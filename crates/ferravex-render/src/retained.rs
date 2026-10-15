@@ -14,6 +14,7 @@ pub(crate) struct Geometry {
     pub id: u32,
     pub vertices: Vec<[f32; 10]>,
     opaque: bool,
+    bounds: ferravex_graphics::Bounds,
 }
 #[derive(Default)]
 struct Registry {
@@ -52,6 +53,20 @@ impl ResidentMesh {
             r.next = r.next.checked_add(1).ok_or("mesh identity exhausted")?;
             let data = Rc::new(Geometry {
                 id: r.next,
+                bounds: mesh
+                    .indices
+                    .iter()
+                    .map(|i| mesh.vertices[*i as usize].position)
+                    .fold(
+                        ferravex_graphics::Bounds {
+                            min: crate::Vec3::splat(f32::INFINITY),
+                            max: crate::Vec3::splat(f32::NEG_INFINITY),
+                        },
+                        |b, p| ferravex_graphics::Bounds {
+                            min: b.min.min(p),
+                            max: b.max.max(p),
+                        },
+                    ),
                 opaque: mesh
                     .indices
                     .iter()
@@ -85,6 +100,9 @@ impl ResidentMesh {
     }
     pub fn vertex_count(&self) -> usize {
         self.0.vertices.len()
+    }
+    pub fn bounds(&self) -> ferravex_graphics::Bounds {
+        self.0.bounds
     }
 }
 pub(crate) fn geometry(id: u32) -> Option<Rc<Geometry>> {

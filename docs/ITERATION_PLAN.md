@@ -9,8 +9,8 @@ unsupported platforms or features are complete.
 | # | Improvement | Status |
 |---|---|---|
 | 1 | Performance regression harness | Merged: [PR 1](https://github.com/nearbycoder/ferravex/pull/1) |
-| 2 | Shared retained GPU renderer | Implemented; local checks passed |
-| 3 | Visibility and detail management | Pending |
+| 2 | Shared retained GPU renderer | Merged: [PR 2](https://github.com/nearbycoder/ferravex/pull/2) |
+| 3 | Visibility and detail management | Implemented; local checks passed |
 | 4 | Materials and custom shader pipeline | Pending |
 | 5 | Shared low-poly lighting | Pending |
 | 6 | Reusable character controllers | Pending |

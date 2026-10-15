@@ -8,6 +8,7 @@ use ferravex_render::{
     prelude::*,
     shaders::{LitMaterial, LitSettings},
     ui,
+    visibility::{LodChain, LodState},
 };
 use race::{
     Course, GATES, HALF_WIDTH, HOVER_HEIGHT, Input, LAPS, Race, heading, path, right, tangent,
@@ -41,7 +42,8 @@ struct Scene {
     curbs: Mesh3d,
     props: Vec<Prop>,
     prop_meshes: Vec<Mesh3d>,
-    rock_meshes: Vec<Mesh3d>,
+    rock_lods: Vec<LodChain>,
+    rock_lod_states: std::cell::RefCell<Vec<LodState>>,
     pillar: Mesh3d,
     lintel: Mesh3d,
     cap: Mesh3d,
@@ -171,9 +173,22 @@ impl Scene {
             ),
             props,
             prop_meshes,
-            rock_meshes: (0..3)
-                .map(|i| Mesh3d::sphere(1.1 + i as f32 * 0.24, STONE, 6, 4))
+            rock_lods: (0..3)
+                .map(|i| {
+                    let radius = 1.1 + i as f32 * 0.24;
+                    LodChain::new(
+                        vec![
+                            Mesh3d::sphere(radius, STONE, 6, 4).resident().clone(),
+                            Mesh3d::sphere(radius, STONE, 4, 3).resident().clone(),
+                            Mesh3d::sphere(radius, STONE, 3, 2).resident().clone(),
+                        ],
+                        vec![35., 75.],
+                        0.12,
+                    )
+                    .unwrap()
+                })
                 .collect(),
+            rock_lod_states: Default::default(),
             pillar: Mesh3d::cuboid(vec3(0.75, 7.6, 1.15), STONE),
             lintel: Mesh3d::cuboid(vec3(HALF_WIDTH * 2.0 + 1.5, 0.7, 1.15), PALE),
             cap: Mesh3d::cuboid(vec3(1.1, 0.5, 1.5), PALE),
@@ -200,9 +215,19 @@ impl Scene {
         for prop in &self.props {
             self.prop_meshes[prop.mesh].draw(prop.position, prop.rotation);
         }
-        for (index, &(p, _)) in course.rocks.iter().enumerate() {
-            self.rock_meshes[index % 3]
-                .draw(world(p, 0.65), Quat::from_rotation_y(index as f32 * 1.7));
+        {
+            let mut states = self.rock_lod_states.borrow_mut();
+            states.resize(course.rocks.len(), LodState::default());
+            for (index, &(p, _)) in course.rocks.iter().enumerate() {
+                ferravex_render::draw_lod(
+                    &self.rock_lods[index % 3],
+                    Mat4::from_rotation_translation(
+                        Quat::from_rotation_y(index as f32 * 1.7),
+                        world(p, 0.65),
+                    ),
+                    &mut states[index],
+                );
+            }
         }
         for (index, gate) in course.gates.iter().enumerate() {
             let rotation = Quat::from_rotation_y(heading(gate.direction));

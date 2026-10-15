@@ -120,3 +120,14 @@ submission work, offsetting CPU preparation savings. Retained buffers are a
 foundation, not a claim that every example is already faster. Visibility/LOD is
 next, and final iteration validation must revisit total CPU, GPU where available,
 and artifact budgets. Raw reports remain in `target/perf/iteration-02-final`.
+
+### Visibility iteration
+
+The same fixed local workload after frustum culling reduced Crystal Cavern's
+mean retained/immediate draw commands from 229 to 118.2, submitted vertices from
+33,180 to 26,025.3, and submission CPU time from 224.3 to 147.8 microseconds.
+Dune Skimmer submitted vertices fell from 37,532.5 to 28,856.5. Other games can
+show small-scene test overhead or host timing noise; use the raw workload and
+full-frame measurements before making broader performance claims. The per-frame
+object visibility counters are also available through the runtime API and browser
+canvas attributes. Raw recordings are in `target/perf/iteration-03`.

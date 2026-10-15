@@ -18,6 +18,7 @@ pub mod native;
 pub mod retained;
 pub mod shaders;
 pub mod ui;
+pub mod visibility;
 pub use ferravex_core::telemetry;
 
 pub mod prelude {
@@ -149,6 +150,9 @@ impl Default for Camera3D {
 pub trait Camera {
     fn matrix(&self, w: f32, h: f32) -> Mat4;
     fn depth(&self) -> bool;
+    fn position(&self) -> Option<Vec3> {
+        None
+    }
 }
 impl Camera for Camera2D {
     fn matrix(&self, _: f32, _: f32) -> Mat4 {
@@ -162,6 +166,9 @@ impl Camera for Camera2D {
     }
 }
 impl Camera for Camera3D {
+    fn position(&self) -> Option<Vec3> {
+        Some(self.position)
+    }
     fn matrix(&self, w: f32, h: f32) -> Mat4 {
         Mat4::perspective_rh_gl(
             self.fovy,
@@ -253,6 +260,10 @@ struct State {
     time: f64,
     matrix: Mat4,
     depth: bool,
+    frustum: Option<ferravex_graphics::Frustum>,
+    eye: Option<Vec3>,
+    visibility: visibility::VisibilitySettings,
+    visibility_stats: visibility::VisibilityStats,
     clear: Color,
     vertices: Vec<[f32; 8]>,
     batches: Vec<Batch>,
@@ -285,6 +296,10 @@ impl Default for State {
             time: 0.,
             matrix: Mat4::IDENTITY,
             depth: false,
+            frustum: None,
+            eye: None,
+            visibility: Default::default(),
+            visibility_stats: Default::default(),
             clear: BLACK,
             vertices: Vec::new(),
             batches: Vec::new(),
@@ -313,9 +328,30 @@ impl Default for State {
     }
 }
 impl State {
+    fn test_visibility(&mut self, bounds: ferravex_graphics::Bounds, model: Mat4) -> bool {
+        use visibility::Visibility;
+        self.visibility_stats.tested += 1;
+        match visibility::classify(bounds, model, self.frustum, self.eye, self.visibility) {
+            Visibility::Visible => {
+                self.visibility_stats.visible += 1;
+                true
+            }
+            Visibility::OutsideFrustum => {
+                self.visibility_stats.frustum_culled += 1;
+                false
+            }
+            Visibility::TooDistant => {
+                self.visibility_stats.distance_culled += 1;
+                false
+            }
+            Visibility::InvalidTransform => false,
+        }
+    }
     fn default_camera(&mut self) {
         self.matrix = Mat4::orthographic_rh_gl(0., self.w as f32, self.h as f32, 0., -1., 1.);
         self.depth = false;
+        self.frustum = None;
+        self.eye = None;
     }
     fn push(&mut self, vertices: impl IntoIterator<Item = (Vec3, Vec3, Color)>, model: Mat4) {
         let start = self.vertices.len() as u32;
@@ -367,6 +403,15 @@ pub fn set_camera(camera: &impl Camera) {
     edit(|s| {
         s.matrix = camera.matrix(s.w as f32, s.h as f32);
         s.depth = camera.depth();
+        s.eye = camera.position();
+        s.frustum = if s.depth {
+            ferravex_graphics::Frustum::from_matrix(
+                s.matrix,
+                ferravex_graphics::ClipDepth::NegativeOneToOne,
+            )
+        } else {
+            None
+        };
     });
 }
 pub fn set_default_camera() {
@@ -381,17 +426,50 @@ pub fn clear_background(c: Color) {
         s.vertices.clear();
         s.batches.clear();
         s.retained.clear();
+        s.visibility_stats = Default::default();
     });
 }
 pub fn draw_mesh(m: &Mesh) {
     draw_mesh_transformed(m, Mat4::IDENTITY)
 }
 /// Submit an immutable mesh snapshot. Compatible adjacent draws share one instanced call.
-/// Returns false for non-affine/singular transforms or a full frame instance budget.
+/// Returns false when culled, for invalid transforms or a full frame instance budget.
 pub fn draw_resident(mesh: &retained::ResidentMesh, model: Mat4) -> bool {
     edit(|s| {
-        s.retained
-            .record(mesh, model, s.matrix, s.depth, s.lighting)
+        s.test_visibility(mesh.bounds(), model)
+            && s.retained
+                .record(mesh, model, s.matrix, s.depth, s.lighting)
+    })
+}
+pub fn set_visibility(settings: visibility::VisibilitySettings) -> bool {
+    if !settings.valid() {
+        return false;
+    }
+    edit(|s| s.visibility = settings);
+    true
+}
+pub fn visibility_stats() -> visibility::VisibilityStats {
+    read(|s| s.visibility_stats)
+}
+pub fn draw_lod(
+    chain: &visibility::LodChain,
+    model: Mat4,
+    state: &mut visibility::LodState,
+) -> bool {
+    edit(|s| {
+        if !s.test_visibility(chain.bounds(), model) {
+            return false;
+        }
+        let distance = s.eye.map_or(0., |eye| {
+            visibility::distance_to_bounds(chain.bounds(), model, eye)
+        });
+        s.retained.record(
+            chain.select(distance, state),
+            model,
+            s.matrix,
+            s.depth,
+            s.lighting,
+        )
     })
 }
 pub fn draw_mesh_transformed(m: &Mesh, model: Mat4) {
@@ -687,6 +765,7 @@ fn frame(dt: f32, w: u32, h: u32) -> bool {
         s.vertices.clear();
         s.batches.clear();
         s.retained.clear();
+        s.visibility_stats = Default::default();
         s.default_camera();
     });
     let mut future = edit(|s| s.future.take());
@@ -898,6 +977,15 @@ macro_rules! game {
 mod wasm {
     use super::*;
     #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_culled_count() -> u32 {
+        let s = visibility_stats();
+        s.frustum_culled + s.distance_culled
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_visible_count() -> u32 {
+        visibility_stats().visible
+    }
+    #[unsafe(no_mangle)]
     pub extern "C" fn ferravex_commands() -> *const retained::Command {
         read(|s| s.retained.commands.as_ptr())
     }
@@ -1005,6 +1093,36 @@ mod tests {
     use super::*;
     fn reset() {
         edit(|s| *s = State::default());
+    }
+    #[test]
+    fn shared_camera_culls_residents_and_default_ui_camera_does_not() {
+        reset();
+        let mesh = mesh::Mesh3d::cuboid(Vec3::ONE, WHITE);
+        set_camera(&Camera3D {
+            position: vec3(0., 0., 5.),
+            target: Vec3::ZERO,
+            z_far: 20.,
+            ..Default::default()
+        });
+        assert!(draw_resident(mesh.resident(), Mat4::IDENTITY));
+        assert!(!draw_resident(
+            mesh.resident(),
+            Mat4::from_translation(Vec3::X * 100.)
+        ));
+        let stats = visibility_stats();
+        assert_eq!(
+            (stats.tested, stats.visible, stats.frustum_culled),
+            (2, 1, 1)
+        );
+        assert!(!set_visibility(visibility::VisibilitySettings {
+            max_distance: Some(-1.),
+            ..Default::default()
+        }));
+        set_default_camera();
+        assert!(draw_resident(
+            mesh.resident(),
+            Mat4::from_translation(Vec3::X * 100.)
+        ));
     }
     #[test]
     fn frame_yields_once_and_keeps_game_local_state() {

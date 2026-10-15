@@ -34,7 +34,7 @@ finished.
 | # | Feature | Working implementation | Remaining work |
 |---|---|---|---|
 | 1 | Profiling and budgets | Fixed-size CPU samples, budget flags, p99; browser CPU frame and asynchronous GPU timer measurements; binary size/audit scripts | Allocator instrumentation, trace timelines, device budgets |
-| 2 | Retained rendering | Shared native/WebGL2 retained buffers and opaque-pass instancing; Courtyard static buffers/instancing and transformed bounds/frustum culling; headless clipped depth rasterizer | General LOD policy, Windows/macOS/iOS GPU hosts, GPU-driven submission |
+| 2 | Retained rendering | Shared native/WebGL2 retained buffers, opaque-pass instancing, conservative frustum/distance tests and authored hysteretic LOD; Courtyard static buffers/instancing and transformed bounds/frustum culling; headless clipped depth rasterizer | Windows/macOS/iOS GPU hosts, GPU-driven submission |
 | 3 | Character movement | Owned sphere slide/step/snap helper; existing shared FPS AABB motor and prediction | Unified capsule motor, slopes, moving platforms, body pushing |
 | 4 | Input actions | Bounded remappable action map, deadzones, buffered edges; browser keyboard/mouse/gamepad/touch adapters; Linux host events for restored games | Interactive rebinding UI and physical-device testing |
 | 5 | Spatial audio | Strict PCM16 WAV decoder, bounded resampling stereo mixer, distance attenuation/panning; browser AudioWorklet output | Occlusion, streaming/compressed audio, native sinks and authored footsteps |

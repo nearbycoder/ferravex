@@ -73,6 +73,7 @@ try {
    const at=bp+index*12,depth=view.getUint8(at+8)!==0;depth?gl.enable(gl.DEPTH_TEST):gl.disable(gl.DEPTH_TEST);gl.depthMask(depth);gl.drawArrays(gl.TRIANGLES,view.getUint32(at,true),view.getUint32(at+4,true));
   }
   canvas.dataset.frames=String(++frames);canvas.dataset.vertices=String(count+retained.vertices);
+  canvas.dataset.culled=String(exports.ferravex_culled_count());canvas.dataset.visible=String(exports.ferravex_visible_count());
   canvas.dataset.drawCalls=String(commands);canvas.dataset.residentMeshes=String(retained.meshes.size);canvas.dataset.uploadBytes=String(vertices.byteLength+retained.uploadBytes);
   if(running)requestAnimationFrame(loop);
  };
