@@ -226,6 +226,11 @@ impl<B: Access> World<B> {
             }
         }
         self.last_step = stats;
+        ferravex_core::telemetry::record_physics(
+            stats.broadphase_pairs,
+            stats.contact_points,
+            stats.ccd_impacts,
+        );
         stats
     }
     fn sweep_balls(&mut self, old: &[(RigidBodyHandle, Vec3)]) -> usize {

@@ -1,8 +1,14 @@
 #[cfg(not(target_arch = "wasm32"))]
+#[global_allocator]
+static ALLOCATOR: ferravex_core::telemetry::TrackingAllocator =
+    ferravex_core::telemetry::TrackingAllocator;
+#[cfg(not(target_arch = "wasm32"))]
 mod native {
     use ferravex_fps::InputFrame;
     use owned_lab::Lab;
     pub fn run() {
+        use ferravex_core::telemetry::{FrameSample, FrameToken, Session};
+        let mut performance = Session::from_env();
         let args: Vec<_> = std::env::args().collect();
         let frames = args
             .iter()
@@ -22,7 +28,23 @@ mod native {
         let mut lab = Lab::new();
         let start = std::time::Instant::now();
         for _ in 0..frames {
+            let token = performance.as_ref().map(|_| FrameToken::begin());
             lab.update(1. / 64., InputFrame::default(), 0, 16. / 9.);
+            if let (Some(session), Some(token)) = (&mut performance, token) {
+                let cpu_us = token.elapsed_us();
+                let render_start = std::time::Instant::now();
+                std::hint::black_box(lab.render(960, 540));
+                session.record(token.finish(FrameSample {
+                    cpu_us,
+                    software_render_us: Some(render_start.elapsed().as_secs_f64() * 1e6),
+                    ..Default::default()
+                }));
+            }
+        }
+        if let Some(session) = performance {
+            session
+                .write("software/courtyard", 960, 540)
+                .expect("write performance report");
         }
         let simulation = start.elapsed();
         let render_start = std::time::Instant::now();

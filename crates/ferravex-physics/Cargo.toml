@@ -11,4 +11,5 @@ dim2 = []
 dim3 = []
 
 [dependencies]
+ferravex-core.workspace = true
 ferravex-math.workspace = true

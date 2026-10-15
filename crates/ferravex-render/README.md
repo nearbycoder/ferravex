@@ -1,6 +1,6 @@
 # Original game runtime
 
-`ferravex-render` implements the shared runtime for thirteen recovered Ferravex games. It depends only on the original math and graphics crates. There is no re-export of a third-party engine or window library.
+`ferravex-render` implements the shared runtime for thirteen recovered Ferravex games. It depends only on the original core, math and graphics crates. There is no re-export of a third-party engine or window library.
 
 - Rust owns game futures, frame scheduling, keyboard/pointer/touch state, cameras, procedural meshes, 2D primitives, static bitmap glyph geometry, faceted directional lighting and distance fog.
 - Geometry is transformed to homogeneous clip space and submitted as a contiguous triangle stream. Adjacent draws with the same depth mode share a GPU batch; transparent UI retains submission order.
