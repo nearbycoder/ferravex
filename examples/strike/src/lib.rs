@@ -10,6 +10,7 @@ use ferravex_fps::GameClient;
 use ferravex_fps::{Arena, Match, Player, TICK_RATE, forward};
 use ferravex_net::{BUTTON_FIRE, InputFrame};
 use ferravex_play::camera::{Input3, Mode3, NoObstructions, Rig3, Settings3, Target3};
+use ferravex_render::audio::{self, Cue, GameAudio, Spatial, Surface, VoiceParams};
 use ferravex_render::prelude::*;
 use ferravex_render::shaders::{LitMaterial, LitSettings};
 use geometry::{build_operator, build_rifle, build_yard, draw_transformed, rgb};
@@ -110,6 +111,24 @@ fn apply_game_events(
     damage_timer: &mut f32,
 ) {
     for event in events {
+        if let ferravex_fps::GameEvent::Shot { player, origin, .. } = &event
+            && *player != local_id
+        {
+            audio::play(
+                Cue::Fire,
+                VoiceParams {
+                    position: origin.to_array(),
+                    gain: 0.75,
+                    priority: 5,
+                    spatial: Spatial::Attenuated {
+                        min_distance: 1.,
+                        max_distance: 65.,
+                        rolloff: 0.04,
+                    },
+                    ..Default::default()
+                },
+            );
+        }
         match event {
             ferravex_fps::GameEvent::Shot {
                 player,
@@ -210,6 +229,8 @@ async fn game() {
     let mut browser_playing = active;
     sync_browser_ui(active);
     let mut controls = Controls::default();
+    let mut sound = GameAudio::new();
+    let mut was_reload = 0;
     let mut clock = FixedClock::new(TICK_RATE as f64, 8);
     let mut stats = FrameStats::<120>::default();
     let mut frames = 0u64;
@@ -336,12 +357,31 @@ async fn game() {
             }
         }
         if local.ammo < was_ammo {
+            sound.cue(Cue::Fire, 0.75);
             shot_timer = 0.09;
         }
 
         if local.health < was_health {
             damage_timer = 0.25;
         }
+        if local.reload_ticks > 0 && was_reload == 0 {
+            sound.cue(Cue::Reload, 0.6);
+        }
+        if local.health == 0 && was_health > 0 {
+            sound.cue(Cue::Failure, 0.5);
+        }
+        was_reload = local.reload_ticks;
+        audio::listener(
+            Vec3::from_array(local.eye_position().to_array()),
+            vec3(controls.yaw.cos(), 0., controls.yaw.sin()),
+        );
+        sound.walk(
+            Vec3::from_array(local.position.to_array()),
+            local.grounded,
+            active && controls.input.gameplay_active() && local.health > 0,
+            Surface::Stone,
+            1.65,
+        );
         was_ammo = local.ammo;
         was_health = local.health;
         shot_timer = (shot_timer - dt).max(0.);

@@ -1,6 +1,7 @@
 mod game;
 
 use ferravex_core::FixedClock;
+use ferravex_render::audio::{Cue, GameAudio, Surface};
 use ferravex_render::input::{
     Binding, InputCode, PlayerInput, Preset,
     touch::{Control, Output, Region},
@@ -23,6 +24,7 @@ fn conf() -> Conf {
 ferravex_render::game!(conf, game);
 async fn game() {
     let mut demo = Demo::new();
+    let mut sound = GameAudio::new();
     let mut game = Game::new();
     let mut clock = FixedClock::new(120.0, 12);
     let mut started = demo.autoplay;
@@ -116,6 +118,10 @@ async fn game() {
                 input.fire =
                     fire.pressed || fire.value > 0.5 || touch_aim && game.nearest_enemy().is_some();
                 input.dash = dash.pressed || dash.value > 0.5;
+                let shots = game.shots;
+                let health = game.health;
+                let phase = game.phase;
+                let dashing = game.dash_time;
                 game.update(
                     if demo.autoplay {
                         game.autoplay()
@@ -124,8 +130,37 @@ async fn game() {
                     },
                     step.dt,
                 );
+                if game.shots > shots {
+                    sound.cue(Cue::Fire, 0.55);
+                }
+                if game.health < health {
+                    sound.cue(Cue::Impact(Surface::Metal), 0.4);
+                }
+                if game.health > health {
+                    sound.cue(Cue::Pickup, 0.5);
+                }
+                if game.dash_time > dashing {
+                    sound.cue(Cue::Jump, 0.3);
+                }
+                if game.phase != phase {
+                    sound.cue(
+                        if game.phase == Phase::Won {
+                            Cue::Success
+                        } else {
+                            Cue::Failure
+                        },
+                        0.65,
+                    );
+                }
             }
         }
+        sound.walk(
+            vec3(game.player.x, 0., game.player.y),
+            true,
+            started && !paused && (demo.autoplay || player_input.gameplay_active()),
+            Surface::Metal,
+            80.,
+        );
         clear_background(INK);
         set_camera(&canvas.camera());
         draw_arena();

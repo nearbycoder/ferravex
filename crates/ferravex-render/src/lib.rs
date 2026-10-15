@@ -9,6 +9,7 @@ use std::{
     task::{Context, Poll, Waker},
 };
 pub mod ao;
+pub mod audio;
 pub mod canvas;
 pub mod demo;
 mod font;
@@ -900,6 +901,7 @@ pub async fn next_frame() {
     Yield(false).await
 }
 pub fn start(conf: Conf, future: impl Future<Output = ()> + 'static) {
+    audio::reset();
     edit(|s| {
         *s = State::default();
         s.w = conf.window_width.max(1) as u32;
@@ -945,6 +947,8 @@ fn frame(dt: f32, w: u32, h: u32) -> bool {
     !finished
 }
 fn end_host_frame() {
+    let dt = read(|s| s.dt);
+    audio::end_frame(dt);
     edit(|s| {
         s.retained.finalize();
         s.frame += 1;
@@ -989,6 +993,9 @@ fn focus(focused: bool) {
             clear_held(s);
         }
     });
+    if !focused {
+        audio::focus_lost();
+    }
 }
 fn key(code: u32, down: bool) {
     if code == 0 || code > u16::MAX as u32 {
@@ -1161,6 +1168,7 @@ pub fn run(conf: Conf, future: impl Future<Output = ()> + 'static) {
         );
     }
     let fixed = std::env::args().any(|s| s == "--smoke-frames");
+    audio::boot_native(fixed);
     let mut performance = telemetry::Session::from_env();
     if let Some(session) = &mut performance {
         window.set_swap_interval(0);
@@ -1193,7 +1201,10 @@ pub fn run(conf: Conf, future: impl Future<Output = ()> + 'static) {
                 Event::Wheel(v) => wheel(v),
                 Event::Focus(value) => focus(value),
                 Event::Resize(_, _) => {}
-                Event::Quit => return,
+                Event::Quit => {
+                    audio::shutdown_native();
+                    return;
+                }
             }
         }
         input::poll_gamepads();
@@ -1247,6 +1258,7 @@ pub fn run(conf: Conf, future: impl Future<Output = ()> + 'static) {
             }
         }
     }
+    audio::shutdown_native();
     if let Some(mut session) = performance {
         session.render_quality(quality() as u32);
         window.finish_gpu_timing();

@@ -5,6 +5,7 @@ use ferravex_physics::d3::{
 };
 use ferravex_physics::{JointHandle, JointMotor};
 use ferravex_play::camera::{Input3, Mode3, NoObstructions, Rig3, Settings3, Target3};
+use ferravex_render::audio::{Cue, GameAudio, Surface};
 use ferravex_render::input::{
     PlayerInput, Preset,
     touch::{Control, Output, Region},
@@ -34,6 +35,7 @@ struct Sandbox {
     bodies: Vec<Body>,
     sequence: u32,
     links: Vec<JointHandle>,
+    impact: Option<(f32, Surface)>,
 }
 
 impl Sandbox {
@@ -43,6 +45,7 @@ impl Sandbox {
             bodies: Vec::new(),
             sequence: 0,
             links: Vec::new(),
+            impact: None,
         };
         sandbox
             .physics
@@ -194,12 +197,34 @@ impl Sandbox {
     }
 
     fn step(&mut self, dt: f32) {
-        for body in &mut self.bodies {
+        let mut velocities = [Vec3::ZERO; MAX_BODIES];
+        for (i, body) in self.bodies.iter_mut().enumerate() {
+            velocities[i] = Vec3::from_array(self.physics.bodies[body.handle].linvel().to_array());
             let rigid_body = &self.physics.bodies[body.handle];
             body.previous_position = Vec3::from_array(rigid_body.translation().to_array());
             body.previous_rotation = Quat::from_array(rigid_body.rotation().to_array());
         }
         self.physics.step(dt);
+        self.impact = None;
+        for (body, before) in self.bodies.iter().zip(velocities) {
+            let after = Vec3::from_array(self.physics.bodies[body.handle].linvel().to_array());
+            let change = (after - before).length();
+            if before.length() > 1.
+                && change > 1.2
+                && self.impact.is_none_or(|(strength, _)| change > strength)
+            {
+                self.impact = Some((
+                    change,
+                    if body.compound {
+                        Surface::Metal
+                    } else if body.ball {
+                        Surface::Stone
+                    } else {
+                        Surface::Wood
+                    },
+                ));
+            }
+        }
     }
 }
 
@@ -211,6 +236,8 @@ ferravex_render::game!(window_conf, game);
 async fn game() {
     let mut demo = ferravex_render::demo::Demo::new();
     let mut sandbox = Sandbox::new();
+    let mut sound = GameAudio::new();
+    let mut impact_cooldown = 0_f32;
     let mut clock = FixedClock::new(120.0, 8);
     let mut stats = FrameStats::<90>::default();
     let material = LitMaterial::new()
@@ -293,6 +320,7 @@ async fn game() {
         if player_input.pressed("select_two") {
             sandbox.drop_body(true);
         }
+        impact_cooldown = (impact_cooldown - get_frame_time()).max(0.);
         let frame = clock.advance(if paused {
             0.0
         } else {
@@ -300,6 +328,12 @@ async fn game() {
         });
         for _ in 0..frame.steps {
             sandbox.step(frame.dt);
+            if impact_cooldown == 0.
+                && let Some((strength, surface)) = sandbox.impact
+            {
+                sound.cue(Cue::Impact(surface), (strength * 0.09).clamp(0.15, 0.7));
+                impact_cooldown = 0.055;
+            }
         }
         let alpha = if paused { 1.0 } else { frame.alpha };
         clear_background(ui::BACKGROUND);
@@ -509,6 +543,19 @@ async fn game() {
 mod tests {
     use super::*;
 
+    #[test]
+    fn falling_bodies_produce_bounded_impact_hints() {
+        let mut sandbox = Sandbox::new();
+        let mut found = false;
+        for _ in 0..360 {
+            sandbox.step(1. / 120.);
+            if let Some((strength, _)) = sandbox.impact {
+                assert!(strength.is_finite() && strength > 1.2);
+                found = true;
+            }
+        }
+        assert!(found);
+    }
     #[test]
     fn jointed_mechanisms_keep_their_constraints_under_load() {
         let mut sandbox = Sandbox::new();

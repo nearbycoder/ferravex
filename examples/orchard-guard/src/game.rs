@@ -96,6 +96,7 @@ pub struct Game {
     pub active: bool,
     pub remaining: u8,
     pub kills: u32,
+    pub fired: u32,
     pub escaped: u32,
     pub outcome: Outcome,
     pub selected: usize,
@@ -115,6 +116,7 @@ impl Game {
             active: false,
             remaining: 0,
             kills: 0,
+            fired: 0,
             escaped: 0,
             outcome: Outcome::Playing,
             selected: 0,
@@ -265,6 +267,7 @@ impl Game {
                 .max_by(|a, b| a.distance.total_cmp(&b.distance));
             if let Some(pest) = target {
                 tower.aim = (pest.pos - PLOTS[plot]).normalize_or_zero();
+                self.fired = self.fired.saturating_add(1);
                 self.shots.push(Shot {
                     pos: PLOTS[plot] + tower.aim * 18.,
                     target: pest.id,

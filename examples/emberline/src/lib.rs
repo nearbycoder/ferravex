@@ -4,6 +4,7 @@ use ferravex_physics::character::{
     Character, CharacterInput, CharacterSettings, CharacterShape, Obstacle, QueryBounds, Terrain,
 };
 use ferravex_play::camera::{Follow2, Follow2Settings, Limits2};
+use ferravex_render::audio::{Cue, GameAudio, Surface};
 use ferravex_render::input::{
     PlayerInput, Preset,
     touch::{Control, Output, Region},
@@ -423,6 +424,7 @@ fn config() -> Conf {
 ferravex_render::game!(config, game);
 async fn game() {
     let mut demo = Demo::new();
+    let mut sound = GameAudio::new();
     let mut game = Game::new();
     let mut clock = FixedClock::new(120.0, 12);
     let mut player_input = PlayerInput::preset("emberline", Preset::Platformer);
@@ -477,6 +479,7 @@ async fn game() {
         let touch_mode = player_input.touch_seen();
         if player_input.pressed("restart") || game.won && player_input.pressed("confirm") {
             game = Game::new();
+            sound.reset();
             clock.reset();
             camera.cut();
         }
@@ -496,8 +499,40 @@ async fn game() {
                     jump: player_input.pressed("jump"),
                 }
             };
+            let grounded = game.motor.grounded;
+            let collected = game.embers.iter().filter(|(_, found)| *found).count();
+            let won = game.won;
+            let deaths = game.deaths;
             game.update(input, frame.dt);
+            if grounded && !game.motor.grounded && game.velocity().y < 0. {
+                sound.cue(Cue::Jump, 0.5);
+            }
+            if !grounded && game.motor.grounded {
+                sound.cue(Cue::Impact(Surface::Wood), 0.4);
+            }
+            if game.embers.iter().filter(|(_, found)| *found).count() > collected {
+                sound.cue(Cue::Pickup, 0.55);
+            }
+            if game.won && !won {
+                sound.cue(Cue::Success, 0.65);
+            }
+            if game.deaths > deaths {
+                sound.cue(Cue::Failure, 0.5);
+            }
         }
+        sound.walk(
+            vec3(game.position().x, 0., 0.),
+            game.motor.grounded,
+            demo.autoplay || player_input.gameplay_active(),
+            if game.position().x > 1800. {
+                Surface::Metal
+            } else if game.position().x > 900. {
+                Surface::Wood
+            } else {
+                Surface::Grass
+            },
+            64.,
+        );
         if game.deaths != previous_deaths {
             camera.cut();
         }

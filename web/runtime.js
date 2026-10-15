@@ -1,6 +1,7 @@
 // Original Ferravex browser platform: WebGL2, DOM input, direct Rust/Wasm ABI.
 import {RetainedRenderer,GpuTimer} from './retained.js';
 import {bindInput} from './input.js';
+import {bindAudio} from './audio.js';
 const canvas = document.querySelector('canvas');
 const status = document.querySelector('[role=status]');
 const gl = canvas.getContext('webgl2', {alpha:false, antialias:true, depth:true});
@@ -30,8 +31,9 @@ let exports,playing=false,active=true,allocated=0,frames=0,last=0;
 const game=canvas.dataset.game;
 const inputPlatform=bindInput(canvas,game,()=>exports,()=>playing);
 const controlsButton=document.querySelector('[data-controls]');
+const audio=bindAudio(canvas,()=>exports,{button:document.querySelector('[data-audio]')});
 controlsButton?.addEventListener('click',()=>{inputPlatform.openSettings();canvas.focus();});
-canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();active=false;status.textContent='Graphics context lost. Reload to resume.';});
+canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();active=false;audio.dispose();status.textContent='Graphics context lost. Reload to resume.';});
 try {
  const imports={env:{...inputPlatform.imports,ferravex_set_playing:value=>{playing=!!value;if(!playing&&document.pointerLockElement)document.exitPointerLock();}}};
  const response=await fetch(`${game.replaceAll('-','_')}.wasm`);if(!response.ok)throw new Error(`Game download failed (${response.status})`);
@@ -50,7 +52,7 @@ try {
   // Rust receives logical pixels; the GPU viewport alone uses framebuffer pixels.
   inputPlatform.poll();
   const running=exports.ferravex_frame(dt,Math.round(r.width),Math.round(r.height));
-  const controlsOpen=inputPlatform.syncPanel();
+  const controlsOpen=inputPlatform.syncPanel();audio.sync();
   controlsButton?.setAttribute('aria-pressed',String(controlsOpen));
   const count=exports.ferravex_vertex_count(),ptr=exports.ferravex_vertices();
   const vertices=new Float32Array(exports.memory.buffer,ptr,count*8);
@@ -77,7 +79,7 @@ try {
   canvas.dataset.culled=String(exports.ferravex_culled_count());canvas.dataset.visible=String(exports.ferravex_visible_count());
   canvas.dataset.drawCalls=String(immediateDraws+retained.drawCalls+retained.shadowDrawCalls);canvas.dataset.shadowDrawCalls=String(retained.shadowDrawCalls);canvas.dataset.quality=String(retained.environment.quality);canvas.dataset.lightingError=retained.lightingError;canvas.dataset.residentMeshes=String(retained.meshes.size);canvas.dataset.uploadBytes=String(count*32+retained.uploadBytes);
   canvas.dataset.materialError=retained.lastError;materialTools?.update();
-  if(running)requestAnimationFrame(loop);
+  if(running)requestAnimationFrame(loop);else audio.dispose();
  };
  requestAnimationFrame(loop);
 } catch(error) {status.textContent=error.message;console.error(error);}

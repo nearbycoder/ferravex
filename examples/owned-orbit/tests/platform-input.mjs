@@ -20,7 +20,7 @@ const engine={memory:{buffer:new ArrayBuffer(640*720*4)},init(){},width:()=>640,
  ferravex_key:(...args)=>events.push(args),ferravex_blur:()=>events.push(['blur']),ferravex_focus(){},ferravex_input_settings(){events.push(['settings']);}};
 const host={window,document,navigator:{},storage:()=>({getItem:()=>null}),atob,btoa};
 const sandbox={document,window,ImageData:class{},Uint8ClampedArray,Math,Number,Error,
- bindInput:(canvas,game,getExports,isPlaying)=>bindInput(canvas,game,getExports,isPlaying,host),drawInput2d(){},
+ bindInput:(canvas,game,getExports,isPlaying)=>bindInput(canvas,game,getExports,isPlaying,host),drawInput2d(){},bindAudio:()=>({sync(){}}),
  requestAnimationFrame:fn=>pendingFrame=fn,fetch:async()=>({ok:true,clone(){return this;}}),WebAssembly:{instantiateStreaming:async()=>({instance:{exports:engine}})}};
 await vm.runInNewContext(`(async()=>{${source}\n})()`,sandbox);
 function tap(code){window.emit('keydown',{code});window.emit('keyup',{code});}

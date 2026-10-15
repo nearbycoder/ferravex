@@ -1,4 +1,5 @@
 //! A complete small rally time trial; all art is procedural and all motion is simulated.
+use ferravex_render::audio::{Cue, GameAudio, Surface};
 use ferravex_render::input::{
     PlayerInput, Preset,
     touch::{Control, Output, Region},
@@ -260,6 +261,7 @@ async fn game() {
     let mut race = Race::new(&track);
     let mut clock = FixedClock::new(120., 8);
     let mut demo = Demo::new();
+    let mut sound = GameAudio::new();
     let mut marks: VecDeque<(Vec2, Vec2)> = VecDeque::new();
     let mut player_input = PlayerInput::preset("pocket-rally", Preset::Racer);
     player_input
@@ -326,7 +328,15 @@ async fn game() {
             } else {
                 controls
             };
+            let laps = race.laps;
+            let finished = race.finished();
             race.step(&track, input, frame.dt);
+            if race.laps > laps {
+                sound.cue(Cue::Pickup, 0.5);
+            }
+            if race.finished() && !finished {
+                sound.cue(Cue::Success, 0.65);
+            }
             if !race.finished()
                 && (race.car.sliding || race.car.offroad)
                 && race.ticks.is_multiple_of(3)
@@ -337,6 +347,23 @@ async fn game() {
                 }
             }
         }
+        let pos = race.car.pose.position;
+        sound.walk(
+            vec3(pos.x, 0., pos.y),
+            race.car.offroad || race.car.sliding,
+            demo.autoplay || player_input.gameplay_active(),
+            if race.car.offroad {
+                Surface::Sand
+            } else {
+                Surface::Stone
+            },
+            42.,
+        );
+        sound.motor(
+            race.car.velocity.length(),
+            250.,
+            !race.finished() && (demo.autoplay || player_input.gameplay_active()),
+        );
         clear_background(rgba(137, 148, 103));
         let scale = (screen_width() / 1140.).min((screen_height() - 135.).max(150.) / 650.);
         // A full-window projection keeps input in logical display pixels, avoiding raw

@@ -1,5 +1,6 @@
 use crate::{BALL_RADIUS, BUMPERS, Controls, FLIPPER_LENGTH, PIVOTS, RAILS, Table};
 use ferravex_core::FixedClock;
+use ferravex_render::audio::{Cue, GameAudio, Surface};
 use ferravex_render::input::{
     PlayerInput, Preset,
     touch::{Control, Output, Region},
@@ -250,6 +251,8 @@ fn table_render(table: &Table, touch_mode: bool) -> Rect {
 ferravex_render::game!(window_conf, game);
 async fn game() {
     let mut demo = Demo::new();
+    let mut sound = GameAudio::new();
+    let mut flippers = [false; 2];
     let mut table = Table::new();
     let mut clock = FixedClock::new(120.0, 16);
     let mut player_input = PlayerInput::preset("salvage-pinball", Preset::Pinball);
@@ -310,7 +313,25 @@ async fn game() {
                     launch: player_input.pressed("launch") || launch_pending,
                 }
             };
+            let hits = table.hits;
+            let launches = table.launches;
+            let drains = table.drains;
+            for (i, down) in [controls.left, controls.right].into_iter().enumerate() {
+                if down && !flippers[i] {
+                    sound.cue(Cue::Click, 0.3);
+                }
+                flippers[i] = down;
+            }
             table.step(frame.dt, controls);
+            if table.hits > hits {
+                sound.cue(Cue::Impact(Surface::Metal), 0.65);
+            }
+            if table.launches > launches {
+                sound.cue(Cue::Jump, 0.55);
+            }
+            if table.drains > drains {
+                sound.cue(Cue::Failure, 0.4);
+            }
             launch_pending = false;
         }
         if table.over() {

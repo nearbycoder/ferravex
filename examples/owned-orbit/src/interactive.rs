@@ -1,5 +1,6 @@
 //! Interactive host adapter; the headless/software simulation keeps its API.
 use super::*;
+use ferravex_engine::render::audio::{Cue, GameAudio, Surface};
 use ferravex_engine::render::{
     self,
     input::{
@@ -9,7 +10,7 @@ use ferravex_engine::render::{
     prelude::{KeyCode, Rect, vec2},
 };
 use std::cell::RefCell;
-thread_local! {static CONTROLS:RefCell<Option<PlayerInput>>=const {RefCell::new(None)};}
+thread_local! {static SOUND:RefCell<Option<GameAudio>>=const {RefCell::new(None)};static CONTROLS:RefCell<Option<PlayerInput>>=const {RefCell::new(None)};}
 fn profile() -> PlayerInput {
     let mut p = PlayerInput::new("owned-orbit");
     for (name, label, codes, global) in [
@@ -116,6 +117,10 @@ pub extern "C" fn orbit_controls_frame(dt: f32, width: u32, height: u32) {
                         / 18.)
                         .clamp(-1., 1.);
                 }
+                let hits = app.game.ccd_impacts;
+                let score = app.game.score;
+                let lives = app.game.lives;
+                let phase = app.game.phase;
                 let frame = app.clock.advance(p.simulation_dt(dt) as f64);
                 for _ in 0..frame.steps {
                     app.game.tick(
@@ -127,6 +132,24 @@ pub extern "C" fn orbit_controls_frame(dt: f32, width: u32, height: u32) {
                         frame.dt,
                     );
                 }
+                SOUND.with(|cell| {
+                    let mut cell = cell.borrow_mut();
+                    let sound = cell.get_or_insert_with(GameAudio::new);
+                    if app.game.score > score {
+                        sound.cue(Cue::Pickup, 0.45);
+                    } else if app.game.ccd_impacts > hits {
+                        sound.cue(Cue::Impact(Surface::Metal), 0.5);
+                    }
+                    if app.game.lives < lives {
+                        sound.cue(Cue::Failure, 0.45);
+                    }
+                    if app.game.phase == game::Phase::Won && phase != game::Phase::Won {
+                        sound.cue(Cue::Success, 0.65);
+                    }
+                    if app.game.phase == game::Phase::Playing && phase == game::Phase::Ready {
+                        sound.cue(Cue::Jump, 0.45);
+                    }
+                });
                 app.render();
             }
             p.draw_settings();

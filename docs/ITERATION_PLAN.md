@@ -17,8 +17,8 @@ unsupported platforms or features are complete.
 | 7 | More stable rigid-body contacts | Merged: [PR 8](https://github.com/nearbycoder/ferravex/pull/8); size/work flags recorded in PERFORMANCE.md |
 | 8 | Joints and compound colliders | Merged: [PR 9](https://github.com/nearbycoder/ferravex/pull/9); size/work costs recorded in PERFORMANCE.md |
 | 9 | Camera rigs | Merged: [PR 10](https://github.com/nearbycoder/ferravex/pull/10); Wasm size costs recorded in PERFORMANCE.md |
-| 10 | Unified player input | Implemented; local validation passed; 56 artifact-size flags recorded in PERFORMANCE.md |
-| 11 | Shared runtime audio | Pending |
+| 10 | Unified player input | Merged: [PR 11](https://github.com/nearbycoder/ferravex/pull/11); 56 artifact-size flags recorded in PERFORMANCE.md |
+| 11 | Shared runtime audio | Implemented; local validation passed; 54 size flags recorded in PERFORMANCE.md |
 | 12 | Animation playback and blending | Pending |
 | 13 | Reusable effects | Pending |
 | 14 | AI perception and decisions | Pending |

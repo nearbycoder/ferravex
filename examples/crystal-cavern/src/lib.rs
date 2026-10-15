@@ -5,6 +5,7 @@ use ferravex_physics::character::{
     move_and_slide,
 };
 use ferravex_play::camera::{Input3, Mode3, NoObstructions, Rig3, Settings3, Target3};
+use ferravex_render::audio::{Cue, GameAudio, Surface};
 use ferravex_render::input::{
     ActionKind, Binding, InputCode, PlayerInput, Preset,
     touch::{Control, Output, Region},
@@ -663,6 +664,7 @@ async fn game() {
         font.populate_font_cache(&characters, size);
     }
     let mut demo = Demo::new();
+    let mut sound = GameAudio::new();
     ferravex_render::set_quality(ferravex_render::lighting::Quality::Medium);
     let mut game = Game::new();
     let mut view_rig = Rig3::new(Settings3 {
@@ -778,8 +780,27 @@ async fn game() {
             } else {
                 input.interact = player_input.pressed("interact");
             }
+            let collected = game.count();
+            let switches = game.switches;
+            let won = game.won;
             game.step(input, frame.dt);
+            if game.count() > collected {
+                sound.cue(Cue::Pickup, 0.55);
+            }
+            if game.switches != switches {
+                sound.cue(Cue::Impact(Surface::Metal), 0.4);
+            }
+            if game.won && !won {
+                sound.cue(Cue::Success, 0.65);
+            }
         }
+        sound.walk(
+            world(game.position, 0.),
+            true,
+            !game.won && (demo.autoplay || player_input.gameplay_active()),
+            Surface::Stone,
+            1.45,
+        );
         clear_background(INK);
         let view = view_rig
             .update(

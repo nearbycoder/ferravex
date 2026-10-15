@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 pub mod animation;
+pub mod audio;
 pub mod camera;
 pub mod input;
 pub mod navigation;

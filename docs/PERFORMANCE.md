@@ -393,3 +393,73 @@ workload observation, not an isolated input optimization measurement.
 Shared browser input/overlay JavaScript is reported separately by
 `scripts/report-size.py`. The numbers above are actual game module bytes,
 excluding documentation, screenshots, precompressed copies and container images.
+
+## Iteration 11: shared runtime audio
+
+The shared Rust mixer now supplies all fifteen browser examples and thirteen
+interactive Linux examples; native Courtyard retains its headless PCM buffer.
+The original bank supplies surface footsteps/impacts, weapon/reload/outcome cues
+and managed motor loops. Validated sounds support handles, priority, pitch,
+volume buses, positional falloff/panning and gain/stop ramps. Linux device access
+uses original dynamically loaded ALSA bindings and a bounded worker queue;
+browser playback uses an original AudioWorklet and reset-epoch ring. No external
+Cargo packages or sound files were added. See [audio](AUDIO.md).
+
+Local validation passed 373 workspace tests, strict native/Wasm Clippy, native
+and Wasm release builds, all fifteen native gameplay smoke runs, docs/search and
+browser-contract checks. A real-Wasm integration exercised each game's own
+simulation/input path until all fifteen produced finite nonzero PCM. The core
+playback/parameter/render regression allocates zero times after setup. An ALSA
+null/file-device test checked actual system-output bytes and unavailable-device
+handling. Live browser output showed nonzero PCM with zero reported underruns or
+overflows during the observed Emberline run; mute/settings suspension and resume
+were verified. This does not certify physical speakers, all devices or long-term
+playback. No Windows/Apple device checks or iOS SDK checks were available.
+
+The built-in bank uses **616,896 decoded sample bytes**, generated once at runtime.
+It is absent from Wasm module/data download bytes. The runtime uses 64 voices;
+queued device buffers, input/global state, renderer state and clips are separate
+memory costs. Custom WAV sounds do not require generating the built-in bank.
+The open audio output adds mixing to the normal update budget; fixed native
+smoke/performance runs mix offline in simulation time instead of using hardware.
+
+`target/perf/iteration-11-final/report.json` compares against iteration 10 using
+unchanged release/default-quality workloads, two runs of 120 measured frames,
+30 warmup frames, 20% timing allowance, 1,000 µs CPU/submission floor, 20 µs GPU
+floor and 5% size allowance. Every timing and work-count gate passed. **54
+artifact-size flags remain**: raw/gzip native files for the thirteen interactive
+native games and raw/gzip Wasm for fourteen games. Courtyard Wasm remains within
+the size allowance. These costs remain visible for the final size audit; neither
+the baseline nor tolerances were increased to hide them.
+
+| Game | Wasm bytes | Gzip-9 bytes | Raw increase vs 10 | Gzip increase vs 10 |
+|---|---:|---:|---:|---:|
+| owned-lab | 353,923 | 132,802 | +13,490 | +5,553 |
+| owned-orbit | 246,854 | 93,840 | +22,176 | +9,112 |
+| emberline | 256,004 | 98,301 | +23,845 | +9,873 |
+| neon-swarm | 270,935 | 101,599 | +23,401 | +9,860 |
+| pocket-rally | 243,273 | 92,462 | +23,677 | +9,564 |
+| salvage-pinball | 365,888 | 139,292 | +22,546 | +8,972 |
+| orchard-guard | 234,667 | 89,391 | +22,374 | +8,864 |
+| marble-run | 387,985 | 148,794 | +22,894 | +9,051 |
+| dune-skimmer | 311,163 | 120,088 | +22,879 | +8,986 |
+| crystal-cavern | 338,658 | 130,117 | +23,210 | +9,560 |
+| siege-foundry | 369,892 | 142,490 | +22,795 | +8,861 |
+| sky-courier | 289,445 | 110,801 | +23,426 | +9,141 |
+| strike | 350,670 | 134,760 | +24,006 | +9,465 |
+| physics-2d | 360,864 | 137,907 | +22,891 | +9,143 |
+| physics-3d | 413,058 | 157,972 | +23,197 | +9,534 |
+
+An earlier measurement remains at `target/perf/iteration-11-before-suspend-fix`:
+54 size flags plus a 2D lab GPU p99 flag (67.29 µs versus a 41.40 µs allowance).
+The final source also clears transient voices when output is suspended and
+primes loops to resume from silence; this fixes old one-shot tails after focus
+loss. The GPU flag did not repeat in the final run. No rendering optimization or
+GPU improvement is inferred from that difference. Native binary hashes in the
+final report were checked against the current release files.
+
+`target/iteration-11-emberline.wav` records six seconds / 288,000 stereo frames
+of actual native gameplay mix. `audio_bank` generates an independent 6.42-second
+preview. WAV captures, raw metrics and precompressed site copies stay outside
+source/distribution size totals. Shared audio JavaScript is listed separately
+by `scripts/report-size.py`.

@@ -4,8 +4,8 @@ mod interactive;
 mod peer;
 use ferravex_core::FixedClock;
 use ferravex_engine::play::particles::{ParticleDesc, ParticlePool};
+use ferravex_engine::render::audio::{self, Cue, GameAudio, Surface};
 use ferravex_engine::{
-    audio::{Clip, Mixer},
     dynamics::{BodyDesc, BodyHandle, PhysicsWorld, Shape},
     replay::{Frame, Replay, checksum},
 };
@@ -40,9 +40,9 @@ pub struct Lab {
     pub status: [f32; 11],
     meshes: Vec<MeshId>,
     mesh_data: Vec<Vec<f32>>,
-    mixer: Mixer,
+    sound: GameAudio,
+    last_reload: u16,
     pub audio: Vec<[f32; 2]>,
-    shot: Clip,
     replay: Replay,
     player_mesh: MeshId,
     head_mesh: MeshId,
@@ -228,9 +228,9 @@ impl Lab {
             status: [0.; 11],
             meshes,
             mesh_data,
-            mixer: Mixer::new(48000, 32).unwrap(),
+            sound: GameAudio::new(),
+            last_reload: 0,
             audio: Vec::new(),
-            shot: Clip::tone(48000, 95., 0.09).unwrap(),
             replay: Replay::default(),
             player_mesh,
             head_mesh,
@@ -288,12 +288,7 @@ impl Lab {
                     command,
                     arena,
                 ) {
-                    self.mixer.play(
-                        self.shot.clone(),
-                        self.game.player(0).unwrap().eye_position().to_array(),
-                        0.8,
-                        false,
-                    );
+                    self.sound.cue(Cue::Fire, 0.75);
                 }
                 self.game.tick = self.game.tick.wrapping_add(1);
                 Vec::new()
@@ -303,8 +298,7 @@ impl Lab {
             for event in events {
                 match event {
                     GameEvent::Shot { origin, end, .. } => {
-                        self.mixer
-                            .play(self.shot.clone(), origin.to_array(), 0.8, false);
+                        self.sound.at(Cue::Fire, origin, 0.8);
                         for i in 0..6 {
                             let phase = i as f32 * 2.4 + self.time;
                             let _ = self.particles.spawn(ParticleDesc {
@@ -340,15 +334,36 @@ impl Lab {
             }
         }
         self.rebuild(aspect, view);
-        let count = if seconds.is_finite() {
-            (seconds.clamp(0., 0.1) * 48000.) as usize
-        } else {
-            0
-        };
-        self.audio.resize(count, [0.; 2]);
-        self.mixer.listener = self.camera.position.to_array();
-        self.mixer.right = vec3(input.yaw.cos(), 0., input.yaw.sin()).to_array();
-        self.mixer.render(&mut self.audio);
+        let player = self.game.player(0).unwrap();
+        if player.reload_ticks > 0 && self.last_reload == 0 {
+            self.sound.cue(Cue::Reload, 0.6);
+        }
+        self.last_reload = player.reload_ticks;
+        audio::listener(
+            self.camera.position,
+            vec3(input.yaw.cos(), 0., input.yaw.sin()),
+        );
+        self.sound.walk(
+            player.position,
+            player.grounded,
+            view != 0,
+            Surface::Stone,
+            1.65,
+        );
+        // Native reference callers retain the PCM buffer. The browser consumes
+        // the shared pull ABI, so it must not advance a second mixer here.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let count = if seconds.is_finite() {
+                (seconds.clamp(0., 0.1) * 48000.) as usize
+            } else {
+                0
+            };
+            self.audio.resize(count, [0.; 2]);
+            for block in self.audio.chunks_mut(audio::MAX_PULL_FRAMES) {
+                audio::render(block, audio::SAMPLE_RATE);
+            }
+        }
     }
     fn rebuild(&mut self, aspect: f32, view: u32) {
         let aspect = if aspect.is_finite() {

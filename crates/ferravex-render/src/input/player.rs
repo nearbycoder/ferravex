@@ -456,6 +456,7 @@ impl PlayerInput {
         self.map.suppress_held();
         self.surface.clear(&mut self.map);
         if open {
+            crate::audio::suspend();
             self.prior_cursor = crate::read(|s| (s.grab, s.visible));
             crate::set_cursor_grab(false);
             crate::show_mouse(true);
