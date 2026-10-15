@@ -2,6 +2,7 @@
 //! Renderer-independent systems; cameras share the first-party scalar math crate.
 #![forbid(unsafe_code)]
 
+pub mod ai;
 pub mod animation;
 pub mod audio;
 pub mod camera;

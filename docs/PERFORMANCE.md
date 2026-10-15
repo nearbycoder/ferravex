@@ -628,3 +628,91 @@ No textures or third-party runtime libraries were introduced. Download changes:
 Sky native measures **835,112 bytes / 404,824 gzip-9 bytes**. Strike native
 measures **1,010,344 / 491,272 bytes**. All raw reports remain in ignored target
 storage. Thresholds and earlier reports were not overwritten to hide flags.
+
+
+## Iteration 14: shared AI and reusable navigation
+
+Sight cones, occluded hearing, expiring identity memory, bounded priority selection,
+ordered decision graphs and round-robin sensing now live in ferravex-play. An
+indexed-heap incremental A* implementation reuses its per-cell/heap/path storage;
+a FIFO planner shares scratch across agents. Search expansion and parent tracing
+both consume a per-tick work allowance. Polyline distance cursors and collision-
+driven waypoint followers share reusable routes. Grid identity/revision checks
+reject changed search inputs. The engine adds a current-pose rigid visibility
+adapter. Strike, Neon Swarm and Orchard Guard use the shared systems.
+
+Local validation passed **429 workspace tests** (10 device/GPU tests remain ignored
+in the regular suite, as before), strict native and Wasm Clippy, strict Rustdoc,
+all 15 native release smoke checks at 360 frames and all 15 release Wasm builds.
+Existing real-Wasm input/audio/animation/effects checks also passed, including
+changing Strike bot poses and accepted-shot effects. Core tests compare incremental
+paths with reference A* on 48 weighted/disconnected maps in both connectivity
+modes. A counting allocator recorded **zero allocations across 1000 constructed
+AI/search/follower updates**. Game tests route a pursuer around cover, prevent
+hidden silent target knowledge/fire, accept bot shots through Match, and win both
+complete Neon/Orchard autoplay scenarios. This does not claim whole-game allocation
+freedom. Static site/search checks and the 28-package, zero-external-Cargo-package
+audit passed. Live browser gameplay in all three adopting games rendered without
+console/shader errors; the local host served game/Wasm assets with HTTP 200.
+No iOS or unavailable Windows/Apple device checks were run.
+
+`target/perf/iteration-14-final/report.json` records source
+`a45b97a0d016e4f1f8e435f7c02d48fa641261ce`, compared against iteration 13 with
+unchanged release/default-quality configuration: two 120-frame samples after
+30 warmup frames, 20% timing tolerance, 1000 µs CPU/submission floor, 20 µs GPU
+floor and 5% size/work tolerance. All native SHA-256 hashes and raw/deterministic-
+gzip Wasm lengths match the recorded artifacts.
+
+**Four size flags remain; the overall performance gate did not pass.** They are
+raw/gzip Wasm for Neon and Strike. All timing/work gates passed with those existing
+thresholds; this does not mean all CPU costs stayed flat. Neon whole-game CPU mean
+rose **59.28 → 81.37 µs**, p95 **68.57 → 99.33 µs**; Orchard mean
+**239.34 → 299.39 µs**, p95 **299.00 → 554.00 µs**. These changed gameplay
+workloads include sensing/navigation/targeting and are not isolated AI benchmarks.
+Neon draw counts remain p95/p99 **3** and whole-game allocation p99 remains
+**21 calls**; byte p99 **1112 → 1144**. Orchard draw/upload/allocation distributions
+remain unchanged.
+
+Strike's command vector is reused rather than allocated each fixed step. Its
+measured whole-game allocation mean changes **3.075 → 2.008 calls / 192.73 →
+13.53 bytes**, p95/p99 **4 → 2 calls / 341 → 5 bytes**. CPU mean was
+**45.84 → 40.91 µs**, p95 **61.79 → 56.19 µs**; GPU mean
+**51.11 → 51.67 µs**. Bots now follow routes and visibility, so fewer visible
+actors/draws in this sample are a workload difference, not proof of faster rendering.
+Whole-game p95 draws **14 → 13**, uploads **41008 → 40208 bytes**.
+
+A separate longer `target/perf/iteration-14-active/report.json` samples the three
+adopting games for two 900-frame runs plus 30 warmup frames. It supplements the
+short catalog comparison, does not replace it and is not a baseline pass:
+
+| Game | CPU p95 µs | GPU p95 µs | Draw p95 | Allocation calls p95 |
+|---|---:|---:|---:|---:|
+| neon-swarm | 107.47 | 22.16 | 3 | 13 |
+| orchard-guard | 308.25 | 29.02 | 1 | 6 |
+| strike | 73.30 | 55.74 | 16 | 3 |
+
+Native Neon measures **840696 / 403333 gzip-9 bytes**; Orchard **754928 /
+363733**; Strike **1032792 / 502492**. No runtime asset downloads were added.
+
+| Game | Wasm bytes | Gzip-9 bytes | Raw change vs 13 | Gzip change vs 13 |
+|---|---:|---:|---:|---:|
+| owned-lab | 358,292 | 134,127 | +0 | +73 |
+| owned-orbit | 251,373 | 95,129 | +0 | -2 |
+| emberline | 263,846 | 100,739 | +0 | +6 |
+| neon-swarm | 323,855 | 120,781 | +26,255 | +9,870 |
+| pocket-rally | 261,867 | 98,802 | +0 | +1 |
+| salvage-pinball | 367,383 | 139,133 | +0 | -4 |
+| orchard-guard | 241,031 | 91,119 | +4,869 | +1,855 |
+| marble-run | 390,617 | 149,286 | +0 | +5 |
+| dune-skimmer | 344,396 | 132,184 | +0 | +3 |
+| crystal-cavern | 341,288 | 130,612 | +0 | +2 |
+| siege-foundry | 372,519 | 142,924 | +0 | +4 |
+| sky-courier | 340,636 | 129,338 | +0 | -8 |
+| strike | 467,231 | 177,764 | +23,963 | +9,827 |
+| physics-2d | 362,359 | 137,816 | +0 | +10 |
+| physics-3d | 415,685 | 158,493 | +0 | +8 |
+
+Earlier size/work/timing flags, including iteration 13's Neon draw/cold-allocation
+costs and physics-lab GPU tails, remain evidence for the final audit. A later
+baseline or an unflagged sample does not resolve them. Reports and thresholds
+were not overwritten to hide failed comparisons.

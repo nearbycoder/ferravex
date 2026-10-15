@@ -1,3 +1,4 @@
+mod ai;
 mod game;
 
 use ferravex_core::FixedClock;

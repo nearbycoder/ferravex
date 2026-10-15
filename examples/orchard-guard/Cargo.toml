@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 ferravex-core.workspace = true
+ferravex-play.workspace = true
 ferravex-render.workspace = true
 
 [lib]

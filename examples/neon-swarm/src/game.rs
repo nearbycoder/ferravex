@@ -18,6 +18,7 @@ pub const PLAYER_RADIUS: f32 = 15.0;
 pub struct Position(pub Vec2);
 #[derive(Clone, Copy)]
 pub struct Enemy {
+    pub ai_slot: usize,
     pub health: f32,
     pub radius: f32,
     pub speed: f32,
@@ -64,6 +65,7 @@ pub struct Game {
     pub wave_banner: f32,
     pub particles: ParticlePool,
     sparks: Emitter,
+    ai: crate::ai::SwarmAi,
     fire_cooldown: f32,
     spawn_timer: f32,
     remaining: u32,
@@ -76,6 +78,7 @@ impl Game {
     pub fn new() -> Self {
         Self {
             world: World::new(),
+            ai: crate::ai::SwarmAi::new(),
             player: vec2(640.0, 414.0),
             facing: vec2(1.0, 0.0),
             health: 100,
@@ -196,7 +199,8 @@ impl Game {
             input.movement.clamp_length_max(1.0) * 230.0
         };
         self.player = move_body(self.player, velocity * dt, PLAYER_RADIUS);
-        if input.fire && self.fire_cooldown == 0.0 {
+        let shot = input.fire && self.fire_cooldown == 0.0;
+        if shot {
             self.world.spawn((
                 Position(self.player + self.facing * 24.0),
                 Bullet {
@@ -213,21 +217,11 @@ impl Game {
             self.spawn_enemy();
             self.spawn_timer = 0.68 - self.wave as f32 * 0.06;
         }
+        self.ai.update(&self.world, self.player, shot, dt);
         for (mut p, mut enemy) in &mut self.world.query::<(&mut Position, &mut Enemy)>() {
             enemy.flash = (enemy.flash - dt).max(0.0);
-            let toward = (self.player - p.0).normalize_or_zero();
-            // A tangent steering probe keeps pursuers flowing around cover.
-            let desired = toward * enemy.speed * dt;
-            let direct = move_body(p.0, desired, enemy.radius);
-            p.0 = if direct.distance_squared(p.0) < desired.length_squared() * 0.2 {
-                move_body(
-                    p.0,
-                    vec2(-toward.y, toward.x) * enemy.speed * dt,
-                    enemy.radius,
-                )
-            } else {
-                direct
-            };
+            let velocity = self.ai.velocity(enemy.ai_slot, p.0, enemy.speed);
+            p.0 = move_body(p.0, velocity * dt, enemy.radius);
             if p.0.distance(self.player) < enemy.radius + PLAYER_RADIUS
                 && self.hurt_time == 0.0
                 && self.dash_time == 0.0
@@ -280,9 +274,12 @@ impl Game {
             _ => vec2(ARENA.x + along * ARENA.w, ARENA.bottom() - 26.0),
         };
         let heavy = self.wave > 1 && index.is_multiple_of(4);
+        let ai_slot = index as usize % 64;
+        self.ai.reset_agent(ai_slot);
         self.world.spawn((
             Position(p),
             Enemy {
+                ai_slot,
                 health: if heavy { 72.0 } else { 24.0 },
                 radius: if heavy { 22.0 } else { 14.0 },
                 speed: if heavy {
@@ -412,6 +409,7 @@ mod tests {
         game.world.spawn((
             Position(vec2(500.0, 284.0)),
             Enemy {
+                ai_slot: 0,
                 health: 24.0,
                 radius: 14.0,
                 speed: 0.0,
@@ -438,6 +436,7 @@ mod tests {
         game.world.spawn((
             Position(game.player),
             Enemy {
+                ai_slot: 0,
                 health: 24.0,
                 radius: 14.0,
                 speed: 0.0,

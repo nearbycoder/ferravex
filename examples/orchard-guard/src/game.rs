@@ -1,3 +1,7 @@
+use ferravex_play::{
+    ai::{Candidate, Observer, Sight, Unoccluded, WorkBudget, select_target},
+    navigation::{PathCursor, Route3},
+};
 use ferravex_render::prelude::*;
 
 pub const WAVES: u8 = 4;
@@ -72,6 +76,7 @@ pub struct Pest {
     pub max_hp: f32,
     pub slow: f32,
     pub fast: bool,
+    cursor: PathCursor,
 }
 #[derive(Clone, Debug)]
 pub struct Shot {
@@ -103,9 +108,12 @@ pub struct Game {
     pub time: f32,
     spawn_timer: f32,
     next_id: u32,
+    route: Route3,
 }
 impl Game {
     pub fn new() -> Self {
+        let mut route = Route3::new(PATH.len()).unwrap();
+        route.set(&PATH.map(|p| p.extend(0.))).unwrap();
         Self {
             towers: [None; 8],
             pests: Vec::with_capacity(MAX_PESTS),
@@ -123,6 +131,7 @@ impl Game {
             time: 0.,
             spawn_timer: 0.,
             next_id: 0,
+            route,
         }
     }
     pub fn build(&mut self, plot: usize, kind: Kind) -> bool {
@@ -213,6 +222,7 @@ impl Game {
                     max_hp: hp,
                     slow: 0.,
                     fast,
+                    cursor: PathCursor::default(),
                 });
                 self.remaining -= 1;
                 self.spawn_timer += 0.95 - self.wave as f32 * 0.08;
@@ -220,21 +230,16 @@ impl Game {
         }
         for pest in &mut self.pests {
             pest.slow = (pest.slow - dt).max(0.);
-            let mut travel =
-                (if pest.fast { 105. } else { 66. }) * if pest.slow > 0. { 0.45 } else { 1. } * dt;
-            pest.distance += travel;
-            while travel > 0. && pest.segment < PATH.len() - 1 {
-                let delta = PATH[pest.segment + 1] - pest.pos;
-                let length = delta.length();
-                if travel >= length {
-                    pest.pos = PATH[pest.segment + 1];
-                    travel -= length;
-                    pest.segment += 1;
-                } else {
-                    pest.pos += delta / length * travel;
-                    travel = 0.;
-                }
-            }
+            let speed =
+                (if pest.fast { 105. } else { 66. }) * if pest.slow > 0. { 0.45 } else { 1. };
+            let sample = pest
+                .cursor
+                .advance(&self.route, speed, dt)
+                .unwrap()
+                .unwrap();
+            pest.pos = sample.position.truncate();
+            pest.segment = sample.segment;
+            pest.distance = sample.distance as f32;
         }
         self.pests.retain(|p| {
             if p.segment == PATH.len() - 1 {
@@ -258,14 +263,27 @@ impl Game {
             if tower.cooldown > 0. || self.shots.len() == MAX_SHOTS {
                 continue;
             }
-            let target = self
-                .pests
-                .iter()
-                .filter(|p| {
-                    p.hp > 0. && p.pos.distance_squared(PLOTS[plot]) <= tower.range().powi(2)
-                })
-                .max_by(|a, b| a.distance.total_cmp(&b.distance));
-            if let Some(pest) = target {
+            let selected = select_target(
+                self.pests
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| p.hp > 0.)
+                    .map(|(i, p)| Candidate {
+                        id: i as u64,
+                        position: p.pos.extend(0.),
+                        groups: 1,
+                    }),
+                Observer {
+                    position: PLOTS[plot].extend(0.),
+                    forward: Vec3::Y,
+                },
+                Sight::new(tower.range(), std::f32::consts::TAU, 1).unwrap(),
+                &mut WorkBudget::new(MAX_PESTS as u32, MAX_PESTS as u32, 0),
+                &mut Unoccluded,
+                |candidate| self.pests[candidate.id as usize].distance,
+            )
+            .unwrap();
+            if let Some(pest) = selected.target.map(|c| &self.pests[c.id as usize]) {
                 tower.aim = (pest.pos - PLOTS[plot]).normalize_or_zero();
                 self.fired = self.fired.saturating_add(1);
                 self.shots.push(Shot {
