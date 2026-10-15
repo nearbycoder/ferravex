@@ -1,5 +1,9 @@
 use crate::{BALL_RADIUS, BUMPERS, Controls, FLIPPER_LENGTH, PIVOTS, RAILS, Table};
 use ferravex_core::FixedClock;
+use ferravex_render::input::{
+    PlayerInput, Preset,
+    touch::{Control, Output, Region},
+};
 use ferravex_render::{demo::Demo, prelude::*};
 
 const INK: Color = Color::from_rgba(19, 27, 27, 255);
@@ -248,50 +252,65 @@ async fn game() {
     let mut demo = Demo::new();
     let mut table = Table::new();
     let mut clock = FixedClock::new(120.0, 16);
-    let mut touch_mode = false;
+    let mut player_input = PlayerInput::preset("salvage-pinball", Preset::Pinball);
     let mut game_over_time = 0.0;
     let mut launch_pending = false;
     loop {
         ferravex_render::ui::warm_up_font_sizes(&[13, 16, 17, 25, 32]);
-        let touches = ferravex_render::input::logical_touches();
-        touch_mode |= !touches.is_empty();
-        let pointer = Vec2::from(mouse_position());
-        let pointer_down = is_mouse_button_down(MouseButton::Left);
-        let tapped = is_mouse_button_pressed(MouseButton::Left)
-            || touches.iter().any(|t| t.phase == TouchPhase::Started);
-        launch_pending |= is_key_pressed(KeyCode::Space) || tapped;
         let split = screen_width() * 0.5;
         let lower = screen_height() * 0.5;
-        let mut controls = Controls {
-            left: is_key_down(KeyCode::A)
-                || is_key_down(KeyCode::Left)
-                || (pointer_down && pointer.x < split && pointer.y > lower)
-                || touches.iter().any(|t| {
-                    t.position.x < split
-                        && t.position.y > lower
-                        && !matches!(t.phase, TouchPhase::Ended | TouchPhase::Cancelled)
-                }),
-            right: is_key_down(KeyCode::D)
-                || is_key_down(KeyCode::Right)
-                || (pointer_down && pointer.x >= split && pointer.y > lower)
-                || touches.iter().any(|t| {
-                    t.position.x >= split
-                        && t.position.y > lower
-                        && !matches!(t.phase, TouchPhase::Ended | TouchPhase::Cancelled)
-                }),
-            launch: launch_pending,
+        player_input
+            .set_touch_layout(&[
+                Control {
+                    region: Region::Rect(Rect::new(0., lower, split, lower)),
+                    output: Output::Button(0),
+                },
+                Control {
+                    region: Region::Rect(Rect::new(split, lower, split, lower)),
+                    output: Output::Button(1),
+                },
+                Control {
+                    region: Region::Rect(Rect::new(0., 0., split * 2., lower)),
+                    output: Output::Button(8),
+                },
+            ])
+            .unwrap();
+        player_input.sample_play();
+        let touch_mode = player_input.touch_seen();
+        let pointer = Vec2::from(mouse_position());
+        let tapped = is_mouse_button_pressed(MouseButton::Left)
+            || ferravex_render::input::logical_touches()
+                .iter()
+                .any(|t| t.phase == TouchPhase::Started);
+        launch_pending |= tapped && player_input.gameplay_active();
+        if !player_input.gameplay_active() {
+            launch_pending = false;
+        }
+        let pointer_down =
+            is_mouse_button_down(MouseButton::Left) && player_input.gameplay_active();
+        let dt = if demo.autoplay {
+            demo.dt()
+        } else {
+            player_input.simulation_dt(demo.dt())
         };
-        if demo.autoplay {
-            controls = table.autoplay();
-        }
-        let frame = clock.advance(demo.dt() as f64);
+        let frame = clock.advance(dt as f64);
         for _ in 0..frame.steps {
-            if demo.autoplay {
-                controls = table.autoplay();
-            }
+            let left = player_input.take("flipper_left");
+            let right = player_input.take("flipper_right");
+            let controls = if demo.autoplay {
+                table.autoplay()
+            } else {
+                Controls {
+                    left: left.pressed
+                        || left.value > 0.5
+                        || pointer_down && pointer.x < split && pointer.y > lower,
+                    right: right.pressed
+                        || right.value > 0.5
+                        || pointer_down && pointer.x >= split && pointer.y > lower,
+                    launch: player_input.pressed("launch") || launch_pending,
+                }
+            };
             table.step(frame.dt, controls);
-        }
-        if frame.steps > 0 {
             launch_pending = false;
         }
         if table.over() {
@@ -300,7 +319,8 @@ async fn game() {
             game_over_time = 0.0;
         }
         let reset = table_render(&table, touch_mode);
-        if is_key_pressed(KeyCode::R)
+        if player_input.pressed("restart")
+            || table.over() && player_input.pressed("confirm")
             || (tapped && (reset.contains(pointer) || table.over()))
             || (demo.autoplay && game_over_time > 2.0)
         {
@@ -308,6 +328,7 @@ async fn game() {
             clock.reset();
             launch_pending = false;
         }
+        player_input.draw_settings();
         if demo.finish_frame() {
             println!(
                 "salvage-pinball: score={} hits={} launches={} drains={}",

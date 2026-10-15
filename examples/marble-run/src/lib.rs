@@ -1,4 +1,8 @@
 //! An asset-free rolling-ball time trial over a suspended, low-poly aqueduct.
+use ferravex_render::input::{
+    ActionKind, Binding, InputCode, PlayerInput, Preset,
+    touch::{Control, Output, Region},
+};
 mod sim;
 use ferravex_core::FixedClock;
 use ferravex_engine::camera::{
@@ -263,26 +267,6 @@ fn centered(s: &str, y: f32, size: u16, color: Color) {
     let m = measure_text(s, None, size, 1.);
     text(s, (screen_width() - m.width) * 0.5, y, size as f32, color);
 }
-fn touch_input() -> (Vec2, bool, bool) {
-    let mut direction = Vec2::ZERO;
-    let mut brake = false;
-    let mut active = false;
-    for touch in ferravex_render::input::logical_touches()
-        .iter()
-        .filter(|t| !matches!(t.phase, TouchPhase::Ended | TouchPhase::Cancelled))
-    {
-        active = true;
-        let p = touch.position;
-        let base = vec2(100., screen_height() - 105.);
-        if p.distance(base) < 100. {
-            direction = (p - base).clamp_length_max(48.) / 48.;
-        }
-        if p.distance(vec2(screen_width() - 75., screen_height() - 90.)) < 65. {
-            brake = true;
-        }
-    }
-    (direction, brake, active)
-}
 ferravex_render::game!(conf, game);
 async fn game() {
     let mut game = Run::new();
@@ -290,7 +274,18 @@ async fn game() {
     let material = LitMaterial::new().expect("Ferravex's portable lit material must compile");
     let mut clock = FixedClock::new(120., 12);
     let mut demo = Demo::new();
-    let mut touch_mode = false;
+    let mut player_input = PlayerInput::preset("marble-run", Preset::Racer);
+    player_input
+        .global_action(
+            "overview",
+            "Course overview",
+            ActionKind::Button,
+            vec![
+                Binding::digital(InputCode::Key(KeyCode::Tab as u16)),
+                Binding::digital(InputCode::PadButton(3)),
+            ],
+        )
+        .unwrap();
     let mut camera = Rig3::new(Settings3 {
         position_half_life: std::f32::consts::LN_2 / 6.,
         target_half_life: std::f32::consts::LN_2 / 6.,
@@ -307,25 +302,54 @@ async fn game() {
     let right = vec3(-forward.z, 0., forward.x);
     loop {
         ferravex_render::ui::warm_up_font_sizes(&[12, 17, 18, 20, 23, 26, 30]);
-        let (touch, touch_brake, touched) = touch_input();
-        touch_mode |= touched;
-        let restart = is_key_pressed(KeyCode::R)
-            || game.finished && is_mouse_button_pressed(MouseButton::Left);
-        if restart {
+        player_input
+            .set_touch_layout(&[
+                Control {
+                    region: Region::Circle {
+                        center: vec2(100., screen_height() - 105.),
+                        radius: 100.,
+                    },
+                    output: Output::Stick {
+                        x: 0,
+                        y: 1,
+                        radius: 48.,
+                        floating: false,
+                    },
+                },
+                Control {
+                    region: Region::Circle {
+                        center: vec2(screen_width() - 75., screen_height() - 90.),
+                        radius: 65.,
+                    },
+                    output: Output::Button(6),
+                },
+            ])
+            .unwrap();
+        player_input.sample_play();
+        let touch_mode = player_input.touch_seen();
+        let touch = player_input
+            .touch_stick(0, 1)
+            .map_or(Vec2::ZERO, |(_, delta)| delta);
+        if player_input.pressed("restart")
+            || game.finished
+                && (player_input.pressed("confirm") || is_mouse_button_pressed(MouseButton::Left))
+        {
             game = Run::new();
             clock.reset();
             camera.cut();
         }
-        let held = |a, b| f32::from(is_key_down(a) || is_key_down(b));
-        let horizontal =
-            held(KeyCode::D, KeyCode::Right) - held(KeyCode::A, KeyCode::Left) + touch.x;
-        let vertical = held(KeyCode::W, KeyCode::Up) - held(KeyCode::S, KeyCode::Down) - touch.y;
-        let direction = right * horizontal + forward * vertical;
+        let movement = player_input.movement();
+        let direction = right * movement.x + forward * movement.y;
         let input = Controls {
             roll: vec2(direction.x, direction.z).clamp_length_max(1.),
-            brake: is_key_down(KeyCode::Space) || touch_brake,
+            brake: player_input.held("brake"),
         };
-        let frame = clock.advance(demo.dt() as f64);
+        let dt = if demo.autoplay {
+            demo.dt()
+        } else {
+            player_input.simulation_dt(demo.dt())
+        };
+        let frame = clock.advance(dt as f64);
         for _ in 0..frame.steps {
             let controls = if demo.autoplay {
                 game.autopilot()
@@ -360,7 +384,7 @@ async fn game() {
             .expect("valid rolling camera")
             .pose;
         clear_background(SKY);
-        let overview = is_key_down(KeyCode::Tab);
+        let overview = player_input.held("overview");
         let camera_position = if overview {
             vec3(31., 40., 20.)
         } else {
@@ -473,6 +497,7 @@ async fn game() {
             centered(&format!("{} falls", game.falls), y + 48., 18, CREAM);
             centered("R or tap to roll again", y + 90., 17, CREAM);
         }
+        player_input.draw_settings();
         if demo.finish_frame() {
             break;
         }

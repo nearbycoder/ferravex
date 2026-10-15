@@ -278,13 +278,18 @@ struct State {
     quality_override: Option<lighting::Quality>,
     points: Vec<lighting::PointLight>,
     sun: Option<lighting::SunShadow>,
+    input: input::PlatformInput,
+    input_enabled: bool,
+    controls_open: bool,
     keys: BTreeSet<u32>,
     pressed: BTreeSet<u32>,
     buttons: BTreeSet<u32>,
+    touch_buttons: BTreeSet<u32>,
     clicks: BTreeSet<u32>,
     mouse: Vec2,
     delta: Vec2,
     wheel: f32,
+    wheel_x: f32,
     touches: Vec<Touch>,
     grab: bool,
     visible: bool,
@@ -292,9 +297,9 @@ struct State {
     #[cfg(not(target_arch = "wasm32"))]
     screenshots: Vec<String>,
     future: Option<Pin<Box<dyn Future<Output = ()>>>>,
-    finished: bool,
     autoplay: bool,
     frame: u64,
+    in_frame: bool,
 }
 impl Default for State {
     fn default() -> Self {
@@ -320,13 +325,18 @@ impl Default for State {
             quality_override: None,
             points: Vec::new(),
             sun: None,
+            input: Default::default(),
+            input_enabled: false,
+            controls_open: false,
             keys: BTreeSet::new(),
             pressed: BTreeSet::new(),
             buttons: BTreeSet::new(),
+            touch_buttons: BTreeSet::new(),
             clicks: BTreeSet::new(),
             mouse: Vec2::ZERO,
             delta: Vec2::ZERO,
             wheel: 0.,
+            wheel_x: 0.,
             touches: Vec::new(),
             grab: false,
             visible: true,
@@ -334,9 +344,9 @@ impl Default for State {
             #[cfg(not(target_arch = "wasm32"))]
             screenshots: Vec::new(),
             future: None,
-            finished: false,
             autoplay: false,
             frame: 0,
+            in_frame: false,
         };
         s.default_camera();
         s
@@ -818,16 +828,19 @@ pub fn get_time() -> f64 {
     read(|s| s.time)
 }
 pub fn is_key_down(k: KeyCode) -> bool {
-    read(|s| s.keys.contains(&(k as u32)))
+    read(|s| !s.controls_open && s.keys.contains(&(k as u32)))
 }
 pub fn is_key_pressed(k: KeyCode) -> bool {
-    read(|s| s.pressed.contains(&(k as u32)))
+    read(|s| !s.controls_open && s.pressed.contains(&(k as u32)))
 }
 pub fn is_mouse_button_down(k: MouseButton) -> bool {
-    read(|s| s.buttons.contains(&(k as u32)))
+    read(|s| {
+        !s.controls_open
+            && (s.buttons.contains(&(k as u32)) || s.touch_buttons.contains(&(k as u32)))
+    })
 }
 pub fn is_mouse_button_pressed(k: MouseButton) -> bool {
-    read(|s| s.clicks.contains(&(k as u32)))
+    read(|s| !s.controls_open && s.clicks.contains(&(k as u32)))
 }
 pub fn mouse_position() -> (f32, f32) {
     read(|s| s.mouse.into())
@@ -836,10 +849,16 @@ pub fn mouse_delta_position() -> Vec2 {
     read(|s| -s.delta / vec2(s.w as f32, s.h as f32))
 }
 pub fn mouse_wheel() -> (f32, f32) {
-    read(|s| (0., s.wheel))
+    read(|s| (s.wheel_x, s.wheel))
 }
 pub fn touches() -> Vec<Touch> {
-    read(|s| s.touches.clone())
+    read(|s| {
+        if s.controls_open {
+            Vec::new()
+        } else {
+            s.touches.clone()
+        }
+    })
 }
 pub fn set_cursor_grab(grab: bool) {
     edit(|s| s.grab = grab)
@@ -889,8 +908,10 @@ pub fn start(conf: Conf, future: impl Future<Output = ()> + 'static) {
         s.future = Some(Box::pin(future));
     });
 }
-fn frame(dt: f32, w: u32, h: u32) -> bool {
+fn begin_host_frame(dt: f32, w: u32, h: u32) {
     edit(|s| {
+        assert!(!s.in_frame, "one input/render frame at a time");
+        s.in_frame = true;
         s.dt = if dt.is_finite() {
             dt.clamp(0., 0.1)
         } else {
@@ -908,6 +929,9 @@ fn frame(dt: f32, w: u32, h: u32) -> bool {
         s.visibility_stats = Default::default();
         s.default_camera();
     });
+}
+fn frame(dt: f32, w: u32, h: u32) -> bool {
+    begin_host_frame(dt, w, h);
     let mut future = edit(|s| s.future.take());
     let finished = future.as_mut().is_none_or(|f| {
         f.as_mut()
@@ -916,64 +940,185 @@ fn frame(dt: f32, w: u32, h: u32) -> bool {
     });
     edit(|s| {
         s.future = future;
+    });
+    end_host_frame();
+    !finished
+}
+fn end_host_frame() {
+    edit(|s| {
         s.retained.finalize();
-        s.finished = finished;
         s.frame += 1;
+        s.in_frame = false;
         s.pressed.clear();
         s.clicks.clear();
+        s.input.finish_frame();
         s.delta = Vec2::ZERO;
         s.wheel = 0.;
-        let ended: Vec<_> = s
-            .touches
-            .iter()
-            .filter(|t| matches!(t.phase, TouchPhase::Ended | TouchPhase::Cancelled))
-            .map(|t| t.id)
-            .collect();
-        s.touches.retain(|t| !ended.contains(&t.id));
+        s.wheel_x = 0.;
+        if !s.touches.is_empty() {
+            let mut ended = [0_u64; 64];
+            let mut len = 0;
+            for touch in &s.touches {
+                if matches!(touch.phase, TouchPhase::Ended | TouchPhase::Cancelled) {
+                    ended[len] = touch.id;
+                    len += 1;
+                }
+            }
+            s.touches.retain(|touch| !ended[..len].contains(&touch.id));
+        }
         for t in &mut s.touches {
             t.phase = TouchPhase::Stationary;
         }
     });
-    !finished
+}
+fn clear_held(s: &mut State) {
+    s.keys.clear();
+    s.pressed.clear();
+    s.buttons.clear();
+    s.touch_buttons.clear();
+    s.clicks.clear();
+    s.touches.clear();
+    s.delta = Vec2::ZERO;
+    s.wheel = 0.;
+    s.wheel_x = 0.;
+}
+fn focus(focused: bool) {
+    edit(|s| {
+        s.input.focus(focused);
+        if !focused {
+            clear_held(s);
+        }
+    });
 }
 fn key(code: u32, down: bool) {
+    if code == 0 || code > u16::MAX as u32 {
+        return;
+    }
     edit(|s| {
+        if s.keys.contains(&code) == down {
+            return;
+        }
+        if !s.input.push(input::PlatformEvent::Value(
+            input::InputCode::Key(code as u16),
+            f32::from(down),
+        )) {
+            clear_held(s);
+            return;
+        }
         if down {
-            if s.keys.insert(code) {
+            if s.keys.len() < input::MAX_ACTIVE_CODES {
+                s.keys.insert(code);
                 s.pressed.insert(code);
             }
         } else {
             s.keys.remove(&code);
         }
-    })
+    });
 }
 fn button(code: u32, down: bool) {
-    edit(|s| {
-        if down {
-            if s.buttons.insert(code) {
-                s.clicks.insert(code);
-            }
-        } else {
-            s.buttons.remove(&code);
-        }
-    })
+    button_source(code, down, false)
 }
-fn pointer(x: f32, y: f32, dx: f32, dy: f32) {
-    if ![x, y, dx, dy].into_iter().all(f32::is_finite) {
+fn button_source(code: u32, down: bool, touch: bool) {
+    if !(1..=5).contains(&code) {
         return;
     }
     edit(|s| {
+        if !s.input.focused || s.input.overflow {
+            clear_held(s);
+            return;
+        }
+        let held = if touch { &s.touch_buttons } else { &s.buttons };
+        if held.contains(&code) == down {
+            return;
+        }
+        if !touch
+            && !s.input.push(input::PlatformEvent::Value(
+                input::InputCode::Mouse(code as u8),
+                f32::from(down),
+            ))
+        {
+            clear_held(s);
+            return;
+        }
+        let held = if touch {
+            &mut s.touch_buttons
+        } else {
+            &mut s.buttons
+        };
+        if down {
+            held.insert(code);
+            s.clicks.insert(code);
+        } else {
+            held.remove(&code);
+        }
+    });
+}
+fn pointer(x: f32, y: f32, dx: f32, dy: f32) {
+    if ![x, y, dx, dy]
+        .iter()
+        .all(|v| v.is_finite() && v.abs() <= 1e6)
+    {
+        return;
+    }
+    edit(|s| {
+        if (dx != 0. || dy != 0.)
+            && !s
+                .input
+                .push(input::PlatformEvent::MouseMotion(vec2(dx, dy)))
+        {
+            clear_held(s);
+            return;
+        }
         s.mouse = vec2(x, y);
         s.delta += vec2(dx, dy);
-    })
+    });
 }
-#[cfg(any(target_arch = "wasm32", test))]
+fn wheel(delta: f32) {
+    wheel_axis(1, delta)
+}
+fn wheel_axis(axis: u8, delta: f32) {
+    if !delta.is_finite() || axis > 1 {
+        return;
+    }
+    edit(|s| {
+        let delta = delta.clamp(-1000., 1000.);
+        if !s.input.push(input::PlatformEvent::Value(
+            input::InputCode::Wheel(axis),
+            delta,
+        )) {
+            clear_held(s);
+            return;
+        }
+        if axis == 0 {
+            s.wheel_x += delta;
+        } else {
+            s.wheel += delta;
+        }
+    });
+}
 fn touch(id: u64, phase: u32, x: f32, y: f32) {
     if !x.is_finite() || !y.is_finite() {
         return;
     }
     edit(|s| {
         let position = vec2(x, y);
+        if position.abs().max_element() > 1e6 {
+            return;
+        }
+        let event = ferravex_play::input::touch::Event {
+            id,
+            position,
+            phase: match phase {
+                0 => ferravex_play::input::touch::Phase::Start,
+                1 => ferravex_play::input::touch::Phase::Move,
+                2 => ferravex_play::input::touch::Phase::End,
+                _ => ferravex_play::input::touch::Phase::Cancel,
+            },
+        };
+        if !s.input.push(input::PlatformEvent::Touch(event)) {
+            clear_held(s);
+            return;
+        }
         if phase == 1
             && let Some(t) = s
                 .touches
@@ -1045,11 +1190,13 @@ pub fn run(conf: Conf, future: impl Future<Output = ()> + 'static) {
                     let old = read(|s| s.mouse);
                     pointer(old.x, old.y, dx, dy);
                 }
-                Event::Wheel(v) => edit(|s| s.wheel += v),
+                Event::Wheel(v) => wheel(v),
+                Event::Focus(value) => focus(value),
                 Event::Resize(_, _) => {}
                 Event::Quit => return,
             }
         }
+        input::poll_gamepads();
         let (w, h) = window.size();
         let token = performance.as_ref().map(|_| telemetry::FrameToken::begin());
         let active = frame(dt, w, h);
@@ -1226,21 +1373,51 @@ mod wasm {
     }
     #[unsafe(no_mangle)]
     pub extern "C" fn ferravex_wheel(delta: f32) {
-        if delta.is_finite() {
-            edit(|s| s.wheel += delta);
+        wheel(delta);
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_wheel_axis(axis: u32, delta: f32) {
+        if axis < 2 {
+            wheel_axis(axis as u8, delta);
         }
     }
     #[unsafe(no_mangle)]
     pub extern "C" fn ferravex_blur() {
-        edit(|s| {
-            s.keys.clear();
-            s.pressed.clear();
-            s.buttons.clear();
-            s.clicks.clear();
-            s.touches.clear();
-            s.delta = Vec2::ZERO;
-            s.wheel = 0.;
-        })
+        focus(false)
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_focus(value: u32) {
+        focus(value != 0)
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_touch_button(code: u32, down: u32) {
+        button_source(code, down != 0, true)
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_touch_pointer(x: f32, y: f32) {
+        if x.is_finite() && y.is_finite() {
+            edit(|s| s.mouse = vec2(x, y));
+        }
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_pad_connected(index: u32, connected: u32) {
+        edit(|s| s.input.pad_connected(index as usize, connected != 0));
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_pad_axis(index: u32, axis: u32, value: f32) {
+        edit(|s| s.input.pad_axis(index as usize, axis as usize, value));
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_pad_button(index: u32, button: u32, value: f32) {
+        edit(|s| s.input.pad_button(index as usize, button as usize, value));
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_controls_open() -> u32 {
+        read(|s| s.controls_open as u32)
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_input_settings() {
+        edit(|s| s.input.settings_requested = true);
     }
     #[unsafe(no_mangle)]
     pub extern "C" fn ferravex_touch_mouse() -> u32 {

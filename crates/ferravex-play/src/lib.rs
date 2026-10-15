@@ -4,6 +4,7 @@
 
 pub mod animation;
 pub mod camera;
+pub mod input;
 pub mod navigation;
 pub mod particles;
 pub mod rounds;

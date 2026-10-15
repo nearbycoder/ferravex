@@ -69,14 +69,11 @@ impl Demo {
     /// Call after all drawing and before next_frame. Returns true when the run is finished.
     pub fn finish_frame(&mut self) -> bool {
         self.frame += 1;
-        if self.limit.is_some_and(|limit| self.frame >= limit) {
-            #[cfg(not(target_arch = "wasm32"))]
-            if let Some(path) = &self.screenshot {
-                get_screen_data().export_png(path);
-            }
-            true
-        } else {
-            false
+        let finished = self.limit.is_some_and(|limit| self.frame >= limit);
+        #[cfg(not(target_arch = "wasm32"))]
+        if finished && let Some(path) = &self.screenshot {
+            get_screen_data().export_png(path);
         }
+        finished
     }
 }

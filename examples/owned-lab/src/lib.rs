@@ -1,4 +1,6 @@
 //! Playable first-party reference scene. Platform code consumes the same Rust state on native/Web.
+#[cfg(target_arch = "wasm32")]
+mod interactive;
 mod peer;
 use ferravex_core::FixedClock;
 use ferravex_engine::play::particles::{ParticleDesc, ParticlePool};

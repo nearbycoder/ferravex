@@ -1,4 +1,8 @@
 //! A complete small rally time trial; all art is procedural and all motion is simulated.
+use ferravex_render::input::{
+    PlayerInput, Preset,
+    touch::{Control, Output, Region},
+};
 mod sim;
 use ferravex_core::FixedClock;
 use ferravex_render::{demo::Demo, prelude::*};
@@ -250,32 +254,6 @@ fn text(s: &str, x: f32, y: f32, size: f32, color: Color) {
 fn time(t: f32) -> String {
     format!("{:02}:{:05.2}", (t / 60.) as u32, t % 60.)
 }
-fn touch_controls() -> (Controls, bool) {
-    let mut c = Controls::default();
-    let active = ferravex_render::input::logical_touches()
-        .iter()
-        .any(|t| t.phase != TouchPhase::Ended && t.phase != TouchPhase::Cancelled);
-    for touch in ferravex_render::input::logical_touches()
-        .into_iter()
-        .filter(|t| !matches!(t.phase, TouchPhase::Ended | TouchPhase::Cancelled))
-    {
-        if touch.position.y > screen_height() - 130. {
-            let x = touch.position.x;
-            if x < 100. {
-                c.steer = -1.;
-            } else if x < 200. {
-                c.steer = 1.;
-            } else if x > screen_width() - 100. {
-                c.throttle = 1.;
-            } else if x > screen_width() - 200. {
-                c.handbrake = true;
-                c.throttle = -0.3;
-            }
-        }
-    }
-    (c, active)
-}
-
 ferravex_render::game!(conf, game);
 async fn game() {
     let track = Track::new();
@@ -283,29 +261,64 @@ async fn game() {
     let mut clock = FixedClock::new(120., 8);
     let mut demo = Demo::new();
     let mut marks: VecDeque<(Vec2, Vec2)> = VecDeque::new();
-    let mut touch_mode = false;
+    let mut player_input = PlayerInput::preset("pocket-rally", Preset::Racer);
+    player_input
+        .add_default_binding(
+            "move_back",
+            ferravex_render::input::Binding {
+                code: ferravex_render::input::InputCode::Touch(6),
+                scale: 0.3,
+                deadzone: 0.,
+            },
+        )
+        .unwrap();
     loop {
         ferravex_render::ui::warm_up_font_sizes(&[12, 13, 16, 17, 18, 20, 21, 23, 25, 26, 32]);
-        if is_key_pressed(KeyCode::R)
-            || race.finished() && is_mouse_button_pressed(MouseButton::Left)
+        let w = screen_width();
+        let h = screen_height();
+        player_input
+            .set_touch_layout(&[
+                Control {
+                    region: Region::Rect(Rect::new(0., h - 130., 100., 130.)),
+                    output: Output::Button(12),
+                },
+                Control {
+                    region: Region::Rect(Rect::new(100., h - 130., 100., 130.)),
+                    output: Output::Button(13),
+                },
+                Control {
+                    region: Region::Rect(Rect::new(w - 100., h - 130., 100., 130.)),
+                    output: Output::Button(14),
+                },
+                Control {
+                    region: Region::Rect(Rect::new(w - 200., h - 130., 100., 130.)),
+                    output: Output::Button(6),
+                },
+            ])
+            .unwrap();
+        player_input.sample_play();
+        let touch_mode = player_input.touch_seen();
+        if player_input.pressed("restart")
+            || race.finished()
+                && (player_input.pressed("confirm") || is_mouse_button_pressed(MouseButton::Left))
         {
             race.reset(&track);
             clock.reset();
             marks.clear();
         }
-        let (touch, touched) = touch_controls();
-        touch_mode |= touched;
-        let held = |a, b| f32::from(is_key_down(a) || is_key_down(b));
+        let movement = player_input.movement();
+        let brake = player_input.held("brake");
         let controls = Controls {
-            throttle: (held(KeyCode::W, KeyCode::Up) - held(KeyCode::S, KeyCode::Down)
-                + touch.throttle)
-                .clamp(-1., 1.),
-            steer: (held(KeyCode::D, KeyCode::Right) - held(KeyCode::A, KeyCode::Left)
-                + touch.steer)
-                .clamp(-1., 1.),
-            handbrake: is_key_down(KeyCode::Space) || touch.handbrake,
+            throttle: movement.y,
+            steer: movement.x,
+            handbrake: brake,
         };
-        let frame = clock.advance(demo.dt() as f64);
+        let dt = if demo.autoplay {
+            demo.dt()
+        } else {
+            player_input.simulation_dt(demo.dt())
+        };
+        let frame = clock.advance(dt as f64);
         for _ in 0..frame.steps {
             let previous = race.car.pose.position;
             let input = if demo.autoplay {
@@ -488,6 +501,7 @@ async fn game() {
                 CREAM,
             );
         }
+        player_input.draw_settings();
         if demo.finish_frame() {
             break;
         }

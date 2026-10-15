@@ -1,6 +1,10 @@
 mod game;
 
 use ferravex_core::FixedClock;
+use ferravex_render::input::{
+    Binding, InputCode, PlayerInput, Preset,
+    touch::{Control, Output, Region},
+};
 use ferravex_render::{canvas::Canvas2D, demo::Demo, prelude::*};
 use game::{ARENA, Bullet, COVER, Enemy, Game, Input, Phase, Pickup, Position};
 
@@ -23,7 +27,10 @@ async fn game() {
     let mut clock = FixedClock::new(120.0, 12);
     let mut started = demo.autoplay;
     let mut paused = false;
-    let mut touch_mode = false;
+    let mut player_input = PlayerInput::preset("neon-swarm", Preset::TopDown);
+    player_input
+        .add_default_binding("confirm", Binding::digital(InputCode::Mouse(1)))
+        .unwrap();
     loop {
         ferravex_render::ui::warm_up_font_sizes(&[14, 15, 18, 22, 30, 32, 56]);
         let canvas = Canvas2D::fit(
@@ -31,55 +38,84 @@ async fn game() {
             vec2(screen_width().max(1.0), screen_height().max(1.0)),
         );
         let mouse = canvas.unproject(Vec2::from(mouse_position()));
-        let touch_points = ferravex_render::input::logical_touches();
-        if !touch_points.is_empty() {
-            touch_mode = true;
-        }
-        if !started
-            && (is_key_pressed(KeyCode::Enter)
-                || is_mouse_button_pressed(MouseButton::Left)
-                || !touch_points.is_empty())
-        {
+        let scene_active = started && game.phase == Phase::Playing;
+        let control = |rect: Rect, output| Control {
+            region: Region::Rect(Rect::new(
+                canvas.project(vec2(rect.x, rect.y)).x,
+                canvas.project(vec2(rect.x, rect.y)).y,
+                rect.w * canvas.scale,
+                rect.h * canvas.scale,
+            )),
+            output,
+        };
+        let layout = if scene_active {
+            [
+                Control {
+                    region: Region::Circle {
+                        center: canvas.project(vec2(202., 600.)),
+                        radius: 210. * canvas.scale,
+                    },
+                    output: Output::Stick {
+                        x: 0,
+                        y: 1,
+                        radius: 66. * canvas.scale,
+                        floating: false,
+                    },
+                },
+                control(Rect::new(640., 0., 640., 800.), Output::Button(7)),
+            ]
+        } else {
+            [
+                control(Rect::new(0., 0., 1280., 800.), Output::Button(10)),
+                control(Rect::new(0., 0., 1280., 800.), Output::Button(10)),
+            ]
+        };
+        player_input
+            .set_touch_layout(&layout[..if scene_active { 2 } else { 1 }])
+            .unwrap();
+        player_input.sample(scene_active && !paused);
+        let touch_mode = player_input.touch_seen();
+        let confirm = player_input.pressed("confirm");
+        if !started && confirm {
             started = true;
         }
-        if is_key_pressed(KeyCode::Escape) && started && game.phase == Phase::Playing {
+        if player_input.pressed("pause") && started && game.phase == Phase::Playing {
             paused = !paused;
         }
-        if is_key_pressed(KeyCode::R)
-            || (game.phase != Phase::Playing
-                && (is_key_pressed(KeyCode::Enter)
-                    || is_mouse_button_pressed(MouseButton::Left)
-                    || !touch_points.is_empty()))
-        {
+        if player_input.pressed("restart") || game.phase != Phase::Playing && confirm {
             game = Game::new();
             clock.reset();
             started = true;
             paused = false;
         }
+        player_input.sample(started && !paused && game.phase == Phase::Playing);
+        let movement = player_input.movement();
         let mut input = Input {
-            movement: vec2(
-                axis(KeyCode::D, KeyCode::Right) - axis(KeyCode::A, KeyCode::Left),
-                axis(KeyCode::S, KeyCode::Down) - axis(KeyCode::W, KeyCode::Up),
-            ),
+            movement: vec2(movement.x, -movement.y),
             aim: mouse,
-            fire: is_mouse_button_down(MouseButton::Left),
-            dash: is_key_down(KeyCode::Space) || is_key_down(KeyCode::LeftShift),
+            ..Default::default()
         };
-        if touch_mode {
-            for touch in &touch_points {
-                let p = canvas.unproject(touch.position);
-                if p.x < 640.0 {
-                    input.movement = ((p - vec2(202.0, 600.0)) / 66.0).clamp_length_max(1.0);
-                } else {
-                    input.dash = true;
-                }
-            }
+        let aim = vec2(player_input.value("aim_x"), player_input.value("aim_y"));
+        if aim.length_squared() > 0.01 {
+            input.aim = game.player + aim * 200.;
+        }
+        let touch_aim = player_input.touch_active();
+        if touch_aim {
             input.aim = game.nearest_enemy().unwrap_or(game.player + game.facing);
-            input.fire = game.nearest_enemy().is_some();
         }
         if started && !paused {
-            let step = clock.advance(f64::from(demo.dt()));
+            let dt = if demo.autoplay {
+                demo.dt()
+            } else {
+                player_input.simulation_dt(demo.dt())
+            };
+            let step = clock.advance(dt as f64);
             for _ in 0..step.steps {
+                let fire = player_input.take("fire");
+                let dash = player_input.take("boost");
+                input.fire =
+                    fire.pressed || fire.value > 0.5 || touch_aim && game.nearest_enemy().is_some();
+                input.dash = dash.pressed || dash.value > 0.5;
                 game.update(
                     if demo.autoplay {
                         game.autoplay()
@@ -154,18 +190,11 @@ async fn game() {
             );
         }
         set_default_camera();
+        player_input.draw_settings();
         if demo.finish_frame() {
             break;
         }
         next_frame().await;
-    }
-}
-
-fn axis(primary: KeyCode, alternate: KeyCode) -> f32 {
-    if is_key_down(primary) || is_key_down(alternate) {
-        1.0
-    } else {
-        0.0
     }
 }
 

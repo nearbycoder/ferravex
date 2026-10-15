@@ -14,6 +14,7 @@ pub enum Event {
     MouseButton(u32, bool),
     Wheel(f32),
     Resize(u32, u32),
+    Focus(bool),
     Quit,
 }
 
@@ -978,9 +979,11 @@ mod linux {
                         }
                         FOCUS_IN => {
                             self.focused = true;
+                            output.push(Event::Focus(true));
                         }
                         FOCUS_OUT => {
                             self.focused = false;
+                            output.push(Event::Focus(false));
                             if self.grabbed {
                                 XUngrabPointer(self.display, 0);
                                 self.grabbed = false;

@@ -1,5 +1,6 @@
 // Original Ferravex browser platform: WebGL2, DOM input, direct Rust/Wasm ABI.
 import {RetainedRenderer,GpuTimer} from './retained.js';
+import {bindInput} from './input.js';
 const canvas = document.querySelector('canvas');
 const status = document.querySelector('[role=status]');
 const gl = canvas.getContext('webgl2', {alpha:false, antialias:true, depth:true});
@@ -26,33 +27,20 @@ gl.enable(gl.BLEND);gl.blendFuncSeparate(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA,gl.
 const retained=new RetainedRenderer(gl);
 const gpuTimer=new GpuTimer(gl,canvas,new URLSearchParams(location.search).has('profile'));
 let exports,playing=false,active=true,allocated=0,frames=0,last=0;
-const keyboard=new Map([['F1',0xffbe],['F2',0xffbf],['F3',0xffc0],['Space',32],['Escape',0xff1b],['Enter',0xff0d],['Tab',0xff09],['ArrowLeft',0xff51],['ArrowUp',0xff52],['ArrowRight',0xff53],['ArrowDown',0xff54],['ShiftLeft',0xffe1],['ShiftRight',0xffe2],['ControlLeft',0xffe3],['ControlRight',0xffe4]]);
-const editing=e=>e.target instanceof Element&&!!e.target.closest('input,textarea,select,button,[contenteditable]');
-const keyCode=e=>keyboard.get(e.code)??(/^Key[A-Z]$/.test(e.code)?e.code.charCodeAt(3)+32:/^Digit\d$/.test(e.code)?e.code.charCodeAt(5):0);
-const reset=()=>exports?.ferravex_blur();
-window.addEventListener('blur',reset);document.addEventListener('visibilitychange',()=>{if(document.hidden)reset();last=0;});
-window.addEventListener('keydown',e=>{if(editing(e))return;const code=keyCode(e);if(code&&exports){exports.ferravex_key(code,1);e.preventDefault();}});
-window.addEventListener('keyup',e=>{if(editing(e))return;const code=keyCode(e);if(code&&exports){exports.ferravex_key(code,0);e.preventDefault();}});
-const coords=e=>{const r=canvas.getBoundingClientRect();return [e.clientX-r.left,e.clientY-r.top];};
-const buttons=[1,2,3];
-canvas.addEventListener('pointerdown',e=>{canvas.focus();canvas.setPointerCapture(e.pointerId);const [x,y]=coords(e);exports?.ferravex_pointer(x,y,0,0);if(e.pointerType==='touch'){exports?.ferravex_touch(e.pointerId,0,x,y);}if(e.pointerType!=='touch'||exports?.ferravex_touch_mouse())exports?.ferravex_button(buttons[e.button]??1,1);if(exports?.ferravex_grab()&&!document.pointerLockElement)canvas.requestPointerLock()?.catch(()=>{});e.preventDefault();});
-canvas.addEventListener('pointermove',e=>{const [x,y]=coords(e);exports?.ferravex_pointer(x,y,e.movementX,e.movementY);if(e.pointerType==='touch'&&e.buttons)exports?.ferravex_touch(e.pointerId,1,x,y);});
-const release=(e,cancel)=>{const [x,y]=coords(e);if(e.pointerType!=='touch'||exports?.ferravex_touch_mouse())exports?.ferravex_button(buttons[e.button]??1,0);if(e.pointerType==='touch')exports?.ferravex_touch(e.pointerId,cancel?3:2,x,y);};
-canvas.addEventListener('pointerup',e=>release(e,false));canvas.addEventListener('pointercancel',e=>release(e,true));
-canvas.addEventListener('contextmenu',e=>e.preventDefault());
-canvas.addEventListener('wheel',e=>{exports?.ferravex_wheel(-Math.sign(e.deltaY));e.preventDefault();},{passive:false});
-document.addEventListener('pointerlockchange',()=>{reset();if(!document.pointerLockElement&&playing){exports?.ferravex_key(0xff1b,1);exports?.ferravex_key(0xff1b,0);}});
-canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();active=false;status.textContent='Graphics context lost. Reload to resume.';});
 const game=canvas.dataset.game;
+const inputPlatform=bindInput(canvas,game,()=>exports,()=>playing);
+const controlsButton=document.querySelector('[data-controls]');
+controlsButton?.addEventListener('click',()=>{inputPlatform.openSettings();canvas.focus();});
+canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();active=false;status.textContent='Graphics context lost. Reload to resume.';});
 try {
- const imports={env:{ferravex_set_playing:value=>{playing=!!value;if(!playing&&document.pointerLockElement)document.exitPointerLock();}}};
+ const imports={env:{...inputPlatform.imports,ferravex_set_playing:value=>{playing=!!value;if(!playing&&document.pointerLockElement)document.exitPointerLock();}}};
  const response=await fetch(`${game.replaceAll('-','_')}.wasm`);if(!response.ok)throw new Error(`Game download failed (${response.status})`);
  const {instance}=await WebAssembly.instantiate(await response.arrayBuffer(),imports);exports=instance.exports;
  exports.ferravex_init();
  const requestedQuality=new URLSearchParams(location.search).get('quality');if(requestedQuality!==null){const quality=['low','medium','high'].indexOf(requestedQuality);if(quality<0)throw new Error('quality must be low, medium or high');exports.ferravex_quality_override(quality);}
  exports.ferravex_autoplay(new URLSearchParams(location.search).has('autoplay')?1:0);
  let materialTools=null;if(new URLSearchParams(location.search).has('material-tools')){materialTools=(await import('./material-tools.js')).createMaterialTools(exports);}
- status.textContent='';canvas.focus();
+ status.textContent='';if(controlsButton)controlsButton.disabled=false;canvas.focus();
  const loop=time=>{
   if(!active)return;
   const r=canvas.getBoundingClientRect(),dpr=Math.min(devicePixelRatio||1,2);
@@ -60,7 +48,10 @@ try {
   if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;gl.viewport(0,0,w,h);}
   const dt=last?Math.min((time-last)/1000,0.1):1/60;last=time;
   // Rust receives logical pixels; the GPU viewport alone uses framebuffer pixels.
+  inputPlatform.poll();
   const running=exports.ferravex_frame(dt,Math.round(r.width),Math.round(r.height));
+  const controlsOpen=inputPlatform.syncPanel();
+  controlsButton?.setAttribute('aria-pressed',String(controlsOpen));
   const count=exports.ferravex_vertex_count(),ptr=exports.ferravex_vertices();
   const vertices=new Float32Array(exports.memory.buffer,ptr,count*8);
   gl.bindBuffer(gl.ARRAY_BUFFER,buffer);

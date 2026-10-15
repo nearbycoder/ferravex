@@ -5,6 +5,10 @@ use ferravex_physics::d3::{
 };
 use ferravex_physics::{JointHandle, JointMotor};
 use ferravex_play::camera::{Input3, Mode3, NoObstructions, Rig3, Settings3, Target3};
+use ferravex_render::input::{
+    PlayerInput, Preset,
+    touch::{Control, Output, Region},
+};
 use ferravex_render::{
     mesh::Mesh3d,
     prelude::*,
@@ -232,7 +236,8 @@ async fn game() {
     let mut yaw: f32 = 0.68;
     let mut pitch: f32 = 0.48;
     let mut radius: f32 = 25.0;
-    let mut previous_mouse = Vec2::from(mouse_position());
+    let mut player_input = PlayerInput::preset("physics-3d", Preset::Lab3);
+    player_input.set_mouse_look_button(Some(1)).unwrap();
     let mut camera = Rig3::new(Settings3 {
         position_half_life: 0.045,
         target_half_life: 0.,
@@ -242,48 +247,57 @@ async fn game() {
     loop {
         ui::warm_up_font();
         stats.record(get_frame_time());
+        let footer_y = screen_height() - 98.;
+        player_input
+            .set_touch_layout(&[Control {
+                region: Region::Rect(Rect::new(
+                    0.,
+                    126.,
+                    screen_width(),
+                    (footer_y - 126.).max(1.),
+                )),
+                output: Output::Look { x: 0, y: 1 },
+            }])
+            .unwrap();
+        player_input.sample(true);
         let pointer = Vec2::from(mouse_position());
         let footer_y = screen_height() - 98.0;
         let in_scene = pointer.y > 126.0 && pointer.y < footer_y;
-        if is_mouse_button_down(MouseButton::Left)
-            && !is_mouse_button_pressed(MouseButton::Left)
-            && in_scene
+        let look = player_input.look(demo.dt());
+        if in_scene
+            || player_input.touch_active()
+            || player_input.value("look_rate_x").abs() > 0.001
+            || player_input.value("look_rate_y").abs() > 0.001
         {
-            let delta = pointer - previous_mouse;
-            yaw -= delta.x * 0.006;
-            pitch = (pitch + delta.y * 0.004).clamp(0.12, 1.35);
+            yaw -= look.x;
+            pitch = (pitch + look.y).clamp(0.12, 1.35);
         }
-        previous_mouse = pointer;
+        let zoom = player_input.take("zoom").value;
         if in_scene {
-            radius = (radius - mouse_wheel().1 * 0.8).clamp(12.0, 42.0);
+            radius = (radius - zoom * 0.8).clamp(12., 42.);
         }
-        let rotate_speed = get_frame_time() * 1.2;
-        if is_key_down(KeyCode::Left) {
-            yaw -= rotate_speed;
-        }
-        if is_key_down(KeyCode::Right) {
-            yaw += rotate_speed;
-        }
-        if is_key_down(KeyCode::Up) {
-            pitch = (pitch + rotate_speed).min(1.35);
-        }
-        if is_key_down(KeyCode::Down) {
-            pitch = (pitch - rotate_speed).max(0.12);
-        }
-        if is_key_pressed(KeyCode::Space) {
+        radius = (radius - player_input.value("zoom_rate") * demo.dt() * 4.).clamp(12., 42.);
+        let movement = player_input.movement();
+        yaw += movement.x * demo.dt() * 1.2;
+        pitch = (pitch + movement.y * demo.dt() * 1.2).clamp(0.12, 1.35);
+        if player_input.pressed("pause") {
             paused = !paused;
         }
-        if is_key_pressed(KeyCode::R) {
+        if player_input.pressed("restart") {
             sandbox = Sandbox::new();
             clock.reset();
         }
-        if is_key_pressed(KeyCode::Key1) {
+        if player_input.pressed("select_one") {
             sandbox.drop_body(false);
         }
-        if is_key_pressed(KeyCode::Key2) {
+        if player_input.pressed("select_two") {
             sandbox.drop_body(true);
         }
-        let frame = clock.advance(if paused { 0.0 } else { get_frame_time() as f64 });
+        let frame = clock.advance(if paused {
+            0.0
+        } else {
+            player_input.simulation_dt(get_frame_time()) as f64
+        });
         for _ in 0..frame.steps {
             sandbox.step(frame.dt);
         }
@@ -483,6 +497,7 @@ async fn game() {
         if screen_width() > 1100.0 {
             ui::stat(955.0, footer_y + 25.0, "SHADING", "Flat + fog");
         }
+        player_input.draw_settings();
         if demo.finish_frame() {
             break;
         }

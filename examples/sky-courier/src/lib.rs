@@ -2,6 +2,10 @@ use ferravex_core::FixedClock;
 use ferravex_play::camera::{
     Input3, Mode3, NoObstructions, Rig3, Settings3, ShakeImpulse, Target3,
 };
+use ferravex_render::input::{
+    PlayerInput, Preset,
+    touch::{Control, Output, Region},
+};
 use ferravex_render::{
     demo::Demo,
     mesh::Mesh3d,
@@ -314,30 +318,6 @@ impl Scene {
     }
 }
 
-fn human_input() -> Input {
-    let mut input = Input {
-        turn: (is_key_down(KeyCode::D) || is_key_down(KeyCode::Right)) as u8 as f32
-            - (is_key_down(KeyCode::A) || is_key_down(KeyCode::Left)) as u8 as f32,
-        climb: (is_key_down(KeyCode::W) || is_key_down(KeyCode::Up)) as u8 as f32
-            - (is_key_down(KeyCode::S) || is_key_down(KeyCode::Down)) as u8 as f32,
-        boost: is_key_down(KeyCode::Space),
-        slow: is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift),
-    };
-    // A left-side virtual stick and a right-side slow-flight pad support touch.
-    for touch in ferravex_render::input::logical_touches() {
-        if touch.phase == TouchPhase::Ended || touch.phase == TouchPhase::Cancelled {
-            continue;
-        }
-        if touch.position.x < screen_width() * 0.55 {
-            let offset = touch.position - vec2(90., screen_height() - 100.);
-            input.turn = (offset.x / 60.).clamp(-1., 1.);
-            input.climb = (-offset.y / 60.).clamp(-1., 1.);
-        } else {
-            input.slow = true;
-        }
-    }
-    input
-}
 fn label(text: &str, x: f32, y: f32, size: f32, color: Color) {
     draw_text(
         text,
@@ -475,7 +455,7 @@ async fn game() {
     let mut clock = FixedClock::new(120., 12);
     let scene = Scene::new();
     let material = LitMaterial::new().expect("portable flight material");
-    let mut touch_mode = false;
+    let mut player_input = PlayerInput::preset("sky-courier", Preset::Flight);
     let mut reported = false;
     let mut camera = Rig3::new(Settings3 {
         position_half_life: 0.1,
@@ -487,12 +467,37 @@ async fn game() {
     let mut previous_hull = flight.hull;
     loop {
         ferravex_render::ui::warm_up_font_sizes(&[13, 14, 16, 17, 18, 19, 20, 22, 24, 26, 38]);
-        touch_mode |= !ferravex_render::input::logical_touches().is_empty();
-        if is_key_pressed(KeyCode::R)
+        let w = screen_width();
+        let h = screen_height();
+        // Keep the authored stick origin while bounding its hit region to the left half.
+        player_input
+            .set_touch_layout(&[
+                Control {
+                    region: Region::Circle {
+                        center: vec2(90., h - 100.),
+                        radius: 85.,
+                    },
+                    output: Output::Stick {
+                        x: 0,
+                        y: 1,
+                        radius: 60.,
+                        floating: false,
+                    },
+                },
+                Control {
+                    region: Region::Rect(Rect::new(w * 0.55, 0., w * 0.45, h)),
+                    output: Output::Button(6),
+                },
+            ])
+            .unwrap();
+        player_input.sample_play();
+        let touch_mode = player_input.touch_seen();
+        if player_input.pressed("restart")
             || (flight.outcome != Outcome::Flying
-                && ferravex_render::input::logical_touches()
-                    .iter()
-                    .any(|t| t.phase == TouchPhase::Started))
+                && (player_input.pressed("confirm")
+                    || ferravex_render::input::logical_touches()
+                        .iter()
+                        .any(|t| t.phase == TouchPhase::Started)))
         {
             flight = Flight::new();
             clock.reset();
@@ -500,8 +505,19 @@ async fn game() {
             camera.cut();
             previous_hull = flight.hull;
         }
-        let steps = clock.advance(demo.dt() as f64);
-        let human = human_input();
+        let dt = if demo.autoplay {
+            demo.dt()
+        } else {
+            player_input.simulation_dt(demo.dt())
+        };
+        let steps = clock.advance(dt as f64);
+        let movement = player_input.movement();
+        let human = Input {
+            turn: movement.x,
+            climb: movement.y,
+            boost: player_input.held("boost"),
+            slow: player_input.held("brake"),
+        };
         for _ in 0..steps.steps {
             let input = if demo.autoplay {
                 flight.autopilot()
@@ -578,6 +594,7 @@ async fn game() {
             );
             reported = true;
         }
+        player_input.draw_settings();
         if demo.finish_frame() {
             break;
         }

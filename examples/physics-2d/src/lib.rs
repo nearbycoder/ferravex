@@ -4,6 +4,7 @@ use ferravex_physics::JointHandle;
 use ferravex_physics::d2::{
     self, ColliderBuilder, JointBuilder, PhysicsWorld, RigidBodyBuilder, RigidBodyHandle,
 };
+use ferravex_render::input::{PlayerInput, Preset};
 use ferravex_render::{prelude::*, ui};
 
 const MAX_BODIES: usize = 240;
@@ -224,19 +225,21 @@ async fn game() {
     let mut stats = FrameStats::<90>::default();
     let mut paused = false;
     let mut ball = true;
+    let mut player_input = PlayerInput::preset("physics-2d", Preset::Lab2);
     loop {
         ui::warm_up_font();
         stats.record(get_frame_time());
-        if is_key_pressed(KeyCode::Space) {
+        player_input.sample(true);
+        if player_input.pressed("pause") {
             paused = !paused;
         }
-        if is_key_pressed(KeyCode::Key1) {
+        if player_input.pressed("select_one") {
             ball = true;
         }
-        if is_key_pressed(KeyCode::Key2) {
+        if player_input.pressed("select_two") {
             ball = false;
         }
-        if is_key_pressed(KeyCode::R) {
+        if player_input.pressed("restart") {
             sandbox = Sandbox::new();
             clock.reset();
         }
@@ -248,25 +251,28 @@ async fn game() {
             .max(1.0);
         let origin = vec2(screen_width() * 0.5, footer_y - 15.0 - scale);
         let to_screen = |point: Vec2| origin + vec2(point.x, -point.y) * scale;
-        let pointer = Vec2::from(mouse_position());
+        let pointer = player_input.cursor(demo.dt(), 600.);
         let pointer_in_scene = pointer.y > 136.0 && pointer.y < footer_y - 8.0;
         let spawn_position = vec2(
             (pointer.x - origin.x) / scale,
             (origin.y - pointer.y) / scale,
         );
-        if pointer_in_scene
-            && (is_mouse_button_pressed(MouseButton::Left)
-                || is_mouse_button_pressed(MouseButton::Right))
-        {
+        let secondary = player_input.pressed("secondary");
+        let primary = player_input.pressed("primary");
+        if pointer_in_scene && (primary || secondary) {
             sandbox.spawn(
                 vec2(
                     spawn_position.x.clamp(-11.2, 11.2),
                     spawn_position.y.max(0.6),
                 ),
-                ball && !is_mouse_button_pressed(MouseButton::Right),
+                ball && !secondary,
             );
         }
-        let frame = clock.advance(if paused { 0.0 } else { get_frame_time() as f64 });
+        let frame = clock.advance(if paused {
+            0.0
+        } else {
+            player_input.simulation_dt(get_frame_time()) as f64
+        });
         for _ in 0..frame.steps {
             sandbox.step(frame.dt);
         }
@@ -467,6 +473,10 @@ async fn game() {
         if screen_width() > 1090.0 {
             ui::stat(934.0, footer_y + 25.0, "FIXED SIMULATION", "120 Hz");
         }
+        if player_input.gameplay_active() && player_input.cursor_is_virtual() {
+            draw_circle_lines(pointer.x, pointer.y, 5., 1.3, WHITE);
+        }
+        player_input.draw_settings();
         if demo.finish_frame() {
             break;
         }

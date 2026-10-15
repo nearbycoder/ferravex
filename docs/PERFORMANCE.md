@@ -334,3 +334,62 @@ excluding re-export mirrors and redirect stubs. The current corpus is 2719
 entries, roughly 1.4 MB raw JSON / 190 KB gzip, loaded when search opens. Local
 retrieval checks averaged about 0.7 ms/query; the extra searchable API content
 has a transfer/storage cost even though it is separate from game modules.
+
+## Iteration 10: shared player input
+
+All fifteen browser games now use the shared action core and controls panel;
+the thirteen shared-renderer games also use it on Linux. The two owned native
+programs remain headless reference runners. Contexts, buffered press/release and
+motion, captured touch roles, selected-controller response, validated saved
+profiles and rebinding are implemented in first-party Rust. Browser/OS event
+bindings and storage are the host boundary; see [input](INPUT.md).
+
+Local validation included the workspace suite, strict native and Wasm Clippy,
+release native/Wasm builds, all fifteen native gameplay smoke runs, browser API
+contract tests and offline Wasm input/panel checks for all fifteen modules. Live
+browser checks covered rebinding, persistence after reload, gameplay with a
+rebound key, custom Canvas/WebGL overlays, and a 390×844 controls layout. A real
+browser test caught and fixed Base64 helper invocation context during saving.
+Core feeds/context changes/steady touch layout pass the zero-allocation test;
+the open controls editor can allocate text/layout data. No physical controller
+was attached, so Linux/browser device hardware behavior is not certified. Other
+native platform implementation remains iteration 20; no iOS SDK/device tests ran.
+
+The final report is `target/perf/iteration-10-final/report.json`, compared with
+iteration 9 using two runs, 30 warmup and 120 measured frames per run. Linux
+x86_64, the same release profile/default quality and autoplay workload, 20% time
+allowance, 1,000 µs CPU/submission floor, 20 µs GPU floor and 5% artifact size
+allowance were retained. Every timing and work gate passed. **56 size flags
+remain:** raw/gzip Wasm for all fifteen games and raw/gzip native files for the
+thirteen interactive native games. Editor/profile functionality is currently
+linked into each game; these costs need attention during the final size audit.
+The baseline and tolerances were not changed to hide them.
+
+| Game | Wasm bytes | Gzip-9 bytes | Raw increase vs 9 | Gzip increase vs 9 |
+|---|---:|---:|---:|---:|
+| owned-lab | 340,433 | 127,249 | +81,323 | +30,074 |
+| owned-orbit | 224,678 | 84,728 | +58,524 | +22,499 |
+| emberline | 232,159 | 88,428 | +63,804 | +23,381 |
+| neon-swarm | 247,534 | 91,739 | +65,382 | +24,052 |
+| pocket-rally | 219,596 | 82,898 | +65,854 | +24,704 |
+| salvage-pinball | 343,342 | 130,320 | +64,867 | +23,926 |
+| orchard-guard | 212,293 | 80,527 | +90,987 | +34,063 |
+| marble-run | 365,091 | 139,743 | +66,431 | +24,787 |
+| dune-skimmer | 288,284 | 111,102 | +67,203 | +25,025 |
+| crystal-cavern | 315,448 | 120,557 | +70,911 | +26,321 |
+| siege-foundry | 347,097 | 133,629 | +66,438 | +25,075 |
+| sky-courier | 266,019 | 101,660 | +66,296 | +24,482 |
+| strike | 326,664 | 125,295 | +66,331 | +24,457 |
+| physics-2d | 337,973 | 128,764 | +64,227 | +23,877 |
+| physics-3d | 389,861 | 148,438 | +65,680 | +24,510 |
+
+An earlier measurement is preserved under
+`target/perf/iteration-10-before-cursor-fix`; it had 56 size flags plus a 2D lab
+GPU p99 flag (72.94 µs versus a 47.33 µs allowance). The final implementation
+only draws a virtual pointer after stick/keyboard cursor input, avoiding a
+redundant cursor over a real mouse. Final GPU timing passed; this is a whole
+workload observation, not an isolated input optimization measurement.
+
+Shared browser input/overlay JavaScript is reported separately by
+`scripts/report-size.py`. The numbers above are actual game module bytes,
+excluding documentation, screenshots, precompressed copies and container images.

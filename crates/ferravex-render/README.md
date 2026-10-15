@@ -1,6 +1,6 @@
 # Original game runtime
 
-`ferravex-render` implements the shared runtime for thirteen recovered Ferravex games. It depends only on the original core, math and graphics crates. There is no re-export of a third-party engine or window library.
+`ferravex-render` implements the shared runtime for thirteen recovered Ferravex games. It depends only on the original core, math, graphics and play crates. There is no re-export of a third-party engine or window library.
 
 - Rust owns game futures, frame scheduling, keyboard/pointer/touch state, cameras, procedural meshes, 2D primitives, static bitmap glyph geometry, faceted directional lighting and distance fog.
 - Immediate primitives/text use a clip-space triangle stream. Mesh3d and explicit ResidentMesh handles use persistent GPU buffers, GPU transforms/lighting/fog and instanced submission. Opaque retained draws group within a camera/material pass; transparent draws and immediate UI preserve ordering barriers.
@@ -35,3 +35,9 @@ Retained 3D draws use conservative camera-frustum culling by default. Optional d
 [Materials and hot reload](../../docs/MATERIALS.md) describes the shader contract, native file polling and optional browser editor. Default game URLs keep the normal HUD.
 
 [Low-poly lighting](../../docs/LIGHTING.md) covers quality settings, local lights, shadow volumes, AO baking and driver GPU timing.
+
+[Unified input](../../docs/INPUT.md) covers action contexts, buffered fixed-tick
+edges, touch capture, gamepad response, local rebinding profiles and the F2
+controls panel. All fifteen browser games use that core; custom renderer hosts
+can drive it with `input::host_frame`. Linux controller hardware still needs
+physical device verification.

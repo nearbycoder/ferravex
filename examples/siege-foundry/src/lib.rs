@@ -3,6 +3,10 @@ use ferravex_core::FixedClock;
 use ferravex_physics::d3::{
     ColliderBuilder, PhysicsWorld, RigidBodyBuilder, RigidBodyHandle, Vector,
 };
+use ferravex_render::input::{
+    PlayerInput, Preset,
+    touch::{Control, Output, Region},
+};
 use ferravex_render::{
     demo::Demo,
     mesh::Mesh3d,
@@ -388,45 +392,53 @@ async fn game() {
     let mut demo = Demo::new();
     let mut clock = FixedClock::new(120.0, 12);
     let mut pending_fire = false;
-    let mut previous_mouse = Vec2::from(mouse_position());
+    let mut player_input = PlayerInput::preset("siege-foundry", Preset::Turret);
+    player_input.set_mouse_look_button(Some(1)).unwrap();
     loop {
         ferravex_render::ui::warm_up_font_sizes(&[16, 17, 18, 19, 23, 26, 28, 36]);
-        let dt = demo.dt();
+        let h = screen_height();
+        player_input
+            .set_touch_layout(&[Control {
+                region: Region::Rect(Rect::new(0., 90., screen_width(), (h - 190.).max(1.))),
+                output: Output::Look { x: 0, y: 1 },
+            }])
+            .unwrap();
+        player_input.sample_play();
+        let dt = if demo.autoplay {
+            demo.dt()
+        } else {
+            player_input.simulation_dt(demo.dt())
+        };
         let pointer = Vec2::from(mouse_position());
         let w = screen_width();
         let h = screen_height();
         let compact = w < 640.0;
-        if is_key_pressed(KeyCode::R) {
+        if player_input.pressed("restart")
+            || game.phase != Phase::Aiming && player_input.pressed("confirm")
+        {
             game = Range::new();
             clock.reset();
             pending_fire = false;
         }
         if game.phase == Phase::Aiming {
-            game.yaw += (is_key_down(KeyCode::Right) as i32 - is_key_down(KeyCode::Left) as i32)
-                as f32
-                * dt
-                * 0.33;
-            game.elevation += (is_key_down(KeyCode::Up) as i32 - is_key_down(KeyCode::Down) as i32)
-                as f32
-                * dt
-                * 0.2;
-            if is_mouse_button_down(MouseButton::Left)
-                && !is_mouse_button_pressed(MouseButton::Left)
-                && pointer.y > 90.0
-                && pointer.y < h - 100.0
-            {
-                let delta = pointer - previous_mouse;
-                game.yaw += delta.x * 0.002;
-                game.elevation -= delta.y * 0.0012;
+            let movement = player_input.movement();
+            game.yaw += movement.x * dt * 0.33;
+            game.elevation += movement.y * dt * 0.2;
+            let look = player_input.look(dt);
+            if pointer.y > 90. && pointer.y < h - 100. || player_input.touch_active() {
+                game.yaw += look.x * 0.7;
+                game.elevation -= look.y * 0.45;
             }
             game.yaw = game.yaw.clamp(-0.55, 0.55);
             game.elevation = game.elevation.clamp(0.025, 0.65);
-            pending_fire |= is_key_pressed(KeyCode::Space);
+            pending_fire |= player_input.pressed("fire");
             if demo.autoplay {
                 pending_fire |= game.autoplay();
             }
         }
-        previous_mouse = pointer;
+        if !player_input.gameplay_active() && !demo.autoplay {
+            pending_fire = false;
+        }
         let frame = clock.advance(dt as f64);
         for _ in 0..frame.steps {
             if pending_fire {
@@ -456,7 +468,10 @@ async fn game() {
             } else {
                 "FIRE"
             },
-            game.ammo > 0 && game.cooldown <= 0.0 && game.phase == Phase::Aiming,
+            game.ammo > 0
+                && game.cooldown <= 0.0
+                && game.phase == Phase::Aiming
+                && player_input.gameplay_active(),
         );
         if button(reset_rect, "REBUILD", true) {
             game = Range::new();
@@ -515,6 +530,7 @@ async fn game() {
             let width = measure_text(detail, None, 16, 1.0).width;
             label(detail, (w - width) * 0.5, 161.0, 16.0, PAPER);
         }
+        player_input.draw_settings();
         if demo.finish_frame() {
             break;
         }
