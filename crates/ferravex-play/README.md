@@ -6,6 +6,7 @@ Original gameplay systems using Rust std and the workspace's first-party scalar 
 
 | Module | Working behavior | Current scope |
 | --- | --- | --- |
+| `input` | Bounded named actions, context stacks, held axes/buttons, buffered digital edges and relative motion, radial gamepad response, strict versioned control profiles and multi-touch capture | Platform-independent; renderer hosts supply events, storage and the controls panel. See [input](../../docs/INPUT.md). |
 | `camera` | 2D dead-zone follow and 3D follow/orbit/first-person/chase, exponential damping, FOV, cuts, obstruction sphere sweeps and seeded bounded shake | Renderer/input independent. Optional rigid-world adapter is in ferravex-engine; authored boxes use conservative inflation. See [camera rigs](../../docs/CAMERAS.md). |
 | `rounds` | Fixed teams, buy phase, weapon/armor/kit purchases, money validation, kill rewards, escalating loss rewards, plant/defuse channels, dropped bomb pickup, death and timeout outcomes, match score, respawn, capped event queue | Host must supply server-validated positions and hit results. This is a reusable rules module, not a transport or collision engine. No halftime, overtime, weapon-specific damage, shop UI, or matchmaking. |
 | `navigation` | Deterministic weighted-grid A*, four/eight neighbors, blocked endpoints, no diagonal corner cutting, arrival and separation steering | Grid navigation, not a navigation mesh or crowd solver. Each path search allocates scratch arrays. Unblocking a cell resets its cost to one. |

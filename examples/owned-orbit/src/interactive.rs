@@ -1,0 +1,154 @@
+//! Interactive host adapter; the headless/software simulation keeps its API.
+use super::*;
+use ferravex_engine::render::{
+    self,
+    input::{
+        ActionKind, PlayerInput,
+        touch::{Control, Output, Region},
+    },
+    prelude::{KeyCode, Rect, vec2},
+};
+use std::cell::RefCell;
+thread_local! {static CONTROLS:RefCell<Option<PlayerInput>>=const {RefCell::new(None)};}
+fn profile() -> PlayerInput {
+    let mut p = PlayerInput::new("owned-orbit");
+    for (name, label, codes, global) in [
+        (
+            "move_left",
+            "Left",
+            vec![
+                InputCode::Key(KeyCode::A as u16),
+                InputCode::Key(KeyCode::Left as u16),
+                InputCode::PadButton(14),
+            ],
+            false,
+        ),
+        (
+            "move_right",
+            "Right",
+            vec![
+                InputCode::Key(KeyCode::D as u16),
+                InputCode::Key(KeyCode::Right as u16),
+                InputCode::PadButton(15),
+            ],
+            false,
+        ),
+        ("move_x", "Paddle stick", vec![InputCode::PadAxis(0)], false),
+        (
+            "launch",
+            "Launch / retry",
+            vec![
+                InputCode::Key(32),
+                InputCode::Key(KeyCode::Enter as u16),
+                InputCode::Mouse(1),
+                InputCode::PadButton(0),
+                InputCode::Touch(8),
+            ],
+            false,
+        ),
+        (
+            "restart",
+            "Restart",
+            vec![InputCode::Key(KeyCode::R as u16), InputCode::PadButton(8)],
+            true,
+        ),
+        (
+            "pause",
+            "Pause",
+            vec![
+                InputCode::Key(KeyCode::Escape as u16),
+                InputCode::PadButton(9),
+            ],
+            true,
+        ),
+    ] {
+        let bindings = codes.into_iter().map(Binding::digital).collect();
+        let kind = if name.starts_with("move_") {
+            ActionKind::Axis
+        } else {
+            ActionKind::Button
+        };
+        if global {
+            p.global_action(name, label, kind, bindings)
+        } else {
+            p.action(name, label, kind, bindings)
+        }
+        .unwrap();
+    }
+    p
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn orbit_controls_frame(dt: f32, width: u32, height: u32) {
+    render::input::host_frame(dt, width, height, || {
+        CONTROLS.with(|cell| {
+            let mut cell = cell.borrow_mut();
+            let p = cell.get_or_insert_with(profile);
+            p.set_touch_layout(&[Control {
+                region: Region::Rect(Rect::new(0., 0., width.max(1) as f32, height.max(1) as f32)),
+                output: Output::Button(8),
+            }])
+            .unwrap();
+            p.sample_play();
+            if let Some(app) = APP.lock().unwrap().as_mut() {
+                if p.pressed("restart") {
+                    app.game = Game::new();
+                    app.clock.reset();
+                }
+                let mut axis = p.movement().x;
+                let pointer = render::input::logical_touches()
+                    .into_iter()
+                    .find(|t| {
+                        !matches!(
+                            t.phase,
+                            render::prelude::TouchPhase::Ended
+                                | render::prelude::TouchPhase::Cancelled
+                        )
+                    })
+                    .map(|t| t.position)
+                    .or_else(|| {
+                        render::is_mouse_button_down(render::prelude::MouseButton::Left)
+                            .then(|| vec2(render::mouse_position().0, render::mouse_position().1))
+                    });
+                if p.gameplay_active()
+                    && let Some(pointer) = pointer
+                {
+                    axis = ((pointer.x / width.max(1) as f32 * WIDTH as f32 - app.game.paddle_x)
+                        / 18.)
+                        .clamp(-1., 1.);
+                }
+                let frame = app.clock.advance(p.simulation_dt(dt) as f64);
+                for _ in 0..frame.steps {
+                    app.game.tick(
+                        Input {
+                            axis,
+                            launch: p.pressed("launch"),
+                            restart: false,
+                        },
+                        frame.dt,
+                    );
+                }
+                app.render();
+            }
+            p.draw_settings();
+        })
+    });
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn orbit_pause(value: u32) {
+    CONTROLS.with(|cell| {
+        if let Some(p) = cell.borrow_mut().as_mut() {
+            p.set_paused(value != 0);
+        }
+    });
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn orbit_paused() -> u32 {
+    CONTROLS.with(|cell| u32::from(cell.borrow().as_ref().is_some_and(|p| p.paused())))
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn orbit_restart() {
+    if let Some(app) = APP.lock().unwrap().as_mut() {
+        app.game = Game::new();
+        app.clock.reset();
+    }
+}

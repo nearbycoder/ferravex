@@ -236,9 +236,7 @@ pub fn menu(network: bool, has_played: bool) -> bool {
     let touched = ferravex_render::input::logical_touches()
         .iter()
         .any(|t| t.phase == TouchPhase::Started && button.contains(t.position));
-    (hover && is_mouse_button_pressed(MouseButton::Left))
-        || is_key_pressed(KeyCode::Enter)
-        || touched
+    (hover && is_mouse_button_pressed(MouseButton::Left)) || touched
 }
 
 pub fn roster(players: &[Player], local_id: u8) {

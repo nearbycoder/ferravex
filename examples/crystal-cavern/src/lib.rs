@@ -5,6 +5,10 @@ use ferravex_physics::character::{
     move_and_slide,
 };
 use ferravex_play::camera::{Input3, Mode3, NoObstructions, Rig3, Settings3, Target3};
+use ferravex_render::input::{
+    ActionKind, Binding, InputCode, PlayerInput, Preset,
+    touch::{Control, Output, Region},
+};
 type Aabb2 = ferravex_core::collision::Aabb2<Vec2>;
 use ferravex_render::{
     demo::Demo,
@@ -673,49 +677,106 @@ async fn game() {
     let mut clock = FixedClock::new(60.0, 8);
     let mut pilot = Pilot::default();
     let mut pitch = -0.03_f32;
-    let mut previous_mouse = Vec2::from(mouse_position());
-    let mut pending_interact = false;
+    let mut player_input = PlayerInput::preset("crystal-cavern", Preset::Explore);
+    player_input.set_mouse_look_button(Some(1)).unwrap();
+    for (name, key) in [
+        ("move_left", KeyCode::A),
+        ("move_right", KeyCode::D),
+        ("move_forward", KeyCode::W),
+        ("move_back", KeyCode::S),
+    ] {
+        let mut bindings = player_input.bindings(name).unwrap().to_vec();
+        bindings.retain(|b| {
+            !matches!(b.code, InputCode::Key(_)) || b.code == InputCode::Key(key as u16)
+        });
+        player_input.set_default_bindings(name, bindings).unwrap();
+    }
+    for (name, key, scale) in [
+        ("look_rate_x", KeyCode::Left, -0.72),
+        ("look_rate_x", KeyCode::Right, 0.72),
+        ("look_rate_y", KeyCode::Up, -0.5),
+        ("look_rate_y", KeyCode::Down, 0.5),
+    ] {
+        player_input
+            .add_default_binding(
+                name,
+                Binding {
+                    code: InputCode::Key(key as u16),
+                    scale,
+                    deadzone: 0.,
+                },
+            )
+            .unwrap();
+    }
+    player_input
+        .global_action(
+            "help",
+            "Toggle help",
+            ActionKind::Button,
+            vec![Binding::digital(InputCode::Key(KeyCode::H as u16))],
+        )
+        .unwrap();
     let mut help = true;
     loop {
         ferravex_render::ui::warm_up_font_sizes(&[17, 20, 22, 23, 24, 38]);
-        let dt = demo.dt();
-        let pointer = Vec2::from(mouse_position());
-        if is_key_pressed(KeyCode::R) {
+        let w = screen_width();
+        let h = screen_height();
+        player_input
+            .set_touch_layout(&[
+                Control {
+                    region: Region::Circle {
+                        center: vec2(w - 65., h - 90.),
+                        radius: 48.,
+                    },
+                    output: Output::Button(4),
+                },
+                Control {
+                    region: Region::Rect(Rect::new(0., 0., w * 0.42, h)),
+                    output: Output::Stick {
+                        x: 0,
+                        y: 1,
+                        radius: 54.,
+                        floating: true,
+                    },
+                },
+                Control {
+                    region: Region::Rect(Rect::new(w * 0.42, 0., w * 0.58, h)),
+                    output: Output::Look { x: 0, y: 1 },
+                },
+            ])
+            .unwrap();
+        player_input.sample_play();
+        let dt = if demo.autoplay {
+            demo.dt()
+        } else {
+            player_input.simulation_dt(demo.dt())
+        };
+        if player_input.pressed("restart") || game.won && player_input.pressed("confirm") {
             game = Game::new();
             clock.reset();
             pilot = Pilot::default();
             view_rig.cut();
             pitch = -0.03;
-            pending_interact = false;
         }
-        if is_key_pressed(KeyCode::H) {
+        if player_input.pressed("help") {
             help = !help;
         }
-        let mut input = Input::default();
-        input.movement.x = f32::from(is_key_down(KeyCode::D)) - f32::from(is_key_down(KeyCode::A));
-        input.movement.y = f32::from(is_key_down(KeyCode::W)) - f32::from(is_key_down(KeyCode::S));
-        input.turn =
-            (f32::from(is_key_down(KeyCode::Right)) - f32::from(is_key_down(KeyCode::Left))) * 1.8;
-        pitch = (pitch
-            + (f32::from(is_key_down(KeyCode::Up)) - f32::from(is_key_down(KeyCode::Down))) * dt)
-            .clamp(-0.8, 0.8);
-        if is_mouse_button_down(MouseButton::Left)
-            && !is_mouse_button_pressed(MouseButton::Left)
-            && !demo.autoplay
-        {
-            let delta = pointer - previous_mouse;
-            game.yaw += delta.x * 0.004;
-            pitch = (pitch - delta.y * 0.004).clamp(-0.8, 0.8);
+        let movement = player_input.movement();
+        let look = player_input.look(dt);
+        if !demo.autoplay {
+            game.yaw += look.x;
+            pitch = (pitch - look.y).clamp(-0.8, 0.8);
         }
-        previous_mouse = pointer;
-        pending_interact |= is_key_pressed(KeyCode::E);
+        let mut input = Input {
+            movement,
+            ..Default::default()
+        };
         let frame = clock.advance(dt as f64);
         for _ in 0..frame.steps {
             if demo.autoplay {
                 input = pilot.input(&game);
             } else {
-                input.interact = pending_interact;
-                pending_interact = false;
+                input.interact = player_input.pressed("interact");
             }
             game.step(input, frame.dt);
         }
@@ -793,6 +854,22 @@ async fn game() {
                 WHITE,
             );
         }
+        if player_input.touch_seen() && !game.won {
+            let (origin, delta) = player_input
+                .touch_stick(0, 1)
+                .unwrap_or((vec2(90., h - 105.), Vec2::ZERO));
+            let tint = Color::new(0.8, 0.9, 0.85, 0.45);
+            draw_circle_lines(origin.x, origin.y, 54., 2., tint);
+            draw_circle(
+                origin.x + delta.x * 38.,
+                origin.y + delta.y * 38.,
+                15.,
+                tint,
+            );
+            draw_circle_lines(w - 65., h - 90., 44., 2., tint);
+            draw_text("USE", w - 82., h - 84., 17., tint);
+        }
+        player_input.draw_settings();
         if demo.finish_frame() {
             break;
         }

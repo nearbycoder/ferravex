@@ -1,99 +1,119 @@
 use ferravex_net::{BUTTON_FIRE, BUTTON_JUMP, BUTTON_RELOAD, InputFrame};
 use ferravex_render::prelude::*;
 
-#[derive(Default)]
+use ferravex_render::input::{
+    ActionKind, Binding, InputCode, PlayerInput, Preset,
+    touch::{Control, Output, Region},
+};
+
 pub struct Controls {
     pub yaw: f32,
     pub pitch: f32,
     pub touch_mode: bool,
-    stick: Option<(u64, Vec2)>,
-    look: Option<(u64, Vec2)>,
+    pub input: PlayerInput,
+    stick_origin: Vec2,
     pub stick_delta: Vec2,
 }
+impl Default for Controls {
+    fn default() -> Self {
+        let mut input = PlayerInput::preset("strike", Preset::Shooter);
+        for (name, label, key) in [
+            ("roster", "Players", KeyCode::Tab),
+            ("diagnostics", "Diagnostics", KeyCode::F3),
+        ] {
+            input
+                .global_action(
+                    name,
+                    label,
+                    ActionKind::Button,
+                    vec![Binding::digital(InputCode::Key(key as u16))],
+                )
+                .unwrap();
+        }
+        Self {
+            yaw: 0.,
+            pitch: 0.,
+            touch_mode: false,
+            input,
+            stick_origin: Vec2::ZERO,
+            stick_delta: Vec2::ZERO,
+        }
+    }
+}
 impl Controls {
+    pub fn prepare(&mut self, active: bool) {
+        let w = screen_width();
+        let h = screen_height();
+        self.input
+            .set_touch_layout(&[
+                Control {
+                    region: Region::Circle {
+                        center: vec2(w - 74., h - 96.),
+                        radius: 48.,
+                    },
+                    output: Output::Button(2),
+                },
+                Control {
+                    region: Region::Circle {
+                        center: vec2(w - 170., h - 66.),
+                        radius: 34.,
+                    },
+                    output: Output::Button(3),
+                },
+                Control {
+                    region: Region::Circle {
+                        center: vec2(w - 64., h - 197.),
+                        radius: 31.,
+                    },
+                    output: Output::Button(5),
+                },
+                Control {
+                    region: Region::Rect(Rect::new(0., 0., w * 0.42, h)),
+                    output: Output::Stick {
+                        x: 0,
+                        y: 1,
+                        radius: 54.,
+                        floating: true,
+                    },
+                },
+                Control {
+                    region: Region::Rect(Rect::new(w * 0.42, 0., w * 0.58, h)),
+                    output: Output::Look { x: 0, y: 1 },
+                },
+            ])
+            .unwrap();
+        self.input.sample(active);
+        self.touch_mode = self.input.touch_seen();
+        let (origin, delta) = self
+            .input
+            .touch_stick(0, 1)
+            .unwrap_or((vec2(90., h - 108.), Vec2::ZERO));
+        self.stick_origin = origin;
+        self.stick_delta = delta;
+    }
     pub fn sample(&mut self, active: bool) -> InputFrame {
+        self.input.sample(active);
+        let movement = self.input.movement();
+        let look = self.input.look(get_frame_time());
+        self.yaw = (self.yaw + look.x).rem_euclid(std::f32::consts::TAU);
+        self.pitch = (self.pitch - look.y).clamp(-1.45, 1.45);
         let mut input = InputFrame {
             yaw: self.yaw,
             pitch: self.pitch,
+            move_x: movement.x,
+            move_z: movement.y,
             ..Default::default()
         };
-        if !active {
-            self.stick = None;
-            self.look = None;
-            self.stick_delta = Vec2::ZERO;
-            return input;
-        }
-        input.move_x = is_key_down(KeyCode::D) as u8 as f32 - is_key_down(KeyCode::A) as u8 as f32;
-        input.move_z = is_key_down(KeyCode::W) as u8 as f32 - is_key_down(KeyCode::S) as u8 as f32;
-        if is_key_down(KeyCode::Space) || is_key_pressed(KeyCode::Space) {
-            input.buttons |= BUTTON_JUMP;
-        }
-        if is_key_down(KeyCode::R) || is_key_pressed(KeyCode::R) {
-            input.buttons |= BUTTON_RELOAD;
-        }
-        if !self.touch_mode {
-            let delta = mouse_delta_position();
-            self.yaw -= delta.x * 1.9;
-            self.pitch += delta.y * 1.9;
-            if is_mouse_button_down(MouseButton::Left) || is_mouse_button_pressed(MouseButton::Left)
-            {
-                input.buttons |= BUTTON_FIRE;
+        for (name, flag) in [
+            ("fire", BUTTON_FIRE),
+            ("jump", BUTTON_JUMP),
+            ("reload", BUTTON_RELOAD),
+        ] {
+            let action = self.input.take(name);
+            if action.pressed || action.value.abs() > 0.5 {
+                input.buttons |= flag;
             }
         }
-        let w = screen_width();
-        let h = screen_height();
-        for t in ferravex_render::input::logical_touches() {
-            self.touch_mode = true;
-            let done = matches!(t.phase, TouchPhase::Ended | TouchPhase::Cancelled);
-            if done {
-                if self.stick.is_some_and(|(id, _)| id == t.id) {
-                    self.stick = None;
-                    self.stick_delta = Vec2::ZERO;
-                }
-                if self.look.is_some_and(|(id, _)| id == t.id) {
-                    self.look = None;
-                }
-                continue;
-            }
-            if t.position.distance(vec2(w - 74., h - 96.)) < 48. {
-                input.buttons |= BUTTON_FIRE;
-                continue;
-            }
-            if t.position.distance(vec2(w - 170., h - 66.)) < 34. {
-                input.buttons |= BUTTON_JUMP;
-                continue;
-            }
-            if t.position.distance(vec2(w - 64., h - 197.)) < 31. {
-                input.buttons |= BUTTON_RELOAD;
-                continue;
-            }
-            if t.phase == TouchPhase::Started {
-                if t.position.x < w * 0.42 && self.stick.is_none() {
-                    self.stick = Some((t.id, t.position));
-                } else if self.look.is_none() {
-                    self.look = Some((t.id, t.position));
-                }
-            }
-            if let Some((id, origin)) = self.stick
-                && id == t.id
-            {
-                self.stick_delta = ((t.position - origin) / 54.).clamp_length_max(1.);
-                input.move_x = self.stick_delta.x;
-                input.move_z = -self.stick_delta.y;
-            }
-            if let Some((id, previous)) = self.look
-                && id == t.id
-            {
-                let d = t.position - previous;
-                self.yaw += d.x * 0.004;
-                self.pitch -= d.y * 0.004;
-                self.look = Some((id, t.position));
-            }
-        }
-        self.pitch = self.pitch.clamp(-1.45, 1.45);
-        self.yaw = self.yaw.rem_euclid(std::f32::consts::TAU);
-        input.yaw = self.yaw;
-        input.pitch = self.pitch;
         input
     }
     pub fn draw_touch(&self) {
@@ -103,7 +123,7 @@ impl Controls {
         let w = screen_width();
         let h = screen_height();
         let c = Color::new(0.9, 0.92, 0.83, 0.45);
-        let origin = self.stick.map(|(_, p)| p).unwrap_or(vec2(90., h - 108.));
+        let origin = self.stick_origin;
         draw_circle_lines(origin.x, origin.y, 55., 2., c);
         let thumb = origin + self.stick_delta * 42.;
         draw_circle(thumb.x, thumb.y, 18., Color::new(0.9, 0.92, 0.83, 0.22));

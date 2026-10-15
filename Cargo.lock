@@ -124,6 +124,7 @@ dependencies = [
  "ferravex-core",
  "ferravex-graphics",
  "ferravex-math",
+ "ferravex-play",
 ]
 
 [[package]]

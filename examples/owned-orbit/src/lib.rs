@@ -1,5 +1,7 @@
 //! Orbit Breaker: original gameplay, original CPU raster, and only first-party Ferravex crates.
 pub mod game;
+#[cfg(target_arch = "wasm32")]
+mod interactive;
 mod raster;
 use ferravex_core::FixedClock;
 use ferravex_engine::input::{ActionMap, Binding, InputCode};

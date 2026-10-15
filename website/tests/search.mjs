@@ -9,6 +9,8 @@ assert.equal(searchIndex(rows, 'dune skim', {section:'Examples'})[0].href, '/exa
 assert.equal(searchIndex(rows, 'coyote', {section:'Examples'})[0].href, '/examples/emberline/');
 assert.equal(searchIndex(rows, 'castball', {section:'API reference'})[0].href, '/api/ferravex_dynamics/struct.PhysicsWorld.html#method.cast_ball');
 assert.equal(searchIndex(rows, 'PhysicsWorld::cast_ball', {section:'API reference'})[0].href, '/api/ferravex_dynamics/struct.PhysicsWorld.html#method.cast_ball');
+assert.equal(searchIndex(rows,'PlayerInput::sample',{section:'API reference'})[0].href,'/api/ferravex_render/input/struct.PlayerInput.html#method.sample');
+assert.equal(searchIndex(rows,'ActionMap::named_action',{section:'API reference'})[0].href,'/api/ferravex_play/input/struct.ActionMap.html#method.named_action');
 assert.equal(searchIndex(rows, 'Rig3::update', {section:'API reference'})[0].href, '/api/ferravex_play/camera/struct.Rig3.html#method.update');
 assert.equal(searchIndex(rows, 'RigidObstructions', {section:'API reference'})[0].href, '/api/ferravex_engine/camera/struct.RigidObstructions.html');
 assert.ok(searchIndex(rows, 'Netcode', {section:'Documentation'})[0].href.includes('#netcode'));

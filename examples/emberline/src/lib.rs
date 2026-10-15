@@ -4,6 +4,10 @@ use ferravex_physics::character::{
     Character, CharacterInput, CharacterSettings, CharacterShape, Obstacle, QueryBounds, Terrain,
 };
 use ferravex_play::camera::{Follow2, Follow2Settings, Limits2};
+use ferravex_render::input::{
+    PlayerInput, Preset,
+    touch::{Control, Output, Region},
+};
 use ferravex_render::{demo::Demo, prelude::*};
 
 const WIDTH: f32 = 1280.0;
@@ -421,9 +425,7 @@ async fn game() {
     let mut demo = Demo::new();
     let mut game = Game::new();
     let mut clock = FixedClock::new(120.0, 12);
-    let mut jump_pending = false;
-    let mut touch_jump_was_down = false;
-    let mut touch_mode = false;
+    let mut player_input = PlayerInput::preset("emberline", Preset::Platformer);
     let mut camera = Follow2::new(Follow2Settings {
         offset: vec2(WIDTH * 0.15, 0.),
         dead_zone: vec2(28., 0.),
@@ -449,55 +451,52 @@ async fn game() {
             }
             font_dpi = dpi;
         }
-        if is_key_pressed(KeyCode::R) {
-            game = Game::new();
-            clock.reset();
-            camera.cut();
-        }
         let canvas = ferravex_render::canvas::Canvas2D::fit(
             vec2(WIDTH, HEIGHT),
             vec2(screen_width(), screen_height()),
         );
-        let mut touch_left = false;
-        let mut touch_right = false;
-        let mut touch_jump = false;
-        for touch in ferravex_render::input::logical_touches() {
-            if matches!(touch.phase, TouchPhase::Ended | TouchPhase::Cancelled) {
-                continue;
-            }
-            touch_mode = true;
-            let point = canvas.unproject(touch.position);
-            if point.y > 590.0 {
-                touch_left |= point.x < 120.0;
-                touch_right |= (120.0..250.0).contains(&point.x);
-                touch_jump |= point.x > 1080.0;
-            }
-            if game.won && point.y > 350.0 && point.y < 470.0 {
-                game = Game::new();
-                clock.reset();
-                camera.cut();
-            }
+        let button = |rect: Rect, code| Control {
+            region: Region::Rect(Rect::new(
+                canvas.project(vec2(rect.x, rect.y)).x,
+                canvas.project(vec2(rect.x, rect.y)).y,
+                rect.w * canvas.scale,
+                rect.h * canvas.scale,
+            )),
+            output: Output::Button(code),
+        };
+        let layout = [
+            button(Rect::new(0., 590., 120., HEIGHT - 590.), 12),
+            button(Rect::new(120., 590., 130., HEIGHT - 590.), 13),
+            button(Rect::new(1080., 590., WIDTH - 1080., HEIGHT - 590.), 3),
+            button(Rect::new(0., 350., WIDTH, 120.), 9),
+        ];
+        player_input
+            .set_touch_layout(&layout[..if game.won { 4 } else { 3 }])
+            .unwrap();
+        player_input.sample_play();
+        let touch_mode = player_input.touch_seen();
+        if player_input.pressed("restart") || game.won && player_input.pressed("confirm") {
+            game = Game::new();
+            clock.reset();
+            camera.cut();
         }
-        jump_pending |= is_key_pressed(KeyCode::Space)
-            || is_key_pressed(KeyCode::W)
-            || is_key_pressed(KeyCode::Up)
-            || (touch_jump && !touch_jump_was_down);
-        touch_jump_was_down = touch_jump;
-        let direction =
-            f32::from(is_key_down(KeyCode::D) || is_key_down(KeyCode::Right) || touch_right)
-                - f32::from(is_key_down(KeyCode::A) || is_key_down(KeyCode::Left) || touch_left);
-        let frame = clock.advance(f64::from(demo.dt()));
+        let direction = player_input.movement().x;
+        let dt = if demo.autoplay {
+            demo.dt()
+        } else {
+            player_input.simulation_dt(demo.dt())
+        };
+        let frame = clock.advance(f64::from(dt));
         for _ in 0..frame.steps {
             let input = if demo.autoplay {
                 game.autoplay()
             } else {
                 Input {
                     direction,
-                    jump: jump_pending,
+                    jump: player_input.pressed("jump"),
                 }
             };
             game.update(input, frame.dt);
-            jump_pending = false;
         }
         if game.deaths != previous_deaths {
             camera.cut();
@@ -589,6 +588,7 @@ async fn game() {
             );
         }
         set_default_camera();
+        player_input.draw_settings();
         if demo.finish_frame() {
             break;
         }

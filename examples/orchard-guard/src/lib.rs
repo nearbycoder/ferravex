@@ -1,5 +1,6 @@
 mod game;
 use ferravex_core::FixedClock;
+use ferravex_render::input::{PlayerInput, Preset};
 use ferravex_render::{canvas::Canvas2D, demo::Demo, prelude::*};
 use game::*;
 
@@ -417,21 +418,21 @@ async fn game() {
     let mut g = Game::new();
     let mut clock = FixedClock::new(60., 8);
     let mut demo = Demo::new();
+    let mut player_input = PlayerInput::preset("orchard-guard", Preset::Strategy);
     loop {
         ferravex_render::ui::warm_up_font_sizes(&[14, 15, 16, 17, 18, 19, 20, 24, 28, 30]);
         let canvas = Canvas2D::fit(SIZE, vec2(screen_width().max(1.), screen_height().max(1.)));
+        player_input.sample_play();
+        let cursor = player_input.cursor(demo.dt(), 600.);
         let touch = ferravex_render::input::logical_touches()
             .into_iter()
             .find(|t| t.phase == TouchPhase::Started);
-        let pointer = canvas.pointer(touch.as_ref().map_or_else(
-            || {
-                let (x, y) = mouse_position();
-                vec2(x, y)
-            },
-            |t| t.position,
-        ));
-        let click = is_mouse_button_pressed(MouseButton::Left) || touch.is_some();
-        if is_key_pressed(KeyCode::R) {
+        let pointer = canvas.pointer(touch.as_ref().map_or_else(|| cursor, |t| t.position));
+        let click =
+            (player_input.pressed("primary") || touch.is_some()) && player_input.gameplay_active();
+        if player_input.pressed("restart")
+            || g.outcome != Outcome::Playing && player_input.pressed("confirm")
+        {
             g = Game::new();
             clock.reset();
         }
@@ -443,20 +444,25 @@ async fn game() {
                     }
                 }
             }
-            if is_key_pressed(KeyCode::Key1) {
+            if player_input.pressed("select_one") {
                 g.build(g.selected, Kind::Seed);
             }
-            if is_key_pressed(KeyCode::Key2) {
+            if player_input.pressed("select_two") {
                 g.build(g.selected, Kind::Frost);
             }
-            if is_key_pressed(KeyCode::U) {
+            if player_input.pressed("upgrade") {
                 g.upgrade(g.selected);
             }
-            if is_key_pressed(KeyCode::Space) {
+            if player_input.pressed("wave") {
                 g.launch();
             }
         }
-        let step = clock.advance(demo.dt() as f64);
+        let dt = if demo.autoplay {
+            demo.dt()
+        } else {
+            player_input.simulation_dt(demo.dt())
+        };
+        let step = clock.advance(dt as f64);
         for _ in 0..step.steps {
             if demo.autoplay {
                 g.autoplay();
@@ -514,7 +520,12 @@ async fn game() {
                 clock.reset();
             }
         }
+        if player_input.cursor_is_virtual() {
+            let point = canvas.unproject(cursor);
+            draw_circle_lines(point.x, point.y, 6., 1.5, CREAM);
+        }
         set_default_camera();
+        player_input.draw_settings();
         if demo.finish_frame() {
             break;
         }

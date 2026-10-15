@@ -243,13 +243,14 @@ async fn game() {
             get_frame_time().min(0.25)
         };
         stats.record(get_frame_time());
-        if is_key_pressed(KeyCode::Escape) {
+        controls.prepare(active);
+        if controls.input.pressed("pause") {
             active = !active;
             has_played |= active;
             set_cursor_grab(active && !controls.touch_mode);
             show_mouse(!active || controls.touch_mode);
         }
-        if is_key_pressed(KeyCode::F3) {
+        if controls.input.pressed("diagnostics") {
             diagnostics = !diagnostics;
         }
         let mut input = controls.sample(active);
@@ -266,7 +267,7 @@ async fn game() {
                 ferravex_fps::BUTTON_FIRE
             };
         }
-        if active {
+        if active && controls.input.gameplay_active() {
             pending_buttons |= input.buttons;
         } else {
             pending_buttons = 0;
@@ -305,7 +306,7 @@ async fn game() {
                 server_tick = c.server_tick();
                 continue;
             }
-            if !network && active {
+            if !network && active && controls.input.gameplay_active() {
                 let mut commands = Vec::with_capacity(6);
                 commands.push((
                     0,
@@ -531,10 +532,12 @@ async fn game() {
         );
         if active {
             controls.draw_touch();
-            if is_key_down(KeyCode::Tab) {
+            if controls.input.held("roster") {
                 hud::roster(&remote, local.id);
             }
-        } else if hud::menu(network, has_played) {
+        } else if (hud::menu(network, has_played) || controls.input.pressed("confirm"))
+            && !controls.input.controls_open()
+        {
             active = true;
             has_played = true;
             controls.touch_mode |= !ferravex_render::input::logical_touches().is_empty();
@@ -542,6 +545,7 @@ async fn game() {
             show_mouse(controls.touch_mode);
             clock.reset();
         }
+        controls.input.draw_settings();
         if browser_playing != active {
             sync_browser_ui(active);
             browser_playing = active;

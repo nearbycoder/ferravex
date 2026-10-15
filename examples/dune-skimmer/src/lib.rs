@@ -1,4 +1,8 @@
 //! A compact low-poly hover time trial built on Ferravex's fixed clock and lit renderer.
+use ferravex_render::input::{
+    PlayerInput, Preset,
+    touch::{Control, Output, Region},
+};
 mod race;
 
 use ferravex_core::FixedClock;
@@ -512,40 +516,6 @@ fn touch_controls() -> [Rect; 4] {
         Rect::new(w - size - 18.0, h - size - 20.0, size, size),
     ]
 }
-fn read_input(touch_mode: bool) -> Input {
-    let mut input = Input {
-        throttle: f32::from(is_key_down(KeyCode::W) || is_key_down(KeyCode::Up))
-            - f32::from(is_key_down(KeyCode::S) || is_key_down(KeyCode::Down)),
-        steer: f32::from(is_key_down(KeyCode::D) || is_key_down(KeyCode::Right))
-            - f32::from(is_key_down(KeyCode::A) || is_key_down(KeyCode::Left)),
-        boost: is_key_down(KeyCode::Space),
-    };
-    if touch_mode {
-        let rects = touch_controls();
-        for touch in ferravex_render::input::logical_touches()
-            .iter()
-            .filter(|touch| {
-                touch.phase != TouchPhase::Ended && touch.phase != TouchPhase::Cancelled
-            })
-        {
-            if rects[0].contains(touch.position) {
-                input.steer = -1.0;
-            }
-            if rects[1].contains(touch.position) {
-                input.steer = 1.0;
-            }
-            if rects[2].contains(touch.position) {
-                input.throttle = 1.0;
-            }
-            if rects[3].contains(touch.position) {
-                input.boost = true;
-                input.throttle = 1.0;
-            }
-        }
-    }
-    input
-}
-
 ferravex_render::game!(conf, game);
 async fn game() {
     let course = Course::new();
@@ -555,7 +525,13 @@ async fn game() {
     let mut clock = FixedClock::new(120.0, 16);
     let mut demo = Demo::new();
     ferravex_render::set_quality(ferravex_render::lighting::Quality::Medium);
-    let mut touch_mode = false;
+    let mut player_input = PlayerInput::preset("dune-skimmer", Preset::HoverRacer);
+    player_input
+        .add_default_binding(
+            "move_forward",
+            ferravex_render::input::Binding::digital(ferravex_render::input::InputCode::Touch(7)),
+        )
+        .unwrap();
     let mut camera = Rig3::new(Settings3 {
         position_half_life: std::f32::consts::LN_2 / 5.5,
         target_half_life: std::f32::consts::LN_2 / 8.,
@@ -572,10 +548,18 @@ async fn game() {
     loop {
         ferravex_render::ui::warm_up_font_sizes(&[13, 14, 16, 17, 18, 20, 22, 28, 47, 49, 54, 74]);
         ui::warm_up_font();
-        touch_mode |= !ferravex_render::input::logical_touches().is_empty();
-        if is_key_pressed(KeyCode::R)
+        let rects = touch_controls();
+        let layout = std::array::from_fn::<_, 4, _>(|i| Control {
+            region: Region::Rect(rects[i]),
+            output: Output::Button([12, 13, 14, 7][i]),
+        });
+        player_input.set_touch_layout(&layout).unwrap();
+        player_input.sample_play();
+        let touch_mode = player_input.touch_seen();
+        if player_input.pressed("restart")
             || (race.finished
-                && (is_mouse_button_pressed(MouseButton::Left)
+                && (player_input.pressed("confirm")
+                    || is_mouse_button_pressed(MouseButton::Left)
                     || ferravex_render::input::logical_touches()
                         .iter()
                         .any(|t| t.phase == TouchPhase::Started)))
@@ -586,8 +570,17 @@ async fn game() {
             previous_impacts = 0;
             previous_recoveries = 0;
         }
-        let input = read_input(touch_mode);
-        let dt = demo.dt();
+        let movement = player_input.movement();
+        let input = Input {
+            throttle: movement.y,
+            steer: movement.x,
+            boost: player_input.held("boost"),
+        };
+        let dt = if demo.autoplay {
+            demo.dt()
+        } else {
+            player_input.simulation_dt(demo.dt())
+        };
         let frame = clock.advance(dt as f64);
         for _ in 0..frame.steps {
             race.step(
@@ -690,6 +683,7 @@ async fn game() {
                 );
             }
         }
+        player_input.draw_settings();
         if demo.finish_frame() {
             println!(
                 "DUNE SKIMMER laps={} next_gate={} time={:.2} finished={} impacts={} recoveries={} finite={}",
