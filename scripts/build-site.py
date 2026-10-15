@@ -3,6 +3,7 @@
 import argparse, gzip, hashlib, html, json, re, shutil, subprocess
 from pathlib import Path
 from urllib.parse import quote, urlsplit
+from site_search import build_index
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / 'dist/site'
@@ -107,7 +108,7 @@ def sidebar(current):
  return ''.join(out)+'</aside>'
 def layout(title,body,url='/',description='An original Rust engine for compact 2D and 3D games.',section=''):
  nav=''.join(f'<a href="{href}" class="{cls}"'+(' aria-current="page"' if section==label else '')+f'>{label}</a>' for href,label,cls in [('/docs/getting-started/','Docs',''),('/examples/','Examples',''),('/api/ferravex/index.html','API','api-nav')])
- return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>{esc(title)} · Ferravex</title><meta name="description" content="{esc(description)}"><link rel="canonical" href="{BASE}{url}"><meta property="og:title" content="{esc(title)} · Ferravex"><meta property="og:description" content="{esc(description)}"><meta property="og:image" content="{BASE}/assets/owned-courtyard.png"><meta property="og:type" content="website"><link rel="icon" href="data:,"><link rel="stylesheet" href="/site.css"><script src="/site.js" defer></script></head><body><a class="skip" href="#main">Skip to content</a><header class="header"><div class="header-inner"><a class="brand" href="/" aria-label="Ferravex home"><span class="brand-mark" aria-hidden="true">//</span>ferravex</a><nav aria-label="Main navigation">{nav}</nav><div class="header-actions"><button class="search-trigger" data-search>Search<kbd>Ctrl K</kbd></button><button class="theme-toggle" id="theme-toggle" aria-label="Switch color theme">Theme</button><a href="{REPO}">GitHub</a></div></div></header>{body}<footer class="footer"><div class="container"><span>Ferravex. Original engine systems, built in Rust.</span><span><a href="{REPO}">Source</a><a href="{REPO}/blob/main/LICENSE">MIT license</a><a href="/docs/status/">Implementation status</a></span></div></footer><dialog id="search-dialog"><div class="search-head"><strong>Find your way</strong><button id="search-close">Close</button></div><label for="search-input">Search documentation and examples</label><input id="search-input" type="search" placeholder="Try physics, multiplayer or a game name" autocomplete="off"><p class="search-message" id="search-message" role="status">Type to search.</p><ul id="search-results"></ul></dialog></body></html>'''
+ return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>{esc(title)} · Ferravex</title><meta name="description" content="{esc(description)}"><link rel="canonical" href="{BASE}{url}"><meta property="og:title" content="{esc(title)} · Ferravex"><meta property="og:description" content="{esc(description)}"><meta property="og:image" content="{BASE}/assets/owned-courtyard.png"><meta property="og:type" content="website"><link rel="icon" href="/favicon.ico"><link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png"><link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png"><link rel="stylesheet" href="/site.css"><link rel="stylesheet" href="/search.css"><script src="/site.js" defer></script><script type="module" src="/site-search.js"></script></head><body><a class="skip" href="#main">Skip to content</a><header class="header"><div class="header-inner"><a class="brand" href="/" aria-label="Ferravex home"><img class="brand-mark" src="/favicon-32.png" alt="" width="28" height="28" aria-hidden="true">ferravex</a><nav aria-label="Main navigation">{nav}</nav><div class="header-actions"><button class="search-trigger" data-qikbar-open aria-label="Search Ferravex"><span>Search site</span><kbd data-command-key>Ctrl K</kbd></button><button class="theme-toggle" id="theme-toggle" aria-label="Switch color theme">Theme</button><a href="{REPO}">GitHub</a></div></div></header>{body}<footer class="footer"><div class="container"><span>Ferravex. Original engine systems, built in Rust.</span><span><a href="{REPO}">Source</a><a href="{REPO}/blob/main/LICENSE">MIT license</a><a href="/docs/status/">Implementation status</a></span></div></footer></body></html>'''
 def meta(game):return f'<div class="meta"><span>{esc(game["dimension"])} / {esc(game["genre"])}</span><span class="owned">First-party engine</span></div>'
 def tile(game):
  return f'<article class="example-tile" data-dimension="{game["dimension"]}"><a href="/examples/{game["id"]}/"><img src="/assets/{game["image"]}" alt="{esc(game["title"])} gameplay" width="960" height="600" loading="lazy"><h2>{esc(game["title"])}</h2></a>{meta(game)}<p>{esc(game["description"])}</p></article>'
@@ -166,9 +167,19 @@ def main():
   for path in folder.glob('*.png'):shutil.copy2(path,assets/path.name)
  for game in GAMES:
   if not (assets/game['image']).is_file():raise SystemExit('Missing screenshot: '+game['image'])
- for name in ['site.css','site.js']:shutil.copy2(ROOT/'website/static'/name,OUT/name)
+ for name in ['site.css','site.js','site-search.js','search-index.mjs','search.css','favicon.ico','favicon-16.png','favicon-32.png','apple-touch-icon.png']:shutil.copy2(ROOT/'website/static'/name,OUT/name)
 
- home();pages();write(OUT/'search.json',json.dumps(SEARCH,separators=(',',':')))
+ shutil.copytree(ROOT/'website/static/vendor',OUT/'vendor')
+ # Qikbar is available on generated Rustdoc pages as well as the branded guides.
+ for page in (OUT/'api').rglob('*.html'):
+  content=page.read_text()
+  content=content.replace('</head>','<link rel="stylesheet" href="/search.css"><script type="module" src="/site-search.js"></script></head>',1)
+  content=content.replace('<body', '<body data-ferravex-api',1)
+  page.write_text(content)
+ home();pages()
+ corpus=build_index(OUT,DOCS,GAMES,ROOT)
+ write(OUT/'search.json',json.dumps(corpus,separators=(',',':')))
+ print(f'Indexed {len(corpus)} pages, guide sections and API symbols')
  write(OUT/'404.html',layout('Page not found','<main id="main" class="container page-heading"><h1>This path is uncharted.</h1><p>The page could not be found.</p><a class="button" href="/">Back home</a></main>'))
  urls=['/','/docs/','/examples/']+[f'/docs/{slug}/' for slug,*_ in DOCS]+[f'/examples/{g["id"]}/' for g in GAMES]
  write(OUT/'sitemap.xml','<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'+''.join(f'<url><loc>{BASE}{u}</loc></url>' for u in urls)+'</urlset>')

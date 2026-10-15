@@ -1,0 +1,8 @@
+Mode: built-in image_gen
+Asset: ferravex-icon-v1.png
+Reference: ferravex-logo-v1.png
+Background: opaque dark evergreen
+Favicon export: ImageMagick Lanczos resize and ICO encoding, no runtime dependencies added.
+
+Prompt:
+Create a square favicon master using only the copper F/V emblem from the LEFT side of the supplied Ferravex logo. Remove the entire wordmark. Preserve the emblem's exact distinctive silhouette and proportions: its broad slanted top bar, angular middle bar, descending left stem, V-shaped negative cutout, and subtle darker copper triangular facet. This must be recognizably the SAME F character, not a redesigned letter. Center the emblem in a square, scale it to fill approximately 84 percent of the canvas height with equal comfortable margins. Render clean crisp flat vector-like edges and broad solid warm copper planes, simplified just enough to be readable at 16 and 32 pixels. Completely solid opaque dark evergreen #101813 background, no transparency, no lettering, no border, no circular badge, no rounded frame, no shadow, glow, bevel, texture, scratches, gradient, presentation mockup, or extra symbols. One square icon asset only.

@@ -1,0 +1,21 @@
+/* Ferravex tokens on Qikbar's native layout, focus management and touch behavior. */
+.ferravex-search .qb-dialog{border:1px solid var(--qb-border);box-shadow:0 24px 100px #0005;overflow:hidden}
+.ferravex-search .qb-header{padding-inline:20px;gap:12px;border-bottom:1px solid var(--qb-border)}
+.ferravex-search .qb-header::before{content:"";width:30px;height:30px;flex:0 0 30px;background:url('/favicon-32.png') center/contain no-repeat}
+.ferravex-search .qb-input{letter-spacing:-.015em;outline:none!important}
+.ferravex-search .qb-section{font:600 10px/1.4 ui-monospace,monospace;text-transform:uppercase;letter-spacing:.1em;padding-top:16px;padding-bottom:7px;color:var(--qb-fg-muted)}
+.ferravex-search .qb-item{margin-inline:8px;border:1px solid transparent;padding-inline:12px}
+.ferravex-search .qb-item[aria-selected=true]{border-color:var(--qb-border);box-shadow:inset 2px 0 var(--qb-accent)}
+.ferravex-search .qb-item-text{display:flex;flex-direction:column;gap:2px;min-width:0}
+.ferravex-search .qb-item-title{font-weight:550;letter-spacing:-.015em}
+.ferravex-search .qb-item-subtitle{font-size:12px;line-height:1.5;color:var(--qb-fg-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+.ferravex-search .qb-item-icon{color:var(--qb-fg-muted)}
+.ferravex-search .qb-item[aria-selected=true] .qb-item-icon{color:var(--qb-accent)}
+.ferravex-search .qb-match{color:var(--qb-highlight);font-weight:650}
+.ferravex-search .qb-item-accessories{font:10px/1.4 ui-monospace,monospace;white-space:nowrap}
+.ferravex-search .qb-footer{border-top:1px solid var(--qb-border);font-size:11px;min-height:46px}
+.ferravex-search .qb-footer kbd{border-radius:2px}
+.ferravex-api-search{position:fixed;right:24px;bottom:24px;z-index:90;padding:11px 15px;border:1px solid #536459;border-radius:4px;background:#18201b;color:#e6ebe5;font:12px/1.4 system-ui,sans-serif;cursor:pointer;box-shadow:0 4px 20px #0003}
+.ferravex-api-search:focus-visible{outline:2px solid #e59a6c;outline-offset:3px}
+@media(max-width:600px){.ferravex-search .qb-header{padding-inline:14px}.ferravex-search .qb-header::before{width:26px;height:26px;flex-basis:26px}.ferravex-search .qb-item{margin-inline:4px;padding-inline:8px}.ferravex-search .qb-item-subtitle{max-width:66vw}.ferravex-search .qb-footer{font-size:10px}.ferravex-api-search{right:16px;bottom:16px}}
+@media(prefers-reduced-motion:reduce){.ferravex-search *{animation:none!important;transition:none!important}}

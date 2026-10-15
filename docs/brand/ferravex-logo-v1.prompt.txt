@@ -1,0 +1,7 @@
+Mode: built-in image_gen
+Asset: ferravex-logo-v1.png
+Background: opaque dark evergreen
+Reference: generated Ferravex copper F/V emblem concept
+
+Final refinement prompt:
+Create the final polished flat Ferravex engine logo, using the reference only for its original copper angular F/V emblem and the horizontal arrangement. Important change: use a completely solid opaque very dark evergreen background #101813 across the whole image, no transparency. Reconstruct the emblem as perfectly crisp vector-style polygon shapes with two flat copper fills, and redraw the exact word FERRAVEX in solid warm ivory uppercase geometric sans lettering with clean uninterrupted edges. The reference has broken alpha artifacts and white speckles around its letters: none of these must appear. Remove every speckle, scratch, stipple, distressed edge, glow, bevel, highlight, contour outline, and stray mark. Every letter should be a single flat graphic silhouette with only its correct intentional counters. Exact text FERRAVEX. Keep balanced wide landscape icon-left wordmark-right composition, generous padding, precise spacing, refined professional independent Rust game-engine identity. No additional text or slogan. One final clean logo on a solid #101813 background, not a mockup and not a presentation sheet.

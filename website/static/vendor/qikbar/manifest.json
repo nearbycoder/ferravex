@@ -1,0 +1,25 @@
+{
+  "package": "@qikbar/qikbar",
+  "version": "0.2.1",
+  "source": "https://registry.npmjs.org/@qikbar/qikbar/-/qikbar-0.2.1.tgz",
+  "repository": "https://github.com/nearbycoder/qikbar-next",
+  "files": {
+    "index.js": "5ba60b027e018391475ba59457f5dca364b6e4f7e2afcca72310d186be3ea6ca",
+    "utils.js": "3a878abb50c3556977a9ac3a6dda1aa957d745b9c5fa0bf8985d6c7a4cad5825",
+    "LICENSE": "355d053cb960128b9c8736c0e1b8c76eea0a329636136289cd30c8c27a5161b5",
+    "package.json": "609158e6c5fbc237939fa3ddf7faab80ab690bdc0c8d584414a885130103c4e8",
+    "chunks/bar-P3SCR4SJ.js": "e1d57aab21655a776e0f485129ea3f5ae99afda6e1978d5d2edfbd7a38a1bb88",
+    "chunks/chunk-24EBWTCF.js": "f6201851e2a04c6be38fd2562c09ca7f25377344bc53558bb46f5271186e9c74",
+    "chunks/chunk-INTEVQYK.js": "cb8972aeb250d97f252c1426d64fa96d4166761022515f4011e7c7b33f6a63cb",
+    "chunks/chunk-JHQAIXM7.js": "950315834eb254f228844d7fd71fb00269034ea3592e636b9ecd6a897eface11",
+    "chunks/chunk-MPTP2EWW.js": "187be8c335633f0412c2ebd8464ae6cf81dc4515947bbc9a0d54d2a17be53299",
+    "chunks/chunk-MRHKJ2FZ.js": "d28391f7dfee237cc3590c7d136b794d95ead16b15ec209a17927f181d476124",
+    "chunks/chunk-N4Y2Z6YD.js": "784a3d40284cab7dfbd919aea2dfcfd7bf55b80bd925cd96c9bc9964cabd089e",
+    "chunks/chunk-PQEHV3D4.js": "c7fbf167c8e0f4f034a92c15fe2e940fe8742c961b9059e18985eb4db82f2ca3",
+    "chunks/chunk-R2AY6LRL.js": "3086ff6533aad06c25a4812df588a3a8c4e03caa6d4f1bfd6244d8fc613ee9e9",
+    "chunks/chunk-TIM4VBM4.js": "f07b2306c639d9a7a5a1cbe68754c1ec5138f56f0288fdb06e573c448c70b929",
+    "chunks/chunk-WO6XXQ3H.js": "366a91c88cc886881467c7afffc9d89e13514f4933740b6739827d539a90f377",
+    "chunks/chunk-YCVJQ7U3.js": "5cf0b3bf3e9656293b4519fa690072ff3d0262450b904a312d3c0eb32d0eaee5",
+    "chunks/launcher-B5MGOPEQ.js": "6c42c19929f9dafe16ee4de7db73dad661da22de1740a6122de388723156ca3e"
+  }
+}
