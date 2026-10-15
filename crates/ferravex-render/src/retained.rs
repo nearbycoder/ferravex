@@ -13,6 +13,8 @@ pub struct ResidentMesh(Rc<Geometry>);
 pub(crate) struct Geometry {
     pub id: u32,
     pub vertices: Vec<[f32; 10]>,
+    pub skin: Option<Vec<[f32; 8]>>,
+    pub joint_count: usize,
     opaque: bool,
     bounds: ferravex_graphics::Bounds,
 }
@@ -25,10 +27,20 @@ thread_local! {static REGISTRY: RefCell<Registry> = RefCell::new(Registry::defau
 impl ResidentMesh {
     /// Snapshot validated geometry. Changes to the source Mesh require a new snapshot.
     pub fn new(mesh: &Mesh) -> Result<Self, &'static str> {
+        Self::with_skin(mesh, None)
+    }
+    pub(crate) fn with_skin(
+        mesh: &Mesh,
+        skin: Option<(&[[f32; 8]], usize)>,
+    ) -> Result<Self, &'static str> {
+        if skin.is_some_and(|(weights, _)| weights.len() != mesh.vertices.len()) {
+            return Err("skin source vertex count mismatch");
+        }
         if mesh.indices.is_empty() || !mesh.indices.len().is_multiple_of(3) {
             return Err("mesh requires complete triangles");
         }
-        if mesh.indices.len() > MAX_BYTES / 40 {
+        let stride = if skin.is_some() { 72 } else { 40 };
+        if mesh.indices.len() > MAX_BYTES / stride {
             return Err("mesh exceeds retained storage budget");
         }
         if mesh.indices.iter().any(|i| {
@@ -45,14 +57,18 @@ impl ResidentMesh {
                 .meshes
                 .iter()
                 .filter_map(Weak::upgrade)
-                .map(|m| m.vertices.len() * 40)
+                .map(|m| m.vertices.len() * if m.skin.is_some() { 72 } else { 40 })
                 .sum();
-            if r.meshes.len() >= MAX_MESHES || bytes + mesh.indices.len() * 40 > MAX_BYTES {
+            if r.meshes.len() >= MAX_MESHES || bytes + mesh.indices.len() * stride > MAX_BYTES {
                 return Err("retained storage capacity exceeded");
             }
             r.next = r.next.checked_add(1).ok_or("mesh identity exhausted")?;
             let data = Rc::new(Geometry {
                 id: r.next,
+                skin: skin.map(|(weights, _)| {
+                    mesh.indices.iter().map(|i| weights[*i as usize]).collect()
+                }),
+                joint_count: skin.map_or(0, |(_, joints)| joints),
                 bounds: mesh
                     .indices
                     .iter()
@@ -142,6 +158,7 @@ pub struct RetainedBatch {
     pub params: [f32; 16],
     pub material: u32,
     pub revision: u32,
+    /// Skin palette first joint / joint count; count zero disables skinning.
     pub reserved: [u32; 2],
 }
 #[derive(Default)]
@@ -149,6 +166,8 @@ pub(crate) struct Frame {
     pub commands: Vec<Command>,
     pub batches: Vec<RetainedBatch>,
     pub instances: Vec<[f32; 28]>,
+    pub skin_matrices: Vec<[f32; 16]>,
+    pub skin_normals: Vec<[f32; 9]>,
     pub environment: crate::lighting::Environment,
     scratch_instances: Vec<[f32; 28]>,
     scratch_batches: Vec<RetainedBatch>,
@@ -162,6 +181,7 @@ pub(crate) struct DrawStyle<'a> {
     pub params: [f32; 16],
     pub shadow_only: bool,
     pub skip_shadow: bool,
+    pub skin: Option<&'a crate::skinning::SkinPalette>,
 }
 impl RetainedBatch {
     fn same_pass(&self, other: &Self) -> bool {
@@ -173,7 +193,10 @@ impl RetainedBatch {
             && self.depth & 7 == other.depth & 7
     }
     fn compatible(&self, other: &Self) -> bool {
-        self.mesh == other.mesh && self.depth == other.depth && self.same_pass(other)
+        self.mesh == other.mesh
+            && self.depth == other.depth
+            && self.reserved == other.reserved
+            && self.same_pass(other)
     }
 }
 impl Frame {
@@ -181,6 +204,8 @@ impl Frame {
         self.commands.clear();
         self.batches.clear();
         self.instances.clear();
+        self.skin_matrices.clear();
+        self.skin_normals.clear();
         self.keep_alive.clear();
         self.keep_materials.clear();
     }
@@ -213,6 +238,19 @@ impl Frame {
         style: DrawStyle<'_>,
     ) -> bool {
         let light = style.light;
+        let bones = style.skin.map_or(0, |skin| skin.count);
+        let skin_at = if let Some(skin) = style.skin.filter(|skin| {
+            self.skin_matrices.len() >= bones
+                && self.skin_matrices[self.skin_matrices.len() - bones..] == skin.matrices[..bones]
+                && self.skin_normals[self.skin_normals.len() - bones..] == skin.normals[..bones]
+        }) {
+            self.skin_matrices.len() - skin.count
+        } else {
+            self.skin_matrices.len()
+        };
+        if bones != mesh.0.joint_count || skin_at + bones > crate::skinning::MAX_FRAME_SKIN_JOINTS {
+            return false;
+        }
         if self.instances.len() >= MAX_INSTANCES || !model.is_finite() || !camera.is_finite() {
             return false;
         }
@@ -280,6 +318,11 @@ impl Frame {
         if style.shadow_only {
             depth_flags |= 32;
         }
+        if let Some(skin) = style.skin.filter(|_| skin_at == self.skin_matrices.len()) {
+            self.skin_matrices
+                .extend_from_slice(&skin.matrices[..bones]);
+            self.skin_normals.extend_from_slice(&skin.normals[..bones]);
+        }
         let batch = RetainedBatch {
             mesh: mesh.id(),
             first: self.instances.len() as u32,
@@ -290,7 +333,11 @@ impl Frame {
             params: style.params,
             material: style.material.map_or(0, |m| m.id()),
             revision: style.material.map_or(0, |m| m.0.revision.get()),
-            reserved: [0; 2],
+            reserved: if bones == 0 {
+                [0; 2]
+            } else {
+                [skin_at as u32, bones as u32]
+            },
         };
         if let Some(last) = self.batches.last_mut().filter(|last| {
             self.commands.last().is_some_and(|c| c.kind == 1) && last.compatible(&batch)
@@ -383,6 +430,10 @@ pub const VERTEX_BODY: &str = r#"
 attribute vec3 a_position;
 attribute vec3 a_normal;
 attribute vec4 a_color;
+attribute vec4 a_joints; attribute vec4 a_weights;
+uniform int u_skin_count;
+uniform mat4 u_bones[32];
+uniform mat3 u_bone_normals[32];
 attribute vec4 a_model0; attribute vec4 a_model1; attribute vec4 a_model2; attribute vec4 a_model3;
 attribute vec4 a_normal0; attribute vec4 a_normal1; attribute vec4 a_normal2;
 uniform mat4 u_camera;
@@ -395,8 +446,13 @@ vec3 ferravex_vertex(vec3 position);
 vec3 ferravex_normal(vec3 normal);
 void main(){
  mat4 model=mat4(a_model0,a_model1,a_model2,a_model3);
- vec4 world=model*vec4(ferravex_vertex(a_position),1.0);
- vec3 normal=mat3(a_normal0.xyz,a_normal1.xyz,a_normal2.xyz)*ferravex_normal(a_normal);
+ vec3 position=a_position;vec3 posed_normal=a_normal;
+ if(u_skin_count>0){
+  position=vec3(0.0);posed_normal=vec3(0.0);
+  for(int i=0;i<4;i++){int joint=int(a_joints[i]);position+=(u_bones[joint]*vec4(a_position,1.0)).xyz*a_weights[i];posed_normal+=u_bone_normals[joint]*a_normal*a_weights[i];}
+ }
+ vec4 world=model*vec4(ferravex_vertex(position),1.0);
+ vec3 normal=mat3(a_normal0.xyz,a_normal1.xyz,a_normal2.xyz)*ferravex_normal(posed_normal);
  float n=length(normal);normal=n>0.0?normal/n:vec3(0.0);
  gl_Position=u_camera*world;v_color=a_color;v_world=world.xyz;v_normal=normal;
 }

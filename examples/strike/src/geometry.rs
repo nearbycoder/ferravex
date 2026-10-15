@@ -9,17 +9,37 @@ pub fn rgb(hex: u32) -> Color {
 pub struct Model {
     pub mesh: Mesh,
     cached: std::cell::OnceCell<ferravex_render::retained::ResidentMesh>,
+    weights: Option<Vec<ferravex_render::skinning::SkinWeights>>,
+    bone: u16,
 }
 impl Model {
     pub fn new() -> Self {
         Self {
             cached: Default::default(),
+            weights: None,
+            bone: 0,
             mesh: Mesh {
                 vertices: Vec::new(),
                 indices: Vec::new(),
                 texture: None,
             },
         }
+    }
+    fn skinned() -> Self {
+        let mut model = Self::new();
+        model.weights = Some(Vec::new());
+        model
+    }
+    fn bone(&mut self, bone: u16) {
+        self.bone = bone;
+    }
+    fn into_skin(self, joints: usize) -> ferravex_render::skinning::SkinnedMesh {
+        ferravex_render::skinning::SkinnedMesh::new(
+            &self.mesh,
+            self.weights.as_ref().expect("skinned model"),
+            joints,
+        )
+        .expect("valid authored skin")
     }
     pub fn resident(&self) -> &ferravex_render::retained::ResidentMesh {
         self.cached.get_or_init(|| {
@@ -41,6 +61,9 @@ impl Model {
             let mut v = Vertex::new2(p, uv, color);
             v.normal = normal.extend(0.0);
             self.mesh.vertices.push(v);
+        }
+        if let Some(weights) = &mut self.weights {
+            weights.extend([ferravex_render::skinning::SkinWeights::rigid(self.bone); 4]);
         }
         self.mesh
             .indices
@@ -266,27 +289,32 @@ pub fn build_yard(arena: &Arena) -> Model {
     m
 }
 
-pub fn build_operator() -> Model {
-    let mut m = Model::new();
+pub fn build_operator() -> ferravex_render::skinning::SkinnedMesh {
+    let mut m = Model::skinned();
+    m.bone(1);
     let cloth = rgb(0x6a705e);
     let armor = rgb(0x353e38);
     let boots = rgb(0x292f2c);
     m.cube(vec3(0., 1.10, 0.), vec3(0.58, 0.65, 0.33), cloth);
     m.cube(vec3(0., 1.15, -0.20), vec3(0.48, 0.43, 0.13), armor);
+    m.bone(2);
     m.cube(vec3(0., 1.63, 0.), vec3(0.31, 0.33, 0.30), rgb(0xb79875));
     m.cube(vec3(0., 1.76, 0.01), vec3(0.39, 0.16, 0.37), cloth);
     m.cube(vec3(0., 1.66, -0.16), vec3(0.30, 0.09, 0.03), rgb(0x243331));
     for x in [-0.16, 0.16] {
+        m.bone(if x < 0. { 3 } else { 4 });
         m.cube(vec3(x, 0.44, 0.), vec3(0.23, 0.74, 0.27), cloth);
         m.cube(vec3(x, 0.12, -0.07), vec3(0.25, 0.23, 0.40), boots);
+        m.bone(if x < 0. { 5 } else { 6 });
         m.cube(vec3(x * 2., 1.05, -0.15), vec3(0.17, 0.46, 0.21), cloth);
     }
+    m.bone(7);
     m.cube(vec3(0.22, 1.10, -0.49), vec3(0.12, 0.16, 0.78), armor);
-    m
+    m.into_skin(8)
 }
 
-pub fn build_rifle() -> Model {
-    let mut m = Model::new();
+pub fn build_rifle() -> ferravex_render::skinning::SkinnedMesh {
+    let mut m = Model::skinned();
     let steel = rgb(0x3d4948);
     let dark = rgb(0x283330);
     let wood = rgb(0x827452);
@@ -294,12 +322,14 @@ pub fn build_rifle() -> Model {
     m.cube(vec3(0., -0.02, 0.23), vec3(0.09, 0.14, 0.25), wood);
     m.cube(vec3(0., 0.015, -0.38), vec3(0.085, 0.10, 0.23), wood);
     m.cube(vec3(0., 0.045, -0.62), vec3(0.035, 0.035, 0.30), dark);
+    m.bone(1);
     m.box_rotated(
         vec3(0., -0.18, -0.06),
         vec3(0.075, 0.24, 0.10),
         Quat::from_rotation_x(-0.25),
         dark,
     );
+    m.bone(0);
     m.box_rotated(
         vec3(0., -0.14, 0.10),
         vec3(0.065, 0.18, 0.08),
@@ -309,12 +339,14 @@ pub fn build_rifle() -> Model {
     m.cube(vec3(0., 0.11, -0.12), vec3(0.035, 0.04, 0.32), dark);
     m.cube(vec3(0., 0.09, -0.71), vec3(0.016, 0.065, 0.018), steel);
     // Two gloved hands and rolled sleeves, in the same low-poly vocabulary.
+    m.bone(3);
     m.box_rotated(
         vec3(0.045, -0.19, 0.10),
         vec3(0.11, 0.11, 0.17),
         Quat::from_rotation_x(-0.4),
         rgb(0x656b53),
     );
+    m.bone(2);
     m.box_rotated(
         vec3(-0.07, -0.10, -0.32),
         vec3(0.13, 0.13, 0.19),
@@ -327,7 +359,7 @@ pub fn build_rifle() -> Model {
         Quat::from_rotation_z(-0.45),
         rgb(0x92947a),
     );
-    m
+    m.into_skin(4)
 }
 
 /// Record a transformed cached model without rebuilding its source vertices.

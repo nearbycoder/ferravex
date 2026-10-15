@@ -46,6 +46,9 @@ impl NativeWindow {
     pub fn last_mesh_upload_bytes(&self) -> u64 {
         0
     }
+    pub fn skin_upload_bytes(&self) -> u64 {
+        0
+    }
     pub fn enable_gpu_timing(&mut self) -> bool {
         false
     }
@@ -382,6 +385,7 @@ mod linux {
         fn glDeleteBuffers(count: c_int, buffers: *const c_uint);
         fn glBindBuffer(target: c_uint, buffer: c_uint);
         fn glBufferData(target: c_uint, bytes: isize, data: *const c_void, usage: c_uint);
+        fn glBufferSubData(target: c_uint, offset: isize, bytes: isize, data: *const c_void);
         fn glEnableVertexAttribArray(index: c_uint);
         fn glDisableVertexAttribArray(index: c_uint);
         fn glVertexAttribPointer(
@@ -397,6 +401,7 @@ mod linux {
         fn glVertexAttribDivisor(index: c_uint, divisor: c_uint);
         fn glGetUniformLocation(program: c_uint, name: *const c_char) -> c_int;
         fn glUniformMatrix4fv(location: c_int, count: c_int, transpose: u8, values: *const f32);
+        fn glUniformMatrix3fv(location: c_int, count: c_int, transpose: u8, values: *const f32);
         fn glGenQueries(count: c_int, queries: *mut c_uint);
         fn glDeleteQueries(count: c_int, queries: *const c_uint);
         fn glBeginQuery(target: c_uint, query: c_uint);
@@ -530,6 +535,9 @@ mod linux {
         shadow_texture: c_int,
         shadow_options: c_int,
         shadow_extra: c_int,
+        skin_count: c_int,
+        bones: c_int,
+        bone_normals: c_int,
     }
     struct ProgramPair {
         color: GpuProgram,
@@ -553,6 +561,8 @@ mod linux {
         materials: BTreeMap<u32, MaterialProgram>,
         instances: c_uint,
         meshes: BTreeMap<u32, (c_uint, c_int)>,
+        skin_matrices: Vec<[f32; 16]>,
+        skin_normals: Vec<[f32; 9]>,
         batches: Vec<crate::retained::RetainedBatch>,
     }
     pub struct NativeWindow {
@@ -1040,6 +1050,41 @@ mod linux {
         pub fn last_mesh_upload_bytes(&self) -> u64 {
             self.mesh_upload_bytes
         }
+        /// Actual palette uniform bytes submitted in color and shadow programs.
+        pub fn skin_upload_bytes(&self) -> u64 {
+            let Some(gpu) = &self.retained else {
+                return 0;
+            };
+            let mut bytes = 0;
+            for b in &gpu.batches {
+                if b.reserved[1] == 0 {
+                    continue;
+                }
+                let pair = gpu
+                    .materials
+                    .get(&b.material)
+                    .and_then(|m| m.valid.as_ref())
+                    .unwrap_or(&gpu.builtin);
+                for shadow in [false, true] {
+                    let used = if shadow {
+                        gpu.environment.shadow_size > 0
+                            && gpu.shadow.is_some()
+                            && b.depth & 1 != 0
+                            && b.depth & 8 == 0
+                            && b.light[15] > 0.5
+                    } else {
+                        b.depth & 32 == 0
+                    };
+                    if used {
+                        let p = if shadow { &pair.depth } else { &pair.color };
+                        bytes += b.reserved[1] as u64
+                            * (if p.bones >= 0 { 64 } else { 0 }
+                                + if p.bone_normals >= 0 { 36 } else { 0 });
+                    }
+                }
+            }
+            bytes
+        }
         pub fn enable_gpu_timing(&mut self) -> bool {
             if !self.make_current() {
                 return false;
@@ -1121,8 +1166,12 @@ mod linux {
             }
             if let Some(gpu) = &mut self.retained {
                 gpu.batches.clear();
+                gpu.skin_matrices.clear();
+                gpu.skin_normals.clear();
                 if let Some(frame) = frame {
                     gpu.batches.extend_from_slice(&frame.batches);
+                    gpu.skin_matrices.extend_from_slice(&frame.skin_matrices);
+                    gpu.skin_normals.extend_from_slice(&frame.skin_normals);
                 }
             }
             self.last_batches.clear();
@@ -1211,6 +1260,8 @@ mod linux {
                         materials: BTreeMap::new(),
                         instances,
                         meshes: BTreeMap::new(),
+                        skin_matrices: Vec::new(),
+                        skin_normals: Vec::new(),
                         batches: Vec::new(),
                     });
                 }
@@ -1239,12 +1290,37 @@ mod linux {
                         assert_ne!(buffer, 0, "allocate retained mesh buffer");
                         glBindBuffer(GL_ARRAY_BUFFER, buffer);
                         let bytes = mesh.vertices.len() * 40;
-                        glBufferData(
-                            GL_ARRAY_BUFFER,
-                            bytes as isize,
-                            mesh.vertices.as_ptr().cast(),
-                            0x88e4,
-                        );
+                        if let Some(skin) = &mesh.skin {
+                            // One static buffer holds positions then influences.
+                            // Static-only cache entries keep their original size.
+                            let skin_bytes = skin.len() * 32;
+                            glBufferData(
+                                GL_ARRAY_BUFFER,
+                                (bytes + skin_bytes) as isize,
+                                ptr::null(),
+                                0x88e4,
+                            );
+                            glBufferSubData(
+                                GL_ARRAY_BUFFER,
+                                0,
+                                bytes as isize,
+                                mesh.vertices.as_ptr().cast(),
+                            );
+                            glBufferSubData(
+                                GL_ARRAY_BUFFER,
+                                bytes as isize,
+                                skin_bytes as isize,
+                                skin.as_ptr().cast(),
+                            );
+                            self.mesh_upload_bytes += skin_bytes as u64;
+                        } else {
+                            glBufferData(
+                                GL_ARRAY_BUFFER,
+                                bytes as isize,
+                                mesh.vertices.as_ptr().cast(),
+                                0x88e4,
+                            );
+                        }
                         self.mesh_upload_bytes += bytes as u64;
                         slot.insert((buffer, mesh.vertices.len() as i32));
                     }
@@ -1541,6 +1617,8 @@ mod linux {
                 (7, c"a_normal0"),
                 (8, c"a_normal1"),
                 (9, c"a_normal2"),
+                (10, c"a_joints"),
+                (11, c"a_weights"),
             ];
             let handle = create_program_stages(&vertex, &fragment, &attributes)?;
             // SAFETY: Compilation returned a live program owned by the current GL context.
@@ -1556,6 +1634,9 @@ mod linux {
                     shadow_texture: glGetUniformLocation(handle, c"u_shadow_texture".as_ptr()),
                     shadow_options: glGetUniformLocation(handle, c"u_shadow_options".as_ptr()),
                     shadow_extra: glGetUniformLocation(handle, c"u_shadow_extra".as_ptr()),
+                    skin_count: glGetUniformLocation(handle, c"u_skin_count".as_ptr()),
+                    bones: glGetUniformLocation(handle, c"u_bones[0]".as_ptr()),
+                    bone_normals: glGetUniformLocation(handle, c"u_bone_normals[0]".as_ptr()),
                 })
             }
         }
@@ -1696,6 +1777,23 @@ mod linux {
                     .unwrap_or(&self.builtin);
                 let program = if shadow { &pair.depth } else { &pair.color };
                 glUseProgram(program.handle);
+                let first = batch.reserved[0] as usize;
+                let bones = batch.reserved[1] as usize;
+                glUniform1i(program.skin_count, bones as i32);
+                if bones > 0 {
+                    glUniformMatrix4fv(
+                        program.bones,
+                        bones as i32,
+                        0,
+                        self.skin_matrices[first..first + bones].as_ptr().cast(),
+                    );
+                    glUniformMatrix3fv(
+                        program.bone_normals,
+                        bones as i32,
+                        0,
+                        self.skin_normals[first..first + bones].as_ptr().cast(),
+                    );
+                }
                 glUniformMatrix4fv(
                     program.camera,
                     1,
@@ -1762,6 +1860,19 @@ mod linux {
                         offset as *const c_void,
                     );
                 }
+                if bones > 0 {
+                    for (attribute, offset) in [(10, 0), (11, 16)] {
+                        glEnableVertexAttribArray(attribute);
+                        glVertexAttribPointer(
+                            attribute,
+                            4,
+                            GL_FLOAT,
+                            0,
+                            32,
+                            (count as usize * 40 + offset) as *const c_void,
+                        );
+                    }
+                }
                 glBindBuffer(GL_ARRAY_BUFFER, self.instances);
                 for i in 0..7 {
                     let at = 3 + i;
@@ -1783,7 +1894,7 @@ mod linux {
                     1,
                     GL_ONE_MINUS_SRC_ALPHA,
                 );
-                for at in 0..10 {
+                for at in 0..12 {
                     glDisableVertexAttribArray(at);
                     if at >= 3 {
                         glVertexAttribDivisor(at, 0);
@@ -1903,6 +2014,149 @@ mod linux {
     #[cfg(test)]
     mod tests {
         use super::*;
+        #[test]
+        #[ignore = "requires a live X11 display and OpenGL context"]
+        fn four_weight_gpu_skin_matches_static_geometry_normals_and_shadows() {
+            use crate::{
+                Mat4, Vec2, Vec3,
+                lighting::{Quality, SunShadow},
+                mesh::Mesh3d,
+                retained::{DrawStyle, Frame},
+                shaders::LitSettings,
+                skinning::{SkinPalette, SkinWeights, SkinnedMesh},
+            };
+            let mut window = NativeWindow::new(&Conf {
+                window_width: 192,
+                window_height: 128,
+                ..Default::default()
+            })
+            .unwrap();
+            window.set_swap_interval(0);
+            let floor = Mesh3d::plane(Vec2::splat(8.), crate::WHITE, 1);
+            let cube = Mesh3d::cuboid(Vec3::ONE, crate::RED);
+            let skin = SkinnedMesh::new(
+                &cube.mesh,
+                &vec![
+                    SkinWeights {
+                        joints: [0, 1, 2, 3],
+                        weights: [1.; 4]
+                    };
+                    cube.mesh.vertices.len()
+                ],
+                4,
+            )
+            .unwrap();
+            let matrices: Vec<_> = [0.2, 0.6, 1., 1.4]
+                .into_iter()
+                .map(|x| {
+                    (Mat4::from_translation(Vec3::X * x)
+                        * Mat4::from_scale(Vec3::new(1., 1.5, 0.5)))
+                    .to_cols_array()
+                })
+                .collect();
+            let palette = SkinPalette::new(&matrices).unwrap();
+            let eye = Vec3::new(4., 5., 6.);
+            let camera = Mat4::perspective_rh_gl(0.8, 1.5, 0.1, 50.)
+                * Mat4::look_at_rh(eye, Vec3::ZERO, Vec3::Y);
+            let sun = SunShadow {
+                direction: Vec3::new(-0.5, 1., -0.2),
+                extent: 6.,
+                depth: 15.,
+                strength: 1.,
+                ..Default::default()
+            };
+            let light = LitSettings {
+                camera_position: eye,
+                light_direction: sun.direction,
+                ambient: 0.3,
+                fog_start: 100.,
+                fog_end: 200.,
+                ..Default::default()
+            }
+            .sanitized();
+            let mut frame = Frame::default();
+            frame
+                .environment
+                .update(&[], Some(sun), Quality::High, Some(eye));
+            frame.record(floor.resident(), Mat4::IDENTITY, camera, true, Some(light));
+            frame.record(
+                cube.resident(),
+                Mat4::from_translation(Vec3::new(0.8, 0.75, 0.))
+                    * Mat4::from_scale(Vec3::new(1., 1.5, 0.5)),
+                camera,
+                true,
+                Some(light),
+            );
+            window.present_scene(&[], &[], crate::BLACK, Some(&frame));
+            let reference = window.pixels();
+            frame.clear();
+            frame.record(floor.resident(), Mat4::IDENTITY, camera, true, Some(light));
+            frame.record_style(
+                skin.resident(),
+                Mat4::from_translation(Vec3::Y * 0.75),
+                camera,
+                true,
+                DrawStyle {
+                    light: Some(light),
+                    skin: Some(&palette),
+                    ..Default::default()
+                },
+            );
+            frame.finalize();
+            window.present_scene(&[], &[], crate::BLACK, Some(&frame));
+            let animated = window.pixels();
+            let mismatches = reference
+                .chunks_exact(4)
+                .zip(animated.chunks_exact(4))
+                .filter(|(a, b)| a.iter().zip(*b).any(|(a, b)| a.abs_diff(*b) > 3))
+                .count();
+            assert!(
+                mismatches < 10,
+                "skin color/normal/shadow mismatch: {mismatches} pixels"
+            );
+            assert_eq!(
+                window.last_mesh_upload_bytes(),
+                skin.resident().vertex_count() as u64 * 72
+            );
+            window.present_scene(&[], &[], crate::BLACK, Some(&frame));
+            assert_eq!(window.last_mesh_upload_bytes(), 0);
+            assert_eq!(window.skin_upload_bytes(), 4 * (100 + 64));
+            let moved =
+                SkinPalette::new(&[Mat4::from_translation(Vec3::X * -1.5).to_cols_array(); 4])
+                    .unwrap();
+            frame.clear();
+            frame.record(floor.resident(), Mat4::IDENTITY, camera, true, Some(light));
+            frame.record_style(
+                skin.resident(),
+                Mat4::from_translation(Vec3::Y * 0.75),
+                camera,
+                true,
+                DrawStyle {
+                    light: Some(light),
+                    skin: Some(&moved),
+                    ..Default::default()
+                },
+            );
+            window.present_scene(&[], &[], crate::BLACK, Some(&frame));
+            let changed = window.pixels();
+            assert!(
+                animated
+                    .chunks_exact(4)
+                    .zip(changed.chunks_exact(4))
+                    .filter(|(a, b)| a != b)
+                    .count()
+                    > 100,
+                "palette did not animate GPU geometry/shadows"
+            );
+            drop(skin);
+            frame.clear();
+            window.present_scene(&[], &[], crate::BLACK, Some(&frame));
+            assert_eq!(
+                window.retained.as_ref().unwrap().meshes.len(),
+                2,
+                "skin mesh/weight resource was not collected"
+            );
+        }
         #[test]
         #[ignore = "requires a live X11 display and OpenGL context"]
         fn shared_shadow_map_and_point_lights_change_rendered_pixels() {

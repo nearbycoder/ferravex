@@ -1,4 +1,6 @@
 //! A small precision platformer: no assets, a fixed simulation, and forgiving jumps.
+mod animation;
+use animation::EmberAnimation;
 use ferravex_core::FixedClock;
 use ferravex_physics::character::{
     Character, CharacterInput, CharacterSettings, CharacterShape, Obstacle, QueryBounds, Terrain,
@@ -250,7 +252,7 @@ fn tree(x: f32, y: f32, size: f32, color: Color) {
     );
 }
 
-fn world(game: &Game, camera: f32, time: f32) {
+fn world(game: &Game, camera: f32, time: f32, motion: &EmberAnimation) {
     clear_background(Color::from_hex(0x242c2b));
     draw_circle(
         1040.0 - camera * 0.12,
@@ -366,10 +368,16 @@ fn world(game: &Game, camera: f32, time: f32) {
         GREEN,
     );
     let p = game.position() - vec2(camera, 0.0);
-    let bob = if game.motor.grounded {
-        (time * 17.0).sin() * game.velocity().x.abs() / SPEED * 2.0
-    } else {
-        0.0
+    let (left, right, body) = match motion.frame() {
+        1 => (0., 0., 1.),
+        2 => (-3., 3., 0.),
+        3 | 5 => (0., 0., -1.),
+        4 => (3., -3., 0.),
+        8 => (-3., -1., 0.),
+        9 => (1., 2., 0.),
+        10 => (-3., -3., 3.),
+        11 => (-1., -1., 1.),
+        _ => (0., 0., 0.),
     };
     draw_ellipse(
         p.x + 12.0,
@@ -379,28 +387,37 @@ fn world(game: &Game, camera: f32, time: f32) {
         0.0,
         Color::new(0.0, 0.0, 0.0, 0.20),
     );
-    draw_rectangle(p.x + 3.0, p.y + 15.0, 18.0, 19.0, ORANGE);
+    draw_rectangle(p.x + 3.0, p.y + 15.0 + body, 18.0, 19.0, ORANGE);
     draw_rectangle(
         p.x + 4.0,
         p.y + 32.0,
         6.0,
-        8.0 + bob,
+        8.0 + left,
         Color::from_hex(0x1b2524),
     );
     draw_rectangle(
         p.x + 15.0,
         p.y + 32.0,
         6.0,
-        8.0 - bob,
+        8.0 + right,
         Color::from_hex(0x1b2524),
     );
-    draw_rectangle(p.x + 4.0, p.y + 1.0, 17.0, 15.0, CREAM);
-    draw_rectangle(p.x + 1.0, p.y, 24.0, 6.0, Color::from_hex(0xc79d57));
-    let face = if game.velocity().x < -1.0 { 5.0 } else { 14.0 };
-    draw_rectangle(p.x + face, p.y + 7.0, 5.0, 3.0, Color::from_hex(0x26312b));
+    draw_rectangle(p.x + 4.0, p.y + 1.0 + body, 17.0, 15.0, CREAM);
+    draw_rectangle(p.x + 1.0, p.y + body, 24.0, 6.0, Color::from_hex(0xc79d57));
+    let face = if motion.facing() < 0. { 5.0 } else { 14.0 };
+    draw_rectangle(
+        p.x + face,
+        p.y + 7.0 + body,
+        5.0,
+        3.0,
+        Color::from_hex(0x26312b),
+    );
     draw_triangle(
         vec2(p.x + 5.0, p.y + 18.0),
-        vec2(p.x - 13.0, p.y + 22.0 + bob),
+        vec2(
+            p.x + 12.0 - motion.facing() * 25.0,
+            p.y + 22.0 + left * 0.4 + body,
+        ),
         vec2(p.x + 5.0, p.y + 26.0),
         Color::from_hex(0x9e5033),
     );
@@ -426,6 +443,7 @@ async fn game() {
     let mut demo = Demo::new();
     let mut sound = GameAudio::new();
     let mut game = Game::new();
+    let mut motion = EmberAnimation::new();
     let mut clock = FixedClock::new(120.0, 12);
     let mut player_input = PlayerInput::preset("emberline", Preset::Platformer);
     let mut camera = Follow2::new(Follow2Settings {
@@ -480,6 +498,7 @@ async fn game() {
         if player_input.pressed("restart") || game.won && player_input.pressed("confirm") {
             game = Game::new();
             sound.reset();
+            motion.reset();
             clock.reset();
             camera.cut();
         }
@@ -520,19 +539,20 @@ async fn game() {
                 sound.cue(Cue::Failure, 0.5);
             }
         }
-        sound.walk(
-            vec3(game.position().x, 0., 0.),
-            game.motor.grounded,
-            demo.autoplay || player_input.gameplay_active(),
-            if game.position().x > 1800. {
+        if game.deaths != previous_deaths {
+            motion.reset();
+        }
+        motion.update(&game, dt);
+        for _ in 0..motion.footsteps() {
+            let surface = if game.position().x > 1800. {
                 Surface::Metal
             } else if game.position().x > 900. {
                 Surface::Wood
             } else {
                 Surface::Grass
-            },
-            64.,
-        );
+            };
+            sound.cue(Cue::Footstep(surface), 0.32);
+        }
         if game.deaths != previous_deaths {
             camera.cut();
         }
@@ -548,7 +568,7 @@ async fn game() {
             .x
             - WIDTH * 0.5;
         set_camera(&canvas.camera());
-        world(&game, camera_x, demo.time());
+        world(&game, camera_x, demo.time(), &motion);
         let collected = game.embers.iter().filter(|(_, found)| *found).count();
         label("EMBERLINE", 32.0, 48.0, 28.0, CREAM);
         let zone = if game.position().x < 900.0 {

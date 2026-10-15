@@ -78,6 +78,7 @@ try {
   canvas.dataset.frames=String(++frames);canvas.dataset.vertices=String(count+retained.vertices+retained.shadowVertices);
   canvas.dataset.culled=String(exports.ferravex_culled_count());canvas.dataset.visible=String(exports.ferravex_visible_count());
   canvas.dataset.drawCalls=String(immediateDraws+retained.drawCalls+retained.shadowDrawCalls);canvas.dataset.shadowDrawCalls=String(retained.shadowDrawCalls);canvas.dataset.quality=String(retained.environment.quality);canvas.dataset.lightingError=retained.lightingError;canvas.dataset.residentMeshes=String(retained.meshes.size);canvas.dataset.uploadBytes=String(count*32+retained.uploadBytes);
+  canvas.dataset.skinnedDrawCalls=String(retained.skinnedDrawCalls);canvas.dataset.skinJoints=String(exports.ferravex_skin_joint_count?.()||0);
   canvas.dataset.materialError=retained.lastError;materialTools?.update();
   if(running)requestAnimationFrame(loop);else audio.dispose();
  };

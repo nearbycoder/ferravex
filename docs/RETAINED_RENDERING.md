@@ -45,7 +45,7 @@ The native retained path requires OpenGL 3.3+; the browser path requires WebGL2.
 Custom vertex/fragment materials, blending and transactional reload are described
 in [materials](MATERIALS.md); [visibility/LOD](VISIBILITY.md) is also implemented.
 Directional shadows, local lights and vertex AO are described in [lighting](LIGHTING.md).
-General texture assets, skinning and indirect draws remain separate work. Courtyard keeps its separate
+[GPU skinning](ANIMATION.md) adds immutable four-influence weights and bounded per-frame position/normal palettes, matching color/shadow passes and conservative animated bounds. Static vertex/instance layouts remain unchanged. General texture assets and indirect draws remain separate work. Courtyard keeps its separate
 renderer. Native CPU savings and driver submission cost must be measured together:
 more resident draw calls can offset savings in small scenes, especially on a
 software GPU. This is not a blanket frame-rate improvement claim.
@@ -54,5 +54,5 @@ Checks include native instanced readback, shared mesh upload reuse, depth and HU
 ordering, normal matrix/layout, invalid transforms, resource lifetimes, instance
 regrouping, the native catalog screenshot harness, and actual browser games.
 The local performance harness records static mesh uploads plus instance/immediate
-uploads. Browser canvas data attributes expose resident mesh, draw, vertex and
+uploads, plus skin-palette uniform bytes for each actual color/shadow program. Browser canvas data attributes expose resident mesh, draw, vertex and
 upload counters for inspection.
