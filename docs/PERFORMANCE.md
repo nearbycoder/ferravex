@@ -41,3 +41,60 @@ python3 scripts/smoke-games.py --output target/game-smoke
 ```
 
 The full smoke run requires Linux X11/GLX and a display. On a headless machine, select `--game owned-lab --game owned-orbit` or provide a suitable display/graphics environment before running the restored games. The smoke report records bounded execution and PNG output, not performance certification. Recovery-wide validation is pending; consult actual local build/test reports instead of inferring passes from the commands above.
+
+## Local performance regression checks
+
+Build and record all fifteen catalog examples on the current machine:
+
+```sh
+python3 scripts/perf-games.py --write-baseline target/perf/baseline.json
+python3 scripts/perf-games.py --baseline target/perf/baseline.json
+```
+
+Each run uses fixed simulation intervals and the games' existing autoplay inputs
+(Courtyard uses its fixed idle/training workload). Three fresh processes each
+discard 60 warmup frames and record 180 measured frames. Select a subset with
+repeated `--game` arguments. Linux interactive examples need DISPLAY and OpenGL;
+Courtyard and Orbit Breaker use their software renderers. Platform, renderer,
+dimensions and workload configuration must match the baseline.
+
+`target/perf/current` contains raw per-frame JSON and a summarized `report.json`.
+Metrics include CPU update/geometry preparation, CPU driver submission/swap,
+software rendering where applicable, immediate draw calls, submitted vertices,
+upload bytes, successful Rust allocation/reallocation calls and requested bytes,
+and rigid-physics step/pair/contact/CCD counts. Allocations exclude C/driver
+allocations and do not measure live heap size. Rigid solver counters sum all
+catch-up steps. No rigid solver calls means zero work, not an inferred timing.
+Unsupported counters are null. GPU time is currently null: submission wall time
+can include driver/swap blocking and is never called GPU execution time.
+
+Native reporting is opt-in through `FERRAVEX_PERF_OUTPUT`; normal play does not
+allocate a recording buffer. The game entry macro installs a forwarding System
+allocator; counting is enabled only for recordings. Custom hosts can install
+`ferravex_core::telemetry::TrackingAllocator` once and use `Session`, `FrameToken`
+and `FrameSample`. A recording retains at most 8192 measured frames and reports
+overflow; the runner rejects incomplete output. Screenshot encoding, setup and
+report serialization are outside measured frames. Presentation pacing is disabled
+for interactive recordings, but drivers can still impose blocking.
+
+The runner compares mean/p95/p99: timing budgets allow the greater of 20% or
+200 microseconds of noise; work budgets allow the greater of 5% or one unit.
+Native/available Wasm raw and gzip artifact budgets allow the greater of 5% or
+1024 bytes growth. Tolerances are explicit CLI options. Missing metrics, changed
+artifact coverage and incompatible machines fail comparison. Wasm size is only
+included when an artifact exists; rebuild it before claiming current Web sizes.
+Use `--no-build` only when taking responsibility for executable freshness.
+
+Record baselines deliberately on an otherwise idle machine. Do not automatically
+replace a baseline following a failure. These are local regression measurements,
+not portable frame-rate promises. Run `python3 -B scripts/test_perf.py` for the
+comparison/coverage regressions, plus the relevant Rust tests and native game
+smoke checks before merging. iOS and other unavailable devices are not required
+for this local iteration series.
+
+The first local comparison on this shared Linux host flagged sub-millisecond
+tail variation in unchanged binaries. Use a measured host-specific timing floor
+(e.g. `--time-floor-us 1000` here) when reproducing those results; the stricter
+default remains useful on quiet dedicated machines. Keep the chosen budget with
+the comparison result rather than claiming every timing fluctuation is a code
+regression.

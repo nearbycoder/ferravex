@@ -1,6 +1,6 @@
 # Ferravex Physics
 
-An original Rust rigid-body solver used by Marble Run, Salvage Pinball, Siege Foundry, and the 2D/3D physics laboratories. Its only dependency is the workspace's original `ferravex-math`. It contains no Rapier, Parry, nalgebra, glam, or other third-party physics code.
+An original Rust rigid-body solver used by Marble Run, Salvage Pinball, Siege Foundry, and the 2D/3D physics laboratories. Its dependencies are the workspace's original `ferravex-math` and `ferravex-core` (local telemetry). It contains no Rapier, Parry, nalgebra, glam, or other third-party physics code.
 
 This is separate from `ferravex-dynamics`, the smaller translational array-based solver. This crate implements orientation, angular momentum response, local mass moments transformed into world space, and angular contact velocities.
 

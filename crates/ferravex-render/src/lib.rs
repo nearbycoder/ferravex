@@ -17,6 +17,7 @@ pub mod mesh;
 pub mod native;
 pub mod shaders;
 pub mod ui;
+pub use ferravex_core::telemetry;
 
 pub mod prelude {
     pub use crate::{
@@ -770,6 +771,10 @@ pub fn run(conf: Conf, future: impl Future<Output = ()> + 'static) {
         .unwrap_or_else(|e| panic!("Ferravex native platform: {e}"));
     start(conf, future);
     let fixed = std::env::args().any(|s| s == "--smoke-frames");
+    let mut performance = telemetry::Session::from_env();
+    if performance.is_some() {
+        window.set_swap_interval(0);
+    }
     let mut last = std::time::Instant::now();
     loop {
         let now = std::time::Instant::now();
@@ -798,9 +803,22 @@ pub fn run(conf: Conf, future: impl Future<Output = ()> + 'static) {
             }
         }
         let (w, h) = window.size();
+        let token = performance.as_ref().map(|_| telemetry::FrameToken::begin());
         let active = frame(dt, w, h);
         read(|s| window.set_cursor(s.grab, s.visible));
+        let cpu_us = token.as_ref().map_or(0., |t| t.elapsed_us());
+        let submit_start = std::time::Instant::now();
         read(|s| window.present(&s.vertices, &s.batches, s.clear));
+        if let (Some(session), Some(token)) = (&mut performance, token) {
+            session.record(token.finish(read(|s| telemetry::FrameSample {
+                cpu_us,
+                submit_us: Some(submit_start.elapsed().as_secs_f64() * 1e6),
+                draw_calls: Some(s.batches.len() as u64),
+                vertices: Some(s.vertices.len() as u64),
+                upload_bytes: Some((s.vertices.len() * 32) as u64),
+                ..Default::default()
+            })));
+        }
         let paths = edit(|s| std::mem::take(&mut s.screenshots));
         if !paths.is_empty() {
             let pixels = window.pixels();
@@ -828,10 +846,20 @@ pub fn run(conf: Conf, future: impl Future<Output = ()> + 'static) {
             }
         }
     }
+    if let Some(session) = performance {
+        let (w, h) = window.size();
+        session
+            .write(&window.driver_info(), w, h)
+            .expect("write performance report");
+    }
 }
 #[macro_export]
 macro_rules! game {
     ($conf:path,$game:path) => {
+        #[cfg(not(target_arch = "wasm32"))]
+        #[global_allocator]
+        static FERRAVEX_ALLOCATOR: $crate::telemetry::TrackingAllocator =
+            $crate::telemetry::TrackingAllocator;
         #[cfg(not(target_arch = "wasm32"))]
         pub fn run() {
             $crate::run($conf(), $game());

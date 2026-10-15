@@ -11,6 +11,7 @@
 pub use ferravex_ecs as ecs;
 pub use ferravex_ecs::{Entity, World};
 pub mod collision;
+pub mod telemetry;
 
 /// A fixed simulation step budget with a fractional render interpolation factor.
 #[derive(Debug, Clone, Copy)]

@@ -38,6 +38,10 @@ impl NativeWindow {
         Vec::new()
     }
     pub fn set_cursor(&mut self, _: bool, _: bool) {}
+    pub fn set_swap_interval(&self, _: i32) {}
+    pub fn driver_info(&self) -> String {
+        "unsupported".into()
+    }
 }
 
 #[cfg(target_os = "linux")]
