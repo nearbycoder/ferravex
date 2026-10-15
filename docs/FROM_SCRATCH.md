@@ -33,12 +33,12 @@ finished.
 
 | # | Feature | Working implementation | Remaining work |
 |---|---|---|---|
-| 1 | Profiling and budgets | Fixed-size CPU samples, budget flags, p99; browser CPU frame and asynchronous GPU timer measurements; binary size/audit scripts | Allocator instrumentation, trace timelines, device budgets |
+| 1 | Profiling and budgets | Fixed-size CPU samples, budget flags, p99; browser CPU frame and asynchronous GPU timer measurements; binary size/audit scripts | Trace timelines and device budgets |
 | 2 | Retained rendering | Shared native/WebGL2 retained buffers, opaque-pass instancing, conservative frustum/distance tests and authored hysteretic LOD; Courtyard static buffers/instancing and transformed bounds/frustum culling; headless clipped depth rasterizer | Windows/macOS/iOS GPU hosts, GPU-driven submission |
 | 3 | Character movement | Shared upright capsule and planar box motors, continuous sweeps, slopes/steps, moving supports, jump grace/buffer, prediction snapshots; adopted by Strike, Crystal Cavern and Emberline | Dynamic-body pushing, mesh terrain and multiplayer platform pose history |
 | 4 | Input actions | Bounded remappable action map, deadzones, buffered edges; browser keyboard/mouse/gamepad/touch adapters; Linux host events for restored games | Interactive rebinding UI and physical-device testing |
 | 5 | Spatial audio | Strict PCM16 WAV decoder, bounded resampling stereo mixer, distance attenuation/panning; browser AudioWorklet output | Occlusion, streaming/compressed audio, native sinks and authored footsteps |
-| 6 | Reliable events | Actual UDP v2 session-bound event/ACK codec, retry/order/dedup, bounded queues and slow-peer disconnect; typed gameplay event delivery | Congestion-aware scheduling and long-running Internet tests |
+| 6 | Reliable events | Actual UDP v3 session-bound event/ACK codec, retry/order/dedup, bounded queues and slow-peer disconnect; typed gameplay event delivery | Congestion-aware scheduling and long-running Internet tests |
 | 7 | Lag compensation | Bounded authority history, clock estimator, opt-in historical-hit damage with current-wall occlusion and lifecycle checks | Validated shot timestamps in the UDP wire format and automatic clock integration |
 | 8 | Compact replication | Bounded sparse/full snapshot byte deltas with exact baselines and centimeter quantization | Baseline ACK integration, quantized wire snapshots, adaptive interest/bandwidth scheduling |
 | 9 | Secure multiplayer | Browser WebRTC DTLS/SCTP adapter; host authority, guest prediction/reconciliation and input redundancy | Native encrypted transport, service identity, accounts, NAT relay/discovery and session resumption |

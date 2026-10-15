@@ -9,7 +9,9 @@ mod geometry;
 mod world;
 pub use body::{BodySet, Collider, ColliderHandle, ColliderSet, RigidBodyHandle};
 use ferravex_math::{Quat, Vec2, Vec3};
-pub use world::{ContactEvent, ContactPair, StepStats};
+pub use world::{
+    ContactEvent, ContactManifold, ContactPair, ContactPoint, SolverSettings, StepStats,
+};
 
 /// A planar rotation, measured in radians.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

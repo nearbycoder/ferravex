@@ -95,6 +95,8 @@ pub struct Collider {
     pub(crate) sensor: bool,
     pub(crate) membership: u32,
     pub(crate) filter: u32,
+    pub(crate) revision: u64,
+    pub(crate) dirty: bool,
 }
 impl Collider {
     pub(crate) fn new(shape: Shape) -> Self {
@@ -107,6 +109,29 @@ impl Collider {
             sensor: false,
             membership: u32::MAX,
             filter: u32::MAX,
+            revision: 0,
+            dirty: false,
+        }
+    }
+    pub fn set_sensor(&mut self, sensor: bool) {
+        if self.sensor != sensor {
+            self.revision = self
+                .revision
+                .checked_add(1)
+                .expect("collider revision exhausted");
+            self.dirty = true;
+            self.sensor = sensor;
+        }
+    }
+    pub fn set_collision_layers(&mut self, membership: u32, filter: u32) {
+        if (self.membership, self.filter) != (membership, filter) {
+            self.revision = self
+                .revision
+                .checked_add(1)
+                .expect("collider revision exhausted");
+            self.dirty = true;
+            self.membership = membership;
+            self.filter = filter;
         }
     }
     pub fn parent(&self) -> Option<RigidBodyHandle> {
@@ -117,10 +142,24 @@ impl Collider {
     }
     pub fn set_restitution(&mut self, v: f32) {
         assert!(v.is_finite() && (0.0..=1.0).contains(&v));
+        if self.restitution != v {
+            self.revision = self
+                .revision
+                .checked_add(1)
+                .expect("collider revision exhausted");
+            self.dirty = true;
+        }
         self.restitution = v;
     }
     pub fn set_friction(&mut self, v: f32) {
         assert!(v.is_finite() && v >= 0.);
+        if self.friction != v {
+            self.revision = self
+                .revision
+                .checked_add(1)
+                .expect("collider revision exhausted");
+            self.dirty = true;
+        }
         self.friction = v;
     }
 }
@@ -151,6 +190,9 @@ pub struct Core {
     pub(crate) ccd: bool,
     pub(crate) sleeping: bool,
     pub(crate) quiet: f32,
+    pub(crate) revision: u64,
+    pub(crate) solver_dirty: bool,
+    pub(crate) wake_requested: bool,
     pub(crate) next_position: Option<Vec3>,
     pub(crate) next_rotation: Option<Quat>,
     pub(crate) colliders: Vec<ColliderHandle>,
@@ -181,12 +223,26 @@ impl Core {
             ccd: false,
             sleeping: false,
             quiet: 0.,
+            revision: 0,
+            solver_dirty: false,
+            wake_requested: false,
             next_position: None,
             next_rotation: None,
             colliders: Vec::with_capacity(1),
         }
     }
+    pub(crate) fn invalidate_contacts(&mut self) {
+        self.revision = self
+            .revision
+            .checked_add(1)
+            .expect("body revision exhausted");
+        self.solver_dirty = true;
+    }
     pub(crate) fn wake(&mut self) {
+        self.wake_requested = true;
+        self.wake_internal();
+    }
+    pub(crate) fn wake_internal(&mut self) {
         self.sleeping = false;
         self.quiet = 0.;
     }

@@ -191,3 +191,51 @@ These flags remain in the report; the previous baseline was not replaced or the
 size tolerance widened. They are an explicit cost for the final iteration-20
 size/performance audit. An inlining experiment increased size and was discarded.
 Raw results: `target/perf/iteration-06-final/report.json`.
+
+
+### Persistent-contact iteration
+
+The 128-box rigid benchmark on this Linux/Radeon host (native release, 1200 ticks
+at 120 Hz) reported these CPU observations with the new solver:
+
+| Configuration | Mean µs/tick | Last 120 ticks, mean µs | Final sleeping bodies |
+|---|---:|---:|---:|
+| Warm start, sleep enabled (default) | 251.9 | 132.3 | 128 |
+| Warm start, sleep disabled | 1711.7 | 1886.0 | 0 |
+| Cold start, sleep disabled | 2634.4 | 3013.6 | 0 |
+
+All three use twelve velocity iterations. Evolving contact sets also affect
+these timings: the cold case merges its stacks into one island, while the warm
+cases retain 32. An earlier observation with the previous solver/default of 24
+velocity iterations averaged 492 µs/tick; both the implementation and default
+iteration count changed, so this is an end-to-end observation rather than an
+isolated warm-start speedup. Raw benchmark logs: `target/iteration-07-bench-*`.
+A separate same-iteration twelve-box test stays upright at eight velocity/eight
+position iterations with warm starting and collapses in the cold comparison.
+Four velocity iterations still retain appreciable residual motion in this stress
+case; they are not advertised as default-quality simulation.
+
+The same fifteen-game fixed workload as iteration 6 recorded these mean Rust
+allocation calls per frame:
+
+| Game | Previous calls | New calls | Previous CPU µs | New CPU µs |
+|---|---:|---:|---:|---:|
+| Pinball | 9.47 | 1.06 | 113.1 | 137.5 |
+| Marble Run | 21.00 | 3.00 | 105.2 | 99.1 |
+| Siege Foundry | 32.04 | 4.06 | 215.0 | 185.8 |
+| 2D Physics Lab | 47.52 | 3.00 | 396.0 | 353.3 |
+| 3D Physics Lab | 45.73 | 3.00 | 602.2 | 388.9 |
+
+These include game/HUD work. A dedicated steady-contact allocation test isolates
+the solver and verifies zero allocations after warmup, awake and asleep. Timing
+values are local observations with shared-host noise, not uniform improvements
+or portable frame-rate guarantees.
+
+The default comparison retained three flags: Pinball raw Wasm grew from 222853 to
+235050 bytes, the 2D lab from 211734 to 222577 bytes, and the 3D lab's contact-point
+p99 was 276 versus a 275.1 budget (baseline 262). Compressed size growth stayed
+within the default gate; the contact count reflects a changed solver workload.
+CPU/GPU timing and the other work comparisons passed the recorded 1000 µs CPU /
+20 µs GPU floors. Neither baselines nor tolerances were changed to hide flags.
+Raw report: `target/perf/iteration-07-final/report.json`. Carry these and iteration
+6's artifact costs into the final size/performance audit.

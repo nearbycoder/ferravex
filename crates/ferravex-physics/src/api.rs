@@ -1,5 +1,5 @@
 pub use crate::{ColliderHandle, RigidBodyHandle};
-/// Rigid body state. The boolean wake parameters are retained for game source compatibility.
+/// Rigid body state. Waking requests activation of its contact island on the next step.
 #[derive(Clone, Debug)]
 pub struct RigidBody {
     core: body::Core,
@@ -45,12 +45,14 @@ impl RigidBody {
     }
     pub fn set_translation(&mut self, p: Vector, wake: bool) {
         assert!(p.is_finite());
+        if self.core.position!=to3(p) {self.core.invalidate_contacts();}
         self.core.position = to3(p);
         if wake {
             self.core.wake();
         }
     }
     pub fn set_rotation(&mut self, q: Rotation, wake: bool) {
+        self.core.invalidate_contacts();
         self.core.set_rotation(rotation_to3(q));
         if wake {
             self.core.wake();
@@ -73,6 +75,7 @@ impl RigidBody {
     }
     pub fn set_gravity_scale(&mut self, scale: f32, wake: bool) {
         assert!(scale.is_finite());
+        if self.core.gravity_scale!=scale {self.core.invalidate_contacts();}
         self.core.gravity_scale = scale;
         if wake {
             self.core.wake();
