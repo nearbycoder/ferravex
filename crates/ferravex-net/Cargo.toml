@@ -1,0 +1,9 @@
+[package]
+name = "ferravex-net"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+description = "Small, validated wire protocol and nonblocking UDP primitives for Ferravex"
+
+[dependencies]

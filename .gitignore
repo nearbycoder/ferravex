@@ -1,0 +1,12 @@
+/target/
+/dist/
+.DS_Store
+*.log
+
+__pycache__/
+*.pyc
+.vercel/
+.railway/
+.env
+.env.*
+!.env.example

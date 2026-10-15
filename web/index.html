@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#16241e">
+  <title>Ferravex / Field tests</title>
+  <style>
+    *{box-sizing:border-box}
+    html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#16241e;color:#eee9d8;font:13px system-ui,sans-serif}
+    canvas{width:100%;height:100%;outline:none;display:block;touch-action:none}
+    #examples{position:fixed;top:max(16px,env(safe-area-inset-top));right:max(16px,env(safe-area-inset-right));z-index:2;color:#d1d2c9}
+    body.playing #examples{display:none}
+    summary{padding:8px 10px;border:1px solid #d1d2c929;border-radius:3px;background:#18201de6;cursor:pointer;user-select:none}
+    summary:hover,summary:focus-visible{color:#fff;background:#29312d}
+    summary:focus-visible,a:focus-visible{outline:2px solid #d1d2c9;outline-offset:3px}
+    nav{position:absolute;right:0;min-width:200px;max-height:calc(100dvh - 76px);overflow:auto;margin-top:6px;padding:4px;border:1px solid #d1d2c929;border-radius:3px;background:#18201df5}
+    a{display:block;padding:9px 10px;color:#d1d2c9;text-decoration:none;white-space:nowrap;border-radius:2px}
+    a:hover,a:focus-visible{color:#fff;background:#ffffff0d}
+    a[aria-current]{color:#fff;background:#ffffff16}
+    #loading{position:fixed;inset:0;display:grid;place-items:center;pointer-events:none;letter-spacing:.1em}
+    #loading[hidden]{display:none}
+    @media (any-pointer:coarse){
+      body.playing #examples{display:block}
+      #examples{left:0;right:auto;top:42%}
+      summary{width:44px;height:44px;padding:0;display:grid;place-items:center;font-size:0;list-style:none}
+      summary::after{content:'☰';font-size:20px}
+      nav{position:fixed;left:48px;right:auto;top:8px;margin:0;width:min(260px,calc(100vw - 64px));max-height:calc(100dvh - 16px)}
+    }
+  </style>
+</head>
+<body>
+  <canvas id="glcanvas" tabindex="0" aria-label="Ferravex interactive game canvas"></canvas>
+  <div id="loading" role="status">LOADING FERRAVEX…</div>
+  <details id="examples">
+    <summary aria-label="Choose a game">Examples</summary>
+    <nav aria-label="Game examples"><a href="gallery.html">Game collection ↗</a></nav>
+  </details>
+  <script>
+    // Macroquad requests cursor capture every frame. Browsers reject repeated
+    // requests while one is pending, and require a fresh gesture after rejection.
+    // Keep capture idempotent; retry only on explicit user interaction.
+    const gameCanvas=document.getElementById('glcanvas');
+    const exampleMenu=document.getElementById('examples');
+    const rawPointerLock=gameCanvas.requestPointerLock?.bind(gameCanvas);
+    let pointerLockPending=false, pointerLockRetry=true, pointerLockWanted=false;
+    if(rawPointerLock){
+      gameCanvas.requestPointerLock=function(){
+        pointerLockWanted=true;
+        if(document.pointerLockElement===gameCanvas || pointerLockPending || !pointerLockRetry)return;
+        pointerLockPending=true;pointerLockRetry=false;
+        try{
+          const result=rawPointerLock();
+          if(result?.then)result.then(()=>{pointerLockPending=false;},()=>{pointerLockPending=false;});
+        }catch{pointerLockPending=false;}
+      };
+      document.addEventListener('pointerlockchange',()=>{pointerLockPending=false;});
+      document.addEventListener('pointerlockerror',()=>{pointerLockPending=false;});
+      gameCanvas.addEventListener('pointerdown',()=>{pointerLockRetry=true;if(pointerLockWanted)gameCanvas.requestPointerLock();});
+      gameCanvas.addEventListener('keydown',event=>{if(event.key==='Enter')pointerLockRetry=true;});
+      const rawUnlock=document.exitPointerLock.bind(document);
+      document.exitPointerLock=function(){pointerLockWanted=false;pointerLockRetry=true;rawUnlock();};
+    }
+  </script>
+  <script src="mq_js_bundle.js"></script>
+  <script>
+    // Game state also covers touch controls, which do not request pointer lock.
+    miniquad_add_plugin({
+      name:'ferravex_ui',version:1,
+      register_plugin(imports){
+        imports.env.ferravex_set_playing=(playing)=>{
+          document.body.classList.toggle('playing',Boolean(playing));
+          if(playing)exampleMenu.open=false;
+        };
+      }
+    });
+    const status=document.getElementById('loading');
+    window.addEventListener('error',()=>{status.hidden=false;status.textContent='Unable to start. Check browser console for details.';});
+    async function startGame(){
+      const response=await fetch('games.json');
+      if(!response.ok)throw new Error('Catalog missing');
+      const games=await response.json();
+      const requested=new URLSearchParams(location.search).get('demo');
+      const demo=games.some(g=>g.id===requested)?requested:'strike';
+      const nav=document.querySelector('nav');
+      for(const game of games){
+        const link=document.createElement('a');link.href=`?demo=${encodeURIComponent(game.id)}`;
+        link.textContent=`${game.title} · ${game.dimension}`;
+        if(game.id===demo)link.setAttribute('aria-current','page');
+        nav.append(link);
+      }
+      const selected=games.find(g=>g.id===demo);
+      document.title=`Ferravex / ${selected.title}`;
+      if(selected.kind==='game'){
+        document.body.classList.add('playing');
+        gameCanvas.addEventListener('keydown',event=>{
+          if(event.key==='Escape'){
+            const show=document.body.classList.contains('playing');
+            document.body.classList.toggle('playing',!show);
+            exampleMenu.open=show;
+          }
+        });
+      }
+      const binary=await fetch(`${demo}.wasm`,{method:'HEAD'});if(!binary.ok)throw new Error('Build missing');
+      load(`${demo}.wasm`);status.hidden=true;gameCanvas.focus();
+    }
+    startGame().catch(()=>{status.textContent='Build missing. Run scripts/build-web.sh and serve dist/web.';});
+  </script>
+</body>
+</html>

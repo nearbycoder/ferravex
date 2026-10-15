@@ -1,0 +1,11 @@
+.git
+.vercel
+.railway
+.env
+.env.*
+target
+dist
+node_modules
+__pycache__
+*.pyc
+*.log

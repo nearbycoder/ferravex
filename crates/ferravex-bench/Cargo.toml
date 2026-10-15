@@ -1,0 +1,10 @@
+[package]
+name = "ferravex-bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ferravex-fps.workspace = true
+ferravex-net.workspace = true
+ferravex-physics = { workspace = true, features = ["dim2", "dim3"] }

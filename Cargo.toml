@@ -1,0 +1,41 @@
+[workspace]
+resolver = "2"
+members = ["examples/owned-orbit", "examples/owned-lab", "crates/ferravex-graphics", "crates/ferravex-play", "crates/ferravex-engine", "crates/ferravex-math", "crates/ferravex-ecs", "crates/ferravex-dynamics", "crates/ferravex-core", "crates/ferravex", "crates/ferravex-physics", "crates/ferravex-render", "crates/ferravex-net", "crates/ferravex-fps", "examples/physics-2d", "examples/physics-3d", "examples/strike", "crates/ferravex-bench", "examples/emberline", "examples/neon-swarm", "examples/pocket-rally", "examples/salvage-pinball", "examples/orchard-guard", "examples/marble-run", "examples/dune-skimmer", "examples/crystal-cavern", "examples/siege-foundry", "examples/sky-courier"]
+default-members = ["examples/owned-lab"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.88"
+
+[workspace.dependencies]
+ferravex-graphics = { path = "crates/ferravex-graphics" }
+ferravex-play = { path = "crates/ferravex-play" }
+ferravex-engine = { path = "crates/ferravex-engine" }
+ferravex-math = { path = "crates/ferravex-math" }
+ferravex-ecs = { path = "crates/ferravex-ecs" }
+ferravex-dynamics = { path = "crates/ferravex-dynamics" }
+ferravex-core = { path = "crates/ferravex-core" }
+ferravex = { path = "crates/ferravex", default-features = false }
+ferravex-physics = { path = "crates/ferravex-physics", default-features = false }
+ferravex-render = { path = "crates/ferravex-render" }
+ferravex-net = { path = "crates/ferravex-net" }
+ferravex-fps = { path = "crates/ferravex-fps" }
+macroquad = { version = "=0.4.16", default-features = false }
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+
+# Opt in when download size matters more than maximum simulation throughput.
+[profile.small]
+inherits = "release"
+opt-level = "z"
+lto = "fat"

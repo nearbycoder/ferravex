@@ -1,0 +1,9 @@
+[package]
+name = "ferravex-dynamics"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.88"
+description = "Original dependency-free 2D/3D translational rigid-body physics for Ferravex"
+
+[dependencies]

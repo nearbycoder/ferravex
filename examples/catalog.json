@@ -1,0 +1,15 @@
+[
+  {"id":"emberline","title":"Emberline","dimension":"2D","kind":"game","genre":"Platformer","description":"Cross a forgotten foundry, collect embers, and reach the signal tower.","controls":"A/D or arrows move · Space jump · R restart"},
+  {"id":"neon-swarm","title":"Neon Swarm","dimension":"2D","kind":"game","genre":"Arena survival","description":"Hold the arena through escalating swarms with aim, dash, and pickups.","controls":"WASD move · Mouse aim/fire · Space dash · R restart"},
+  {"id":"pocket-rally","title":"Pocket Rally","dimension":"2D","kind":"game","genre":"Rally time trial","description":"Find the racing line, drift through bends, and finish three clean laps.","controls":"WASD / arrows drive · Space handbrake · R restart"},
+  {"id":"salvage-pinball","title":"Salvage Pinball","dimension":"2D","kind":"game","genre":"Physics pinball","description":"Work the flippers and bumpers of an industrial salvage table.","controls":"A/D or arrows flippers · Space launch · R restart"},
+  {"id":"orchard-guard","title":"Orchard Guard","dimension":"2D","kind":"game","genre":"Tower defense","description":"Place and upgrade defenses to protect the last orchard.","controls":"Click build/select · Space next wave · R restart"},
+  {"id":"marble-run","title":"Marble Run","dimension":"3D","kind":"game","genre":"Physics obstacle course","description":"Guide a rolling marble across suspended platforms to the finish.","controls":"WASD / arrows roll · Space brake · R restart"},
+  {"id":"dune-skimmer","title":"Dune Skimmer","dimension":"3D","kind":"game","genre":"Hover racing","description":"Thread a low-poly desert circuit and manage your boost.","controls":"WASD / arrows steer · Space boost · R restart"},
+  {"id":"crystal-cavern","title":"Crystal Cavern","dimension":"3D","kind":"game","genre":"Exploration puzzle","description":"Recover crystals and open the sealed cavern gate.","controls":"WASD move · Arrows look · E interact · R restart"},
+  {"id":"siege-foundry","title":"Siege Foundry","dimension":"3D","kind":"game","genre":"Physics demolition","description":"Aim a limited supply of cannonballs at a rigid-body fortress.","controls":"Arrows aim · Space fire · R rebuild"},
+  {"id":"sky-courier","title":"Sky Courier","dimension":"3D","kind":"game","genre":"Flight delivery","description":"Fly through island air gates and deliver cargo before time runs out.","controls":"WASD / arrows fly · Space boost · R restart"},
+  {"id":"strike","title":"Strike","dimension":"3D","kind":"prototype","genre":"Tactical FPS","description":"The original Dockyard shooter with native UDP multiplayer.","controls":"WASD move · Mouse aim/fire · R reload · Escape menu"},
+  {"id":"physics-2d","title":"2D Physics Lab","dimension":"2D","kind":"lab","genre":"Rapier sandbox","description":"Drop, stack, and bounce rigid bodies.","controls":"Click drop · 1/2 shape · Space pause · R reset"},
+  {"id":"physics-3d","title":"3D Physics Lab","dimension":"3D","kind":"lab","genre":"Rapier sandbox","description":"A flat-shaded loading yard for testing rigid-body stacks.","controls":"Drag orbit · 1/2 drop · Space pause · R reset"}
+]

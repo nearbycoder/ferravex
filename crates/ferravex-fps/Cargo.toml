@@ -1,0 +1,15 @@
+[package]
+name = "ferravex-fps"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+description = "Authoritative fixed-tick FPS simulation and native UDP client/server"
+
+[dependencies]
+ferravex-math.workspace = true
+ferravex-net = { path = "../ferravex-net" }
+
+[[bin]]
+name = "ferravex-server"
+path = "src/bin/server.rs"

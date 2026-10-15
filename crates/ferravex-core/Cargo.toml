@@ -1,0 +1,9 @@
+[package]
+name = "ferravex-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ferravex-ecs.workspace = true
+ferravex-math.workspace = true

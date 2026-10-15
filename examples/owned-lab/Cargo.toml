@@ -1,0 +1,13 @@
+[package]
+name = "owned-lab"
+default-run = "owned-lab"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[lib]
+crate-type = ["rlib", "cdylib"]
+[dependencies]
+ferravex-engine.workspace = true
+ferravex-graphics.workspace = true
+ferravex-core.workspace = true
+ferravex-fps.workspace = true

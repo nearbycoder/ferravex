@@ -1,0 +1,641 @@
+//! A small precision platformer: no assets, a fixed simulation, and forgiving jumps.
+use ferravex_core::FixedClock;
+use ferravex_render::{demo::Demo, prelude::*};
+
+const WIDTH: f32 = 1280.0;
+const HEIGHT: f32 = 720.0;
+const WORLD_END: f32 = 2700.0;
+const PLAYER: Vec2 = Vec2::new(24.0, 40.0);
+const SPEED: f32 = 280.0;
+const GRAVITY: f32 = 1600.0;
+const JUMP: f32 = 660.0;
+const COYOTE: f32 = 0.10;
+const BUFFER: f32 = 0.12;
+const ORANGE: Color = Color::new(1.0, 0.54, 0.25, 1.0);
+const CREAM: Color = Color::new(0.96, 0.88, 0.72, 1.0);
+const GREEN: Color = Color::new(0.48, 0.68, 0.48, 1.0);
+
+#[derive(Default, Clone, Copy)]
+struct Input {
+    direction: f32,
+    jump: bool,
+}
+
+struct Game {
+    position: Vec2,
+    velocity: Vec2,
+    grounded: bool,
+    coyote: f32,
+    buffer: f32,
+    platforms: Vec<Rect>,
+    hazards: Vec<Rect>,
+    embers: Vec<(Vec2, bool)>,
+    checkpoint: Vec2,
+    checkpoint_lit: bool,
+    won: bool,
+    deaths: u32,
+    jumps: u32,
+    elapsed: f32,
+    respawn_flash: f32,
+}
+
+impl Game {
+    fn new() -> Self {
+        Self {
+            position: vec2(90.0, 520.0),
+            velocity: Vec2::ZERO,
+            grounded: true,
+            coyote: COYOTE,
+            buffer: 0.0,
+            platforms: vec![
+                Rect::new(-100.0, 560.0, 680.0, 250.0),
+                Rect::new(700.0, 560.0, 500.0, 250.0),
+                Rect::new(1320.0, 560.0, 500.0, 250.0),
+                Rect::new(1940.0, 560.0, 850.0, 250.0),
+                Rect::new(140.0, 445.0, 80.0, 18.0),
+                Rect::new(770.0, 435.0, 130.0, 18.0),
+                Rect::new(1350.0, 430.0, 120.0, 18.0),
+                Rect::new(2010.0, 430.0, 120.0, 18.0),
+            ],
+            hazards: vec![
+                Rect::new(350.0, 542.0, 44.0, 18.0),
+                Rect::new(1040.0, 542.0, 56.0, 18.0),
+                Rect::new(1600.0, 542.0, 52.0, 18.0),
+                Rect::new(2230.0, 542.0, 56.0, 18.0),
+            ],
+            embers: [
+                (180.0, 406.0),
+                (375.0, 455.0),
+                (640.0, 470.0),
+                (835.0, 395.0),
+                (1070.0, 455.0),
+                (1260.0, 470.0),
+                (1410.0, 390.0),
+                (1880.0, 470.0),
+                (2070.0, 390.0),
+                (2430.0, 520.0),
+            ]
+            .into_iter()
+            .map(|(x, y)| (vec2(x, y), false))
+            .collect(),
+            checkpoint: vec2(90.0, 520.0),
+            checkpoint_lit: false,
+            won: false,
+            deaths: 0,
+            jumps: 0,
+            elapsed: 0.0,
+            respawn_flash: 0.0,
+        }
+    }
+
+    fn body(&self) -> Rect {
+        Rect::new(self.position.x, self.position.y, PLAYER.x, PLAYER.y)
+    }
+
+    fn respawn(&mut self) {
+        self.position = self.checkpoint;
+        self.velocity = Vec2::ZERO;
+        self.grounded = true;
+        self.coyote = COYOTE;
+        self.buffer = 0.0;
+        self.deaths += 1;
+        self.respawn_flash = 0.6;
+    }
+
+    fn update(&mut self, input: Input, dt: f32) {
+        if self.won {
+            return;
+        }
+        self.elapsed += dt;
+        self.respawn_flash = (self.respawn_flash - dt).max(0.0);
+        self.buffer = if input.jump {
+            BUFFER
+        } else {
+            (self.buffer - dt).max(0.0)
+        };
+        self.coyote = if self.grounded {
+            COYOTE
+        } else {
+            (self.coyote - dt).max(0.0)
+        };
+        if self.buffer > 0.0 && self.coyote > 0.0 {
+            self.velocity.y = -JUMP;
+            self.grounded = false;
+            self.coyote = 0.0;
+            self.buffer = 0.0;
+            self.jumps += 1;
+        }
+        let target = input.direction.clamp(-1.0, 1.0) * SPEED;
+        let acceleration = if self.grounded { 2400.0 } else { 1600.0 };
+        self.velocity.x += (target - self.velocity.x).clamp(-acceleration * dt, acceleration * dt);
+        self.position.x += self.velocity.x * dt;
+        for platform in &self.platforms {
+            if overlaps(self.body(), *platform) {
+                if self.velocity.x > 0.0 {
+                    self.position.x = platform.x - PLAYER.x;
+                } else if self.velocity.x < 0.0 {
+                    self.position.x = platform.right();
+                }
+                self.velocity.x = 0.0;
+            }
+        }
+        self.position.x = self.position.x.clamp(0.0, WORLD_END - PLAYER.x);
+        self.velocity.y = (self.velocity.y + GRAVITY * dt).min(1000.0);
+        self.position.y += self.velocity.y * dt;
+        self.grounded = false;
+        for platform in &self.platforms {
+            if overlaps(self.body(), *platform) {
+                if self.velocity.y >= 0.0 {
+                    self.position.y = platform.y - PLAYER.y;
+                    self.grounded = true;
+                } else {
+                    self.position.y = platform.bottom();
+                }
+                self.velocity.y = 0.0;
+            }
+        }
+        if self.position.y > 780.0 || self.hazards.iter().any(|h| self.body().overlaps(h)) {
+            self.respawn();
+            return;
+        }
+        let body = self.body();
+        for (position, collected) in &mut self.embers {
+            if body.overlaps(&Rect::new(position.x - 12.0, position.y - 12.0, 24.0, 24.0)) {
+                *collected = true;
+            }
+        }
+        if self.position.x > 1380.0 && self.position.x < 1490.0 && self.grounded {
+            self.checkpoint_lit = true;
+            self.checkpoint = vec2(1410.0, 520.0);
+        }
+        if self.position.x > 2560.0 && self.grounded {
+            self.won = true;
+        }
+    }
+
+    fn autoplay(&self) -> Input {
+        let front = self.position.x + PLAYER.x;
+        let hazard = self
+            .hazards
+            .iter()
+            .any(|h| h.x >= front - 2.0 && h.x - front < 74.0);
+        let gap = self
+            .platforms
+            .iter()
+            .filter(|p| p.y == 560.0)
+            .any(|p| front > p.x && front <= p.right() && p.right() - front < 58.0);
+        Input {
+            direction: 1.0,
+            jump: self.grounded && (hazard || gap),
+        }
+    }
+}
+
+fn overlaps(a: Rect, b: Rect) -> bool {
+    ferravex_core::collision::Aabb2::from_min_size(a.point(), a.size()).overlaps(
+        ferravex_core::collision::Aabb2::from_min_size(b.point(), b.size()),
+    )
+}
+
+fn diamond(position: Vec2, radius: f32, color: Color) {
+    draw_triangle(
+        position + vec2(0.0, -radius),
+        position + vec2(radius * 0.65, 0.0),
+        position + vec2(0.0, radius),
+        color,
+    );
+    draw_triangle(
+        position + vec2(0.0, -radius),
+        position + vec2(0.0, radius),
+        position - vec2(radius * 0.65, 0.0),
+        Color::new(color.r * 0.7, color.g * 0.7, color.b * 0.7, color.a),
+    );
+}
+
+fn tree(x: f32, y: f32, size: f32, color: Color) {
+    draw_rectangle(
+        x - size * 0.04,
+        y - size * 0.45,
+        size * 0.08,
+        size * 0.45,
+        color,
+    );
+    draw_triangle(
+        vec2(x, y - size),
+        vec2(x - size * 0.35, y - size * 0.2),
+        vec2(x + size * 0.3, y - size * 0.2),
+        color,
+    );
+    draw_triangle(
+        vec2(x, y - size * 1.2),
+        vec2(x - size * 0.25, y - size * 0.5),
+        vec2(x + size * 0.25, y - size * 0.5),
+        color,
+    );
+}
+
+fn world(game: &Game, camera: f32, time: f32) {
+    clear_background(Color::from_hex(0x242c2b));
+    draw_circle(
+        1040.0 - camera * 0.12,
+        160.0,
+        86.0,
+        Color::from_hex(0xa97043),
+    );
+    for i in 0..12 {
+        let x = i as f32 * 330.0 - camera * 0.22 - 140.0;
+        draw_triangle(
+            vec2(x, 510.0),
+            vec2(x + 210.0, 175.0 + (i % 3) as f32 * 50.0),
+            vec2(x + 450.0, 510.0),
+            Color::from_hex(0x34413b),
+        );
+    }
+    for i in 0..32 {
+        tree(
+            i as f32 * 130.0 - camera * 0.52,
+            570.0,
+            140.0 + (i % 4) as f32 * 40.0,
+            Color::from_hex(0x28352f),
+        );
+    }
+    for i in 0..8 {
+        let x = 800.0 + i as f32 * 290.0 - camera * 0.8;
+        draw_rectangle(x, 260.0, 12.0, 300.0, Color::from_hex(0x1e2926));
+        draw_line(x, 268.0, x + 280.0, 290.0, 4.0, Color::from_hex(0x1e2926));
+        draw_line(
+            x + 100.0,
+            275.0,
+            x + 100.0,
+            325.0,
+            2.0,
+            Color::from_hex(0x1e2926),
+        );
+        draw_circle(x + 100.0, 328.0, 4.0, ORANGE);
+    }
+    // Deep hot fissures provide an unmistakable landing boundary.
+    draw_rectangle(0.0, 645.0, WIDTH, 75.0, Color::from_hex(0x8c452c));
+    for i in 0..40 {
+        let x = (i as f32 * 119.0 + time * 12.0).rem_euclid(WIDTH);
+        let y = 675.0 - ((time * 25.0 + i as f32 * 39.0) % 180.0);
+        draw_circle(x, y, 1.5, Color::new(1.0, 0.52, 0.22, 0.45));
+    }
+    for p in &game.platforms {
+        let x = p.x - camera;
+        draw_rectangle(x, p.y, p.w, p.h, Color::from_hex(0x383c32));
+        draw_rectangle(x, p.y, p.w, 7.0, Color::from_hex(0x8d8962));
+        draw_rectangle(x, p.y + 7.0, p.w, 8.0, Color::from_hex(0x545942));
+        if p.h > 100.0 {
+            for i in 0..(p.w / 64.0) as usize {
+                let rx = x + i as f32 * 64.0;
+                draw_triangle(
+                    vec2(rx, 598.0),
+                    vec2(rx + 50.0, 585.0),
+                    vec2(rx + 33.0, 684.0),
+                    Color::from_hex(0x30372f),
+                );
+            }
+        } else {
+            draw_line(
+                x + 8.0,
+                p.y + p.h,
+                x + 8.0,
+                560.0,
+                3.0,
+                Color::from_hex(0x62634d),
+            );
+            draw_line(
+                x + p.w - 8.0,
+                p.y + p.h,
+                x + p.w - 8.0,
+                560.0,
+                3.0,
+                Color::from_hex(0x62634d),
+            );
+        }
+    }
+    for h in &game.hazards {
+        for i in 0..4 {
+            let x = h.x - camera + i as f32 * h.w / 4.0;
+            draw_triangle(
+                vec2(x, h.bottom()),
+                vec2(x + h.w / 8.0, h.y),
+                vec2(x + h.w / 4.0, h.bottom()),
+                ORANGE,
+            );
+        }
+    }
+    for (position, collected) in &game.embers {
+        if !collected {
+            diamond(
+                *position - vec2(camera, 0.0) + vec2(0.0, (time * 3.0 + position.x).sin() * 3.0),
+                10.0,
+                ORANGE,
+            );
+        }
+    }
+    // Checkpoint lantern and the final lift share the same visual language.
+    let checkpoint_color = if game.checkpoint_lit { GREEN } else { CREAM };
+    let cx = 1435.0 - camera;
+    draw_rectangle(cx - 3.0, 471.0, 6.0, 89.0, Color::from_hex(0x70715a));
+    draw_rectangle(cx - 14.0, 459.0, 28.0, 30.0, checkpoint_color);
+    draw_rectangle(cx - 8.0, 466.0, 16.0, 16.0, Color::from_hex(0x324237));
+    let exit = 2590.0 - camera;
+    draw_rectangle(exit - 35.0, 450.0, 70.0, 110.0, Color::from_hex(0x1a2925));
+    draw_rectangle_lines(exit - 35.0, 450.0, 70.0, 110.0, 5.0, GREEN);
+    draw_triangle(
+        vec2(exit - 8.0, 495.0),
+        vec2(exit + 9.0, 505.0),
+        vec2(exit - 8.0, 515.0),
+        GREEN,
+    );
+    let p = game.position - vec2(camera, 0.0);
+    let bob = if game.grounded {
+        (time * 17.0).sin() * game.velocity.x.abs() / SPEED * 2.0
+    } else {
+        0.0
+    };
+    draw_ellipse(
+        p.x + 12.0,
+        p.y + 42.0,
+        15.0,
+        3.0,
+        0.0,
+        Color::new(0.0, 0.0, 0.0, 0.20),
+    );
+    draw_rectangle(p.x + 3.0, p.y + 15.0, 18.0, 19.0, ORANGE);
+    draw_rectangle(
+        p.x + 4.0,
+        p.y + 32.0,
+        6.0,
+        8.0 + bob,
+        Color::from_hex(0x1b2524),
+    );
+    draw_rectangle(
+        p.x + 15.0,
+        p.y + 32.0,
+        6.0,
+        8.0 - bob,
+        Color::from_hex(0x1b2524),
+    );
+    draw_rectangle(p.x + 4.0, p.y + 1.0, 17.0, 15.0, CREAM);
+    draw_rectangle(p.x + 1.0, p.y, 24.0, 6.0, Color::from_hex(0xc79d57));
+    let face = if game.velocity.x < -1.0 { 5.0 } else { 14.0 };
+    draw_rectangle(p.x + face, p.y + 7.0, 5.0, 3.0, Color::from_hex(0x26312b));
+    draw_triangle(
+        vec2(p.x + 5.0, p.y + 18.0),
+        vec2(p.x - 13.0, p.y + 22.0 + bob),
+        vec2(p.x + 5.0, p.y + 26.0),
+        Color::from_hex(0x9e5033),
+    );
+}
+
+fn label(text: &str, x: f32, y: f32, size: f32, color: Color) {
+    draw_text(
+        text,
+        x + 1.0,
+        y + 2.0,
+        size,
+        Color::new(0.08, 0.12, 0.10, 0.8),
+    );
+    draw_text(text, x, y, size, color);
+}
+
+fn config() -> Conf {
+    ferravex_render::window_conf("EMBERLINE | Ferravex")
+}
+
+#[macroquad::main(config)]
+async fn main() {
+    let mut demo = Demo::new();
+    let mut game = Game::new();
+    let mut clock = FixedClock::new(120.0, 12);
+    let mut jump_pending = false;
+    let mut touch_jump_was_down = false;
+    let mut touch_mode = false;
+    let mut camera_x = 0.0;
+    let mut font_dpi = 0.0;
+    loop {
+        let dpi = macroquad::miniquad::window::dpi_scale();
+        if font_dpi != dpi {
+            let characters: Vec<char> = (' '..='~').collect();
+            for size in [15_u16, 19, 23, 24, 28, 32, 33] {
+                get_default_font()
+                    .populate_font_cache(&characters, (f32::from(size) * dpi).ceil() as u16);
+            }
+            font_dpi = dpi;
+        }
+        if is_key_pressed(KeyCode::R) {
+            game = Game::new();
+            clock.reset();
+            camera_x = 0.0;
+        }
+        let canvas = ferravex_render::canvas::Canvas2D::fit(
+            vec2(WIDTH, HEIGHT),
+            vec2(screen_width(), screen_height()),
+        );
+        let mut touch_left = false;
+        let mut touch_right = false;
+        let mut touch_jump = false;
+        for touch in ferravex_render::input::logical_touches() {
+            if matches!(touch.phase, TouchPhase::Ended | TouchPhase::Cancelled) {
+                continue;
+            }
+            touch_mode = true;
+            let point = canvas.unproject(touch.position);
+            if point.y > 590.0 {
+                touch_left |= point.x < 120.0;
+                touch_right |= (120.0..250.0).contains(&point.x);
+                touch_jump |= point.x > 1080.0;
+            }
+            if game.won && point.y > 350.0 && point.y < 470.0 {
+                game = Game::new();
+            }
+        }
+        jump_pending |= is_key_pressed(KeyCode::Space)
+            || is_key_pressed(KeyCode::W)
+            || is_key_pressed(KeyCode::Up)
+            || (touch_jump && !touch_jump_was_down);
+        touch_jump_was_down = touch_jump;
+        let direction =
+            f32::from(is_key_down(KeyCode::D) || is_key_down(KeyCode::Right) || touch_right)
+                - f32::from(is_key_down(KeyCode::A) || is_key_down(KeyCode::Left) || touch_left);
+        let frame = clock.advance(f64::from(demo.dt()));
+        for _ in 0..frame.steps {
+            let input = if demo.autoplay {
+                game.autoplay()
+            } else {
+                Input {
+                    direction,
+                    jump: jump_pending,
+                }
+            };
+            game.update(input, frame.dt);
+            jump_pending = false;
+        }
+        let target = (game.position.x - WIDTH * 0.35).clamp(0.0, WORLD_END - WIDTH);
+        camera_x += (target - camera_x) * (1.0 - (-9.0 * demo.dt()).exp());
+        set_camera(&canvas.camera());
+        world(&game, camera_x, demo.time());
+        let collected = game.embers.iter().filter(|(_, found)| *found).count();
+        label("EMBERLINE", 32.0, 48.0, 28.0, CREAM);
+        let zone = if game.position.x < 900.0 {
+            "01 / THE TREELINE"
+        } else if game.position.x < 1800.0 {
+            "02 / THE OLD MILL"
+        } else {
+            "03 / THE FURNACE"
+        };
+        label(zone, 34.0, 72.0, 15.0, Color::from_hex(0xa3ab91));
+        diamond(vec2(WIDTH - 121.0, 38.0), 8.0, ORANGE);
+        label(
+            &format!("{collected} / {}", game.embers.len()),
+            WIDTH - 105.0,
+            45.0,
+            23.0,
+            CREAM,
+        );
+        if game.elapsed < 7.0 && !touch_mode {
+            label(
+                "A / D  move     SPACE  jump     R  restart",
+                34.0,
+                680.0,
+                19.0,
+                CREAM,
+            );
+        }
+        if touch_mode {
+            for (x, text) in [(68.0, "<"), (182.0, ">"), (1184.0, "^")] {
+                draw_circle(x, 651.0, 38.0, Color::new(0.09, 0.14, 0.12, 0.65));
+                label(text, x - 11.0, 663.0, 32.0, CREAM);
+            }
+        }
+        if game.respawn_flash > 0.0 {
+            label(
+                "Back to the lantern",
+                WIDTH * 0.5 - 110.0,
+                112.0,
+                24.0,
+                CREAM,
+            );
+        }
+        if game.won {
+            draw_rectangle(
+                380.0,
+                220.0,
+                520.0,
+                250.0,
+                Color::new(0.08, 0.13, 0.11, 0.96),
+            );
+            label("THE LIGHT CARRIES ON", 422.0, 280.0, 33.0, CREAM);
+            label(
+                &format!(
+                    "{collected} embers    /    {:.1}s    /    {} falls",
+                    game.elapsed, game.deaths
+                ),
+                432.0,
+                330.0,
+                24.0,
+                ORANGE,
+            );
+            label(
+                if touch_mode {
+                    "Tap here to run again"
+                } else {
+                    "Press R to run again"
+                },
+                504.0,
+                417.0,
+                23.0,
+                CREAM,
+            );
+        }
+        set_default_camera();
+        if demo.finish_frame() {
+            break;
+        }
+        next_frame().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    const DT: f32 = 1.0 / 120.0;
+
+    #[test]
+    fn floor_stops_player_without_tunneling() {
+        let mut game = Game::new();
+        game.position.y = 80.0;
+        game.grounded = false;
+        for _ in 0..240 {
+            game.update(Input::default(), DT);
+        }
+        assert!(game.grounded);
+        assert_eq!(game.position.y, 520.0);
+        assert_eq!(game.deaths, 0);
+    }
+
+    #[test]
+    fn coyote_jump_and_buffered_landing_work() {
+        let mut game = Game::new();
+        game.position = vec2(590.0, 520.0);
+        game.grounded = false;
+        game.coyote = 0.07;
+        game.update(
+            Input {
+                jump: true,
+                ..Input::default()
+            },
+            DT,
+        );
+        assert!(game.velocity.y < -600.0);
+        game.position = vec2(90.0, 517.0);
+        game.velocity.y = 180.0;
+        game.coyote = 0.0;
+        game.update(
+            Input {
+                jump: true,
+                ..Input::default()
+            },
+            DT,
+        );
+        for _ in 0..4 {
+            game.update(Input::default(), DT);
+        }
+        assert!(game.velocity.y < -500.0);
+        assert_eq!(game.jumps, 2);
+    }
+
+    #[test]
+    fn hazards_respawn_at_activated_checkpoint() {
+        let mut game = Game::new();
+        game.position.x = 1410.0;
+        game.update(Input::default(), DT);
+        assert!(game.checkpoint_lit);
+        game.position = vec2(1605.0, 520.0);
+        game.update(Input::default(), DT);
+        assert_eq!(game.position, game.checkpoint);
+        assert_eq!(game.deaths, 1);
+    }
+
+    #[test]
+    fn autoplay_completes_all_sections_with_real_physics() {
+        let mut game = Game::new();
+        for _ in 0..2400 {
+            game.update(game.autoplay(), DT);
+            if game.won {
+                break;
+            }
+        }
+        assert!(
+            game.won,
+            "position {:?}, deaths {}",
+            game.position, game.deaths
+        );
+        assert!(game.checkpoint_lit);
+        assert!(game.jumps >= 7);
+        assert!(game.embers.iter().any(|(_, found)| *found));
+        assert_eq!(game.deaths, 0);
+    }
+}

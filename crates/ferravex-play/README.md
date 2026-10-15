@@ -1,0 +1,33 @@
+# ferravex-play
+
+Original, standard-library-only gameplay systems. No third-party dependencies, unsafe Rust, renderer requirements, or copied vendor code. Public math values use fixed arrays so hosts can adapt their own math types without coupling.
+
+## Implemented systems
+
+| Module | Working behavior | Current scope |
+| --- | --- | --- |
+| `rounds` | Fixed teams, buy phase, weapon/armor/kit purchases, money validation, kill rewards, escalating loss rewards, plant/defuse channels, dropped bomb pickup, death and timeout outcomes, match score, respawn, capped event queue | Host must supply server-validated positions and hit results. This is a reusable rules module, not a transport or collision engine. No halftime, overtime, weapon-specific damage, shop UI, or matchmaking. |
+| `navigation` | Deterministic weighted-grid A*, four/eight neighbors, blocked endpoints, no diagonal corner cutting, arrival and separation steering | Grid navigation, not a navigation mesh or crowd solver. Each path search allocates scratch arrays. Unblocking a cell resets its cost to one. |
+| `animation` | Validated scalar and Vec3 key tracks, step/linear interpolation, normalized shortest-arc quaternion slerp, clamp/repeat modes, variable-duration sprite frames | No asset-format importer, animation state machine, root motion, or GPU skinning. |
+| `particles` | Fixed-capacity pool, explicit overflow count, lifetime recycling, analytic constant-acceleration movement, color and size over lifetime | CPU simulation and render data only. Pool updates and successful spawns do not allocate after construction. No GPU simulation or built-in material. |
+| `scene` | Generational nodes, local TRS, parent/child hierarchy, cycle rejection, exact world matrices, subtree removal, independent prefab capture/instantiate/clone, strict binary encoding/decoding, skeletal world poses and skin palettes | Matrix composition preserves nonuniform-scale/rotation shear. Skeleton parents must precede children. Host supplies inverse bind matrices. IDs are world-local and remapped during decoding. |
+| `ui` | Anchored layout, stretch/center offsets, rectangle intersection, clipped topmost hit testing, pointer capture and activation, cyclic keyboard focus, disabled and removed widget handling | Layout/input model only; rendering, text shaping, screen-reader accessibility, and platform event adapters belong to the host. |
+
+## Rules and boundaries
+
+`TacticalMatch::tick` splits time at interaction and phase deadlines. Bomb expiry wins an exact tie with a completed defuse. Moving more than 15 cm from a plant/defuse origin cancels the channel. Dead attackers do not end a planted-bomb round; elimination of all defenders does. Position updates are accepted authoritative simulation output, not raw client input. Damage is accepted only during live/planted phases between living opposing players. Purchases validate phase, ownership, team, and funds before mutation. Money caps at 16,000. Event history retains the latest 128 events; drain it regularly if every event matters.
+
+The scene format begins with `GSC1`, little-endian version 1 and a node count. Nodes contain a parent index, bounded UTF-8 name, and ten TRS floats. Decoder limits: 16 MiB total, 100,000 nodes, 4,096 bytes per name. It rejects unsupported versions, truncated input, trailing data, invalid UTF-8, non-finite transforms, zero quaternions, invalid parents, and cycles. Parent-graph validation is linear in node count. Scene serialization stores hierarchy and transforms, not arbitrary gameplay components or asset payloads.
+
+Quaternion arrays use `[x, y, z, w]`; matrices are column-major. A skin palette entry is hierarchical model-space joint pose multiplied by its inverse bind matrix. Rendering those palettes remains an integration task.
+
+## Verification
+
+```sh
+cargo test -p ferravex-play
+cargo clippy -p ferravex-play --all-targets -- -D warnings
+```
+
+Twenty-four unit regressions cover rule transitions/economy, timer partitioning, spatial and team checks, path correctness, weighted detours, corner blocking, animation boundaries and antipodal quaternions, particle bounds and integration, scene identity/cycles/copies/binary validation, bind-pose palettes, and UI focus/capture.
+
+`tests/tactical_scenario.rs` additionally integrates all six modules in one headless host: route an attacker around a blocked grid cell, sample that route as an animation track, update the scene hierarchy, plant the bomb, spawn a particle, activate a defuse button through UI hit testing, finish the match, and round-trip the scene data. This proves subsystem composition without claiming that an existing graphical FPS has been migrated to these systems.

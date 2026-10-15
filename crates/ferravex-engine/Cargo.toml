@@ -1,0 +1,12 @@
+[package]
+name="ferravex-engine"
+version.workspace=true
+edition.workspace=true
+license.workspace=true
+[dependencies]
+ferravex-math.workspace=true
+ferravex-ecs.workspace=true
+ferravex-dynamics.workspace=true
+ferravex-net.workspace=true
+ferravex-play.workspace=true
+ferravex-graphics.workspace=true

@@ -1,0 +1,14 @@
+// Browser DTLS/SCTP with explicit offer/answer pairing. No relay, account service or third-party JS.
+export class PeerLink {
+ constructor({receive,connected,disconnected,status}){this.receive=receive;this.connected=connected;this.disconnected=disconnected;this.status=status;this.peer=null;this.channel=null;this.mode=0;this.sent=0;this.received=0;this.accepted=0;}
+ close(){if(this.channel)this.channel.close();if(this.peer)this.peer.close();this.channel=null;this.peer=null;this.mode=0;this.disconnected();}
+ create(mode){this.close();this.mode=mode;const peer=new RTCPeerConnection({iceServers:[]});this.peer=peer;peer.onconnectionstatechange=()=>{this.status(`Peer: ${peer.connectionState}`);if(['failed','closed','disconnected'].includes(peer.connectionState))this.disconnected();};peer.ondatachannel=event=>this.attach(event.channel);return peer;}
+ attach(channel){this.channel=channel;channel.binaryType='arraybuffer';channel.onopen=()=>{this.status('Connected over browser DTLS. Host owns movement, weapons and damage.');this.connected(this.mode);};channel.onclose=()=>this.disconnected();channel.onmessage=event=>{if(this.channel===channel&&event.data instanceof ArrayBuffer&&event.data.byteLength<=1200){this.received++;if(this.receive(new Uint8Array(event.data)))this.accepted++;}};}
+ async gathered(peer){if(peer.iceGatheringState==='complete')return;await new Promise(resolve=>{const timer=setTimeout(resolve,5000);const done=()=>{if(peer.iceGatheringState==='complete'){clearTimeout(timer);peer.removeEventListener('icegatheringstatechange',done);resolve();}};peer.addEventListener('icegatheringstatechange',done);});}
+ async host(){const peer=this.create(1);this.attach(peer.createDataChannel('ferravex-state-v1',{ordered:false,maxRetransmits:0}));await peer.setLocalDescription(await peer.createOffer());await this.gathered(peer);return this.encode(peer.localDescription);}
+ async join(token){const peer=this.create(2);const offer=this.decode(token,'offer');await peer.setRemoteDescription(offer);await peer.setLocalDescription(await peer.createAnswer());await this.gathered(peer);return this.encode(peer.localDescription);}
+ async accept(token){if(this.mode!==1||!this.peer)throw Error('Create a host offer first.');await this.peer.setRemoteDescription(this.decode(token,'answer'));}
+ send(bytes){if(this.channel?.readyState==='open'&&bytes.length<=1200&&this.channel.bufferedAmount<65536){this.channel.send(bytes);this.sent++;}}
+ encode(description){return btoa(JSON.stringify({version:1,type:description.type,sdp:description.sdp}));}
+ decode(token,type){if(typeof token!=='string'||token.length>200000)throw Error('Pairing token too large.');let data;try{data=JSON.parse(atob(token.trim()));}catch{throw Error('Invalid pairing token.');}if(data.version!==1||data.type!==type||typeof data.sdp!=='string'||data.sdp.length>100000)throw Error(`Expected a ${type} token.`);return {type:data.type,sdp:data.sdp};}
+}

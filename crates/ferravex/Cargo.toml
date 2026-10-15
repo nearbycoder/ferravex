@@ -1,0 +1,19 @@
+[package]
+name = "ferravex"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+render = ["dep:ferravex-render"]
+physics2d = ["dep:ferravex-physics", "ferravex-physics/dim2"]
+physics3d = ["dep:ferravex-physics", "ferravex-physics/dim3"]
+net = ["dep:ferravex-net"]
+
+[dependencies]
+ferravex-engine.workspace = true
+ferravex-core.workspace = true
+ferravex-render = { workspace = true, optional = true }
+ferravex-physics = { workspace = true, optional = true }
+ferravex-net = { workspace = true, optional = true }
