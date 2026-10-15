@@ -19,8 +19,8 @@ pub const BUTTON_FIRE: u8 = 2;
 pub const BUTTON_RELOAD: u8 = 4;
 pub const MAX_PITCH: f32 = 1.55;
 const MAGIC: &[u8; 4] = b"FVRX";
-/// Version 2 adds session-bound reliable events and individual acknowledgments.
-pub const PROTOCOL_VERSION: u8 = 2;
+/// Version 3 carries jump grace/buffer timers and held state for exact motor replay.
+pub const PROTOCOL_VERSION: u8 = 3;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct InputFrame {
@@ -105,6 +105,9 @@ pub struct PlayerSnapshot {
     pub health: u8,
     pub ammo: u8,
     pub grounded: bool,
+    pub jump_coyote: f32,
+    pub jump_buffer: f32,
+    pub jump_held: bool,
     pub fire_cooldown: u16,
     pub reload_ticks: u16,
     pub respawn_ticks: u16,
@@ -124,6 +127,10 @@ impl PlayerSnapshot {
             && self.yaw.abs() <= std::f32::consts::PI
             && self.pitch.is_finite()
             && self.pitch.abs() <= MAX_PITCH
+            && self.jump_coyote.is_finite()
+            && (0. ..=0.5).contains(&self.jump_coyote)
+            && self.jump_buffer.is_finite()
+            && (0. ..=0.5).contains(&self.jump_buffer)
             && self.health <= 100
             && self.ammo <= 30
             && self.fire_cooldown <= 4096
@@ -312,6 +319,9 @@ pub fn encode_server(packet: &ServerPacket) -> Result<Vec<u8>, ProtocolError> {
                     put_f32(&mut out, n);
                 }
                 out.extend_from_slice(&[p.health, p.ammo, p.grounded as u8]);
+                put_f32(&mut out, p.jump_coyote);
+                put_f32(&mut out, p.jump_buffer);
+                out.push(p.jump_held as u8);
                 put_u16(&mut out, p.fire_cooldown);
                 put_u16(&mut out, p.reload_ticks);
                 put_u16(&mut out, p.respawn_ticks);
@@ -487,6 +497,9 @@ pub fn decode_server(data: &[u8]) -> Result<ServerPacket, ProtocolError> {
                     health: r.u8()?,
                     ammo: r.u8()?,
                     grounded: r.boolean()?,
+                    jump_coyote: r.f32()?,
+                    jump_buffer: r.f32()?,
+                    jump_held: r.boolean()?,
                     fire_cooldown: r.u16()?,
                     reload_ticks: r.u16()?,
                     respawn_ticks: r.u16()?,
@@ -614,6 +627,9 @@ mod tests {
                 id: id as u8,
                 health: 100,
                 ammo: 30,
+                jump_coyote: 0.1,
+                jump_buffer: 0.12,
+                jump_held: true,
                 ..Default::default()
             })
             .collect();
@@ -625,11 +641,46 @@ mod tests {
             players,
         });
         let bytes = encode_server(&packet).unwrap();
+        assert_eq!(bytes.len(), 840);
         assert!(bytes.len() < MAX_PACKET_BYTES);
         assert_eq!(decode_server(&bytes).unwrap(), packet);
         for length in 0..bytes.len() {
             assert!(decode_server(&bytes[..length]).is_err());
         }
+    }
+    #[test]
+    fn jump_state_numeric_and_version_limits_fail_closed() {
+        let player = PlayerSnapshot {
+            health: 100,
+            ammo: 30,
+            ..Default::default()
+        };
+        let make = |p| {
+            ServerPacket::Snapshot(Snapshot {
+                session: 1,
+                players: vec![p],
+                ..Default::default()
+            })
+        };
+        for bad in [f32::NAN, f32::INFINITY, -0.01, 0.51] {
+            assert!(
+                encode_server(&make(PlayerSnapshot {
+                    jump_coyote: bad,
+                    ..player
+                }))
+                .is_err()
+            );
+            assert!(
+                encode_server(&make(PlayerSnapshot {
+                    jump_buffer: bad,
+                    ..player
+                }))
+                .is_err()
+            );
+        }
+        let mut bytes = encode_server(&make(player)).unwrap();
+        bytes[4] = 2;
+        assert_eq!(decode_server(&bytes), Err(ProtocolError::Version));
     }
     #[test]
     fn reliable_event_wire_is_bounded_session_bound_and_versioned() {

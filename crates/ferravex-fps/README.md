@@ -1,6 +1,6 @@
 # ferravex-fps
 
-Original fixed-tick shooter simulation and native UDP client/server. Dependencies are local `ferravex-math` and `ferravex-net`; the authoritative server has no registry dependencies. Movement, hits, ammunition, reloads, damage and respawns remain server-owned.
+Original fixed-tick shooter simulation and native UDP client/server. Dependencies are local `ferravex-math`, `ferravex-net` and `ferravex-physics`; the authoritative server has no registry dependencies. Movement, hits, ammunition, reloads, damage and respawns remain server-owned.
 
 ## Authority rewind
 
@@ -16,7 +16,7 @@ This is **an explicit authority API**, not automatic UDP latency compensation. T
 
 ## Reliable game events
 
-Protocol version 2 carries authority `Shot`, `Hit`, `Killed` and `Respawned` events over an ordered reliable channel inside each UDP session. `NetworkEvent { tick, event }` provides validated compact payload encode/decode; tick is the authority tick after the event's step.
+Protocol version 3 carries authority `Shot`, `Hit`, `Killed` and `Respawned` events over an ordered reliable channel inside each UDP session. `NetworkEvent { tick, event }` provides validated compact payload encode/decode; tick is the authority tick after the event's step.
 
 The server queues events per peer, transmits at most eight per peer per tick, and retries unacknowledged events after 100 ms. Clients acknowledge individual sequences, deduplicate repeats, buffer reordering and deliver events exactly once in sequence order. Every event and ACK is bound to the current session cookie and peer endpoint. Reconnecting resets sequence state and rejects delayed packets or ACKs from the previous session.
 
@@ -49,3 +49,13 @@ cargo tree -p ferravex-fps
 ```
 
 Rewind tests cover a moving victim receiving historical-hit damage, invalid shot times, current-wall occlusion, old-life/slot protection, tick wrap and query immutability. Real UDP tests intentionally drop, reorder and duplicate authority events, exercise reconnect/stale-session rejection, and verify backpressure and bounded slow-peer disconnection. Existing movement, authority, input-loss, replay and prediction tests remain in place.
+
+
+Movement now uses the shared first-party upright capsule motor in
+`ferravex-physics::character`, including slope/step policy, coyote time and buffered
+jump presses. Holding jump does not repeatedly jump after landing. Native authority,
+client prediction and offline practice call the same fixed 64 Hz path. Protocol 3
+includes jump timers and held state so reconciliation can replay them exactly.
+The arena is static; moving-platform pose/support replication remains future work
+for multiplayer. `try_move_player` reports query/validation failures without
+committing motion; the compatibility `move_player` discards that diagnostic.

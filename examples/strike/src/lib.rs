@@ -291,7 +291,8 @@ async fn game() {
                 if let Some(player) = c.local_player() {
                     local = player.clone();
                 }
-                remote = c.players().to_vec();
+                remote.clear();
+                remote.extend_from_slice(c.players());
                 server_tick = c.server_tick();
                 continue;
             }
@@ -311,7 +312,7 @@ async fn game() {
                 let events = game.step(&commands);
                 apply_game_events(events, 0, &mut tracers, &mut hit_timer, &mut damage_timer);
                 local = game.players[0].clone();
-                remote = game.players.clone();
+                remote.clone_from(&game.players);
                 server_tick = game.tick;
             }
         }

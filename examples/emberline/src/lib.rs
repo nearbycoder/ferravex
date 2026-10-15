@@ -1,5 +1,8 @@
 //! A small precision platformer: no assets, a fixed simulation, and forgiving jumps.
 use ferravex_core::FixedClock;
+use ferravex_physics::character::{
+    Character, CharacterInput, CharacterSettings, CharacterShape, Obstacle, QueryBounds, Terrain,
+};
 use ferravex_render::{demo::Demo, prelude::*};
 
 const WIDTH: f32 = 1280.0;
@@ -22,11 +25,7 @@ struct Input {
 }
 
 struct Game {
-    position: Vec2,
-    velocity: Vec2,
-    grounded: bool,
-    coyote: f32,
-    buffer: f32,
+    motor: Character,
     platforms: Vec<Rect>,
     hazards: Vec<Rect>,
     embers: Vec<(Vec2, bool)>,
@@ -42,11 +41,7 @@ struct Game {
 impl Game {
     fn new() -> Self {
         Self {
-            position: vec2(90.0, 520.0),
-            velocity: Vec2::ZERO,
-            grounded: true,
-            coyote: COYOTE,
-            buffer: 0.0,
+            motor: Character::new(feet(vec2(90.0, 520.0))),
             platforms: vec![
                 Rect::new(-100.0, 560.0, 680.0, 250.0),
                 Rect::new(700.0, 560.0, 500.0, 250.0),
@@ -88,16 +83,21 @@ impl Game {
         }
     }
 
+    fn position(&self) -> Vec2 {
+        vec2(
+            self.motor.position.x - PLAYER.x * 0.5,
+            -self.motor.position.y - PLAYER.y,
+        )
+    }
+    fn velocity(&self) -> Vec2 {
+        vec2(self.motor.velocity.x, -self.motor.velocity.y)
+    }
     fn body(&self) -> Rect {
-        Rect::new(self.position.x, self.position.y, PLAYER.x, PLAYER.y)
+        Rect::new(self.position().x, self.position().y, PLAYER.x, PLAYER.y)
     }
 
     fn respawn(&mut self) {
-        self.position = self.checkpoint;
-        self.velocity = Vec2::ZERO;
-        self.grounded = true;
-        self.coyote = COYOTE;
-        self.buffer = 0.0;
+        self.motor = Character::new(feet(self.checkpoint));
         self.deaths += 1;
         self.respawn_flash = 0.6;
     }
@@ -108,53 +108,41 @@ impl Game {
         }
         self.elapsed += dt;
         self.respawn_flash = (self.respawn_flash - dt).max(0.0);
-        self.buffer = if input.jump {
-            BUFFER
-        } else {
-            (self.buffer - dt).max(0.0)
-        };
-        self.coyote = if self.grounded {
-            COYOTE
-        } else {
-            (self.coyote - dt).max(0.0)
-        };
-        if self.buffer > 0.0 && self.coyote > 0.0 {
-            self.velocity.y = -JUMP;
-            self.grounded = false;
-            self.coyote = 0.0;
-            self.buffer = 0.0;
-            self.jumps += 1;
-        }
-        let target = input.direction.clamp(-1.0, 1.0) * SPEED;
-        let acceleration = if self.grounded { 2400.0 } else { 1600.0 };
-        self.velocity.x += (target - self.velocity.x).clamp(-acceleration * dt, acceleration * dt);
-        self.position.x += self.velocity.x * dt;
-        for platform in &self.platforms {
-            if overlaps(self.body(), *platform) {
-                if self.velocity.x > 0.0 {
-                    self.position.x = platform.x - PLAYER.x;
-                } else if self.velocity.x < 0.0 {
-                    self.position.x = platform.right();
-                }
-                self.velocity.x = 0.0;
-            }
-        }
-        self.position.x = self.position.x.clamp(0.0, WORLD_END - PLAYER.x);
-        self.velocity.y = (self.velocity.y + GRAVITY * dt).min(1000.0);
-        self.position.y += self.velocity.y * dt;
-        self.grounded = false;
-        for platform in &self.platforms {
-            if overlaps(self.body(), *platform) {
-                if self.velocity.y >= 0.0 {
-                    self.position.y = platform.y - PLAYER.y;
-                    self.grounded = true;
-                } else {
-                    self.position.y = platform.bottom();
-                }
-                self.velocity.y = 0.0;
-            }
-        }
-        if self.position.y > 780.0 || self.hazards.iter().any(|h| self.body().overlaps(h)) {
+        // A side platform moves before the motor, so standing passengers inherit its pose.
+        self.platforms[5].x = 770.0 + (self.elapsed * 1.2).sin() * 28.0;
+        let result = self
+            .motor
+            .step(
+                &EmberTerrain(&self.platforms),
+                CharacterShape::Box2 { half: PLAYER * 0.5 },
+                CharacterSettings {
+                    speed: SPEED,
+                    gravity: GRAVITY,
+                    jump_speed: JUMP,
+                    terminal_speed: 1000.,
+                    ground_acceleration: 2400.,
+                    air_acceleration: 1600.,
+                    coyote_time: COYOTE,
+                    jump_buffer: BUFFER,
+                    ground_snap: 0.1,
+                    step_height: 0.,
+                    max_recovery: 24.,
+                    ..Default::default()
+                },
+                CharacterInput {
+                    direction: vec3(input.direction, 0., 0.),
+                    jump: input.jump,
+                },
+                dt,
+            )
+            .expect("authored Emberline character terrain");
+        self.jumps += u32::from(result.jumped);
+        self.motor.position.x = self
+            .motor
+            .position
+            .x
+            .clamp(PLAYER.x * 0.5, WORLD_END - PLAYER.x * 0.5);
+        if self.position().y > 780.0 || self.hazards.iter().any(|h| self.body().overlaps(h)) {
             self.respawn();
             return;
         }
@@ -164,17 +152,17 @@ impl Game {
                 *collected = true;
             }
         }
-        if self.position.x > 1380.0 && self.position.x < 1490.0 && self.grounded {
+        if self.position().x > 1380.0 && self.position().x < 1490.0 && self.motor.grounded {
             self.checkpoint_lit = true;
             self.checkpoint = vec2(1410.0, 520.0);
         }
-        if self.position.x > 2560.0 && self.grounded {
+        if self.position().x > 2560.0 && self.motor.grounded {
             self.won = true;
         }
     }
 
     fn autoplay(&self) -> Input {
-        let front = self.position.x + PLAYER.x;
+        let front = self.position().x + PLAYER.x;
         let hazard = self
             .hazards
             .iter()
@@ -186,15 +174,37 @@ impl Game {
             .any(|p| front > p.x && front <= p.right() && p.right() - front < 58.0);
         Input {
             direction: 1.0,
-            jump: self.grounded && (hazard || gap),
+            jump: self.motor.grounded && (hazard || gap),
         }
     }
 }
 
-fn overlaps(a: Rect, b: Rect) -> bool {
-    ferravex_core::collision::Aabb2::from_min_size(a.point(), a.size()).overlaps(
-        ferravex_core::collision::Aabb2::from_min_size(b.point(), b.size()),
-    )
+fn feet(position: Vec2) -> Vec3 {
+    vec3(position.x + PLAYER.x * 0.5, -position.y - PLAYER.y, 0.)
+}
+struct EmberTerrain<'a>(&'a [Rect]);
+impl EmberTerrain<'_> {
+    fn obstacle_at(&self, i: usize) -> Obstacle {
+        let p = self.0[i];
+        Obstacle::cuboid(
+            i as u64,
+            vec3(p.x + p.w * 0.5, -p.y - p.h * 0.5, 0.),
+            vec3(p.w * 0.5, p.h * 0.5, 1.),
+        )
+    }
+}
+impl Terrain for EmberTerrain<'_> {
+    fn visit(&self, bounds: QueryBounds, visitor: &mut dyn FnMut(Obstacle)) {
+        for i in 0..self.0.len() {
+            let o = self.obstacle_at(i);
+            if bounds.intersects(o.bounds()) {
+                visitor(o);
+            }
+        }
+    }
+    fn obstacle(&self, id: u64) -> Option<Obstacle> {
+        ((id as usize) < self.0.len()).then(|| self.obstacle_at(id as usize))
+    }
 }
 
 fn diamond(position: Vec2, radius: f32, color: Color) {
@@ -349,9 +359,9 @@ fn world(game: &Game, camera: f32, time: f32) {
         vec2(exit - 8.0, 515.0),
         GREEN,
     );
-    let p = game.position - vec2(camera, 0.0);
-    let bob = if game.grounded {
-        (time * 17.0).sin() * game.velocity.x.abs() / SPEED * 2.0
+    let p = game.position() - vec2(camera, 0.0);
+    let bob = if game.motor.grounded {
+        (time * 17.0).sin() * game.velocity().x.abs() / SPEED * 2.0
     } else {
         0.0
     };
@@ -380,7 +390,7 @@ fn world(game: &Game, camera: f32, time: f32) {
     );
     draw_rectangle(p.x + 4.0, p.y + 1.0, 17.0, 15.0, CREAM);
     draw_rectangle(p.x + 1.0, p.y, 24.0, 6.0, Color::from_hex(0xc79d57));
-    let face = if game.velocity.x < -1.0 { 5.0 } else { 14.0 };
+    let face = if game.velocity().x < -1.0 { 5.0 } else { 14.0 };
     draw_rectangle(p.x + face, p.y + 7.0, 5.0, 3.0, Color::from_hex(0x26312b));
     draw_triangle(
         vec2(p.x + 5.0, p.y + 18.0),
@@ -473,15 +483,15 @@ async fn game() {
             game.update(input, frame.dt);
             jump_pending = false;
         }
-        let target = (game.position.x - WIDTH * 0.35).clamp(0.0, WORLD_END - WIDTH);
+        let target = (game.position().x - WIDTH * 0.35).clamp(0.0, WORLD_END - WIDTH);
         camera_x += (target - camera_x) * (1.0 - (-9.0 * demo.dt()).exp());
         set_camera(&canvas.camera());
         world(&game, camera_x, demo.time());
         let collected = game.embers.iter().filter(|(_, found)| *found).count();
         label("EMBERLINE", 32.0, 48.0, 28.0, CREAM);
-        let zone = if game.position.x < 900.0 {
+        let zone = if game.position().x < 900.0 {
             "01 / THE TREELINE"
-        } else if game.position.x < 1800.0 {
+        } else if game.position().x < 1800.0 {
             "02 / THE OLD MILL"
         } else {
             "03 / THE FURNACE"
@@ -566,22 +576,22 @@ mod tests {
     #[test]
     fn floor_stops_player_without_tunneling() {
         let mut game = Game::new();
-        game.position.y = 80.0;
-        game.grounded = false;
+        game.motor.position = feet(vec2(90., 80.));
+        game.motor.grounded = false;
         for _ in 0..240 {
             game.update(Input::default(), DT);
         }
-        assert!(game.grounded);
-        assert_eq!(game.position.y, 520.0);
+        assert!(game.motor.grounded);
+        assert!((game.position().y - 520.).abs() < 0.01);
         assert_eq!(game.deaths, 0);
     }
 
     #[test]
     fn coyote_jump_and_buffered_landing_work() {
         let mut game = Game::new();
-        game.position = vec2(590.0, 520.0);
-        game.grounded = false;
-        game.coyote = 0.07;
+        game.motor.position = feet(vec2(590., 520.));
+        game.motor.grounded = false;
+        game.motor.jump.coyote = 0.07;
         game.update(
             Input {
                 jump: true,
@@ -589,10 +599,11 @@ mod tests {
             },
             DT,
         );
-        assert!(game.velocity.y < -600.0);
-        game.position = vec2(90.0, 517.0);
-        game.velocity.y = 180.0;
-        game.coyote = 0.0;
+        assert!(game.velocity().y < -600.0);
+        game.motor.position = feet(vec2(90., 517.));
+        game.motor.jump.held = false;
+        game.motor.velocity.y = -180.;
+        game.motor.jump.coyote = 0.0;
         game.update(
             Input {
                 jump: true,
@@ -603,22 +614,33 @@ mod tests {
         for _ in 0..4 {
             game.update(Input::default(), DT);
         }
-        assert!(game.velocity.y < -500.0);
+        assert!(game.velocity().y < -500.0);
         assert_eq!(game.jumps, 2);
     }
 
     #[test]
     fn hazards_respawn_at_activated_checkpoint() {
         let mut game = Game::new();
-        game.position.x = 1410.0;
+        game.motor.position = feet(vec2(1410., 520.));
         game.update(Input::default(), DT);
         assert!(game.checkpoint_lit);
-        game.position = vec2(1605.0, 520.0);
+        game.motor.position = feet(vec2(1605., 520.));
         game.update(Input::default(), DT);
-        assert_eq!(game.position, game.checkpoint);
+        assert_eq!(game.position(), game.checkpoint);
         assert_eq!(game.deaths, 1);
     }
 
+    #[test]
+    fn moving_side_platform_carries_a_standing_player() {
+        let mut game = Game::new();
+        game.motor = Character::new(feet(vec2(815., 395.)));
+        game.update(Input::default(), DT);
+        let before = game.position();
+        game.update(Input::default(), DT);
+        assert!(game.motor.grounded);
+        assert!(game.position().x - before.x > 0.27);
+        assert!((game.position().y - before.y).abs() < 0.01);
+    }
     #[test]
     fn autoplay_completes_all_sections_with_real_physics() {
         let mut game = Game::new();
@@ -631,7 +653,8 @@ mod tests {
         assert!(
             game.won,
             "position {:?}, deaths {}",
-            game.position, game.deaths
+            game.position(),
+            game.deaths
         );
         assert!(game.checkpoint_lit);
         assert!(game.jumps >= 7);

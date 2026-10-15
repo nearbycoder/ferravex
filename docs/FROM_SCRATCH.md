@@ -35,7 +35,7 @@ finished.
 |---|---|---|---|
 | 1 | Profiling and budgets | Fixed-size CPU samples, budget flags, p99; browser CPU frame and asynchronous GPU timer measurements; binary size/audit scripts | Allocator instrumentation, trace timelines, device budgets |
 | 2 | Retained rendering | Shared native/WebGL2 retained buffers, opaque-pass instancing, conservative frustum/distance tests and authored hysteretic LOD; Courtyard static buffers/instancing and transformed bounds/frustum culling; headless clipped depth rasterizer | Windows/macOS/iOS GPU hosts, GPU-driven submission |
-| 3 | Character movement | Owned sphere slide/step/snap helper; existing shared FPS AABB motor and prediction | Unified capsule motor, slopes, moving platforms, body pushing |
+| 3 | Character movement | Shared upright capsule and planar box motors, continuous sweeps, slopes/steps, moving supports, jump grace/buffer, prediction snapshots; adopted by Strike, Crystal Cavern and Emberline | Dynamic-body pushing, mesh terrain and multiplayer platform pose history |
 | 4 | Input actions | Bounded remappable action map, deadzones, buffered edges; browser keyboard/mouse/gamepad/touch adapters; Linux host events for restored games | Interactive rebinding UI and physical-device testing |
 | 5 | Spatial audio | Strict PCM16 WAV decoder, bounded resampling stereo mixer, distance attenuation/panning; browser AudioWorklet output | Occlusion, streaming/compressed audio, native sinks and authored footsteps |
 | 6 | Reliable events | Actual UDP v2 session-bound event/ACK codec, retry/order/dedup, bounded queues and slow-peer disconnect; typed gameplay event delivery | Congestion-aware scheduling and long-running Internet tests |
@@ -71,7 +71,7 @@ movement and reconciles against host snapshots. One guest is supported. The
 browser transport currently sends full snapshots at up to 20 Hz; native reliable
 UDP events and historical rewind are separate capabilities.
 
-Native UDP protocol v2 remains a trusted-development transport without encryption.
+Native UDP protocol v3 remains a trusted-development transport without encryption.
 No custom cryptographic primitive was invented or substituted for a secure native
 transport. See the FPS/net READMEs for exact APIs and validation limits.
 

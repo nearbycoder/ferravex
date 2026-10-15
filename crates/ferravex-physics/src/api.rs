@@ -334,3 +334,10 @@ pub struct RayHit {
     pub point: [f32; DIM],
     pub normal: [f32; DIM],
 }
+
+impl crate::character::Terrain for PhysicsWorld {
+    fn visit(&self,bounds:crate::character::QueryBounds,visitor:&mut dyn FnMut(crate::character::Obstacle)) {
+        crate::character::Terrain::visit(&self.raw,bounds,visitor);
+    }
+    fn obstacle(&self,id:u64)->Option<crate::character::Obstacle> {crate::character::Terrain::obstacle(&self.raw,id)}
+}

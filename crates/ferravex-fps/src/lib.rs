@@ -2,6 +2,10 @@
 //! weapons, and health. No rendering or platform services enter the simulation.
 //! All movement uses the same 64 Hz step for offline play, authority, and replay.
 use ferravex_math::Vec3;
+use ferravex_physics::character::{
+    Character, CharacterError, CharacterInput, CharacterSettings, CharacterShape, JumpState,
+    Obstacle as CharacterObstacle, ObstacleShape, QueryBounds, Terrain,
+};
 mod event_wire;
 pub use event_wire::NetworkEvent;
 mod rewind;
@@ -110,6 +114,7 @@ pub struct Player {
     pub health: u8,
     pub ammo: u8,
     pub grounded: bool,
+    pub jump: JumpState,
     pub fire_cooldown: u16,
     pub reload_ticks: u16,
     pub respawn_ticks: u16,
@@ -125,6 +130,7 @@ impl Player {
             health: 100,
             ammo: MAGAZINE_SIZE,
             grounded: true,
+            jump: JumpState::default(),
             fire_cooldown: 0,
             reload_ticks: 0,
             respawn_ticks: 0,
@@ -146,6 +152,9 @@ impl Player {
             health: self.health,
             ammo: self.ammo,
             grounded: self.grounded,
+            jump_coyote: self.jump.coyote,
+            jump_buffer: self.jump.buffer,
+            jump_held: self.jump.held,
             fire_cooldown: self.fire_cooldown,
             reload_ticks: self.reload_ticks,
             respawn_ticks: self.respawn_ticks,
@@ -161,6 +170,11 @@ impl Player {
             health: p.health,
             ammo: p.ammo,
             grounded: p.grounded,
+            jump: JumpState {
+                coyote: p.jump_coyote,
+                buffer: p.jump_buffer,
+                held: p.jump_held,
+            },
             fire_cooldown: p.fire_cooldown,
             reload_ticks: p.reload_ticks,
             respawn_ticks: p.respawn_ticks,
@@ -343,7 +357,9 @@ pub fn step_player(player: &mut Player, input: InputFrame, arena: &Arena) -> boo
     }
     player.yaw = input.yaw;
     player.pitch = input.pitch;
-    move_player(player, input, arena);
+    if try_move_player(player, input, arena).is_err() {
+        return false;
+    }
     player.fire_cooldown = player.fire_cooldown.saturating_sub(1);
     if player.reload_ticks > 0 {
         player.reload_ticks -= 1;
@@ -367,60 +383,76 @@ pub fn step_player(player: &mut Player, input: InputFrame, arena: &Arena) -> boo
     false
 }
 
-/// Swept axis-separated player AABB against static arena geometry, with wall sliding.
-/// Dynamic rigid bodies are intentionally kept outside this prediction-safe motor.
-pub fn move_player(player: &mut Player, input: InputFrame, arena: &Arena) {
+/// Shared capsule motor. Static arena supports require no additional platform pose
+/// state; jump timers and held state are included in PlayerSnapshot for reconciliation.
+/// Invalid terrain/state or an exhausted query budget preserves the player's motion.
+pub fn try_move_player(
+    player: &mut Player,
+    input: InputFrame,
+    arena: &Arena,
+) -> Result<(), CharacterError> {
     let input = input.sanitized();
     let forward = Vec3::new(input.yaw.sin(), 0., -input.yaw.cos());
     let right = Vec3::new(input.yaw.cos(), 0., input.yaw.sin());
-    let wish = (right * input.move_x + forward * input.move_z).clamp_length_max(1.0) * WALK_SPEED;
-    let acceleration = if player.grounded { 55.0 } else { 14.0 };
-    let horizontal = Vec3::new(player.velocity.x, 0., player.velocity.z);
-    let difference = wish - horizontal;
-    let change = difference.clamp_length_max(acceleration * FIXED_DT);
-    player.velocity.x += change.x;
-    player.velocity.z += change.z;
-    if input.buttons & BUTTON_JUMP != 0 && player.grounded {
-        player.velocity.y = 8.6;
-        player.grounded = false;
+    let mut motor = Character::new(player.position);
+    motor.velocity = player.velocity;
+    motor.grounded = player.grounded;
+    motor.jump = player.jump;
+    motor.step(
+        arena,
+        CharacterShape::Capsule {
+            radius: PLAYER_RADIUS,
+            height: PLAYER_HEIGHT,
+        },
+        CharacterSettings {
+            speed: WALK_SPEED,
+            ..Default::default()
+        },
+        CharacterInput {
+            direction: right * input.move_x + forward * input.move_z,
+            jump: input.buttons & BUTTON_JUMP != 0,
+        },
+        FIXED_DT,
+    )?;
+    player.position = motor.position;
+    player.velocity = motor.velocity;
+    player.grounded = motor.grounded;
+    player.jump = motor.jump;
+    Ok(())
+}
+/// Compatibility entry point for callers that do not consume movement diagnostics.
+pub fn move_player(player: &mut Player, input: InputFrame, arena: &Arena) {
+    let _ = try_move_player(player, input, arena);
+}
+impl Arena {
+    fn character_obstacle(&self, id: u64) -> Option<CharacterObstacle> {
+        if id == 0 {
+            return Some(CharacterObstacle {
+                shape: ObstacleShape::Plane { normal: Vec3::Y },
+                ..CharacterObstacle::cuboid(0, Vec3::ZERO, Vec3::ONE)
+            });
+        }
+        let solid = self.solids.get((id - 1) as usize)?;
+        Some(CharacterObstacle::cuboid(
+            id,
+            solid.center,
+            solid.half_extents,
+        ))
     }
-    player.velocity.y = (player.velocity.y - 24.0 * FIXED_DT).max(-50.0);
-    let half = Vec3::new(PLAYER_RADIUS, PLAYER_HEIGHT * 0.5, PLAYER_RADIUS);
-    let mut center = player.position + Vec3::Y * half.y;
-    player.grounded = false;
-    for axis in [0, 2, 1] {
-        let requested = player.velocity[axis] * FIXED_DT;
-        let mut displacement = requested;
-        for solid in &arena.solids {
-            let min = solid.min();
-            let max = solid.max();
-            let other_a = (axis + 1) % 3;
-            let other_b = (axis + 2) % 3;
-            if center[other_a] + half[other_a] <= min[other_a] + 0.00001
-                || center[other_a] - half[other_a] >= max[other_a] - 0.00001
-                || center[other_b] + half[other_b] <= min[other_b] + 0.00001
-                || center[other_b] - half[other_b] >= max[other_b] - 0.00001
-            {
-                continue;
-            }
-            if requested > 0. && center[axis] + half[axis] <= min[axis] + 0.00001 {
-                displacement = displacement.min((min[axis] - center[axis] - half[axis]).max(0.));
-            } else if requested < 0. && center[axis] - half[axis] >= max[axis] - 0.00001 {
-                displacement = displacement.max((max[axis] - center[axis] + half[axis]).min(0.));
-            }
-        }
-        if axis == 1 && center.y + displacement - half.y < 0. {
-            displacement = half.y - center.y;
-        }
-        center[axis] += displacement;
-        if (requested - displacement).abs() > 0.000001 {
-            player.velocity[axis] = 0.;
-            if axis == 1 && requested < 0. {
-                player.grounded = true;
+}
+impl Terrain for Arena {
+    fn visit(&self, bounds: QueryBounds, visitor: &mut dyn FnMut(CharacterObstacle)) {
+        visitor(self.character_obstacle(0).unwrap());
+        for i in 0..self.solids.len() {
+            let o = self.character_obstacle(i as u64 + 1).unwrap();
+            if !o.valid() || bounds.intersects(o.bounds()) {
+                visitor(o);
             }
         }
     }
-    player.position = center - Vec3::Y * half.y;
+    fn obstacle(&self, id: u64) -> Option<CharacterObstacle> {
+        self.character_obstacle(id)
+    }
 }
 
 /// Slab ray/AABB intersection, including axis-parallel rays and origins inside boxes.
@@ -554,7 +586,7 @@ mod tests {
             peak = peak.max(p.position.y);
         }
         assert!(peak <= 0.201);
-        assert_eq!(p.position.y, 0.);
+        assert!(p.position.y.abs() < 0.003);
     }
     #[test]
     fn hitscan_is_occluded_and_server_controls_damage() {
@@ -646,6 +678,42 @@ mod tests {
             step_player(&mut replay, *input, &arena);
         }
         assert_eq!(authority, replay);
+    }
+    #[test]
+    fn buffered_jump_survives_wire_snapshot_and_prediction_replay() {
+        let arena = empty_arena();
+        let mut authority = Player::new(0, Vec3::Y * 0.2);
+        authority.grounded = false;
+        authority.velocity.y = -5.;
+        let input = InputFrame {
+            buttons: BUTTON_JUMP,
+            ..Default::default()
+        };
+        try_move_player(&mut authority, input, &arena).unwrap();
+        assert!(authority.jump.buffer > 0. && authority.jump.held);
+        let bytes = ferravex_net::encode_server(&ferravex_net::ServerPacket::Snapshot(
+            ferravex_net::Snapshot {
+                session: 1,
+                players: vec![authority.snapshot()],
+                ..Default::default()
+            },
+        ))
+        .unwrap();
+        let ferravex_net::ServerPacket::Snapshot(snapshot) =
+            ferravex_net::decode_server(&bytes).unwrap()
+        else {
+            panic!("snapshot expected")
+        };
+        let mut predicted = Player::from_snapshot(&snapshot.players[0]);
+        let mut peak = 0f32;
+        for _ in 0..128 {
+            try_move_player(&mut authority, input, &arena).unwrap();
+            try_move_player(&mut predicted, input, &arena).unwrap();
+            assert_eq!(authority, predicted);
+            peak = peak.max(authority.position.y);
+        }
+        assert!(peak > 1. && authority.grounded);
+        assert_eq!(authority.jump.buffer, 0.);
     }
     #[test]
     fn default_spawns_are_clear_and_player_count_is_bounded() {
