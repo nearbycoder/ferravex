@@ -38,7 +38,7 @@ impl Mesh {
             vertices: Vec::with_capacity(vertices),
             indices: Vec::with_capacity(indices),
         };
-        for row in bytes[16..16 + vertices * 40].chunks_exact(40) {
+        for row in bytes[16..16 + vertices * 40].as_chunks::<40>().0 {
             let f = |i: usize| f32::from_le_bytes(row[i * 4..i * 4 + 4].try_into().unwrap());
             result.vertices.push(Vertex::new(
                 Vec3::new(f(0), f(1), f(2)),
@@ -46,10 +46,8 @@ impl Mesh {
                 Color::new(f(6), f(7), f(8), f(9)),
             ));
         }
-        for row in bytes[16 + vertices * 40..].chunks_exact(4) {
-            result
-                .indices
-                .push(u32::from_le_bytes(row.try_into().unwrap()));
+        for row in bytes[16 + vertices * 40..].as_chunks::<4>().0 {
+            result.indices.push(u32::from_le_bytes(*row));
         }
         result.validate()?;
         Ok(result)

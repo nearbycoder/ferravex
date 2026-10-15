@@ -75,7 +75,7 @@ impl Replay {
         let rows = &data[12..end];
         let mut previous = None;
         // Validate every row before reserving output for a hostile count/header.
-        for row in rows.chunks_exact(ROW_BYTES) {
+        for row in rows.as_chunks::<ROW_BYTES>().0 {
             let frame = decode_row(row)?;
             if previous.is_some_and(|tick| tick >= frame.tick) {
                 return None;
@@ -83,7 +83,7 @@ impl Replay {
             previous = Some(frame.tick);
         }
         let mut frames = Vec::with_capacity(count);
-        for row in rows.chunks_exact(ROW_BYTES) {
+        for row in rows.as_chunks::<ROW_BYTES>().0 {
             frames.push(decode_row(row)?);
         }
         Some(Self { frames })

@@ -134,7 +134,7 @@ impl Bundle {
                 1 if stored_len.is_multiple_of(2) => {
                     // Validate expansion completely before allocating the claimed output.
                     let mut expanded = 0_usize;
-                    for pair in stored.chunks_exact(2) {
+                    for pair in stored.as_chunks::<2>().0 {
                         let run = usize::from(pair[0]);
                         if run == 0 {
                             return Err(AssetError::Format);
@@ -148,7 +148,7 @@ impl Bundle {
                         return Err(AssetError::Format);
                     }
                     let mut raw = Vec::with_capacity(raw_len);
-                    for pair in stored.chunks_exact(2) {
+                    for pair in stored.as_chunks::<2>().0 {
                         raw.resize(raw.len() + usize::from(pair[0]), pair[1]);
                     }
                     if checksum(&raw) != hash {

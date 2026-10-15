@@ -57,7 +57,7 @@ impl Delta {
             1 if body.len().is_multiple_of(3) => {
                 let mut result = base.to_vec();
                 let mut previous = None;
-                for entry in body.chunks_exact(3) {
+                for entry in body.as_chunks::<3>().0 {
                     let i = u16::from_le_bytes([entry[0], entry[1]]) as usize;
                     if i >= len || previous.is_some_and(|p| i <= p) {
                         return Err(ProtocolError::Invalid);

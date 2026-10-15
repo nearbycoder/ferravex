@@ -1,5 +1,6 @@
 use super::{Arena, InputFrame, MAX_PLAYERS, Match, NetworkEvent, Player, step_player};
 use ferravex_net::reliable::{EventReceiver, EventSender};
+#[cfg(not(test))]
 use ferravex_net::udp::Socket;
 use ferravex_net::{
     ClientPacket, InputQueue, MAX_INPUTS_PER_PACKET, MAX_PACKET_BYTES, ServerPacket, Snapshot,
@@ -20,6 +21,41 @@ const HELLO_INTERVAL: Duration = Duration::from_millis(250);
 const SNAPSHOT_INTERVAL: u32 = 3;
 const EVENT_SEND_BUDGET: usize = 8;
 const MAX_DELIVERED_EVENTS: usize = 512;
+
+// Loopback delivery is asynchronous on macOS and Windows. The test harness
+// gives real UDP packets a bounded delivery window, including deliberately
+// dropped/reordered packets. Runtime sockets remain strictly nonblocking.
+#[cfg(test)]
+struct Socket(ferravex_net::udp::Socket);
+#[cfg(test)]
+impl std::ops::Deref for Socket {
+    type Target = ferravex_net::udp::Socket;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+#[cfg(test)]
+impl Socket {
+    fn bind(addr: impl ToSocketAddrs) -> io::Result<Self> {
+        ferravex_net::udp::Socket::bind(addr).map(Self)
+    }
+    fn connect(addr: impl ToSocketAddrs) -> io::Result<Self> {
+        ferravex_net::udp::Socket::connect(addr).map(Self)
+    }
+    fn recv_from(
+        &self,
+        buffer: &mut [u8; MAX_PACKET_BYTES + 1],
+    ) -> io::Result<Option<(usize, SocketAddr)>> {
+        let deadline = Instant::now() + Duration::from_millis(20);
+        loop {
+            match self.0.recv_from(buffer)? {
+                Some(packet) => return Ok(Some(packet)),
+                None if Instant::now() >= deadline => return Ok(None),
+                None => std::thread::sleep(Duration::from_millis(1)),
+            }
+        }
+    }
+}
 
 // RandomState obtains per-instance random keys from the standard library. This
 // session cookie rejects accidental/spoofed input, but is not an auth protocol.

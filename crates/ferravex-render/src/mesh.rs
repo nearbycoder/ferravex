@@ -180,7 +180,7 @@ impl Mesh3d {
         // Duplicate triangle vertices so each facet receives its own normal.
         // This intentionally preserves a low-poly silhouette and flat lighting.
         let mut flat_vertices = Vec::with_capacity(indices.len());
-        for triangle in indices.chunks_exact(3) {
+        for triangle in indices.as_chunks::<3>().0 {
             // Calculate on the unit sphere so degeneracy tests and face normals
             // remain stable for both small projectiles and large scenery.
             let a = vertices[triangle[0] as usize].normal.truncate();
@@ -289,7 +289,7 @@ mod tests {
             Mesh3d::cylinder(1.0, 2.0, WHITE, 8),
             Mesh3d::cone(1.0, 2.0, WHITE, 8),
         ] {
-            for face in shape.mesh.vertices.chunks_exact(3) {
+            for face in shape.mesh.vertices.as_chunks::<3>().0 {
                 let center = (face[0].position + face[1].position + face[2].position) / 3.0;
                 let normal = face[0].normal.truncate();
                 assert!(normal.dot(center) > 0.0);
@@ -312,7 +312,7 @@ mod tests {
                 .iter()
                 .any(|v| v.position.length() < 0.001)
         );
-        for triangle in plane.mesh.indices.chunks_exact(3) {
+        for triangle in plane.mesh.indices.as_chunks::<3>().0 {
             let [a, b, c] = [triangle[0], triangle[1], triangle[2]]
                 .map(|i| plane.mesh.vertices[i as usize].position);
             assert!((b - a).cross(c - a).y > 0.0);

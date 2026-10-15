@@ -57,7 +57,7 @@ fn primitive_winding_and_flat_normals_are_consistent() {
         Mesh::plane(4.0, 3.0, 5, RED),
     ] {
         mesh.validate().unwrap();
-        for indices in mesh.indices.chunks_exact(3) {
+        for indices in mesh.indices.as_chunks::<3>().0 {
             let a = mesh.vertices[indices[0] as usize];
             let b = mesh.vertices[indices[1] as usize];
             let c = mesh.vertices[indices[2] as usize];

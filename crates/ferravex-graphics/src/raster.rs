@@ -217,7 +217,7 @@ impl SoftwareRenderer {
                 });
             }
             let mirrored = item.transform.determinant() < 0.0;
-            for indices in mesh.indices.chunks_exact(3) {
+            for indices in mesh.indices.as_chunks::<3>().0 {
                 stats.submitted_triangles += 1;
                 let triangle = [
                     self.scratch[indices[0] as usize],
