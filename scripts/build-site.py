@@ -144,7 +144,8 @@ def main():
  # Content-only builds must not copy caches left by an older dependency graph.
  metadata=json.loads(subprocess.check_output(['cargo','metadata','--no-deps','--format-version=1','--locked','--offline'],cwd=ROOT,text=True))
  targets={target['name'].replace('-','_') for package in metadata['packages'] for target in package['targets']}
- support={'src','search.index','trait.impl','type.impl','static.files'}
+ # Rust 1.90 uses search.desc; newer toolchains use search.index.
+ support={'src','search.desc','search.index','trait.impl','type.impl','static.files'}
  stale=[p.name for p in (ROOT/'target/doc').iterdir() if p.is_dir() and p.name not in targets|support]
  sources=ROOT/'target/doc/src'
  if sources.exists():stale.extend('src/'+p.name for p in sources.iterdir() if p.is_dir() and p.name not in targets)
