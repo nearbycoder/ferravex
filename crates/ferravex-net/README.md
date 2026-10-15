@@ -2,9 +2,9 @@
 
 Original dependency-free bounded binary codecs, native UDP sockets and reusable networking building blocks.
 
-## Protocol version 2
+## Protocol version 3
 
-Every packet starts with `FERRAVEX`, a one-byte version (`PROTOCOL_VERSION = 2`) and a one-byte kind. Integers and float bit patterns are little-endian. Packets exceeding 1,200 bytes, truncated fields, invalid numeric values, unknown versions/kinds and trailing bytes are rejected. Version 1 peers are deliberately incompatible and must upgrade together.
+Every packet starts with `FVRX`, a one-byte version (`PROTOCOL_VERSION = 3`) and a one-byte kind. Integers and float bit patterns are little-endian. Packets exceeding 1,200 bytes, truncated fields, invalid numeric values, unknown versions/kinds and trailing bytes are rejected. Version 1/2 peers are deliberately incompatible; client and server must upgrade together. Version 3 adds each player's coyote/buffer timers (`f32` seconds) and jump-held state (`u8` boolean), validated to 0–0.5 seconds. The full sixteen-player snapshot occupies 840 bytes, within the packet budget.
 
 | Kind | Direction | Payload after the header |
 |---|---|---|

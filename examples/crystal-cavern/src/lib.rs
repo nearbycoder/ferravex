@@ -1,5 +1,9 @@
 //! A small cave expedition: recover three crystals, wake two altars, find daylight.
 use ferravex_core::FixedClock;
+use ferravex_physics::character::{
+    CharacterSettings, CharacterShape, Obstacle, ObstacleShape, QueryBounds, Terrain,
+    move_and_slide,
+};
 type Aabb2 = ferravex_core::collision::Aabb2<Vec2>;
 use ferravex_render::{
     demo::Demo,
@@ -194,30 +198,75 @@ impl Game {
         let right = vec2(-front.y, front.x);
         let movement = input.movement.clamp_length_max(1.0);
         let delta = (front * movement.y + right * movement.x) * SPEED * dt;
-        // Two swept point-vs-expanded-box passes keep motion sliding along walls.
-        // Unlike destination-only tests, this also blocks unusually long steps.
-        for axis in [vec2(delta.x, 0.0), vec2(0.0, delta.y)] {
-            if axis.length_squared() < 1e-12 {
-                continue;
-            }
-            let mut fraction: f32 = 1.0;
-            for wall in self.obstacles() {
-                let expanded = Aabb2 {
-                    min: wall.min - Vec2::splat(RADIUS),
-                    max: wall.max + Vec2::splat(RADIUS),
-                };
-                if let Some(hit) = expanded.cast_segment(self.position, self.position + axis) {
-                    fraction = fraction.min((hit - 0.001 / axis.length()).max(0.0));
-                }
-            }
-            self.position += axis * fraction;
-        }
+        let motion = move_and_slide(
+            &CaveTerrain(self),
+            CharacterShape::Capsule {
+                radius: RADIUS,
+                height: 1.75,
+            },
+            CharacterSettings {
+                step_height: 0.,
+                ground_snap: 0.,
+                ..Default::default()
+            },
+            world(self.position, 0.),
+            world(delta, 0.),
+            true,
+        )
+        .expect("authored cave character terrain");
+        self.position = vec2(motion.position.x, motion.position.z);
         if input.interact {
             self.interact();
         }
         if self.open() && self.position.distance(at(b'X')) < 1.2 {
             self.won = true;
             self.message("Expedition complete.");
+        }
+    }
+}
+
+struct CaveTerrain<'a>(&'a Game);
+impl CaveTerrain<'_> {
+    fn box_at(&self, id: usize) -> Option<Obstacle> {
+        let wall = if id == self.0.walls.len() {
+            if self.0.open() {
+                return None;
+            }
+            self.0.gate
+        } else {
+            *self.0.walls.get(id)?
+        };
+        let center = (wall.min + wall.max) * 0.5;
+        let half = (wall.max - wall.min) * 0.5;
+        Some(Obstacle::cuboid(
+            id as u64 + 1,
+            world(center, 1.5),
+            vec3(half.x, 1.5, half.y),
+        ))
+    }
+}
+impl Terrain for CaveTerrain<'_> {
+    fn visit(&self, bounds: QueryBounds, visitor: &mut dyn FnMut(Obstacle)) {
+        visitor(Obstacle {
+            shape: ObstacleShape::Plane { normal: Vec3::Y },
+            ..Obstacle::cuboid(0, Vec3::ZERO, Vec3::ONE)
+        });
+        for i in 0..=self.0.walls.len() {
+            if let Some(o) = self.box_at(i)
+                && bounds.intersects(o.bounds())
+            {
+                visitor(o);
+            }
+        }
+    }
+    fn obstacle(&self, id: u64) -> Option<Obstacle> {
+        if id == 0 {
+            Some(Obstacle {
+                shape: ObstacleShape::Plane { normal: Vec3::Y },
+                ..Obstacle::cuboid(0, Vec3::ZERO, Vec3::ONE)
+            })
+        } else {
+            self.box_at((id - 1) as usize)
         }
     }
 }

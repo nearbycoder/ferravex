@@ -7,6 +7,7 @@ name = "crystal-cavern"
 version = "0.1.0"
 dependencies = [
  "ferravex-core",
+ "ferravex-physics",
  "ferravex-render",
 ]
 
@@ -23,6 +24,7 @@ name = "emberline"
 version = "0.1.0"
 dependencies = [
  "ferravex-core",
+ "ferravex-physics",
  "ferravex-render",
 ]
 
@@ -79,6 +81,7 @@ version = "0.1.0"
 dependencies = [
  "ferravex-math",
  "ferravex-net",
+ "ferravex-physics",
 ]
 
 [[package]]

@@ -161,3 +161,33 @@ examples passed using a 1000-microsecond CPU host noise floor and the separate
 20-microsecond GPU floor. This is a reproducibility check, not a speedup claim.
 Schema-1 recordings cannot be compared to the new GPU/quality-aware schema.
 Raw reports are in ignored `target/perf/iteration-05-{default,low,high,repeat}`.
+
+
+### Character-controller iteration
+
+With the same native release workload/machine as iteration 5 (120 measured frames,
+30 warmup, two processes), CPU update means were 17.2 µs for Strike (previously
+7.2), 20.8 µs for Courtyard (11.5), 67.2 µs for Emberline (80.0) and 96.8 µs for
+Crystal Cavern (105.2). The two shooter paths now run continuous capsule queries.
+Small decreases are host/workload observations, not a portable speedup claim.
+The motor uses fixed stack scratch arrays. Reusing Strike's remote-player vector
+reduced its mean per-frame allocation bytes from 474.3 to 192.7 despite the larger
+player state; it no longer allocates a fresh list each simulation update.
+
+The shared motor has a visible size cost in release browser modules:
+
+| Game | Previous Wasm bytes | Controller Wasm bytes | Controller gzip bytes |
+|---|---:|---:|---:|
+| Courtyard | 238397 | 259110 | 97146 |
+| Emberline | 141628 | 164810 | 63825 |
+| Crystal Cavern | 212790 | 233634 | 89833 |
+| Strike | 227653 | 249113 | 96258 |
+
+This adds roughly 21–23 KB raw / 8–10 KB gzip per affected module. The comparison
+passed CPU/GPU timing and work budgets with the recorded 1000 µs CPU / 20 µs GPU
+floors, but **failed the default 5% artifact-growth gate** for these new features
+(including Crystal's native binary and Emberline's compressed native binary).
+These flags remain in the report; the previous baseline was not replaced or the
+size tolerance widened. They are an explicit cost for the final iteration-20
+size/performance audit. An inlining experiment increased size and was discarded.
+Raw results: `target/perf/iteration-06-final/report.json`.

@@ -24,7 +24,7 @@ Boxes use separating axes and clipped face contact manifolds; edge contacts use 
 - Sweep-and-prune AABB broadphase, collision membership/filter masks, sensor overlaps, contact begin/end events, and direct current-pose raycasts. Rays exclude sensors and return the nearest solid hit.
 - Sphere/circle CCD uses signed-distance conservative sweeps against supported convex shapes. Target translation is included in the relative path. Target rotation is frozen within each substep. Adaptive substeps (maximum 8) reduce rotational motion per query; each sweep has a maximum of 40 iterations. Existing penetration goes to the contact solver. Grazing sweeps can exhaust their iteration budget; this is not a universal no-tunneling guarantee. Boxes use substeps only, not swept time of impact.
 
-The public `d2` and `d3` adapters preserve the small builder/body/contact API used by these games. `raw` exposes this original solver, **not** a Rapier-compatible world. No hook, joint, mesh, compound collider, capsule character controller, ray filter callback, or external plugin API is implied.
+The public `d2` and `d3` adapters preserve the small builder/body/contact API used by these games. `raw` exposes this original solver, **not** a Rapier-compatible world. No hook, joint, mesh, compound collider, ray filter callback, or external plugin API is implied.
 
 ## Using a fixed tick
 
@@ -53,3 +53,13 @@ Sleeping is conservative and local: a quiet contacting dynamic body sleeps after
 `cargo test -p ferravex-physics` exercises inertia, real frictional rolling, restitution, fast ball sweeps against thin rotated geometry, layers/sensors/removal, cylinder geometry, raycasts, box edge landing, stable stacks, and impact wake/toppling. The recovered games retain their original gameplay tests: checkpoint/finish/rolling, flipper/bumper/scoring, and ballistic destruction. The laboratories also check finite simulation, floor containment, spawning caps, and reset.
 
 Run `cargo run --release -p ferravex-physics --example rigid_bench` for a local 128-box workload. Measurements are machine-specific and do not imply a platform-wide performance guarantee. All dependency source is local to this workspace.
+
+
+## Character motors
+
+[Shared character controllers](../../docs/CHARACTERS.md) documents the first-party
+upright capsule and planar rectangle motors, slopes/steps, moving supports and
+jump grace/buffering. `PhysicsWorld` implements their terrain query interface with
+current collider poses and generational support identities. These kinematic
+queries are separate from the rigid-body contact shape matrix above. Strike,
+Crystal Cavern and Emberline now use the shared motors.

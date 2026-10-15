@@ -4,6 +4,7 @@
 //! Capsules (2D) and cylinders (3D) are static or kinematic ball obstacles.
 //! This is a small native solver, not a compatibility implementation of Rapier.
 mod body;
+pub mod character;
 mod geometry;
 mod world;
 pub use body::{BodySet, Collider, ColliderHandle, ColliderSet, RigidBodyHandle};
