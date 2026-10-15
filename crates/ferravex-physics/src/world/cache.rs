@@ -93,6 +93,10 @@ impl<B: Access> World<B> {
             return Ok(());
         }
         self.settings = settings;
+        for (_, j) in self.joints.iter_mut() {
+            j.cache.fill(crate::joints::CachedRow::default());
+            j.dt = 0.;
+        }
         self.manifolds.clear();
         self.next_manifolds.clear();
         self.manifolds.shrink_to(settings.max_cached_manifolds);
@@ -165,7 +169,8 @@ impl<B: Access> World<B> {
         for (collider, c) in self.colliders.iter() {
             let id = c.parent.unwrap();
             let b = self.bodies[id].core();
-            let bounds = geometry::bounds(c.shape, b.position, b.rotation);
+            let pose = c.pose(b);
+            let bounds = geometry::bounds(c.shape, pose.position, pose.rotation);
             self.proxies.push(Proxy {
                 body: id,
                 collider,
@@ -188,6 +193,9 @@ impl<B: Access> World<B> {
                 let y = self.proxies[j];
                 if y.bounds.min.x > x.bounds.max.x {
                     break;
+                }
+                if x.body == y.body || self.joint_contacts_disabled(x.body, y.body) {
+                    continue;
                 }
                 if !x.bounds.intersects(y.bounds) {
                     continue;
@@ -247,7 +255,13 @@ impl<B: Access> World<B> {
                     }
                     stats.reused_manifolds += 1;
                 } else {
-                    geometry::contacts(ca.shape, a, cb.shape, b, &mut self.points);
+                    geometry::contacts(
+                        ca.shape,
+                        &ca.pose(a),
+                        cb.shape,
+                        &cb.pose(b),
+                        &mut self.points,
+                    );
                 }
                 if self.points.is_empty() {
                     if !sensor && let Some(old) = old {

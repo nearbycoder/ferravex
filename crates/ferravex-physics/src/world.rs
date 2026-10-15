@@ -4,10 +4,14 @@ use crate::{
 };
 use ferravex_math::{Quat, Vec3};
 mod cache;
+mod compounds;
 mod islands;
+mod joints;
 use cache::Manifold;
 pub use cache::{ContactManifold, ContactPoint, SolverSettings};
+pub use compounds::{MAX_CHILDREN, MAX_COLLIDERS};
 use islands::Islands;
+use joints::{JointPhase, JointRow};
 
 /// Contacts include transient impacts from all substeps of the latest outer step.
 #[derive(Clone, Copy, Debug)]
@@ -43,6 +47,8 @@ pub struct StepStats {
     pub cached_manifolds: usize,
     pub cache_dropped: usize,
     pub velocity_constraints: usize,
+    pub joint_rows: usize,
+    pub joint_constraints: usize,
 }
 #[derive(Clone, Debug)]
 struct Constraint {
@@ -66,12 +72,16 @@ struct Proxy {
     collider: ColliderHandle,
     bounds: Bounds,
 }
-/// Bodies and collider handles use generation counters. One collider per body;
+/// Bodies and child collider handles use generation counters;
 /// capacity is deliberately limited to 4096 bodies for predictable memory use.
 pub struct World<B> {
     pub bodies: BodySet<B>,
     pub colliders: ColliderSet,
     pub gravity: Vec3,
+    pub joints: crate::JointSet,
+    joint_rows: Vec<JointRow>,
+    joint_solver: Option<fn(&mut Self, JointPhase, f32, &mut StepStats)>,
+    disabled_joint_pairs: Vec<(RigidBodyHandle, RigidBodyHandle)>,
     planar: bool,
     contacts: Vec<ContactPair>,
     next_contacts: Vec<ContactPair>,
@@ -81,7 +91,8 @@ pub struct World<B> {
     settings: SolverSettings,
     islands: Islands,
     last_gravity: Vec3,
-    old_positions: Vec<(RigidBodyHandle, Vec3)>,
+    old_positions: Vec<(RigidBodyHandle, Vec3, Quat)>,
+    mass_updates: Vec<(RigidBodyHandle, Option<crate::mass::Mass>)>,
     events: Vec<ContactEvent>,
     constraints: Vec<Constraint>,
     proxies: Vec<Proxy>,
@@ -95,6 +106,10 @@ impl<B: Access> World<B> {
             bodies: BodySet::default(),
             colliders: ColliderSet::default(),
             gravity,
+            joints: Default::default(),
+            joint_rows: Vec::new(),
+            joint_solver: None,
+            disabled_joint_pairs: Vec::new(),
             planar,
             contacts: Vec::new(),
             next_contacts: Vec::new(),
@@ -105,6 +120,7 @@ impl<B: Access> World<B> {
             islands: Default::default(),
             last_gravity: gravity,
             old_positions: Vec::new(),
+            mass_updates: Vec::new(),
             events: Vec::new(),
             constraints: Vec::new(),
             proxies: Vec::new(),
@@ -117,21 +133,27 @@ impl<B: Access> World<B> {
         b: impl Into<B>,
         c: impl Into<Collider>,
     ) -> (RigidBodyHandle, ColliderHandle) {
-        assert!(self.bodies.len() < 4096, "physics body capacity exceeded");
-        let mut b = b.into();
-        let mut c = c.into();
-        b.core_mut().set_mass(&c);
-        // A cloned body is a new world entity; it must not retain another body's
-        // collider ownership or activation state.
-        b.core_mut().colliders.clear();
-        b.core_mut().wake();
-        let body = self.bodies.insert(b);
-        c.parent = Some(body);
-        let collider = self.colliders.insert(c);
-        self.bodies[body].core_mut().colliders.push(collider);
-        (body, collider)
+        let body = self
+            .insert_compound(b, [c.into()])
+            .expect("valid body/collider within capacities");
+        (body, self.bodies[body].core().colliders[0])
     }
+
     pub fn remove_body(&mut self, h: RigidBodyHandle) -> bool {
+        if self.bodies.get(h).is_none() {
+            return false;
+        }
+        loop {
+            let id = self
+                .joints
+                .iter()
+                .find(|(_, j)| j.a == h || j.b == h)
+                .map(|(id, _)| id);
+            let Some(id) = id else {
+                break;
+            };
+            self.remove_joint(id);
+        }
         let Some(b) = self.bodies.remove(h) else {
             return false;
         };
@@ -182,28 +204,48 @@ impl<B: Access> World<B> {
             "use a fixed timestep in (0, 0.1]"
         );
         assert!(self.gravity.is_finite());
+        self.refresh_mass_properties()
+            .expect("valid compound mass properties");
+        self.run_joints(JointPhase::Refresh, dt, &mut StepStats::default());
         self.next_contacts.clear();
         self.events.clear();
         let mut substeps = 1;
         for (_, body) in self.bodies.iter_mut() {
             let b = body.core_mut();
             if b.kind == Kind::Kinematic {
-                b.velocity = b
-                    .next_position
-                    .map_or(Vec3::ZERO, |p| (p - b.position) / dt);
+                b.velocity = b.next_position.map_or(Vec3::ZERO, |p| {
+                    (p + b.next_rotation.unwrap_or(b.rotation) * b.local_com - b.world_com()) / dt
+                });
                 b.angular_velocity = b
                     .next_rotation
                     .map_or(Vec3::ZERO, |r| rotation_delta(b.rotation, r) / dt);
                 substeps = substeps.max((b.angular_velocity.length() * dt / 0.06).ceil() as usize);
             }
             if b.kind == Kind::Dynamic && b.ccd {
-                let shape = self.colliders[b.colliders[0]].shape;
-                let size = match shape {
-                    Shape::Ball(r) => r,
-                    Shape::Box(h) => h.x.min(h.y).min(if self.planar { h.x } else { h.z }),
-                    _ => 1.,
-                };
+                let mut size = f32::INFINITY;
+                for child in &b.colliders {
+                    let extent = match self.colliders[*child].shape {
+                        Shape::Ball(r) => r,
+                        Shape::Box(h) => h.x.min(h.y).min(if self.planar { h.x } else { h.z }),
+                        #[cfg(feature = "dim2")]
+                        Shape::Capsule { radius, .. } => radius,
+                        #[cfg(feature = "dim3")]
+                        Shape::Cylinder {
+                            radius,
+                            half_height,
+                        } => radius.min(half_height),
+                    };
+                    size = size.min(extent);
+                }
                 substeps = substeps.max((b.velocity.length() * dt / (size * 0.75)).ceil() as usize);
+                substeps = substeps.max((b.angular_velocity.length() * dt / 0.06).ceil() as usize);
+            }
+        }
+        for (_, j) in self.joints.iter() {
+            if j.description().enabled {
+                let speed =
+                    joints::motor_speed(j, self.bodies[j.a].core(), self.bodies[j.b].core());
+                substeps = substeps.max((speed * dt / 0.06).ceil() as usize);
             }
         }
         substeps = substeps.clamp(1, 8);
@@ -219,8 +261,11 @@ impl<B: Access> World<B> {
         }
         for _ in 0..substeps {
             self.old_positions.clear();
-            self.old_positions
-                .extend(self.bodies.iter().map(|(id, b)| (id, b.core().position)));
+            self.old_positions.extend(
+                self.bodies
+                    .iter()
+                    .map(|(id, b)| (id, b.core().position, b.core().rotation)),
+            );
             for (_, body) in self.bodies.iter_mut() {
                 let b = body.core_mut();
                 if b.kind == Kind::Dynamic && !b.sleeping {
@@ -230,17 +275,19 @@ impl<B: Access> World<B> {
                     b.angular_velocity /= 1. + b.angular_damping * h;
                 }
                 if b.kind != Kind::Fixed && !b.sleeping {
-                    b.position += b.velocity * h;
-                    b.set_rotation(Quat::from_scaled_axis(b.angular_velocity * h) * b.rotation);
+                    b.integrate(h);
                 }
             }
             stats.ccd_impacts += self.sweep_balls();
             self.find_contacts(h, &mut stats);
             self.wake_contact_islands();
             self.warm_start(&mut stats);
+            self.run_joints(JointPhase::Prepare, h, &mut stats);
             self.solve_velocities(&mut stats);
+            self.run_joints(JointPhase::Integrate, h, &mut stats);
             self.solve_positions();
             self.store_manifolds(h);
+            self.run_joints(JointPhase::Store, h, &mut stats);
             self.sleep_islands(h, &mut stats);
         }
         for (_, body) in self.bodies.iter_mut() {
@@ -306,61 +353,74 @@ impl<B: Access> World<B> {
     }
     fn sweep_balls(&mut self) -> usize {
         let mut hits = 0;
-        for &(id, start) in &self.old_positions {
+        for &(id, start_origin, start_rotation) in &self.old_positions {
             let body = self.bodies[id].core();
             if !body.ccd || body.kind != Kind::Dynamic {
                 continue;
             }
-            let collider = &self.colliders[body.colliders[0]];
-            if collider.sensor {
-                continue;
-            }
-            let Shape::Ball(radius) = collider.shape else {
-                continue;
-            };
-            let end = body.position;
             let mut closest = 1.;
             let mut correction = None;
-            for &(other, old_p) in &self.old_positions {
-                if other == id {
+            for &child in &body.colliders {
+                let collider = &self.colliders[child];
+                if collider.sensor {
                     continue;
                 }
-                let target = self.bodies[other].core();
-                let tc = &self.colliders[target.colliders[0]];
-                if tc.sensor
-                    || collider.membership & tc.filter == 0
-                    || tc.membership & collider.filter == 0
-                {
+                let Shape::Ball(radius) = collider.shape else {
                     continue;
-                }
-                let relative_start = start - old_p + target.position;
-                if relative_start.distance_squared(end) < radius * radius * 0.04 {
-                    continue;
-                }
-                let swept = Bounds {
-                    min: relative_start.min(end) - Vec3::ONE * radius,
-                    max: relative_start.max(end) + Vec3::ONE * radius,
                 };
-                if !swept.intersects(geometry::bounds(tc.shape, target.position, target.rotation)) {
-                    continue;
-                }
-                if let Some((t, n)) = geometry::sweep_ball(
-                    relative_start,
-                    end,
-                    radius,
-                    tc.shape,
-                    target.position,
-                    target.rotation,
-                    self.planar,
-                ) && t < closest
-                    && (end - relative_start).dot(n) < -1e-7
-                {
-                    closest = t;
-                    correction = Some(relative_start + (end - relative_start) * t + n * 0.00002);
+                let start = start_origin + start_rotation * collider.local_translation;
+                let end = collider.pose(body).position;
+                for &(other, old_origin, old_rotation) in &self.old_positions {
+                    if other == id || self.joint_contacts_disabled(id, other) {
+                        continue;
+                    }
+                    let target = self.bodies[other].core();
+                    for &target_child in &target.colliders {
+                        let tc = &self.colliders[target_child];
+                        if tc.sensor
+                            || collider.membership & tc.filter == 0
+                            || tc.membership & collider.filter == 0
+                        {
+                            continue;
+                        }
+                        let target_pose = tc.pose(target);
+                        let target_start = old_origin + old_rotation * tc.local_translation;
+                        let relative_start = start - target_start + target_pose.position;
+                        if relative_start.distance_squared(end) < radius * radius * 0.04 {
+                            continue;
+                        }
+                        let swept = Bounds {
+                            min: relative_start.min(end) - Vec3::splat(radius),
+                            max: relative_start.max(end) + Vec3::splat(radius),
+                        };
+                        if !swept.intersects(geometry::bounds(
+                            tc.shape,
+                            target_pose.position,
+                            target_pose.rotation,
+                        )) {
+                            continue;
+                        }
+                        if let Some((t, n)) = geometry::sweep_ball(
+                            relative_start,
+                            end,
+                            radius,
+                            tc.shape,
+                            target_pose.position,
+                            target_pose.rotation,
+                            self.planar,
+                        ) && t < closest
+                            && (end - relative_start).dot(n) < -1e-7
+                        {
+                            closest = t;
+                            correction = Some(
+                                relative_start + (end - relative_start) * t + n * 0.00002 - end,
+                            );
+                        }
+                    }
                 }
             }
-            if let Some(p) = correction {
-                self.bodies[id].core_mut().position = p;
+            if let Some(delta) = correction {
+                self.bodies[id].core_mut().position += delta;
                 hits += 1;
             }
         }
@@ -379,8 +439,8 @@ impl<B: Access> World<B> {
                     continue;
                 }
                 stats.velocity_constraints += 1;
-                let ra = c.point - a.position;
-                let rb = c.point - b.position;
+                let ra = c.point - a.world_com();
+                let rb = c.point - b.world_com();
                 let denom = effective_mass(a, b, ra, rb, c.normal);
                 if denom <= 1e-10 {
                     continue;
@@ -409,6 +469,7 @@ impl<B: Access> World<B> {
                 a.impulse(-j, c.point);
                 b.impulse(j, c.point);
             }
+            self.run_joints(JointPhase::Velocity, 0., stats);
         }
     }
     fn solve_positions(&mut self) {
@@ -420,9 +481,11 @@ impl<B: Access> World<B> {
                 if a.contact_inv_mass() + b.contact_inv_mass() == 0. {
                     continue;
                 }
-                let ra = a.rotation * c.local_a;
-                let rb = b.rotation * c.local_b;
-                let depth = -((b.position + rb) - (a.position + ra)).dot(c.normal);
+                let pa = a.position + a.rotation * c.local_a;
+                let pb = b.position + b.rotation * c.local_b;
+                let ra = a.rotation * (c.local_a - a.local_com);
+                let rb = b.rotation * (c.local_b - b.local_com);
+                let depth = -(pb - pa).dot(c.normal);
                 if depth <= 0.0005 {
                     continue;
                 }
@@ -431,17 +494,10 @@ impl<B: Access> World<B> {
                     continue;
                 }
                 let j = c.normal * ((depth - 0.0005).min(0.2) * 0.4 / denom);
-                let aa = a.contact_inverse_inertia(ra.cross(-j));
-                let ba = b.contact_inverse_inertia(rb.cross(j));
-                a.position -= j * a.contact_inv_mass();
-                b.position += j * b.contact_inv_mass();
-                if aa.length_squared() > 1e-20 {
-                    a.set_rotation(Quat::from_scaled_axis(aa) * a.rotation);
-                }
-                if ba.length_squared() > 1e-20 {
-                    b.set_rotation(Quat::from_scaled_axis(ba) * b.rotation);
-                }
+                a.position_impulse(-j, ra.cross(-j));
+                b.position_impulse(j, rb.cross(j));
             }
+            self.run_joints(JointPhase::Position, 0., &mut StepStats::default());
         }
     }
     pub(crate) fn cast_ray(
@@ -466,7 +522,9 @@ impl<B: Access> World<B> {
             }
             let body = c.parent.unwrap();
             let b = self.bodies[body].core();
-            let (d, n) = geometry::distance(c.shape, b.position, b.rotation, origin, self.planar);
+            let pose = c.pose(b);
+            let (d, n) =
+                geometry::distance(c.shape, pose.position, pose.rotation, origin, self.planar);
             let hit = if d <= 0. {
                 Some((0., n))
             } else {
@@ -475,8 +533,8 @@ impl<B: Access> World<B> {
                     origin + direction * limit,
                     0.,
                     c.shape,
-                    b.position,
-                    b.rotation,
+                    pose.position,
+                    pose.rotation,
                     self.planar,
                 )
                 .map(|(t, n)| (t * limit, n))

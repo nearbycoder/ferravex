@@ -324,11 +324,12 @@ impl<B: crate::body::Access> crate::world::World<B> {
                 radius,
             },
         };
+        let pose = collider.pose(core);
         Some(Obstacle {
             id: (u64::from(handle.generation) << 32) | handle.index as u64,
             shape,
-            position: core.position,
-            rotation: core.rotation,
+            position: pose.position,
+            rotation: pose.rotation,
             membership: collider.membership,
             sensor: collider.sensor,
         })

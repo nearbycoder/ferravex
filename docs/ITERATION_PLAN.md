@@ -14,8 +14,8 @@ unsupported platforms or features are complete.
 | 4 | Materials and custom shader pipeline | Merged: [PR 4](https://github.com/nearbycoder/ferravex/pull/4), editor layout fix [PR 5](https://github.com/nearbycoder/ferravex/pull/5) |
 | 5 | Shared low-poly lighting | Merged: [PR 6](https://github.com/nearbycoder/ferravex/pull/6) |
 | 6 | Reusable character controllers | Merged: [PR 7](https://github.com/nearbycoder/ferravex/pull/7); artifact growth recorded in PERFORMANCE.md |
-| 7 | More stable rigid-body contacts | Implemented; local checks passed; size/work flags recorded in PERFORMANCE.md |
-| 8 | Joints and compound colliders | Pending |
+| 7 | More stable rigid-body contacts | Merged: [PR 8](https://github.com/nearbycoder/ferravex/pull/8); size/work flags recorded in PERFORMANCE.md |
+| 8 | Joints and compound colliders | Implemented; local checks passed; size/work costs recorded in PERFORMANCE.md |
 | 9 | Camera rigs | Pending |
 | 10 | Unified player input | Pending |
 | 11 | Shared runtime audio | Pending |

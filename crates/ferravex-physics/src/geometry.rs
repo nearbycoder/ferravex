@@ -1,4 +1,10 @@
-use crate::body::{Core, Shape};
+use crate::body::Shape;
+#[derive(Clone, Copy)]
+pub(crate) struct Pose {
+    pub position: Vec3,
+    pub rotation: Quat,
+    pub planar: bool,
+}
 use ferravex_math::{Quat, Vec3};
 
 pub(crate) const MARGIN: f32 = 0.001;
@@ -153,7 +159,7 @@ pub(crate) fn sweep_ball(
     None // A grazing sweep may exhaust this finite iteration budget.
 }
 
-pub(crate) fn contacts(a: Shape, ca: &Core, b: Shape, cb: &Core, out: &mut Vec<Point>) {
+pub(crate) fn contacts(a: Shape, ca: &Pose, b: Shape, cb: &Pose, out: &mut Vec<Point>) {
     out.clear();
     match (a, b) {
         (Shape::Ball(radius), shape) => {
@@ -170,7 +176,7 @@ fn ball_contact(
     center: Vec3,
     radius: f32,
     shape: Shape,
-    other: &Core,
+    other: &Pose,
     planar: bool,
     reverse: bool,
     out: &mut Vec<Point>,
@@ -191,7 +197,7 @@ fn axes(q: Quat) -> [Vec3; 3] {
 fn extent(axis: Vec3, basis: [Vec3; 3], h: Vec3) -> f32 {
     (0..3).map(|i| h[i] * axis.dot(basis[i]).abs()).sum()
 }
-fn box_contacts(ha: Vec3, a: &Core, hb: Vec3, b: &Core, out: &mut Vec<Point>) {
+fn box_contacts(ha: Vec3, a: &Pose, hb: Vec3, b: &Pose, out: &mut Vec<Point>) {
     let aa = axes(a.rotation);
     let ba = axes(b.rotation);
     let delta = b.position - a.position;

@@ -24,6 +24,7 @@ DOCS = [
  ('materials','Materials and shader reload','Engine','docs/MATERIALS.md'),
  ('characters','Character controllers','Engine','docs/CHARACTERS.md'),
  ('contact-stability','Contacts and sleep islands','Engine','docs/CONTACT_STABILITY.md'),
+ ('joints-and-compounds','Joints and compound bodies','Engine','docs/JOINTS_AND_COMPOUNDS.md'),
  ('rigid-bodies','Rotational rigid bodies','Engine','crates/ferravex-physics/README.md'),
  ('gameplay','Scenes, animation and gameplay','Engine','crates/ferravex-play/README.md'),
  ('systems','Input, audio, assets and replay','Engine','crates/ferravex-engine/README.md'),

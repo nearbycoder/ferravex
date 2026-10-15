@@ -1,6 +1,9 @@
 //! Flat-shaded 3D rigid bodies, interpolated fixed-tick physics, and an orbit camera.
 use ferravex_core::{FixedClock, FrameStats};
-use ferravex_physics::d3::{PhysicsWorld, RigidBodyHandle};
+use ferravex_physics::d3::{
+    ColliderBuilder, JointBuilder, PhysicsWorld, RigidBodyBuilder, RigidBodyHandle,
+};
+use ferravex_physics::{JointHandle, JointMotor};
 use ferravex_render::{
     mesh::Mesh3d,
     prelude::*,
@@ -16,6 +19,7 @@ const PAINT: Color = Color::from_rgba(102, 143, 141, 255);
 struct Body {
     handle: RigidBodyHandle,
     ball: bool,
+    compound: bool,
     previous_position: Vec3,
     previous_rotation: Quat,
 }
@@ -24,6 +28,7 @@ struct Sandbox {
     physics: PhysicsWorld,
     bodies: Vec<Body>,
     sequence: u32,
+    links: Vec<JointHandle>,
 }
 
 impl Sandbox {
@@ -32,6 +37,7 @@ impl Sandbox {
             physics: PhysicsWorld::new([0.0, -9.81, 0.0]),
             bodies: Vec::new(),
             sequence: 0,
+            links: Vec::new(),
         };
         sandbox
             .physics
@@ -73,6 +79,7 @@ impl Sandbox {
                 true,
             );
         }
+        sandbox.mechanisms();
         sandbox
     }
 
@@ -91,9 +98,88 @@ impl Sandbox {
         self.bodies.push(Body {
             handle,
             ball,
+            compound: false,
             previous_position: position,
             previous_rotation: Quat::IDENTITY,
         });
+    }
+
+    fn compound(&mut self, position: Vec3) -> RigidBodyHandle {
+        let handle = self
+            .physics
+            .insert_compound(
+                RigidBodyBuilder::dynamic()
+                    .translation(position)
+                    .ccd_enabled(true),
+                [
+                    ColliderBuilder::cuboid(0.8, 0.13, 0.13),
+                    ColliderBuilder::ball(0.36).translation(-Vec3::X * 0.8),
+                    ColliderBuilder::ball(0.36).translation(Vec3::X * 0.8),
+                ],
+            )
+            .unwrap();
+        self.bodies.push(Body {
+            handle,
+            ball: false,
+            compound: true,
+            previous_position: position,
+            previous_rotation: Quat::IDENTITY,
+        });
+        handle
+    }
+    fn mechanisms(&mut self) {
+        let hinge_anchor = self
+            .physics
+            .insert_body(RigidBodyBuilder::fixed().translation(vec3(6., 6., -4.)))
+            .unwrap();
+        let door = self.compound(vec3(6., 5., -4.));
+        self.links.push(
+            self.physics
+                .insert_joint(
+                    hinge_anchor,
+                    door,
+                    JointBuilder::hinge()
+                        .local_anchor2(Vec3::Y)
+                        .limits(-1.2, 1.2)
+                        .motor(JointMotor::position(0.9, 8., 2., 20.)),
+                )
+                .unwrap(),
+        );
+        self.spawn(vec3(6., 3.7, -4.), false);
+        let pendant = self.bodies.last().unwrap().handle;
+        self.links.push(
+            self.physics
+                .insert_joint(
+                    door,
+                    pendant,
+                    JointBuilder::fixed()
+                        .local_anchor1(vec3(0., -0.6, 0.))
+                        .local_anchor2(vec3(0., 0.7, 0.)),
+                )
+                .unwrap(),
+        );
+        let a = self
+            .physics
+            .insert_body(RigidBodyBuilder::fixed().translation(vec3(-6., 7., -4.)))
+            .unwrap();
+        self.spawn(vec3(-4.5, 5., -4.), true);
+        let bob = self.bodies.last().unwrap().handle;
+        self.bodies.last_mut().unwrap().previous_position = vec3(-4.5, 5., -4.);
+        self.links.push(
+            self.physics
+                .insert_joint(a, bob, JointBuilder::distance(2.5))
+                .unwrap(),
+        );
+        let a = self
+            .physics
+            .insert_body(RigidBodyBuilder::fixed().translation(vec3(5., 7., 4.)))
+            .unwrap();
+        let bob = self.compound(vec3(5., 4.6, 4.));
+        self.links.push(
+            self.physics
+                .insert_joint(a, bob, JointBuilder::spring(2., 25., 5.))
+                .unwrap(),
+        );
     }
 
     fn drop_body(&mut self, ball: bool) {
@@ -126,6 +212,8 @@ async fn game() {
         .expect("The built-in Ferravex material must compile on the selected GPU backend");
     let crate_mesh = Mesh3d::cuboid(vec3(1.16, 1.16, 1.16), CRATE);
     let ball_mesh = Mesh3d::sphere(0.58, PAINT, 10, 6);
+    let compound_bar = Mesh3d::cuboid(vec3(1.6, 0.26, 0.26), CONCRETE);
+    let compound_end = Mesh3d::sphere(0.36, ui::AMBER, 10, 6);
     let floor_mesh = Mesh3d::cuboid(vec3(20.0, 0.8, 16.0), Color::from_rgba(71, 81, 86, 255));
     let curb_x = Mesh3d::cuboid(vec3(20.5, 0.5, 0.5), CONCRETE);
     let curb_z = Mesh3d::cuboid(vec3(0.5, 0.5, 16.0), CONCRETE);
@@ -236,25 +324,42 @@ async fn game() {
                 marker.draw(vec3(x, 0.65, z), Quat::IDENTITY);
             }
         }
-        for body in &sandbox.bodies {
-            let rigid_body = &sandbox.physics.bodies[body.handle];
-            let position = body
-                .previous_position
-                .lerp(Vec3::from_array(rigid_body.translation().to_array()), alpha);
-            let rotation = body
-                .previous_rotation
-                .slerp(Quat::from_array(rigid_body.rotation().to_array()), alpha);
-            if body.ball {
-                ball_mesh.draw(position, rotation);
-            } else {
-                crate_mesh.draw(position, rotation);
+        let interpolated = |body: &Body| {
+            let rigid = &sandbox.physics.bodies[body.handle];
+            (
+                body.previous_position.lerp(rigid.translation(), alpha),
+                body.previous_rotation.slerp(*rigid.rotation(), alpha),
+            )
+        };
+        // Group opaque parts by resident mesh so assemblies retain instancing.
+        for body in sandbox.bodies.iter().filter(|b| !b.compound && !b.ball) {
+            let (p, r) = interpolated(body);
+            crate_mesh.draw(p, r);
+        }
+        for body in sandbox.bodies.iter().filter(|b| b.ball) {
+            let (p, r) = interpolated(body);
+            ball_mesh.draw(p, r);
+        }
+        for body in sandbox.bodies.iter().filter(|b| b.compound) {
+            let (p, r) = interpolated(body);
+            compound_bar.draw(p, r);
+        }
+        for body in sandbox.bodies.iter().filter(|b| b.compound) {
+            let (p, r) = interpolated(body);
+            for x in [-0.8, 0.8] {
+                compound_end.draw(p + r * vec3(x, 0., 0.), r);
+            }
+        }
+        for id in &sandbox.links {
+            if let Some([a, _]) = sandbox.physics.joint_anchors(*id) {
+                compound_end.draw(a, Quat::IDENTITY);
             }
         }
         material.end();
         // Wire detail belongs only to crates: it reads as a shipping frame and
         // keeps geometry simple rather than requiring a texture atlas.
         for body in &sandbox.bodies {
-            if body.ball {
+            if body.ball || body.compound {
                 continue;
             }
             let rigid_body = &sandbox.physics.bodies[body.handle];
@@ -290,6 +395,11 @@ async fn game() {
                 (3, 7),
             ] {
                 draw_line_3d(points[a], points[b], Color::from_rgba(84, 64, 43, 255));
+            }
+        }
+        for id in &sandbox.links {
+            if let Some([a, b]) = sandbox.physics.joint_anchors(*id) {
+                draw_line_3d(a, b, ui::CYAN);
             }
         }
         set_default_camera();
@@ -366,6 +476,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn jointed_mechanisms_keep_their_constraints_under_load() {
+        let mut sandbox = Sandbox::new();
+        for _ in 0..1200 {
+            sandbox.step(1. / 120.);
+        }
+        assert_eq!(sandbox.links.len(), 4);
+        for &id in &sandbox.links {
+            let joint = &sandbox.physics.joints[id];
+            let [a, b] = sandbox.physics.joint_anchors(id).unwrap();
+            match joint.description().kind {
+                ferravex_physics::JointKind::Distance { length } => {
+                    assert!((a.distance(b) - length).abs() < 0.005)
+                }
+                ferravex_physics::JointKind::Spring {
+                    length, stiffness, ..
+                } => {
+                    let body = joint.bodies()[1];
+                    let extension = sandbox.physics.bodies[body].mass() * 9.81 / stiffness;
+                    assert!((a.distance(b) - length - extension).abs() < 0.025);
+                }
+                _ => assert!(a.distance(b) < 0.005),
+            }
+        }
+    }
+
+    #[test]
     fn recovered_sandbox_settles_without_floor_tunneling() {
         let mut sandbox = Sandbox::new();
         for _ in 0..960 {
@@ -393,9 +529,9 @@ mod tests {
             sandbox.drop_body(i % 2 == 0);
         }
         assert_eq!(sandbox.bodies.len(), MAX_BODIES);
-        assert_eq!(sandbox.physics.bodies.len(), MAX_BODIES + 9);
+        assert_eq!(sandbox.physics.bodies.len(), MAX_BODIES + 12);
         sandbox = Sandbox::new();
-        assert_eq!(sandbox.bodies.len(), 35);
-        assert_eq!(sandbox.physics.bodies.len(), 44);
+        assert_eq!(sandbox.bodies.len(), 39);
+        assert_eq!(sandbox.physics.bodies.len(), 51);
     }
 }

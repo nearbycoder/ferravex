@@ -13,9 +13,9 @@ pub struct ColliderHandle {
     pub(crate) generation: u32,
 }
 #[derive(Clone, Debug)]
-struct Slot<T> {
-    generation: u32,
-    value: Option<T>,
+pub(crate) struct Slot<T> {
+    pub(crate) generation: u32,
+    pub(crate) value: Option<T>,
 }
 #[derive(Clone, Debug)]
 pub struct BodySet<B> {
@@ -48,6 +48,7 @@ macro_rules! arena {
         impl$(<$generic>)? IndexMut<$handle> for $set$(<$generic>)? {fn index_mut(&mut self,h:$handle)->&mut $item {self.get_mut(h).expect("stale physics handle")}}
     }
 }
+pub(crate) use arena;
 arena!(BodySet<B>, B, RigidBodyHandle);
 arena!(ColliderSet, Collider, ColliderHandle);
 #[derive(Clone, Copy, Debug)]
@@ -88,6 +89,9 @@ impl Shape {
 #[derive(Clone, Debug)]
 pub struct Collider {
     pub(crate) shape: Shape,
+    pub(crate) local_translation: Vec3,
+    pub(crate) local_rotation: Quat,
+    pub(crate) mass_dirty: bool,
     pub(crate) parent: Option<RigidBodyHandle>,
     pub(crate) density: f32,
     pub(crate) restitution: f32,
@@ -102,6 +106,9 @@ impl Collider {
     pub(crate) fn new(shape: Shape) -> Self {
         Self {
             shape,
+            local_translation: Vec3::ZERO,
+            local_rotation: Quat::IDENTITY,
+            mass_dirty: false,
             parent: None,
             density: 1.,
             restitution: 0.,
@@ -111,6 +118,48 @@ impl Collider {
             filter: u32::MAX,
             revision: 0,
             dirty: false,
+        }
+    }
+    pub(crate) fn valid(&self, planar: bool) -> bool {
+        self.local_translation.is_finite()
+            && self.local_translation.abs().max_element() <= 1e6
+            && self.local_rotation.is_finite()
+            && (self.local_rotation.length_squared() - 1.).abs() < 0.001
+            && self.density.is_finite()
+            && (0. ..=1e6).contains(&self.density)
+            && (!planar
+                || self.local_translation.z == 0.
+                    && (self.local_rotation * Vec3::Z - Vec3::Z).length_squared() < 1e-6)
+    }
+    pub fn local_translation(&self) -> Vec3 {
+        self.local_translation
+    }
+    pub fn local_rotation(&self) -> Quat {
+        self.local_rotation
+    }
+    pub fn density(&self) -> f32 {
+        self.density
+    }
+    pub fn set_density(&mut self, density: f32) {
+        assert!(density.is_finite() && (0. ..=1e6).contains(&density));
+        if self.density != density {
+            self.density = density;
+            self.touch_mass();
+        }
+    }
+    pub(crate) fn touch_mass(&mut self) {
+        self.revision = self
+            .revision
+            .checked_add(1)
+            .expect("collider revision exhausted");
+        self.dirty = true;
+        self.mass_dirty = true;
+    }
+    pub(crate) fn pose(&self, body: &Core) -> crate::geometry::Pose {
+        crate::geometry::Pose {
+            position: body.position + body.rotation * self.local_translation,
+            rotation: body.rotation * self.local_rotation,
+            planar: body.planar,
         }
     }
     pub fn set_sensor(&mut self, sensor: bool) {
@@ -181,7 +230,8 @@ pub struct Core {
     pub(crate) angular_velocity: Vec3,
     pub(crate) mass: f32,
     pub(crate) inv_mass: f32,
-    pub(crate) inv_inertia: Vec3,
+    pub(crate) inv_inertia: crate::mass::Tensor,
+    pub(crate) local_com: Vec3,
     pub(crate) force: Vec3,
     pub(crate) torque: Vec3,
     pub(crate) gravity_scale: f32,
@@ -214,7 +264,8 @@ impl Core {
             angular_velocity: Vec3::ZERO,
             mass: 0.,
             inv_mass: 0.,
-            inv_inertia: Vec3::ZERO,
+            inv_inertia: crate::mass::Tensor::ZERO,
+            local_com: Vec3::ZERO,
             force: Vec3::ZERO,
             torque: Vec3::ZERO,
             gravity_scale: 1.,
@@ -253,7 +304,7 @@ impl Core {
         self.rotation2 = Rotation2::from_angle(axis.y.atan2(axis.x));
     }
     pub(crate) fn inverse_inertia(&self, v: Vec3) -> Vec3 {
-        self.rotation * ((self.rotation.conjugate() * v) * self.inv_inertia)
+        self.rotation * self.inv_inertia.apply(self.rotation.conjugate() * v)
     }
     pub(crate) fn contact_inverse_inertia(&self, v: Vec3) -> Vec3 {
         if self.sleeping {
@@ -266,70 +317,42 @@ impl Core {
         if self.sleeping { 0. } else { self.inv_mass }
     }
     pub(crate) fn point_velocity(&self, p: Vec3) -> Vec3 {
-        self.velocity + self.angular_velocity.cross(p - self.position)
+        self.velocity + self.angular_velocity.cross(p - self.world_com())
     }
     pub(crate) fn impulse(&mut self, j: Vec3, p: Vec3) {
         if self.kind == Kind::Dynamic && !self.sleeping {
             self.velocity += j * self.inv_mass;
-            self.angular_velocity += self.inverse_inertia((p - self.position).cross(j));
+            self.angular_velocity += self.inverse_inertia((p - self.world_com()).cross(j));
         }
     }
-    pub(crate) fn set_mass(&mut self, c: &Collider) {
-        if self.kind != Kind::Dynamic {
+    pub(crate) fn world_com(&self) -> Vec3 {
+        self.position + self.rotation * self.local_com
+    }
+    pub(crate) fn set_mass_properties(&mut self, properties: crate::mass::Mass) {
+        let old = self.world_com();
+        self.local_com = properties.center;
+        self.mass = properties.mass;
+        self.inv_mass = 1. / properties.mass;
+        self.inv_inertia = properties.inverse;
+        self.velocity += self.angular_velocity.cross(self.world_com() - old);
+        self.invalidate_contacts();
+        self.wake();
+    }
+    pub(crate) fn integrate(&mut self, dt: f32) {
+        let center = self.world_com() + self.velocity * dt;
+        self.set_rotation(Quat::from_scaled_axis(self.angular_velocity * dt) * self.rotation);
+        self.position = center - self.rotation * self.local_com;
+    }
+    pub(crate) fn position_impulse(&mut self, linear: Vec3, angular: Vec3) {
+        if self.kind != Kind::Dynamic || self.sleeping {
             return;
         }
-        let (volume, inertia) = match c.shape {
-            Shape::Ball(r) => {
-                if self.planar {
-                    (std::f32::consts::PI * r * r, Vec3::new(0., 0., 0.5 * r * r))
-                } else {
-                    (
-                        4. / 3. * std::f32::consts::PI * r * r * r,
-                        Vec3::ONE * (0.4 * r * r),
-                    )
-                }
-            }
-            Shape::Box(h) => {
-                if self.planar {
-                    (
-                        4. * h.x * h.y,
-                        Vec3::new(0., 0., (h.x * h.x + h.y * h.y) / 3.),
-                    )
-                } else {
-                    (
-                        8. * h.x * h.y * h.z,
-                        Vec3::new(
-                            h.y * h.y + h.z * h.z,
-                            h.x * h.x + h.z * h.z,
-                            h.x * h.x + h.y * h.y,
-                        ) / 3.,
-                    )
-                }
-            }
-            _ => panic!(
-                "capsules/cylinders are supported as fixed or kinematic ball obstacles, not dynamic bodies"
-            ),
-        };
-        self.mass = volume * c.density;
-        assert!(self.mass.is_finite() && self.mass > 0.);
-        self.inv_mass = 1. / self.mass;
-        self.inv_inertia = Vec3::new(
-            if inertia.x > 0. {
-                1. / (self.mass * inertia.x)
-            } else {
-                0.
-            },
-            if inertia.y > 0. {
-                1. / (self.mass * inertia.y)
-            } else {
-                0.
-            },
-            if inertia.z > 0. {
-                1. / (self.mass * inertia.z)
-            } else {
-                0.
-            },
-        );
+        let center = self.world_com() + linear * self.inv_mass;
+        let delta = self.inverse_inertia(angular).clamp_length_max(0.2);
+        if delta.length_squared() > 1e-20 {
+            self.set_rotation(Quat::from_scaled_axis(delta) * self.rotation);
+        }
+        self.position = center - self.rotation * self.local_com;
     }
 }
 impl<B> BodySet<B> {

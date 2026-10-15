@@ -25,6 +25,15 @@ impl RigidBody {
     pub fn angvel(&self) -> Angular {
         angular_from3(self.core.angular_velocity)
     }
+    pub fn center_of_mass(&self) -> Vector {
+        from3(self.core.world_com())
+    }
+    pub fn local_center_of_mass(&self) -> Vector {
+        from3(self.core.local_com)
+    }
+    pub fn velocity_at_point(&self, p: Vector) -> Vector {
+        from3(self.core.point_velocity(to3(p)))
+    }
     pub fn mass(&self) -> f32 {
         self.core.mass
     }
@@ -45,7 +54,9 @@ impl RigidBody {
     }
     pub fn set_translation(&mut self, p: Vector, wake: bool) {
         assert!(p.is_finite());
-        if self.core.position!=to3(p) {self.core.invalidate_contacts();}
+        if self.core.position != to3(p) {
+            self.core.invalidate_contacts();
+        }
         self.core.position = to3(p);
         if wake {
             self.core.wake();
@@ -75,7 +86,9 @@ impl RigidBody {
     }
     pub fn set_gravity_scale(&mut self, scale: f32, wake: bool) {
         assert!(scale.is_finite());
-        if self.core.gravity_scale!=scale {self.core.invalidate_contacts();}
+        if self.core.gravity_scale != scale {
+            self.core.invalidate_contacts();
+        }
         self.core.gravity_scale = scale;
         if wake {
             self.core.wake();
@@ -93,7 +106,7 @@ impl RigidBody {
         let j = to3(impulse);
         let p = to3(point);
         assert!(j.is_finite() && p.is_finite());
-        let torque = (p - self.core.position).cross(j);
+        let torque = (p - self.core.world_com()).cross(j);
         self.core.velocity += j * self.core.inv_mass;
         self.core.angular_velocity += self.core.inverse_inertia(torque);
         if wake {
@@ -212,11 +225,22 @@ impl ColliderBuilder {
             collider: Collider::new(shape),
         }
     }
+    pub fn translation(mut self, offset: Vector) -> Self {
+        assert!(offset.is_finite());
+        self.collider.local_translation = to3(offset);
+        self
+    }
+    pub fn rotation(mut self, rotation: Rotation) -> Self {
+        let q = rotation_to3(rotation);
+        assert!(q.is_finite() && q.length_squared() > 1e-12);
+        self.collider.local_rotation = q.normalize();
+        self
+    }
     pub fn ball(radius: f32) -> Self {
         Self::shape(body::Shape::Ball(radius))
     }
     pub fn density(mut self, v: f32) -> Self {
-        assert!(v.is_finite() && v > 0.);
+        assert!(v.is_finite() && (0. ..=1e6).contains(&v));
         self.collider.density = v;
         self
     }
@@ -339,8 +363,81 @@ pub struct RayHit {
 }
 
 impl crate::character::Terrain for PhysicsWorld {
-    fn visit(&self,bounds:crate::character::QueryBounds,visitor:&mut dyn FnMut(crate::character::Obstacle)) {
-        crate::character::Terrain::visit(&self.raw,bounds,visitor);
+    fn visit(
+        &self,
+        bounds: crate::character::QueryBounds,
+        visitor: &mut dyn FnMut(crate::character::Obstacle),
+    ) {
+        crate::character::Terrain::visit(&self.raw, bounds, visitor);
     }
-    fn obstacle(&self,id:u64)->Option<crate::character::Obstacle> {crate::character::Terrain::obstacle(&self.raw,id)}
+    fn obstacle(&self, id: u64) -> Option<crate::character::Obstacle> {
+        crate::character::Terrain::obstacle(&self.raw, id)
+    }
+}
+
+/// Connections use local anchors relative to each body's authored origin.
+#[derive(Clone, Copy, Debug)]
+pub struct JointBuilder {
+    desc: crate::JointDesc,
+}
+impl JointBuilder {
+    pub fn fixed() -> Self {
+        Self {
+            desc: crate::JointDesc::new(crate::JointKind::Fixed),
+        }
+    }
+    pub fn hinge() -> Self {
+        Self {
+            desc: crate::JointDesc::new(crate::JointKind::Hinge {
+                axis1: if PLANAR { Vec3::Z } else { Vec3::Y },
+                axis2: if PLANAR { Vec3::Z } else { Vec3::Y },
+            }),
+        }
+    }
+    pub fn distance(length: f32) -> Self {
+        Self {
+            desc: crate::JointDesc::new(crate::JointKind::Distance { length }),
+        }
+    }
+    pub fn spring(length: f32, stiffness: f32, damping: f32) -> Self {
+        Self {
+            desc: crate::JointDesc::new(crate::JointKind::Spring {
+                length,
+                stiffness,
+                damping,
+            }),
+        }
+    }
+    pub fn local_anchor1(mut self, anchor: Vector) -> Self {
+        self.desc.local_anchor1 = to3(anchor);
+        self
+    }
+    pub fn local_anchor2(mut self, anchor: Vector) -> Self {
+        self.desc.local_anchor2 = to3(anchor);
+        self
+    }
+    pub fn reference_rotation(mut self, rotation: Rotation) -> Self {
+        self.desc.reference_rotation = Some(rotation_to3(rotation));
+        self
+    }
+    pub fn limits(mut self, lower: f32, upper: f32) -> Self {
+        self.desc.limits = Some([lower, upper]);
+        self
+    }
+    pub fn motor(mut self, motor: crate::JointMotor) -> Self {
+        self.desc.motor = Some(motor);
+        self
+    }
+    pub fn contacts_enabled(mut self, enabled: bool) -> Self {
+        self.desc.contacts_enabled = enabled;
+        self
+    }
+    pub fn build(self) -> crate::JointDesc {
+        self.desc
+    }
+}
+impl From<JointBuilder> for crate::JointDesc {
+    fn from(b: JointBuilder) -> Self {
+        b.desc
+    }
 }
