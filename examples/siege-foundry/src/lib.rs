@@ -3,6 +3,7 @@ use ferravex_core::FixedClock;
 use ferravex_physics::d3::{
     ColliderBuilder, PhysicsWorld, RigidBodyBuilder, RigidBodyHandle, Vector,
 };
+use ferravex_render::audio::{Cue, GameAudio, Surface};
 use ferravex_render::input::{
     PlayerInput, Preset,
     touch::{Control, Output, Region},
@@ -390,6 +391,7 @@ async fn game() {
     let art = Art::new();
     let material = LitMaterial::new().expect("Ferravex lit material");
     let mut demo = Demo::new();
+    let mut sound = GameAudio::new();
     let mut clock = FixedClock::new(120.0, 12);
     let mut pending_fire = false;
     let mut player_input = PlayerInput::preset("siege-foundry", Preset::Turret);
@@ -442,10 +444,27 @@ async fn game() {
         let frame = clock.advance(dt as f64);
         for _ in 0..frame.steps {
             if pending_fire {
-                game.fire();
+                if game.fire() {
+                    sound.cue(Cue::Fire, 0.8);
+                }
                 pending_fire = false;
             }
+            let score = game.score();
+            let phase = game.phase;
             game.step(frame.dt);
+            if game.score() > score {
+                sound.cue(Cue::Impact(Surface::Metal), 0.6);
+            }
+            if game.phase != phase {
+                sound.cue(
+                    if game.phase == Phase::Won {
+                        Cue::Success
+                    } else {
+                        Cue::Failure
+                    },
+                    0.65,
+                );
+            }
         }
         clear_background(SKY);
         art.draw(&game, frame.alpha, &material);

@@ -1,5 +1,6 @@
 mod game;
 use ferravex_core::FixedClock;
+use ferravex_render::audio::{Cue, GameAudio, Surface};
 use ferravex_render::input::{PlayerInput, Preset};
 use ferravex_render::{canvas::Canvas2D, demo::Demo, prelude::*};
 use game::*;
@@ -418,6 +419,7 @@ async fn game() {
     let mut g = Game::new();
     let mut clock = FixedClock::new(60., 8);
     let mut demo = Demo::new();
+    let mut sound = GameAudio::new();
     let mut player_input = PlayerInput::preset("orchard-guard", Preset::Strategy);
     loop {
         ferravex_render::ui::warm_up_font_sizes(&[14, 15, 16, 17, 18, 19, 20, 24, 28, 30]);
@@ -467,7 +469,30 @@ async fn game() {
             if demo.autoplay {
                 g.autoplay();
             }
+            let shots = g.fired;
+            let kills = g.kills;
+            let lives = g.lives;
+            let outcome = g.outcome;
             g.step(step.dt);
+            if g.fired > shots {
+                sound.cue(Cue::Click, 0.5);
+            }
+            if g.kills > kills {
+                sound.cue(Cue::Impact(Surface::Grass), 0.35);
+            }
+            if g.lives < lives {
+                sound.cue(Cue::Failure, 0.3);
+            }
+            if g.outcome != outcome {
+                sound.cue(
+                    if g.outcome == Outcome::Won {
+                        Cue::Success
+                    } else {
+                        Cue::Failure
+                    },
+                    0.65,
+                );
+            }
         }
         clear_background(Color::from_hex(0x27372a));
         set_camera(&canvas.camera());

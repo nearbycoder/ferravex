@@ -2,6 +2,7 @@ use ferravex_core::FixedClock;
 use ferravex_play::camera::{
     Input3, Mode3, NoObstructions, Rig3, Settings3, ShakeImpulse, Target3,
 };
+use ferravex_render::audio::{Cue, GameAudio, Surface};
 use ferravex_render::input::{
     PlayerInput, Preset,
     touch::{Control, Output, Region},
@@ -451,6 +452,7 @@ fn conf() -> Conf {
 ferravex_render::game!(conf, game);
 async fn game() {
     let mut demo = Demo::new();
+    let mut sound = GameAudio::new();
     let mut flight = Flight::new();
     let mut clock = FixedClock::new(120., 12);
     let scene = Scene::new();
@@ -524,9 +526,30 @@ async fn game() {
             } else {
                 human
             };
+            let next = flight.next;
+            let outcome = flight.outcome;
             flight.tick(input, steps.dt);
+            if flight.next > next {
+                sound.cue(Cue::Pickup, 0.5);
+            }
+            if flight.outcome != outcome {
+                sound.cue(
+                    if flight.outcome == Outcome::Delivered {
+                        Cue::Success
+                    } else {
+                        Cue::Failure
+                    },
+                    0.65,
+                );
+            }
         }
+        sound.motor(
+            flight.speed,
+            38.,
+            flight.outcome == Outcome::Flying && (demo.autoplay || player_input.gameplay_active()),
+        );
         if flight.hull < previous_hull {
+            sound.cue(Cue::Impact(Surface::Metal), 0.7);
             camera.cut();
             camera
                 .shake

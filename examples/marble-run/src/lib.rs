@@ -1,4 +1,5 @@
 //! An asset-free rolling-ball time trial over a suspended, low-poly aqueduct.
+use ferravex_render::audio::{Cue, GameAudio, Surface};
 use ferravex_render::input::{
     ActionKind, Binding, InputCode, PlayerInput, Preset,
     touch::{Control, Output, Region},
@@ -274,6 +275,8 @@ async fn game() {
     let material = LitMaterial::new().expect("Ferravex's portable lit material must compile");
     let mut clock = FixedClock::new(120., 12);
     let mut demo = Demo::new();
+    let mut sound = GameAudio::new();
+    let mut impact_cooldown = 0_f32;
     let mut player_input = PlayerInput::preset("marble-run", Preset::Racer);
     player_input
         .global_action(
@@ -349,6 +352,7 @@ async fn game() {
         } else {
             player_input.simulation_dt(demo.dt())
         };
+        impact_cooldown = (impact_cooldown - dt).max(0.);
         let frame = clock.advance(dt as f64);
         for _ in 0..frame.steps {
             let controls = if demo.autoplay {
@@ -356,7 +360,30 @@ async fn game() {
             } else {
                 input
             };
+            let before = Vec3::from_array(game.physics.bodies[game.marble].linvel().to_array());
+            let gems = game.gems();
+            let falls = game.falls;
+            let finished = game.finished;
             game.step(controls, frame.dt);
+            let after = Vec3::from_array(game.physics.bodies[game.marble].linvel().to_array());
+            if game.gems() > gems {
+                sound.cue(Cue::Pickup, 0.6);
+            }
+            if game.falls > falls {
+                sound.cue(Cue::Failure, 0.5);
+            } else if before.length() > 1.
+                && (after - before).length() > 1.2
+                && impact_cooldown == 0.
+            {
+                sound.cue(
+                    Cue::Impact(Surface::Stone),
+                    ((after - before).length() * 0.12).clamp(0.15, 0.65),
+                );
+                impact_cooldown = 0.055;
+            }
+            if game.finished && !finished {
+                sound.cue(Cue::Success, 0.65);
+            }
         }
         let position = game.previous_position.lerp(game.position(), frame.alpha);
         let rotation = game.previous_rotation.slerp(game.rotation(), frame.alpha);

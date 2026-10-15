@@ -10,10 +10,11 @@
     :root{color-scheme:dark;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;background:#060e13;color:#dce8df}
     *{box-sizing:border-box}body{margin:0;min-height:100svh;display:grid;place-items:center;padding:12px env(safe-area-inset-right,12px) 12px env(safe-area-inset-left,12px)}
     main{width:min(94vw,640px,calc((100svh - 64px)*.8888889));position:relative}canvas{display:block;width:100%;height:auto;aspect-ratio:8/9;background:#091219;touch-action:none;outline:none}
-    canvas:focus-visible{outline:1px solid #63d7c4;outline-offset:3px}.toolbar{height:36px;display:flex;align-items:center;gap:18px;padding:0 6px;font-size:11px;color:#789497}
+    canvas:focus-visible{outline:1px solid #63d7c4;outline-offset:3px}.toolbar{height:36px;display:flex;align-items:center;gap:12px;padding:0 6px;font-size:11px;color:#789497}
     button,summary,a{font:inherit;color:inherit}button{border:0;background:none;padding:6px 0;cursor:pointer}button:hover,a:hover,summary:hover{color:#e1eada}button:focus-visible,a:focus-visible,summary:focus-visible{outline:1px solid #63d7c4;outline-offset:4px}a{text-decoration:none}.toolbar .spacer{flex:1}
     details{position:relative}summary{cursor:pointer;list-style:none}summary::-webkit-details-marker{display:none}details[open] .help{display:block}.help{position:absolute;bottom:34px;right:-60px;z-index:4;width:260px;padding:18px;background:#0c1a22;border:1px solid #2a4148;font-size:12px;line-height:1.8;box-shadow:0 8px 32px #0008}.help p{margin:0 0 8px}.help p:last-child{margin:0}.help strong{font-weight:500;color:#63d7c4}
     #notice{position:absolute;inset:0 0 36px;display:grid;place-items:center;background:#091219e8;text-align:center;padding:24px;line-height:1.7;font-size:14px}#notice[hidden]{display:none}#notice strong{display:block;font-size:20px;letter-spacing:.08em;color:#63d7c4;margin-bottom:12px}#resume{margin-top:16px;color:#63d7c4;border:1px solid #2a4148;padding:9px 22px}#resume[hidden]{display:none}.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+    @media(max-width:480px){.toolbar details{display:none}.toolbar a{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}}
   </style>
 </head>
 <body>
@@ -23,7 +24,7 @@
     <nav class="toolbar" aria-label="Game controls">
       <a href="../">← Engine lab</a><span class="spacer"></span>
       <details><summary>How to play</summary><div class="help"><p><strong>A D / ← →</strong> move<br><strong>Space / tap</strong> launch<br><strong>Escape</strong> pause<br><strong>R</strong> restart</p><p>Drag on the playfield to steer. Paddle edges angle your return. Catch turquoise capsules for a wider paddle.</p><p>Clear both debris fields with three lives.</p></div></details>
-      <button type="button" data-controls aria-pressed="false" title="Controls (F2)" disabled>Controls</button><button id="pause" type="button">Pause</button><button id="restart" type="button">Restart</button>
+      <button type="button" data-controls aria-pressed="false" title="Controls (F2)" disabled>Controls</button><button type="button" data-audio aria-pressed="false" title="Enable sound" disabled>Sound off</button><button id="pause" type="button">Pause</button><button id="restart" type="button">Restart</button>
     </nav>
     <span id="game-state" class="sr-only" aria-live="polite"></span>
   </main>

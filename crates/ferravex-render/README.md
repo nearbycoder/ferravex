@@ -41,3 +41,9 @@ edges, touch capture, gamepad response, local rebinding profiles and the F2
 controls panel. All fifteen browser games use that core; custom renderer hosts
 can drive it with `input::host_frame`. Linux controller hardware still needs
 physical device verification.
+
+[Runtime audio](../../docs/AUDIO.md) connects the shared Rust mixer to browser
+AudioWorklet output and an optional Linux ALSA worker. Original surface/weapon
+cues and managed engine loops are integrated across the examples; custom PCM16
+WAV sounds use the same voice controls. Browser worklet queues are bounded and
+reset on focus/mute changes. Windows/Apple device output remains iteration 20.

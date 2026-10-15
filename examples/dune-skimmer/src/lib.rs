@@ -1,4 +1,5 @@
 //! A compact low-poly hover time trial built on Ferravex's fixed clock and lit renderer.
+use ferravex_render::audio::{Cue, GameAudio, Surface};
 use ferravex_render::input::{
     PlayerInput, Preset,
     touch::{Control, Output, Region},
@@ -524,6 +525,7 @@ async fn game() {
     let mut race = Race::new();
     let mut clock = FixedClock::new(120.0, 16);
     let mut demo = Demo::new();
+    let mut sound = GameAudio::new();
     ferravex_render::set_quality(ferravex_render::lighting::Quality::Medium);
     let mut player_input = PlayerInput::preset("dune-skimmer", Preset::HoverRacer);
     player_input
@@ -583,6 +585,8 @@ async fn game() {
         };
         let frame = clock.advance(dt as f64);
         for _ in 0..frame.steps {
+            let laps = race.laps;
+            let finished = race.finished;
             race.step(
                 &course,
                 if demo.autoplay {
@@ -592,7 +596,18 @@ async fn game() {
                 },
                 frame.dt,
             );
+            if race.laps > laps {
+                sound.cue(Cue::Pickup, 0.5);
+            }
+            if race.finished && !finished {
+                sound.cue(Cue::Success, 0.65);
+            }
         }
+        sound.motor(
+            race.speed(),
+            48.,
+            !race.finished && (demo.autoplay || player_input.gameplay_active()),
+        );
         let position = race.previous_position.lerp(race.position, frame.alpha);
         let yaw =
             race.previous_yaw + race::angle_difference(race.yaw, race.previous_yaw) * frame.alpha;
@@ -600,6 +615,7 @@ async fn game() {
             camera.cut();
         }
         if race.impacts > previous_impacts {
+            sound.cue(Cue::Impact(Surface::Metal), 0.7);
             camera
                 .shake
                 .push(ShakeImpulse {
