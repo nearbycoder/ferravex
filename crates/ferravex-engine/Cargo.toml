@@ -10,3 +10,5 @@ ferravex-dynamics.workspace=true
 ferravex-net.workspace=true
 ferravex-play.workspace=true
 ferravex-graphics.workspace=true
+ferravex-render.workspace=true
+ferravex-physics.workspace=true

@@ -1,12 +1,12 @@
 # Ferravex
 
-[Website](https://ferravex.com) · [Documentation](https://ferravex.com/docs/getting-started/) · [Examples](https://ferravex.com/examples/) · [Rust API](https://ferravex.com/api/ferravex/index.html)
+An original Rust foundation for compact 2D and 3D games. The workspace uses only first-party crates and Rust std: math, ECS, physics, rendering, gameplay, input, audio, assets, replay and netcode are implemented here. Browser and operating-system APIs form the platform boundary. See the [dependency policy](DEPENDENCIES.md).
 
-An original Rust foundation for compact 2D and 3D games. **The entire Cargo workspace has zero external packages**, including optional features, tools and examples. Math, ECS, translational physics, meshes, rendering, gameplay, input, audio, assets, replay and netcode are implemented here. Rust std and browser/system APIs form the platform boundary. See the [dependency policy](DEPENDENCIES.md).
+**This recovery is local work.** The restored games, renderer and documentation described here have not been pushed or deployed. Build from this checkout; an existing public site or GitHub revision may show an earlier version. Validation of the recovered catalog is in progress; commands below describe how to check it, not a completed device certification.
 
-## Play and build
+## Play and build locally
 
-The two playable games are [Courtyard](examples/owned-lab), a low-poly 3D shooter training ground, and [Orbit Breaker](examples/owned-orbit), a 2D arcade physics game.
+The [catalog](examples/catalog.json) contains fifteen examples: the ten original 2D/3D games, Strike, two physics labs, Courtyard and Orbit Breaker. The thirteen restored examples use the original `ferravex-render` runtime. Courtyard retains its instanced WebGL2 renderer; Orbit Breaker presents its Rust framebuffer through Canvas2D.
 
 ```sh
 python3 scripts/audit-owned.py
@@ -16,11 +16,19 @@ python3 scripts/build-web.py release
 python3 scripts/serve-web.py --port 8000
 ```
 
-Open http://127.0.0.1:8000/owned/ for Courtyard or http://127.0.0.1:8000/owned-orbit/ for Orbit Breaker. The catalog in examples/catalog.json drives browser staging, the documentation gallery and size reports. Both hosts are original JavaScript using browser APIs directly. No external runtime libraries, fonts, art downloads or CDN loaders are used.
+Open http://127.0.0.1:8000/ for the local catalog. Individual pages include `/emberline/`, `/neon-swarm/`, `/strike/`, `/owned/` for Courtyard and `/owned-orbit/` for Orbit Breaker. Browser hosts use standard APIs directly, with no external runtime libraries, fonts, art downloads or CDN loaders.
 
-## Native simulation and tools
+## Native games and tools
 
-The native examples currently run headless and export PNGs through the original software renderer:
+The restored games have an original Linux window and GPU host using system X11/GLX APIs. A working X display and compatible OpenGL driver are required:
+
+```sh
+cargo run --release -p neon-swarm
+cargo run --release -p marble-run
+cargo run --release -p strike
+```
+
+Courtyard and Orbit Breaker retain their native headless simulation and PNG export paths:
 
 ```sh
 cargo run --release -p owned-lab -- --frames 640 --output target/courtyard.png
@@ -31,14 +39,15 @@ cargo run --release -p ferravex-fps --bin ferravex-server -- --bind 127.0.0.1:40
 
 The UDP server is for trusted development/LAN experiments. Courtyard has a separate browser WebRTC host/guest adapter with manual offer/answer pairing and no relay or account service. Browser and native network transports do not interoperate automatically. See the [netcode API](crates/ferravex-fps/README.md).
 
-## Use the engine
+## Use this checkout
 
 ```toml
 [dependencies]
-ferravex = { git = "https://github.com/nearbycoder/ferravex" }
+ferravex = { path = "../ferravex/crates/ferravex" }
+ferravex-render = { path = "../ferravex/crates/ferravex-render" }
 ```
 
-The facade exposes core timing/entities and the engine's math, ECS, dynamics, graphics, gameplay, input, audio, assets, profiling, replay and networking APIs. There are no optional external renderer or physics features.
+The facade exposes timing, entities, math, ECS, translational dynamics, software graphics, gameplay, input, audio, assets, profiling, replay and networking. The restored examples depend directly on the immediate renderer and, where needed, `ferravex-physics` for rotational rigid bodies. There are no optional external renderer or physics backends.
 
 ## Documentation and validation
 
@@ -54,10 +63,10 @@ python3 -B scripts/test_site.py
 python3 scripts/serve-site.py --port 8080
 ```
 
-The site contains guides, first-party Rust API docs and the two playable examples. GitHub pushes to main deploy its Dockerfile on Railway. Generated output lives in dist and is not committed.
+The full native smoke run needs a Linux X display for the restored games. Use `--game owned-lab --game owned-orbit` for only the headless hosts. Generated web/site output lives in `dist`; these commands build and serve it locally.
 
-This is an engine foundation. Native window/GPU/audio hosts, rotational rigid-body physics, secure native internet networking and device validation remain substantial work. The [implementation map](docs/FROM_SCRATCH.md) describes the twenty feature tracks and their limits; [platform status](docs/PLATFORMS.md) distinguishes compilation from runtime support. Adapter-dependent examples and their assets have been removed.
+This is an engine foundation. Interactive Windows, macOS and iOS hosts, native audio output, production networking and physical-device validation still need work. The [implementation map](docs/FROM_SCRATCH.md), [architecture](docs/ARCHITECTURE.md), [validation guide](docs/GAME_TESTS.md) and [platform status](docs/PLATFORMS.md) describe the implemented systems and their limits.
 
 ## License
 
-MIT. All engine/game source and authored assets are first-party. Build toolchains, operating systems and browser implementations have their own licenses.
+MIT. Engine/game source and authored assets are first-party. Build toolchains, operating systems and browser implementations have their own licenses.

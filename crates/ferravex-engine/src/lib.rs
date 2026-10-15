@@ -12,3 +12,7 @@ pub mod profile;
 pub mod replay;
 
 pub use ferravex_graphics as graphics;
+/// Original rotating rigid bodies for the 2D/3D physics games.
+pub use ferravex_physics as physics;
+/// Original window/input/GPU runtime shared by the restored low-poly games.
+pub use ferravex_render as render;

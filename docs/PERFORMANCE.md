@@ -1,6 +1,6 @@
 # Performance and size
 
-Measure the first-party engine with reproducible workloads. Report the machine, toolchain, profile, workload and exclusions with every performance claim.
+Measure the first-party engine with reproducible workloads. Report the machine, toolchain, profile, workload and exclusions with every performance claim. The recovered renderer and rotational solver need fresh measurements; historical measurements of the previous backend are not results for this implementation.
 
 ## Simulation workloads
 
@@ -9,24 +9,27 @@ cargo run --release -p ferravex-bench -- 4096
 cargo run --release -p ferravex-dynamics --example benchmark
 ```
 
-The workspace benchmark warms each workload for 256 ticks, then measures the requested tick count with std::time::Instant. It reports mean, p50 and p99 for sixteen-player shooter simulation and 256-body scenes in two and three dimensions. The physics uses the original translational solver; angular motion and sleeping are unsupported. Rendering, networking, asset startup and GPU work are excluded. These scenes are regression tools, not predictions of complete game cost on another device.
+The workspace benchmark warms each workload for 256 ticks, then measures the requested tick count with `std::time::Instant`. It reports mean, p50 and p99 for sixteen-player shooter simulation and 256-body scenes in two and three dimensions. These physics scenes use `ferravex-dynamics`, the translational solver; they do not benchmark the new `ferravex-physics` rotational solver. Rendering, networking, asset startup and GPU work are excluded. The scenes are regression tools, not predictions of complete game cost on another device.
 
 ## Browser and native artifacts
 
 ```sh
 python3 scripts/build-web.py release
 python3 scripts/report-size.py --profile release
-cargo run --release -p owned-lab -- --frames 640 --output target/courtyard.png
-cargo run --release -p owned-orbit -- --autoplay --frames 1800 --screenshot target/orbit.png
+cargo build --release --workspace --bins --offline --locked
 ```
 
-Report actual uncompressed file bytes and deterministic gzip bytes separately. A deployment also contains generated API HTML, website guides, screenshots and optional precompressed copies. None of those sizes is the engine's executable size, memory footprint or Docker image size.
+The local catalog has fifteen examples. Size reporting should include each compiled game module plus its required host files; the thirteen restored examples also share `web/runtime.js`. Courtyard and Orbit Breaker retain their separate hosts. Report actual uncompressed bytes and deterministic gzip bytes separately. Documentation HTML, screenshots and precompressed copies are site payloads, not the engine's executable size, memory footprint or complete disk footprint.
 
-The only game modules staged are owned_lab.wasm and owned_orbit.wasm. The site and web builders clear old output before staging, so removed binaries, documentation and loaders do not inflate the current deployment. The default release profile favors throughput; the small profile favors size and requires its own throughput measurements.
+The default release profile favors throughput. The `small` profile favors size and requires its own throughput measurements. Builders recreate generated output to avoid stale binaries and loaders; building locally does not deploy it.
 
 ## Render measurements
 
-Courtyard's scene tools report CPU mean/p99, draw calls/visible instances and asynchronous GPU timer results where the browser supports them. CPU frame timing includes JavaScript submission and Rust simulation. GPU timing excludes DOM/audio work. Orbit renders into an original Rust RGBA framebuffer and presents it through Canvas2D. Native PNG export timing includes a software render and file write, not a windowed GPU frame.
+The immediate renderer records transformed clip-space triangles and vertex colors in Rust. GPU hosts submit batches through WebGL2 in the browser and OpenGL/GLX on Linux. Mesh construction can be cached, but transformed vertices are still emitted each frame. Measure CPU transformation/lighting, generated vertices, draw batches, upload bytes and GPU frame time separately before choosing further optimizations. Built-in text is triangle geometry from bitmap glyphs. This path has no shadow-map pass, retained instancing or general LOD system.
+
+Courtyard retains its own persistent mesh/instancing renderer and scene tools for CPU mean/p99, visible instances, draw calls and asynchronous GPU timers where the browser supports them. Its timings do not automatically characterize `ferravex-render`. CPU frame timing includes JavaScript submission and Rust simulation; GPU timing excludes DOM/audio work.
+
+Orbit renders into an original Rust RGBA framebuffer presented through Canvas2D. Courtyard and Orbit's native PNG paths include software rendering and file writes. Restored-game screenshots read back a native GPU frame. Neither screenshot path is an interactive frame-rate benchmark.
 
 ## Verification
 
@@ -37,4 +40,4 @@ cargo clippy --workspace --all-targets --all-features --offline --locked -- -D w
 python3 scripts/smoke-games.py --output target/game-smoke
 ```
 
-The dependency audit covers every workspace member, feature and target. Platform/device and production-network limitations are documented in the implementation map and platform guide. Historical measurements of removed backends do not describe this implementation.
+The full smoke run requires Linux X11/GLX and a display. On a headless machine, select `--game owned-lab --game owned-orbit` or provide a suitable display/graphics environment before running the restored games. The smoke report records bounded execution and PNG output, not performance certification. Recovery-wide validation is pending; consult actual local build/test reports instead of inferring passes from the commands above.

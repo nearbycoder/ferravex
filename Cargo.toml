@@ -1,6 +1,35 @@
 [workspace]
 resolver = "2"
-members = ["examples/owned-orbit", "examples/owned-lab", "crates/ferravex-graphics", "crates/ferravex-play", "crates/ferravex-engine", "crates/ferravex-math", "crates/ferravex-ecs", "crates/ferravex-dynamics", "crates/ferravex-core", "crates/ferravex", "crates/ferravex-net", "crates/ferravex-fps", "crates/ferravex-bench"]
+members = [
+    "crates/ferravex",
+    "crates/ferravex-bench",
+    "crates/ferravex-core",
+    "crates/ferravex-dynamics",
+    "crates/ferravex-ecs",
+    "crates/ferravex-engine",
+    "crates/ferravex-fps",
+    "crates/ferravex-graphics",
+    "crates/ferravex-math",
+    "crates/ferravex-net",
+    "crates/ferravex-physics",
+    "crates/ferravex-play",
+    "crates/ferravex-render",
+    "examples/crystal-cavern",
+    "examples/dune-skimmer",
+    "examples/emberline",
+    "examples/marble-run",
+    "examples/neon-swarm",
+    "examples/orchard-guard",
+    "examples/owned-lab",
+    "examples/owned-orbit",
+    "examples/physics-2d",
+    "examples/physics-3d",
+    "examples/pocket-rally",
+    "examples/salvage-pinball",
+    "examples/siege-foundry",
+    "examples/sky-courier",
+    "examples/strike",
+]
 default-members = ["examples/owned-lab"]
 
 [workspace.package]
@@ -10,6 +39,8 @@ license = "MIT"
 rust-version = "1.88"
 
 [workspace.dependencies]
+ferravex-render = { path = "crates/ferravex-render" }
+ferravex-physics = { path = "crates/ferravex-physics" }
 ferravex-graphics = { path = "crates/ferravex-graphics" }
 ferravex-play = { path = "crates/ferravex-play" }
 ferravex-engine = { path = "crates/ferravex-engine" }

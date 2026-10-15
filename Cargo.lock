@@ -3,6 +3,30 @@
 version = 4
 
 [[package]]
+name = "crystal-cavern"
+version = "0.1.0"
+dependencies = [
+ "ferravex-core",
+ "ferravex-render",
+]
+
+[[package]]
+name = "dune-skimmer"
+version = "0.1.0"
+dependencies = [
+ "ferravex-core",
+ "ferravex-render",
+]
+
+[[package]]
+name = "emberline"
+version = "0.1.0"
+dependencies = [
+ "ferravex-core",
+ "ferravex-render",
+]
+
+[[package]]
 name = "ferravex"
 version = "0.1.0"
 dependencies = [
@@ -44,7 +68,9 @@ dependencies = [
  "ferravex-graphics",
  "ferravex-math",
  "ferravex-net",
+ "ferravex-physics",
  "ferravex-play",
+ "ferravex-render",
 ]
 
 [[package]]
@@ -71,8 +97,48 @@ name = "ferravex-net"
 version = "0.1.0"
 
 [[package]]
+name = "ferravex-physics"
+version = "0.1.0"
+dependencies = [
+ "ferravex-math",
+]
+
+[[package]]
 name = "ferravex-play"
 version = "0.1.0"
+
+[[package]]
+name = "ferravex-render"
+version = "0.1.0"
+dependencies = [
+ "ferravex-graphics",
+ "ferravex-math",
+]
+
+[[package]]
+name = "marble-run"
+version = "0.1.0"
+dependencies = [
+ "ferravex-core",
+ "ferravex-physics",
+ "ferravex-render",
+]
+
+[[package]]
+name = "neon-swarm"
+version = "0.1.0"
+dependencies = [
+ "ferravex-core",
+ "ferravex-render",
+]
+
+[[package]]
+name = "orchard-guard"
+version = "0.1.0"
+dependencies = [
+ "ferravex-core",
+ "ferravex-render",
+]
 
 [[package]]
 name = "owned-lab"
@@ -90,4 +156,66 @@ version = "0.1.0"
 dependencies = [
  "ferravex-core",
  "ferravex-engine",
+]
+
+[[package]]
+name = "physics-2d"
+version = "0.1.0"
+dependencies = [
+ "ferravex-core",
+ "ferravex-physics",
+ "ferravex-render",
+]
+
+[[package]]
+name = "physics-3d"
+version = "0.1.0"
+dependencies = [
+ "ferravex-core",
+ "ferravex-physics",
+ "ferravex-render",
+]
+
+[[package]]
+name = "pocket-rally"
+version = "0.1.0"
+dependencies = [
+ "ferravex-core",
+ "ferravex-render",
+]
+
+[[package]]
+name = "salvage-pinball"
+version = "0.1.0"
+dependencies = [
+ "ferravex-core",
+ "ferravex-physics",
+ "ferravex-render",
+]
+
+[[package]]
+name = "siege-foundry"
+version = "0.1.0"
+dependencies = [
+ "ferravex-core",
+ "ferravex-physics",
+ "ferravex-render",
+]
+
+[[package]]
+name = "sky-courier"
+version = "0.1.0"
+dependencies = [
+ "ferravex-core",
+ "ferravex-render",
+]
+
+[[package]]
+name = "strike"
+version = "0.1.0"
+dependencies = [
+ "ferravex-core",
+ "ferravex-fps",
+ "ferravex-net",
+ "ferravex-render",
 ]

@@ -1,61 +1,63 @@
 # Start building with Ferravex
 
-Ferravex is an original Rust engine for compact 2D and 3D games. Start with a working example, then choose the engine systems your game needs.
+Ferravex is an original Rust engine for compact 2D and 3D games. Start with a working example, then choose the systems your game needs.
 
-## Clone the engine
+The recovered fifteen-example catalog is local work and has not been pushed or deployed. Use the current checkout for the renderer and games described here; a public Git revision or website may still reflect the earlier catalog. Recovery validation is in progress.
 
-Install a stable Rust toolchain, Git and Python 3. Then clone the repository:
+## Check your local source
+
+Install a stable Rust toolchain, Git and Python 3. From the current Ferravex checkout:
 
 ```sh
-git clone https://github.com/nearbycoder/ferravex.git
-cd ferravex
-cargo test --workspace
+python3 scripts/audit-owned.py
+cargo test --workspace --all-features --offline --locked
 ```
 
-The source is MIT licensed. Every engine crate, tool and example uses only project-owned workspace crates and Rust std. The audit covers all optional features and platforms.
+The source is MIT licensed. Every engine crate, tool and example uses only project-owned workspace crates and Rust std. The audit covers all optional features and platforms. Linux windowed games additionally need system X11/GLX libraries and a working display/graphics driver.
 
 ## Play in your browser
 
-Every example has a playable page in the [example collection](/examples/). No installation is required to play. Load one game at a time; keyboard, pointer lock and audio require interacting with its play surface.
-
-To build and serve the browser examples locally:
+Build and serve the catalog locally:
 
 ```sh
 rustup target add wasm32-unknown-unknown
-sh scripts/build-web.sh release
+python3 scripts/build-web.py release
 python3 scripts/serve-web.py --port 8000
 ```
 
-Open http://127.0.0.1:8000/owned/ for Courtyard or http://127.0.0.1:8000/owned-orbit/ for Orbit Breaker.
+Open http://127.0.0.1:8000/ to choose an example. Restored pages include `/emberline/`, `/neon-swarm/`, `/marble-run/` and `/strike/`; Courtyard is `/owned/` and Orbit Breaker is `/owned-orbit/`. Load one game at a time. Keyboard focus, pointer lock and audio may require interaction with its play surface.
 
-## Run a native simulation
+The thirteen restored examples share an original WebGL2 host. Courtyard retains its separate instanced WebGL2 renderer, and Orbit Breaker presents its Rust framebuffer through Canvas2D. No JavaScript libraries, external fonts or runtime loaders are fetched.
 
-The owned native hosts currently run headless and export screenshots:
+## Run a native game or simulation
+
+The restored games open an original Linux X11/GLX window:
+
+```sh
+cargo run --release -p neon-swarm
+cargo run --release -p marble-run
+```
+
+Courtyard and Orbit Breaker retain headless native screenshot paths:
 
 ```sh
 cargo run --release -p owned-lab -- --output /tmp/courtyard.png
 cargo run --release -p owned-orbit -- --autoplay --frames 1800 --screenshot /tmp/orbit.png
 ```
 
-Native hosts currently provide simulation and PNG export. Native window/GPU/audio bindings remain future work. Windows/macOS/iOS compilation does not establish interactive device support.
+Windows/macOS/iOS interactive hosts and native audio output remain unimplemented. Portable Rust core compilation is distinct from interactive device support. See [platform status](/docs/platforms/) for the boundary.
 
-## Add Ferravex to a Rust project
+## Add this checkout to a Rust project
 
-Ferravex has not yet been published to crates.io. Use the Git dependency:
-
-```toml
-[dependencies]
-ferravex = { git = "https://github.com/nearbycoder/ferravex", package = "ferravex" }
-```
-
-Or point at a local checkout:
+Point at local crates so your project uses the recovered implementation:
 
 ```toml
 [dependencies]
 ferravex = { path = "../ferravex/crates/ferravex" }
+ferravex-render = { path = "../ferravex/crates/ferravex-render" }
 ```
 
-The facade exposes math, ECS, dynamics, graphics, gameplay, input, audio, assets, profiling, replay and networking systems. Platform hosts own the frame loop.
+The facade exposes math, ECS, translational dynamics, software graphics, gameplay, input, audio, assets, profiling, replay and networking. The immediate renderer owns drawing/input/frame APIs and platform submission. Physics-based restored games also depend directly on `ferravex-physics`. Copy the package structure of a restored example when adding a windowed/browser game; keep gameplay in Rust and hosts limited to platform APIs.
 
 ## Keep the dependency boundary visible
 

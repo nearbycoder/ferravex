@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Exercise the public static server and check every generated guide/example link."""
+import json
 import functools
 import gzip
 import http.client
@@ -87,10 +88,11 @@ class SiteTests(unittest.TestCase):
         root = ROOT / 'dist/site'
         self.assertTrue((root / 'index.html').is_file(), 'Build the documentation site first')
         pages = [root / 'index.html', *root.glob('docs/**/*.html'), *root.glob('examples/**/*.html')]
-        self.assertEqual({p.parent.name for p in (root / 'examples').glob('*/index.html')}, {'owned-lab', 'owned-orbit'})
-        self.assertEqual(len(list((root / 'play').rglob('*.wasm'))), 2)
+        self.assertEqual({p.parent.name for p in (root / 'examples').glob('*/index.html')}, {g['id'] for g in json.loads((ROOT / 'examples/catalog.json').read_text())})
+        self.assertEqual(len(list((root / 'play').rglob('*.wasm'))), 15)
         self.assertFalse((root / 'third-party').exists())
-        self.assertFalse((root / 'api/ferravex_physics').exists())
+        self.assertTrue((root / 'api/ferravex_physics').exists())
+        self.assertTrue((root / 'play/runtime.js').exists())
         self.assertFalse((root / 'play/mq_js_bundle.js').exists())
         for page in pages:
             for value in re.findall(r'(?:href|src)="([^"]+)"', page.read_text()):

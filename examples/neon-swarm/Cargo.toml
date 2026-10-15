@@ -1,0 +1,12 @@
+[package]
+name = "neon-swarm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ferravex-core.workspace = true
+ferravex-render.workspace = true
+
+[lib]
+crate-type = ["rlib", "cdylib"]
