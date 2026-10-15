@@ -553,7 +553,9 @@ pub mod udp {
         }
         /// The extra byte detects oversized/truncated UDP datagrams. Pass the
         /// result to the codec, which rejects lengths above MAX_PACKET_BYTES.
-        /// Only an empty socket returns None, so bad traffic cannot stop polling.
+        /// Windows discards oversized datagrams and returns InvalidData; callers
+        /// should count those as rejected packets and continue their poll budget.
+        /// Only an empty socket returns None.
         pub fn recv_from(
             &self,
             buffer: &mut [u8; MAX_PACKET_BYTES + 1],
@@ -561,6 +563,11 @@ pub mod udp {
             match self.inner.recv_from(buffer) {
                 Ok(pair) => Ok(Some(pair)),
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(None),
+                #[cfg(windows)]
+                Err(e) if e.raw_os_error() == Some(10040) => Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "oversized UDP datagram discarded by Winsock",
+                )),
                 Err(e) => Err(e),
             }
         }

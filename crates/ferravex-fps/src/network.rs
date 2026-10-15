@@ -131,7 +131,14 @@ impl GameServer {
     pub fn poll(&mut self) -> io::Result<()> {
         let mut buffer = [0; MAX_PACKET_BYTES + 1];
         for _ in 0..POLL_BUDGET {
-            let Some((n, addr)) = self.socket.recv_from(&mut buffer)? else {
+            let received = match self.socket.recv_from(&mut buffer) {
+                Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+                    self.rejected_packets += 1;
+                    continue;
+                }
+                other => other?,
+            };
+            let Some((n, addr)) = received else {
                 break;
             };
             let Ok(packet) = decode_client(&buffer[..n]) else {
@@ -459,7 +466,14 @@ impl GameClient {
     pub fn poll(&mut self) -> io::Result<()> {
         let mut buffer = [0; MAX_PACKET_BYTES + 1];
         for _ in 0..POLL_BUDGET {
-            let Some((n, _)) = self.socket.recv_from(&mut buffer)? else {
+            let received = match self.socket.recv_from(&mut buffer) {
+                Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+                    self.rejected_packets += 1;
+                    continue;
+                }
+                other => other?,
+            };
+            let Some((n, _)) = received else {
                 break;
             };
             let Ok(packet) = decode_server(&buffer[..n]) else {
@@ -902,6 +916,26 @@ mod tests {
         server.poll().unwrap();
         assert_eq!(server.rejected_packets, 1);
         assert_eq!(server.peer_count(), 1);
+    }
+    #[test]
+    fn client_discards_oversized_datagram_and_accepts_following_welcome() {
+        let sender = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut client = GameClient::connect(sender.local_addr().unwrap()).unwrap();
+        let address = client.socket.local_addr().unwrap();
+        sender
+            .send_to(&[0; MAX_PACKET_BYTES + 100], address)
+            .unwrap();
+        let welcome = encode_server(&ServerPacket::Welcome {
+            nonce: client.nonce,
+            session: 42,
+            player_id: 0,
+            tick: 0,
+        })
+        .unwrap();
+        sender.send_to(&welcome, address).unwrap();
+        client.poll().unwrap();
+        assert_eq!(client.rejected_packets, 1);
+        assert!(client.is_connected());
     }
     fn event_payload(player: u8) -> Vec<u8> {
         NetworkEvent {
