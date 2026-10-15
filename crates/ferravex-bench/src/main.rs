@@ -61,38 +61,46 @@ fn main() {
         }
         black_box(game.step(&inputs));
     });
-    let mut p2 = ferravex_physics::d2::PhysicsWorld::new([0., -9.81]);
-    p2.add_box([0., -0.5], [60., 0.5], false);
+    use ferravex_dynamics::{BodyDesc, PhysicsWorld, Shape};
+    let mut p2 = PhysicsWorld::<2>::new([0., -9.81]);
+    p2.insert(BodyDesc::fixed(Shape::cuboid([60., 0.5]), [0., -0.5]))
+        .unwrap();
     for y in 0..16 {
         for x in 0..16 {
-            let h = p2.add_box(
+            p2.insert(BodyDesc::dynamic(
+                Shape::cuboid([0.45; 2]),
                 [x as f32 * 1.1 - 8., y as f32 * 1.1 + 1.],
-                [0.45, 0.45],
-                true,
-            );
-            *p2.bodies[h].activation_mut() =
-                ferravex_physics::d2::RigidBodyActivation::cannot_sleep();
+                1.,
+            ))
+            .unwrap();
         }
     }
-    measure("256 awake 2D rigid bodies", ticks, || p2.step(1. / 64.));
-    let mut p3 = ferravex_physics::d3::PhysicsWorld::new([0., -9.81, 0.]);
-    p3.add_box([0., -0.5, 0.], [60., 0.5, 60.], false);
+    measure("256 first-party 2D bodies", ticks, || {
+        p2.step(1. / 64.).unwrap();
+    });
+    let mut p3 = PhysicsWorld::<3>::new([0., -9.81, 0.]);
+    p3.insert(BodyDesc::fixed(
+        Shape::cuboid([60., 0.5, 60.]),
+        [0., -0.5, 0.],
+    ))
+    .unwrap();
     for y in 0..4 {
         for z in 0..8 {
             for x in 0..8 {
-                let h = p3.add_box(
+                p3.insert(BodyDesc::dynamic(
+                    Shape::cuboid([0.45; 3]),
                     [
                         x as f32 * 1.2 - 4.,
                         y as f32 * 1.2 + 1.,
                         z as f32 * 1.2 - 4.,
                     ],
-                    [0.45; 3],
-                    true,
-                );
-                *p3.bodies[h].activation_mut() =
-                    ferravex_physics::d3::RigidBodyActivation::cannot_sleep();
+                    1.,
+                ))
+                .unwrap();
             }
         }
     }
-    measure("256 awake 3D rigid bodies", ticks, || p3.step(1. / 64.));
+    measure("256 first-party 3D bodies", ticks, || {
+        p3.step(1. / 64.).unwrap();
+    });
 }

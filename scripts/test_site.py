@@ -5,6 +5,8 @@ import gzip
 import http.client
 import importlib.util
 import re
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -85,7 +87,11 @@ class SiteTests(unittest.TestCase):
         root = ROOT / 'dist/site'
         self.assertTrue((root / 'index.html').is_file(), 'Build the documentation site first')
         pages = [root / 'index.html', *root.glob('docs/**/*.html'), *root.glob('examples/**/*.html')]
-        self.assertEqual(len(list((root / 'examples').glob('*/index.html'))), 15)
+        self.assertEqual({p.parent.name for p in (root / 'examples').glob('*/index.html')}, {'owned-lab', 'owned-orbit'})
+        self.assertEqual(len(list((root / 'play').rglob('*.wasm'))), 2)
+        self.assertFalse((root / 'third-party').exists())
+        self.assertFalse((root / 'api/ferravex_physics').exists())
+        self.assertFalse((root / 'play/mq_js_bundle.js').exists())
         for page in pages:
             for value in re.findall(r'(?:href|src)="([^"]+)"', page.read_text()):
                 url = urlsplit(value)
@@ -95,6 +101,26 @@ class SiteTests(unittest.TestCase):
                 if path.is_dir():
                     path = path / 'index.html'
                 self.assertTrue(path.is_file(), f'{page.relative_to(root)}: {value}')
+
+    def test_content_build_rejects_retired_modules_and_api_cache(self):
+        output = ROOT / 'dist/site/index.html'
+        before = output.read_bytes()
+        module = ROOT / 'dist/web/__retired_fixture__.wasm'
+        api = ROOT / 'target/doc/__retired_fixture__'
+        for fixture in (module, api):
+            with self.subTest(path=fixture):
+                if fixture == module:
+                    with fixture.open('xb') as stream:
+                        stream.write(b'old module')
+                else:
+                    fixture.mkdir()
+                try:
+                    result = subprocess.run([sys.executable, 'scripts/build-site.py', '--skip-build'], cwd=ROOT, capture_output=True, text=True)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('Stale build inputs', result.stderr)
+                    self.assertEqual(output.read_bytes(), before)
+                finally:
+                    fixture.unlink() if fixture == module else fixture.rmdir()
 
 if __name__ == '__main__':
     unittest.main()

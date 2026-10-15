@@ -16,4 +16,3 @@ repo_dir=$(CDPATH= cd -P "$(dirname "$0")/.." && pwd)
 cd "$repo_dir"
 command -v python3 >/dev/null 2>&1 || { echo "Python 3 is required." >&2; exit 1; }
 python3 scripts/build-web.py "$profile"
-python3 scripts/stage-web.py "$profile"

@@ -29,7 +29,7 @@ def main():
     if not (directory / "index.html").is_file():
         parser.error(f"no index.html in {directory}; run scripts/build-owned.py or scripts/build-web.sh first")
     with ThreadingHTTPServer((args.bind, args.port), partial(Handler, directory=str(directory))) as server:
-        entry = "owned/" if (directory / "owned" / "index.html").is_file() else "?demo=strike"
+        entry = "owned/"
         print(f"Ferravex demos: http://{args.bind}:{args.port}/{entry}", flush=True)
         try:
             server.serve_forever()

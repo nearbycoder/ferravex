@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Exercise catalog games through their real render loop and capture final frames.
+"""Exercise first-party native simulations and their original PNG exporters.
 
-Requires a graphics display (or xvfb-run on Linux). Autoplay supplies game
-inputs; this is an integration smoke check, not a frame-rate benchmark.
+Runs headless without windowing libraries. This is an integration smoke check,
+not a frame-rate benchmark; interactive gameplay uses the browser hosts.
 """
 import argparse
 import json
@@ -19,7 +19,7 @@ def main():
     parser.add_argument("--frames", type=int, default=720)
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--game", action="append", help="only this game; repeat for a subset")
-    parser.add_argument("--output", type=Path, default=ROOT / "docs" / "screenshots" / "games")
+    parser.add_argument("--output", type=Path, default=ROOT / "target" / "game-smoke")
     args = parser.parse_args()
     if args.frames < 1 or args.timeout < 1:
         parser.error("frames and timeout must be positive")
@@ -43,7 +43,8 @@ def main():
         started = time.monotonic()
         result = {"game": game, "frames": args.frames, "passed": False}
         try:
-            run = subprocess.run([str(executable), "--autoplay", "--smoke-frames", str(args.frames), "--screenshot", str(screenshot)], cwd=ROOT, capture_output=True, text=True, timeout=args.timeout)
+            options = ['--frames', str(args.frames), '--output', str(screenshot)] if game == 'owned-lab' else ['--autoplay', '--frames', str(args.frames), '--screenshot', str(screenshot)]
+            run = subprocess.run([str(executable), *options], cwd=ROOT, capture_output=True, text=True, timeout=args.timeout)
             result.update(exit_code=run.returncode, stdout=run.stdout, stderr=run.stderr)
             if run.returncode != 0:
                 raise ValueError(f"exit {run.returncode}: {run.stderr[-1500:]}")
@@ -59,7 +60,7 @@ def main():
         result["wall_seconds"] = round(time.monotonic() - started, 3)
         results.append(result)
         print(f'{"PASS" if result["passed"] else "FAIL"} {game}: {result.get("error", result.get("stdout", "").strip())}', flush=True)
-    report = {"profile": args.profile, "note": "Scripted render-loop checks, not performance measurements", "results": results}
+    report = {"profile": args.profile, "note": "Headless simulation and PNG export checks, not performance measurements", "results": results}
     (args.output / "smoke-results.json").write_text(json.dumps(report, indent=2) + "\n")
     raise SystemExit(0 if all(r["passed"] for r in results) else 1)
 

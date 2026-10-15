@@ -67,5 +67,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 #[cfg(target_arch = "wasm32")]
 fn main() {
-    eprintln!("ferravex-server requires native UDP; build the strike example for browser play.");
+    eprintln!("ferravex-server requires native UDP; use the Courtyard host for browser play.");
 }

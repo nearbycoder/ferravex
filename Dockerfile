@@ -1,6 +1,6 @@
 # Build all public examples and API documentation from this exact source revision.
 FROM rust:1.90-bookworm AS build
-RUN apt-get update && apt-get install -y --no-install-recommends python3 pkg-config libx11-dev libxi-dev libgl1-mesa-dev && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends python3 && rm -rf /var/lib/apt/lists/*
 RUN rustup target add wasm32-unknown-unknown
 WORKDIR /build
 COPY . .

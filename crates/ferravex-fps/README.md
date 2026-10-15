@@ -35,16 +35,16 @@ for message in client.drain_events() {
 
 The client delivery queue is capped at 512 events and its reordering window at 256. A full application queue stops acknowledging new data. The server caps each peer at 256 pending events and disconnects overflowing peers rather than dropping guaranteed events or growing without bound. `GameClient::pending_event_count`, `GameServer::pending_event_count` and `GameServer::slow_event_disconnects` expose this state. Delivery is guaranteed only during a live session whose application continues draining and whose packets eventually get through; reconnect does not replay prior-session events.
 
-Strike drains this channel each frame and uses actual replicated hits for hit confirmation/damage feedback and remote shots for a capped tracer pool. Offline match events feed the same effects.
+Applications drain this channel to drive hit confirmation, damage feedback and effects from authoritative events.
 
 Snapshots remain full, independently paced, unreliable snapshots. The delta module in `ferravex-net` is a tested standalone building block and is **not integrated** into this session. Reliable events do not change prediction/reconciliation or make snapshots reliable. UDP remains unencrypted development/LAN transport; no new cryptographic/authentication claim is made.
 
 ## Verification
 
 ```sh
-cargo test -p ferravex-fps -p ferravex-net -p strike
-cargo clippy -p ferravex-fps -p ferravex-net -p strike --all-targets -- -D warnings
-cargo check -p strike --target wasm32-unknown-unknown
+cargo test -p ferravex-fps -p ferravex-net
+cargo clippy -p ferravex-fps -p ferravex-net --all-targets -- -D warnings
+cargo check --target wasm32-unknown-unknown
 cargo tree -p ferravex-fps
 ```
 

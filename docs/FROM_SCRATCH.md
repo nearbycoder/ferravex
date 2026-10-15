@@ -1,17 +1,8 @@
 # Original engine implementation
 
-The active `ferravex` facade, `ferravex-engine`, `ferravex-core`, `ferravex-fps`, `owned-lab`, and
-`owned-orbit` dependency graphs contain **zero third-party Cargo packages**.
-`python3 scripts/audit-owned.py` checks this using Cargo's resolved dependency
-metadata. Rust's standard library, system services, and browser APIs are the
-platform boundary. None of the replacement implementations is vendored code.
+Every package in the Cargo workspace uses **zero external Cargo packages**, including all optional features and platform targets. The audit checks the complete resolved graph, not a selected subset. See the [dependency policy](../DEPENDENCIES.md).
 
-The earlier `ferravex-render`/Macroquad and `ferravex-physics`/Rapier adapters and their
-thirteen examples remain in the workspace for regression testing and migration.
-**The entire repository is not yet free of external dependencies.** Removing
-those adapters before their games are ported would discard working functionality.
-The default build now selects the owned reference example; legacy features on the
-facade require explicit opt-in.
+The catalog contains Courtyard and Orbit Breaker. Adapter-dependent examples, their wrappers, bundled loaders and generated assets have been removed. Browser hosts use standard APIs directly; Rust std and browser/system APIs are the platform boundary.
 
 ## Run the owned examples
 
@@ -25,8 +16,7 @@ python3 scripts/serve-web.py --port 8000
 ```
 
 Open `/owned/` for Courtyard or `/owned-orbit/` for Orbit Breaker. These pages
-use original loaders; they do not load Macroquad, Miniquad, Wasm-bindgen, npm
-packages, external assets, fonts, or CDNs. Courtyard uses persistent WebGL2 mesh
+use original bindings without external runtime libraries, assets, fonts or CDNs. Courtyard uses persistent WebGL2 mesh
 buffers, instanced draws, a shadow map and Rust visibility tests. Orbit writes an
 owned RGBA framebuffer to the browser's Canvas2D. Both share their Rust gameplay
 with native headless runs.
@@ -55,7 +45,7 @@ finished.
 | 3 | Character movement | Owned sphere slide/step/snap helper; existing shared FPS AABB motor and prediction | Unified capsule motor, slopes, moving platforms, body pushing |
 | 4 | Input actions | Bounded remappable action map, deadzones, buffered edges; browser keyboard/mouse/gamepad/touch hosts | Interactive rebinding UI and physical-device testing |
 | 5 | Spatial audio | Strict PCM16 WAV decoder, bounded resampling stereo mixer, distance attenuation/panning; browser AudioWorklet output | Occlusion, streaming/compressed audio, native sinks and authored footsteps |
-| 6 | Reliable events | Actual UDP v2 session-bound event/ACK codec, retry/order/dedup, bounded queues and slow-peer disconnect; Strike consumes replicated events | Congestion-aware scheduling and long-running Internet tests |
+| 6 | Reliable events | Actual UDP v2 session-bound event/ACK codec, retry/order/dedup, bounded queues and slow-peer disconnect; typed gameplay event delivery | Congestion-aware scheduling and long-running Internet tests |
 | 7 | Lag compensation | Bounded authority history, clock estimator, opt-in historical-hit damage with current-wall occlusion and lifecycle checks | Validated shot timestamps in the UDP wire format and automatic clock integration |
 | 8 | Compact replication | Bounded sparse/full snapshot byte deltas with exact baselines and centimeter quantization | Baseline ACK integration, quantized wire snapshots, adaptive interest/bandwidth scheduling |
 | 9 | Secure multiplayer | Browser WebRTC DTLS/SCTP adapter; host authority, guest prediction/reconciliation and input redundancy | Native encrypted transport, service identity, accounts, NAT relay/discovery and session resumption |
@@ -69,7 +59,7 @@ finished.
 | 17 | Navigation and AI | Weighted deterministic A*, no corner cutting, arrival/separation steering | Navmesh baking, perception, behavior/state tooling and bot integration |
 | 18 | VFX | Bounded particle pool, constant-acceleration integration, lifetime/color/size curves; shot impacts in Courtyard | GPU simulation, trails and effect authoring |
 | 19 | Responsive UI | Anchor layout, clipping/hit tests, focus/capture, browser safe areas and platform text | Native text shaping/rasterization, retained UI renderer and richer accessibility |
-| 20 | Replay and regressions | Bounded checksummed input files; scene save/load; corruption, gameplay, dropped-input, event-loss, rewind and legacy regressions | Full server-event replay, replay viewer, device farm and long soak tests |
+| 20 | Replay and regressions | Bounded checksummed input files; scene save/load; corruption, gameplay, dropped-input, event-loss, rewind regressions | Full server-event replay, replay viewer, device farm and long soak tests |
 
 ## Browser multiplayer
 
@@ -107,4 +97,4 @@ corruption and are not authentication. The packer does not execute asset code.
 See each new crate README for numerical, allocation and feature limits. In
 particular, the owned physics solver is translational: axis-aligned boxes and
 circles/spheres, without angular rigid bodies, oriented boxes, mesh shapes,
-joints or sleeping. It is not yet a replacement for every Rapier example.
+joints or sleeping. Rotational rigid-body dynamics remain future work.

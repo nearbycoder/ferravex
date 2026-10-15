@@ -47,4 +47,4 @@ Start with [Orbit Breaker](/examples/owned-orbit/) for an original 2D framebuffe
 
 ## Understand physics scope
 
-The original solver supports circles/spheres and axis-aligned boxes. It does not yet simulate rigid-body rotation, joints or mesh terrain. General physics demos that require those features currently use the optional Rapier adapter.
+The original solver supports circles/spheres and axis-aligned boxes. It does not yet simulate rigid-body rotation, joints or mesh terrain. Games requiring those features need further first-party solver implementation.

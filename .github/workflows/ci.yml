@@ -21,35 +21,26 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Linux graphics build dependencies
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libx11-dev libxi-dev libgl1-mesa-dev xvfb
       - name: Formatting
         if: runner.os == 'Linux'
         run: cargo fmt --all --check
       - name: Check workspace targets
-        run: cargo check --workspace --all-targets --locked
+        run: cargo check --workspace --all-targets --all-features --offline --locked
       - name: First-party dependency boundary
         run: python3 scripts/audit-owned.py
       - name: Unit, physics, gameplay, and loopback UDP tests
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --all-features --offline --locked
       - name: Browser input regression
         if: runner.os == 'Linux'
         run: node examples/owned-orbit/tests/platform-input.mjs
       - name: Clippy
         if: runner.os == 'Linux'
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features --offline --locked -- -D warnings
       - name: Rendered gameplay smoke tests
         if: runner.os == 'Linux'
         run: |
-          cargo build --release --workspace --bins --locked
-          xvfb-run -a python3 scripts/smoke-games.py --frames 180 --output target/game-smoke
-      - name: Physics feature isolation
-        if: runner.os == 'Linux'
-        run: |
-          cargo check -p ferravex-physics --no-default-features --locked
-          cargo test -p ferravex-physics --no-default-features --features dim2,deterministic --locked
-          cargo test -p ferravex-physics --no-default-features --features dim3 --locked
+          cargo build --release --workspace --bins --all-features --offline --locked
+          python3 scripts/smoke-games.py --frames 180 --output target/game-smoke
 
   web:
     name: WebAssembly / all examples
@@ -60,18 +51,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - name: Build and stage with the pinned local loader
+      - name: Build and stage the first-party browser hosts
         run: |
-          python3 -B scripts/test_stage_web.py
           sh scripts/build-web.sh release
-          python3 scripts/build-owned.py
       - name: Report exact artifact sizes
         run: python3 scripts/report-size.py --profile release
       - name: Documentation site and HTTP regressions
         run: |
-          cargo doc --workspace --no-deps --locked
+          cargo doc --workspace --no-deps --all-features --offline --locked
           python3 scripts/build-site.py --skip-build
           python3 -B scripts/test_site.py
+          python3 -B scripts/test_audit_owned.py
       - uses: actions/upload-artifact@v4
         with:
           name: ferravex-web
@@ -94,6 +84,4 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - name: Check against the Apple SDK (no signing or simulator execution)
-        run: cargo check --workspace --locked --target ${{ matrix.target }}
-      - name: Inspect packaging plan
-        run: python3 scripts/package-ios.py --target ${{ matrix.target }} --dry-run
+        run: cargo check --workspace --all-features --offline --locked --target ${{ matrix.target }}

@@ -8,7 +8,8 @@ from pathlib import Path
 import subprocess
 
 ROOT = Path(__file__).resolve().parent.parent
-EXAMPLES = tuple(game["id"] for game in json.loads((ROOT / "examples" / "catalog.json").read_text()))
+GAMES = json.loads((ROOT / "examples" / "catalog.json").read_text())
+EXAMPLES = tuple(game['id'] for game in GAMES)
 
 
 def main():
@@ -25,8 +26,9 @@ def main():
     native = (target / args.target if args.target else target) / args.profile
     wasm = target / "wasm32-unknown-unknown" / args.profile
     candidates = [(f"native/{name}", native / name) for name in (*EXAMPLES, "ferravex-server")]
-    candidates += [(f"wasm/{name}.wasm", wasm / f"{name}.wasm") for name in EXAMPLES]
-    candidates += [("web/mq_js_bundle.js", ROOT / "dist" / "web" / "mq_js_bundle.js")]
+    candidates += [(f"wasm/{name.replace('-', '_')}.wasm", wasm / f"{name.replace('-', '_')}.wasm") for name in EXAMPLES]
+    for game in GAMES:
+        candidates += [(f"web/{game['host']}/{path.name}", path) for path in (ROOT / 'dist/web' / game['host']).glob('*') if path.is_file() and path.suffix != '.wasm']
     rows = []
     missing = []
     for label, path in candidates:
@@ -36,7 +38,7 @@ def main():
             missing.append(label)
             continue
         data = path.read_bytes()
-        rows.append({"artifact": label, "path": str(path), "bytes": len(data),
+        rows.append({"artifact": label, "path": str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else str(path), "bytes": len(data),
                      "gzip9_bytes": len(gzip.compress(data, compresslevel=9, mtime=0))})
     if not rows:
         parser.error(f"no built artifacts found for profile {args.profile}; build native examples or run scripts/build-web.sh")

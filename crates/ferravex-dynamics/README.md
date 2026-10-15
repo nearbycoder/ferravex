@@ -1,8 +1,8 @@
 # ferravex-dynamics
 
-An original Rust physics foundation with **zero external dependencies**. It uses the standard library and internal array arithmetic. No Rapier implementation or API is copied into this crate.
+An original Rust physics foundation with **zero external dependencies**. It uses the standard library and internal array arithmetic. No external solver implementation is bundled.
 
-This is a deliberately limited translational solver. It is a new backend, not a complete replacement for Rapier. Existing Rapier examples require an explicit port before they use this implementation.
+This is a deliberately limited translational solver. Angular motion, joints and mesh terrain remain future work.
 
 ```rust
 use ferravex_dynamics::{BodyDesc, PhysicsWorld, Shape};

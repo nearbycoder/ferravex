@@ -2,7 +2,7 @@
 //!
 //! The same fixed-step solver handles circles/spheres and **axis-aligned** boxes.
 //! This foundation deliberately does not claim a full rotational rigid-body or
-//! Rapier-compatible API. See the crate README for numerical and feature limits.
+//! general-purpose dynamics API. See the crate README for numerical and feature limits.
 //!
 //! ```
 //! use ferravex_dynamics::{BodyDesc, PhysicsWorld, Shape};

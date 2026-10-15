@@ -12,7 +12,7 @@ cd ferravex
 cargo test --workspace
 ```
 
-The source is MIT licensed. The default engine and the two first-party examples use only project-owned Rust crates and the standard library. Earlier examples retain Macroquad and Rapier adapters while they are migrated.
+The source is MIT licensed. Every engine crate, tool and example uses only project-owned workspace crates and Rust std. The audit covers all optional features and platforms.
 
 ## Play in your browser
 
@@ -23,7 +23,6 @@ To build and serve the browser examples locally:
 ```sh
 rustup target add wasm32-unknown-unknown
 sh scripts/build-web.sh release
-python3 scripts/build-owned.py
 python3 scripts/serve-web.py --port 8000
 ```
 
@@ -38,13 +37,7 @@ cargo run --release -p owned-lab -- --output /tmp/courtyard.png
 cargo run --release -p owned-orbit -- --autoplay --frames 1800 --screenshot /tmp/orbit.png
 ```
 
-The earlier Strike example has a native interactive window:
-
-```sh
-cargo run --release -p strike
-```
-
-Linux windowed examples require X11/OpenGL development packages. Native Windows, macOS and iOS runtime verification remains in progress. A successful compile is not a device test.
+Native hosts currently provide simulation and PNG export. Native window/GPU/audio bindings remain future work. Windows/macOS/iOS compilation does not establish interactive device support.
 
 ## Add Ferravex to a Rust project
 
@@ -70,4 +63,4 @@ The facade exposes math, ECS, dynamics, graphics, gameplay, input, audio, assets
 python3 scripts/audit-owned.py
 ```
 
-This checks Cargo's resolved graph for the active engine and the owned examples. Legacy rendering and physics features are opt-in; enabling them adds external packages. See the [implementation status](/docs/status/) for the exact boundaries.
+This checks Cargo's complete resolved workspace across all features and platforms. There are no optional external backends. See the [dependency policy](/docs/dependencies/) and [implementation status](/docs/status/) for the exact boundaries.

@@ -1,9 +1,0 @@
-[package]
-name = "ferravex-render"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-description = "Small cross-platform 2D/3D renderer, shader materials and immediate UI for Ferravex"
-
-[dependencies]
-macroquad.workspace = true
