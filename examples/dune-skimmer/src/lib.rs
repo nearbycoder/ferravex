@@ -4,6 +4,7 @@ mod race;
 use ferravex_core::FixedClock;
 use ferravex_render::{
     demo::Demo,
+    material::{MaterialOptions, ShaderMaterial, ShaderSource},
     mesh::Mesh3d,
     prelude::*,
     shaders::{LitMaterial, LitSettings},
@@ -37,6 +38,7 @@ struct Prop {
     rotation: Quat,
 }
 struct Scene {
+    exhaust: ShaderMaterial,
     ground: Mesh3d,
     road: Mesh3d,
     curbs: Mesh3d,
@@ -157,6 +159,17 @@ impl Scene {
             });
         }
         Self {
+            exhaust: ShaderMaterial::new(
+                ShaderSource {
+                    vertex: include_str!("../shaders/exhaust.vert").into(),
+                    fragment: include_str!("../shaders/exhaust.frag").into(),
+                },
+                MaterialOptions {
+                    blend: ferravex_render::material::BlendMode::Opaque,
+                    bounds_padding: 0.1,
+                },
+            )
+            .expect("exhaust material"),
             ground: Mesh3d::plane(vec2(440.0, 440.0), SAND, 22),
             road: ribbon(
                 -HALF_WIDTH,
@@ -280,11 +293,15 @@ impl Scene {
                 Quat::from_rotation_x(PI * 0.5),
             );
             if race.speed() > 1.0 {
+                self.exhaust
+                    .begin([[time, 0., 0., 0.], [0.; 4], [0.; 4], [0.; 4]])
+                    .unwrap();
                 draw(
                     &self.glow,
                     vec3(x, -0.05, -2.0 - if race.boosting { 0.45 } else { 0.0 }),
                     Quat::from_rotation_x(-PI * 0.5),
                 );
+                self.exhaust.end();
             }
         }
         // Bounded analytic particles need no allocation or mutable emitter buffers.

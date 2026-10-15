@@ -125,16 +125,21 @@ pub struct Command {
     pub kind: u32,
     pub index: u32,
 }
-/// ABI: 144 bytes. Lighting: direction.xyz/enabled, eye.xyz/ambient, fog.rgba, start/end/padding.
+/// ABI: 224 bytes. Lighting: direction.xyz/enabled, eye.xyz/ambient, fog.rgba, start/end/padding.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RetainedBatch {
     pub mesh: u32,
     pub first: u32,
     pub count: u32,
+    /// Bit 0: depth test; bit 1: suppress depth writes; bit 2: additive blend.
     pub depth: u32,
     pub camera: [f32; 16],
     pub light: [f32; 16],
+    pub params: [f32; 16],
+    pub material: u32,
+    pub revision: u32,
+    pub reserved: [u32; 2],
 }
 #[derive(Default)]
 pub(crate) struct Frame {
@@ -144,6 +149,26 @@ pub(crate) struct Frame {
     scratch_instances: Vec<[f32; 28]>,
     scratch_batches: Vec<RetainedBatch>,
     keep_alive: Vec<ResidentMesh>,
+    keep_materials: Vec<crate::material::ShaderMaterial>,
+}
+#[derive(Default, Clone, Copy)]
+pub(crate) struct DrawStyle<'a> {
+    pub light: Option<LitSettings>,
+    pub material: Option<&'a crate::material::ShaderMaterial>,
+    pub params: [f32; 16],
+}
+impl RetainedBatch {
+    fn same_pass(&self, other: &Self) -> bool {
+        self.camera == other.camera
+            && self.light == other.light
+            && self.params == other.params
+            && self.material == other.material
+            && self.revision == other.revision
+            && self.depth == other.depth
+    }
+    fn compatible(&self, other: &Self) -> bool {
+        self.mesh == other.mesh && self.same_pass(other)
+    }
 }
 impl Frame {
     pub fn clear(&mut self) {
@@ -151,7 +176,9 @@ impl Frame {
         self.batches.clear();
         self.instances.clear();
         self.keep_alive.clear();
+        self.keep_materials.clear();
     }
+    #[cfg(test)]
     pub fn record(
         &mut self,
         mesh: &ResidentMesh,
@@ -160,6 +187,26 @@ impl Frame {
         depth: bool,
         light: Option<LitSettings>,
     ) -> bool {
+        self.record_style(
+            mesh,
+            model,
+            camera,
+            depth,
+            DrawStyle {
+                light,
+                ..Default::default()
+            },
+        )
+    }
+    pub fn record_style(
+        &mut self,
+        mesh: &ResidentMesh,
+        model: Mat4,
+        camera: Mat4,
+        depth: bool,
+        style: DrawStyle<'_>,
+    ) -> bool {
+        let light = style.light;
         if self.instances.len() >= MAX_INSTANCES || !model.is_finite() || !camera.is_finite() {
             return false;
         }
@@ -196,22 +243,39 @@ impl Frame {
             l.fog_start,
             l.fog_end,
             0.,
-            if mesh.0.opaque { 1. } else { 0. },
+            if mesh.0.opaque
+                && style
+                    .material
+                    .is_none_or(|m| m.0.options.blend == crate::material::BlendMode::Opaque)
+            {
+                1.
+            } else {
+                0.
+            },
         ];
+        let mut depth_flags = depth as u32;
+        if let Some(m) = style.material {
+            if m.0.options.blend != crate::material::BlendMode::Opaque {
+                depth_flags |= 2;
+            }
+            if m.0.options.blend == crate::material::BlendMode::Additive {
+                depth_flags |= 4;
+            }
+        }
         let batch = RetainedBatch {
             mesh: mesh.id(),
             first: self.instances.len() as u32,
             count: 1,
-            depth: depth as u32,
+            depth: depth_flags,
             camera: camera.to_cols_array(),
             light: lighting,
+            params: style.params,
+            material: style.material.map_or(0, |m| m.id()),
+            revision: style.material.map_or(0, |m| m.0.revision.get()),
+            reserved: [0; 2],
         };
         if let Some(last) = self.batches.last_mut().filter(|last| {
-            self.commands.last().is_some_and(|c| c.kind == 1)
-                && last.mesh == batch.mesh
-                && last.camera == batch.camera
-                && last.light == batch.light
-                && last.depth == batch.depth
+            self.commands.last().is_some_and(|c| c.kind == 1) && last.compatible(&batch)
         }) {
             last.count += 1;
         } else {
@@ -221,6 +285,9 @@ impl Frame {
             });
             self.batches.push(batch);
             self.keep_alive.push(mesh.clone());
+            if let Some(material) = style.material {
+                self.keep_materials.push(material.clone());
+            }
         }
         self.instances.push(instance);
         true
@@ -250,7 +317,7 @@ impl Frame {
             let mut end = begin + 1;
             while end < self.commands.len() && opaque(&self.commands[end]) {
                 let b = self.batches[self.commands[end].index as usize];
-                if b.camera != first.camera || b.light != first.light {
+                if !b.same_pass(&first) {
                     break;
                 }
                 end += 1;
@@ -275,13 +342,11 @@ impl Frame {
                 &self.instances[batch.first as usize..(batch.first + batch.count) as usize];
             batch.first = self.scratch_instances.len() as u32;
             self.scratch_instances.extend_from_slice(source);
-            if let Some(last) = self.scratch_batches.last_mut().filter(|last| {
-                previous_retained
-                    && last.mesh == batch.mesh
-                    && last.camera == batch.camera
-                    && last.light == batch.light
-                    && last.depth == batch.depth
-            }) {
+            if let Some(last) = self
+                .scratch_batches
+                .last_mut()
+                .filter(|last| previous_retained && last.compatible(&batch))
+            {
                 last.count += batch.count;
             } else {
                 self.commands[written] = Command {
@@ -308,11 +373,16 @@ attribute vec4 a_model0; attribute vec4 a_model1; attribute vec4 a_model2; attri
 attribute vec4 a_normal0; attribute vec4 a_normal1; attribute vec4 a_normal2;
 uniform mat4 u_camera;
 uniform vec4 u_light[4];
+uniform vec4 u_params[4];
 varying vec4 v_color;
+varying vec3 v_world;
+varying vec3 v_normal;
+vec3 ferravex_vertex(vec3 position);
+vec3 ferravex_normal(vec3 normal);
 void main(){
  mat4 model=mat4(a_model0,a_model1,a_model2,a_model3);
- vec4 world=model*vec4(a_position,1.0);
- vec3 normal=mat3(a_normal0.xyz,a_normal1.xyz,a_normal2.xyz)*a_normal;
+ vec4 world=model*vec4(ferravex_vertex(a_position),1.0);
+ vec3 normal=mat3(a_normal0.xyz,a_normal1.xyz,a_normal2.xyz)*ferravex_normal(a_normal);
  float n=length(normal);normal=n>0.0?normal/n:vec3(0.0);
  vec4 color=a_color;
  if(u_light[0].w>0.5){
@@ -320,7 +390,7 @@ void main(){
   float fog=clamp((distance(world.xyz,u_light[1].xyz)-u_light[3].x)/max(u_light[3].y-u_light[3].x,0.001),0.0,1.0);
   color.rgb=mix(color.rgb*shade,u_light[2].rgb,fog);
  }
- gl_Position=u_camera*world;v_color=color;
+ gl_Position=u_camera*world;v_color=color;v_world=world.xyz;v_normal=normal;
 }
 "#;
 #[cfg(test)]
@@ -380,9 +450,11 @@ mod tests {
     #[test]
     fn wire_layout_and_normal_matrix_are_defined() {
         assert_eq!(std::mem::size_of::<Command>(), 8);
-        assert_eq!(std::mem::size_of::<RetainedBatch>(), 144);
+        assert_eq!(std::mem::size_of::<RetainedBatch>(), 224);
         assert_eq!(std::mem::offset_of!(RetainedBatch, camera), 16);
         assert_eq!(std::mem::offset_of!(RetainedBatch, light), 80);
+        assert_eq!(std::mem::offset_of!(RetainedBatch, params), 144);
+        assert_eq!(std::mem::offset_of!(RetainedBatch, material), 208);
         let mut f = Frame::default();
         f.record(
             &mesh(),
@@ -394,6 +466,50 @@ mod tests {
         assert_eq!(f.instances[0][16], 0.5);
         assert_eq!(f.instances[0][21], 0.25);
         assert_eq!(f.instances[0][26], 0.125);
+    }
+    #[test]
+    fn material_and_parameter_changes_cannot_be_merged() {
+        use crate::material::{MaterialOptions, ShaderMaterial};
+        let mesh = mesh();
+        let a = ShaderMaterial::new(
+            Default::default(),
+            MaterialOptions {
+                blend: crate::material::BlendMode::Opaque,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let b = ShaderMaterial::new(
+            Default::default(),
+            MaterialOptions {
+                blend: crate::material::BlendMode::Opaque,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut f = Frame::default();
+        for (m, v) in [(&a, 1.), (&b, 1.), (&b, 2.)] {
+            f.record_style(
+                &mesh,
+                Mat4::IDENTITY,
+                Mat4::IDENTITY,
+                true,
+                DrawStyle {
+                    material: Some(m),
+                    params: [v; 16],
+                    ..Default::default()
+                },
+            );
+        }
+        f.finalize();
+        assert_eq!(f.batches.len(), 3);
+        assert_eq!(
+            f.batches
+                .iter()
+                .map(|b| (b.material, b.params[0]))
+                .collect::<Vec<_>>(),
+            [(a.id(), 1.), (b.id(), 1.), (b.id(), 2.)]
+        );
     }
     #[test]
     fn opaque_reordering_copies_instances_and_stops_at_ui_barriers() {

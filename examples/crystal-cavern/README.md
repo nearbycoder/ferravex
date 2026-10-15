@@ -18,7 +18,7 @@ cargo run -p crystal-cavern
 
 The browser build uses the same controls and does not require pointer lock. Keyboard/mouse is currently required; touch controls and gamepad support are not implemented.
 
-The example exercises Ferravex's fixed simulation clock, shared AABB segment queries, flat-normal meshes, portable lighting/fog shader, and smoke-run harness. Walls and the sealed gate use swept collision, interactions require line of sight, and one-shot interaction presses remain latched until a simulation tick. Cached procedural meshes need no downloaded textures or models. This is a single handcrafted level with cosmetic crystal glow (full ambient shading), no dynamic point lights or audio.
+The example exercises Ferravex's fixed simulation clock, shared AABB segment queries, flat-normal meshes, portable lighting/fog shader, and smoke-run harness. Walls and the sealed gate use swept collision, interactions require line of sight, and one-shot interaction presses remain latched until a simulation tick. Cached procedural meshes need no downloaded textures or models. This is a single handcrafted level with cosmetic crystal glow (full ambient shading and a shared GPU material pulse), no dynamic point lights or audio.
 
 ```sh
 cargo test -p crystal-cavern
@@ -28,3 +28,5 @@ cargo run -p crystal-cavern -- --autoplay --smoke-frames 6000 --screenshot /tmp/
 ```
 
 Autoplay navigates the map with movement, turning and interaction inputs through the same simulation as a player. The headless completion test verifies the whole expedition, alongside collision, gate prerequisites, interaction visibility and restart tests.
+
+The crystal material can be edited in the browser with `?material-tools`. Native `FERRAVEX_CRYSTAL_SHADER=/path/to/crystal.frag` polls a fragment-hook file; failed replacements keep the last valid program. See the [material guide](../../docs/MATERIALS.md).

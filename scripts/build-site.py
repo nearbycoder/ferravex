@@ -20,6 +20,7 @@ DOCS = [
  ('runtime','Window, input and GPU runtime','Engine','crates/ferravex-render/README.md'),
  ('retained-rendering','Retained GPU rendering','Engine','docs/RETAINED_RENDERING.md'),
  ('visibility','Visibility and level of detail','Engine','docs/VISIBILITY.md'),
+ ('materials','Materials and shader reload','Engine','docs/MATERIALS.md'),
  ('rigid-bodies','Rotational rigid bodies','Engine','crates/ferravex-physics/README.md'),
  ('gameplay','Scenes, animation and gameplay','Engine','crates/ferravex-play/README.md'),
  ('systems','Input, audio, assets and replay','Engine','crates/ferravex-engine/README.md'),
@@ -154,7 +155,7 @@ def main():
  stale=[p.name for p in (ROOT/'target/doc').iterdir() if p.is_dir() and p.name not in targets|support]
  sources=ROOT/'target/doc/src'
  if sources.exists():stale.extend('src/'+p.name for p in sources.iterdir() if p.is_dir() and p.name not in targets)
- allowed={'index.html','games.json','build-info.json','runtime.js','retained.js','retained-shader.js'}
+ allowed={'index.html','games.json','build-info.json','runtime.js','retained.js','retained-shader.js','material-tools.js'}
  for game in GAMES:
   allowed.add(game['host']+'/'+game['id'].replace('-','_')+'.wasm')
   allowed.update(game['host']+'/'+p.name for p in (ROOT/'web'/game['host']).iterdir() if p.is_file())

@@ -46,7 +46,7 @@ finished.
 | 11 | Asset cooking | Bounded OBJ importer, cooked binary mesh codec, PCM WAV validation, deterministic compressed bundles, `ferravex-cook` tool | glTF, image/font pipelines, richer compression and dependency tracking |
 | 12 | Scenes and prefabs | Generational scene graph, cycle checks, hierarchical transforms, clone-subtree prefabs, strict binary scene codec | Asset references, scene streaming and game-specific schema evolution |
 | 13 | Editor | Courtyard browser scene inspector with live position editing, save/load and reset | Viewport picking/gizmos, undo/redo and full prefab/property editing |
-| 14 | Hot reload | Transactional live asset bundles; Courtyard last-valid GLSL replacement with visible errors | Native filesystem watchers, full content dependency invalidation |
+| 14 | Hot reload | Transactional live asset bundles; shared material revision/parameter API, native bounded file polling and browser last-valid vertex/fragment hook reload/editor; Courtyard last-valid GLSL replacement with visible errors | OS event-based filesystem watching and full content dependency invalidation |
 | 15 | Animation | Scalar/vector/quaternion tracks, sprite clips, skeleton world poses and inverse-bind skin palettes | GPU skinning, blend/state graphs, event tracks and importer integration |
 | 16 | Low-poly lighting | Flat normals and CPU directional vertex lighting/fog in the restored renderer; Courtyard separately retains vertex AO and browser PCF shadows | Baked lightmaps/probes, cascades and platform quality tiers |
 | 17 | Navigation and AI | Weighted deterministic A*, no corner cutting, arrival/separation steering | Navmesh baking, perception, behavior/state tooling and bot integration |

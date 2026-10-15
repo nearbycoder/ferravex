@@ -406,11 +406,20 @@ mod linux {
 
     /// The display, window and GL context must stay on their creating thread.
     /// Raw-pointer ownership prevents automatic Send/Sync implementations.
-    struct RetainedGpu {
-        program: c_uint,
-        instances: c_uint,
+    struct GpuProgram {
+        handle: c_uint,
         camera: c_int,
         light: c_int,
+        params: c_int,
+    }
+    struct MaterialProgram {
+        revision: u32,
+        valid: Option<GpuProgram>,
+    }
+    struct RetainedGpu {
+        builtin: GpuProgram,
+        materials: BTreeMap<u32, MaterialProgram>,
+        instances: c_uint,
         meshes: BTreeMap<u32, (c_uint, c_int)>,
         batches: Vec<crate::retained::RetainedBatch>,
     }
@@ -963,7 +972,7 @@ mod linux {
             self.presented = true;
         }
         fn upload_retained(&mut self, frame: &crate::retained::Frame) {
-            if frame.batches.is_empty() {
+            if frame.batches.is_empty() && crate::material::count() == 0 {
                 return;
             }
             if self.retained.is_none() {
@@ -985,39 +994,24 @@ mod linux {
                     (major, minor) >= (3, 3),
                     "retained rendering requires OpenGL 3.3 or newer: {version}"
                 );
-                let source =
-                    CString::new(format!("#version 120\n{}", crate::retained::VERTEX_BODY))
-                        .unwrap();
-                let attributes = [
-                    (0, c"a_position"),
-                    (1, c"a_normal"),
-                    (2, c"a_color"),
-                    (3, c"a_model0"),
-                    (4, c"a_model1"),
-                    (5, c"a_model2"),
-                    (6, c"a_model3"),
-                    (7, c"a_normal0"),
-                    (8, c"a_normal1"),
-                    (9, c"a_normal2"),
-                ];
-                let program =
-                    create_program_with(&source, &attributes).expect("native retained shader");
+                let builtin = GpuProgram::compile(&crate::material::ShaderSource::default())
+                    .expect("native retained shader");
                 // SAFETY: The owned context is current. Names are NUL terminated.
                 unsafe {
                     let mut instances = 0;
                     glGenBuffers(1, &mut instances);
                     assert_ne!(instances, 0, "allocate retained instance buffer");
                     self.retained = Some(RetainedGpu {
-                        program,
+                        builtin,
+                        materials: BTreeMap::new(),
                         instances,
-                        camera: glGetUniformLocation(program, c"u_camera".as_ptr()),
-                        light: glGetUniformLocation(program, c"u_light[0]".as_ptr()),
                         meshes: BTreeMap::new(),
                         batches: Vec::new(),
                     });
                 }
             }
             let gpu = self.retained.as_mut().unwrap();
+            gpu.prepare_materials();
             // SAFETY: All handles are owned by this context; uploads copy live bounded slices.
             unsafe {
                 gpu.meshes.retain(|id, (buffer, _)| {
@@ -1161,7 +1155,12 @@ mod linux {
                                 glDeleteBuffers(1, buffer);
                             }
                             glDeleteBuffers(1, &gpu.instances);
-                            glDeleteProgram(gpu.program);
+                            glDeleteProgram(gpu.builtin.handle);
+                            for m in gpu.materials.values() {
+                                if let Some(p) = &m.valid {
+                                    glDeleteProgram(p.handle);
+                                }
+                            }
                         }
                     }
                     glXMakeCurrent(self.display, 0, ptr::null_mut());
@@ -1191,7 +1190,90 @@ mod linux {
             }
         }
     }
+    impl GpuProgram {
+        fn compile(source: &crate::material::ShaderSource) -> Result<Self, String> {
+            let vertex = CString::new(format!(
+                "#version 330\n{}\n{}",
+                crate::retained::VERTEX_BODY
+                    .replace("attribute ", "in ")
+                    .replace("varying ", "out "),
+                source.vertex
+            ))
+            .map_err(|e| e.to_string())?;
+            let fragment = CString::new(format!(
+                "#version 330\nout vec4 ferravex_pixel;\n{}\n{}",
+                crate::material::FRAGMENT_BODY
+                    .replace("varying ", "in ")
+                    .replace("gl_FragColor", "ferravex_pixel"),
+                source.fragment
+            ))
+            .map_err(|e| e.to_string())?;
+            let attributes = [
+                (0, c"a_position"),
+                (1, c"a_normal"),
+                (2, c"a_color"),
+                (3, c"a_model0"),
+                (4, c"a_model1"),
+                (5, c"a_model2"),
+                (6, c"a_model3"),
+                (7, c"a_normal0"),
+                (8, c"a_normal1"),
+                (9, c"a_normal2"),
+            ];
+            let handle = create_program_stages(&vertex, &fragment, &attributes)?;
+            // SAFETY: Compilation returned a live program owned by the current GL context.
+            unsafe {
+                Ok(Self {
+                    handle,
+                    camera: glGetUniformLocation(handle, c"u_camera".as_ptr()),
+                    light: glGetUniformLocation(handle, c"u_light[0]".as_ptr()),
+                    params: glGetUniformLocation(handle, c"u_params[0]".as_ptr()),
+                })
+            }
+        }
+    }
     impl RetainedGpu {
+        fn prepare_materials(&mut self) {
+            self.materials.retain(|id, entry| {
+                if crate::material::lookup(*id).is_some() {
+                    true
+                } else {
+                    // SAFETY: This cache owns the program and its context is current.
+                    if let Some(program) = &entry.valid {
+                        unsafe {
+                            glDeleteProgram(program.handle);
+                        }
+                    }
+                    false
+                }
+            });
+            crate::material::for_each(|data| {
+                let id = data.id;
+                let revision = data.revision.get();
+                let entry = self.materials.entry(id).or_insert(MaterialProgram {
+                    revision: 0,
+                    valid: None,
+                });
+                if entry.revision == revision {
+                    return;
+                }
+                entry.revision = revision;
+                match GpuProgram::compile(&data.source.borrow()) {
+                    Ok(program) => {
+                        if let Some(old) = entry.valid.replace(program) {
+                            unsafe {
+                                glDeleteProgram(old.handle);
+                            }
+                        }
+                        crate::material::feedback(id, revision, Ok(()));
+                    }
+                    Err(error) => {
+                        eprintln!("Ferravex material {id} revision {revision} rejected: {error}");
+                        crate::material::feedback(id, revision, Err(&error));
+                    }
+                }
+            });
+        }
         unsafe fn draw(&self, index: usize) {
             let Some(batch) = self.batches.get(index) else {
                 return;
@@ -1202,10 +1284,27 @@ mod linux {
             // SAFETY: Recorded batch/instance ranges were produced by the bounded Frame recorder.
             // Attributes refer to the owned static mesh and streamed instance buffers.
             unsafe {
-                set_depth(batch.depth != 0);
-                glUseProgram(self.program);
-                glUniformMatrix4fv(self.camera, 1, 0, batch.camera.as_ptr());
-                glUniform4fv(self.light, 4, batch.light.as_ptr());
+                set_depth(batch.depth & 1 != 0);
+                glDepthMask((batch.depth & 1 != 0 && batch.depth & 2 == 0) as u8);
+                glBlendFuncSeparate(
+                    GL_SRC_ALPHA,
+                    if batch.depth & 4 != 0 {
+                        1
+                    } else {
+                        GL_ONE_MINUS_SRC_ALPHA
+                    },
+                    1,
+                    GL_ONE_MINUS_SRC_ALPHA,
+                );
+                let program = self
+                    .materials
+                    .get(&batch.material)
+                    .and_then(|m| m.valid.as_ref())
+                    .unwrap_or(&self.builtin);
+                glUseProgram(program.handle);
+                glUniformMatrix4fv(program.camera, 1, 0, batch.camera.as_ptr());
+                glUniform4fv(program.light, 4, batch.light.as_ptr());
+                glUniform4fv(program.params, 4, batch.params.as_ptr());
                 glBindBuffer(GL_ARRAY_BUFFER, buffer);
                 for (attribute, size, offset) in [(0, 3, 0), (1, 3, 12), (2, 4, 24)] {
                     glEnableVertexAttribArray(attribute);
@@ -1233,6 +1332,12 @@ mod linux {
                     glVertexAttribDivisor(at, 1);
                 }
                 glDrawArraysInstanced(GL_TRIANGLES, 0, count, batch.count as i32);
+                glBlendFuncSeparate(
+                    GL_SRC_ALPHA,
+                    GL_ONE_MINUS_SRC_ALPHA,
+                    1,
+                    GL_ONE_MINUS_SRC_ALPHA,
+                );
                 for at in 0..10 {
                     glDisableVertexAttribArray(at);
                     if at >= 3 {
@@ -1291,11 +1396,19 @@ mod linux {
         create_program_with(c"#version 120\nattribute vec4 a_position;\nattribute vec4 a_color;\nvarying vec4 v_color;\nvoid main(){ gl_Position=a_position; v_color=a_color; }\n", &[(0,c"a_position"),(1,c"a_color")])
     }
     fn create_program_with(source: &CStr, attributes: &[(u32, &CStr)]) -> Result<c_uint, String> {
-        let vertex = compile_shader(GL_VERTEX_SHADER, source)?;
-        let fragment = match compile_shader(
-            GL_FRAGMENT_SHADER,
+        create_program_stages(
+            source,
             c"#version 120\nvarying vec4 v_color;\nvoid main(){ gl_FragColor=v_color; }\n",
-        ) {
+            attributes,
+        )
+    }
+    fn create_program_stages(
+        source: &CStr,
+        fragment_source: &CStr,
+        attributes: &[(u32, &CStr)],
+    ) -> Result<c_uint, String> {
+        let vertex = compile_shader(GL_VERTEX_SHADER, source)?;
+        let fragment = match compile_shader(GL_FRAGMENT_SHADER, fragment_source) {
             Ok(shader) => shader,
             Err(error) => {
                 // SAFETY: vertex is the live handle just compiled above.
@@ -1345,6 +1458,188 @@ mod linux {
     #[cfg(test)]
     mod tests {
         use super::*;
+        #[test]
+        #[ignore = "requires a live X11 display and OpenGL context"]
+        fn material_alpha_and_additive_preserve_depth_and_following_ui() {
+            use crate::{
+                Mat4,
+                material::{BlendMode, MaterialOptions, ShaderMaterial, ShaderSource},
+                mesh::Mesh3d,
+                retained::{Command, DrawStyle, Frame},
+            };
+            let mut window = NativeWindow::new(&Conf {
+                window_width: 96,
+                window_height: 64,
+                ..Default::default()
+            })
+            .unwrap();
+            window.set_swap_interval(0);
+            let mesh = Mesh3d::plane(crate::Vec2::ONE, crate::WHITE, 1);
+            let model = Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2);
+            let alpha = ShaderMaterial::new(
+                ShaderSource::fragment(
+                    "vec4 ferravex_fragment(vec4 c,vec3 w,vec3 n){return vec4(0.0,0.0,1.0,0.5);}",
+                ),
+                Default::default(),
+            )
+            .unwrap();
+            let mut frame = Frame::default();
+            frame.record_style(
+                mesh.resident(),
+                model,
+                Mat4::IDENTITY,
+                true,
+                DrawStyle {
+                    material: Some(&alpha),
+                    ..Default::default()
+                },
+            );
+            let center = |window: &NativeWindow| {
+                let pixels = window.pixels();
+                let (w, h) = window.size();
+                let at = ((h / 2 * w + w / 2) * 4) as usize;
+                pixels[at..at + 4].to_vec()
+            };
+            window.present_scene(&[], &[], Color::new(1., 0., 0., 1.), Some(&frame));
+            let p = center(&window);
+            assert!((127..=129).contains(&p[0]) && (127..=129).contains(&p[2]));
+            let behind = [
+                [-1., -1., 0.8, 1., 0., 1., 0., 1.],
+                [3., -1., 0.8, 1., 0., 1., 0., 1.],
+                [-1., 3., 0.8, 1., 0., 1., 0., 1.],
+            ];
+            frame.commands.push(Command { kind: 0, index: 0 });
+            window.present_scene(
+                &behind,
+                &[Batch {
+                    start: 0,
+                    count: 3,
+                    depth: true,
+                }],
+                Color::new(1., 0., 0., 1.),
+                Some(&frame),
+            );
+            assert_eq!(
+                center(&window),
+                [0, 255, 0, 255],
+                "alpha must not write depth"
+            );
+            let additive = ShaderMaterial::new(
+                ShaderSource::fragment(
+                    "vec4 ferravex_fragment(vec4 c,vec3 w,vec3 n){return vec4(1.0,0.0,0.0,0.25);}",
+                ),
+                MaterialOptions {
+                    blend: BlendMode::Additive,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            frame.clear();
+            frame.record_style(
+                mesh.resident(),
+                model,
+                Mat4::IDENTITY,
+                true,
+                DrawStyle {
+                    material: Some(&additive),
+                    ..Default::default()
+                },
+            );
+            window.present_scene(&[], &[], Color::new(0., 1., 0., 1.), Some(&frame));
+            let p = center(&window);
+            assert!((63..=65).contains(&p[0]));
+            assert_eq!(p[1], 255);
+            let mut ui = behind;
+            for v in &mut ui {
+                v[4..8].copy_from_slice(&[0., 0., 1., 1.]);
+            }
+            frame.commands.push(Command { kind: 0, index: 0 });
+            window.present_scene(
+                &ui,
+                &[Batch {
+                    start: 0,
+                    count: 3,
+                    depth: false,
+                }],
+                Color::new(0., 1., 0., 1.),
+                Some(&frame),
+            );
+            assert_eq!(
+                center(&window),
+                [0, 0, 255, 255],
+                "additive blend must not leak into UI"
+            );
+        }
+        #[test]
+        #[ignore = "requires a live X11 display and OpenGL context"]
+        fn material_reload_keeps_last_valid_program_and_updates_vertex_hooks() {
+            use crate::{
+                Mat4, Vec3,
+                material::{CompileStatus, MaterialOptions, ShaderMaterial, ShaderSource},
+                mesh::Mesh3d,
+                retained::{DrawStyle, Frame},
+            };
+            let mut window = NativeWindow::new(&Conf {
+                window_width: 96,
+                window_height: 64,
+                ..Default::default()
+            })
+            .unwrap();
+            window.set_swap_interval(0);
+            let mesh = Mesh3d::cuboid(Vec3::ONE, crate::GREEN);
+            let material = ShaderMaterial::new(
+                ShaderSource::fragment(
+                    "vec4 ferravex_fragment(vec4 c,vec3 w,vec3 n){return u_params[0];}",
+                ),
+                MaterialOptions {
+                    blend: crate::material::BlendMode::Opaque,
+                    bounds_padding: 1.,
+                },
+            )
+            .unwrap();
+            let mut frame = Frame::default();
+            let mut params = [0.; 16];
+            params[..4].copy_from_slice(&[1., 0., 0., 1.]);
+            frame.record_style(
+                mesh.resident(),
+                Mat4::IDENTITY,
+                Mat4::IDENTITY,
+                true,
+                DrawStyle {
+                    material: Some(&material),
+                    params,
+                    ..Default::default()
+                },
+            );
+            let center = |window: &NativeWindow| {
+                let pixels = window.pixels();
+                let (w, h) = window.size();
+                let at = ((h / 2 * w + w / 2) * 4) as usize;
+                pixels[at..at + 4].to_vec()
+            };
+            window.present_scene(&[], &[], crate::BLACK, Some(&frame));
+            assert_eq!(center(&window), [255, 0, 0, 255]);
+            assert_eq!(material.status().status, CompileStatus::Ready);
+            material
+                .reload(ShaderSource::fragment("this is invalid GLSL"))
+                .unwrap();
+            window.present_scene(&[], &[], crate::BLACK, Some(&frame));
+            assert_eq!(center(&window), [255, 0, 0, 255]);
+            assert!(matches!(material.status().status, CompileStatus::Failed(_)));
+            assert_eq!(material.status().last_valid_revision, Some(1));
+            material
+                .reload(ShaderSource::fragment(
+                    "vec4 ferravex_fragment(vec4 c,vec3 w,vec3 n){return vec4(0.0,0.0,1.0,1.0);}",
+                ))
+                .unwrap();
+            window.present_scene(&[], &[], crate::BLACK, Some(&frame));
+            assert_eq!(center(&window), [0, 0, 255, 255]);
+            assert_eq!(material.status().last_valid_revision, Some(3));
+            material.reload(ShaderSource{vertex:"vec3 ferravex_vertex(vec3 p){return p+vec3(0.8,0.0,0.0);}\nvec3 ferravex_normal(vec3 n){return n;}".into(),..Default::default()}).unwrap();
+            window.present_scene(&[], &[], crate::BLACK, Some(&frame));
+            assert_eq!(center(&window), [0, 0, 0, 255]);
+            assert_eq!(material.status().last_valid_revision, Some(4));
+        }
         #[test]
         #[ignore = "requires a live X11 display and OpenGL context"]
         fn retained_instances_share_upload_and_preserve_ui_order() {
