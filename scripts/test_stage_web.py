@@ -35,24 +35,25 @@ class LoaderPatchTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("node"), "Node is optional; needed to execute the JS regression fixture")
     def test_strict_mode_registration_executes_and_stays_local(self):
         script = r'''
-const vm = require('node:vm');
 const input = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
 let failed = false;
-try { vm.runInNewContext(input.original, { miniquad_add_plugin() {} }); }
+// Use the normal script realm. Older Node VM contexts permit the invalid
+// function-valued assignment even in strict mode; browsers reject it.
+try { new Function('miniquad_add_plugin', input.original)(() => {}); }
 catch (error) { if (error.name !== 'ReferenceError') throw error; failed = true; }
 if (!failed) throw new Error('Fixture should reproduce the upstream error');
 const plugins = [];
-const context = { miniquad_add_plugin(plugin) { plugins.push(plugin); } };
-vm.runInNewContext(input.patched, context);
+new Function('miniquad_add_plugin', input.patched)(plugin => plugins.push(plugin));
 if (plugins.length !== 1 || plugins[0].name !== 'quad_net') throw new Error('Registration changed');
 const imports = { env: {} };
 plugins[0].register_plugin(imports);
 if (typeof imports.env.ws_connect !== 'function') throw new Error('Plugin function lost');
-if ('register_plugin' in context) throw new Error('Registration leaked into global scope');
+if ('register_plugin' in globalThis) throw new Error('Registration leaked into global scope');
 '''
-        subprocess.run(["node", "-e", script], input=json.dumps({
+        result = subprocess.run(["node", "-e", script], input=json.dumps({
             "original": PLUGIN.decode(), "patched": STAGE.patch_macroquad_loader(PLUGIN).decode(),
-        }), text=True, check=True, capture_output=True)
+        }), text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":
