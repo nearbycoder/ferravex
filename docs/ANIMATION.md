@@ -140,5 +140,8 @@ event storms, invalid data, finite palettes and unchanged authoritative game sta
 Counting allocators cover core graph/layer/skeleton updates and warmed retained skin
 recording. A real Linux GLX readback compares four-weight skinned geometry, nonuniform
 normals and shadows with an equivalent static model, then changes its pose and checks
-GPU resource reuse/collection. Browser/game smoke, release sizes and performance
-results are recorded as iteration 12 validation proceeds; see [performance](PERFORMANCE.md).
+GPU resource reuse/collection. Local validation passed 396 workspace tests, all fifteen native gameplay smoke
+runs, release-Wasm skin/input/audio integration and strict native/Wasm checks.
+Live browser Strike rendered operator/weapon skins and reload without errors;
+Emberline rendered timed poses. Twelve performance flags remain documented,
+including two timing tails; see [performance](PERFORMANCE.md).
