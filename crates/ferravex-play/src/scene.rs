@@ -536,11 +536,24 @@ impl Skeleton {
         self.joints.len()
     }
     pub fn world_pose(&self, locals: &[Transform]) -> Result<Vec<Matrix>, SceneError> {
-        if locals.len() != self.joints.len() {
+        let mut world = vec![IDENTITY; self.joints.len()];
+        self.world_pose_into(locals, &mut world)?;
+        Ok(world)
+    }
+    /// Allocation-free pose evaluation into caller-owned scratch. On numeric
+    /// overflow output may be partially written; use it only after Ok(()).
+    pub fn world_pose_into(
+        &self,
+        locals: &[Transform],
+        world: &mut [Matrix],
+    ) -> Result<(), SceneError> {
+        if locals.len() != self.joints.len() || world.len() != locals.len() {
             return Err(SceneError::InvalidSkeleton);
         }
-        let mut world = Vec::with_capacity(locals.len());
-        for (joint, local) in self.joints.iter().zip(locals) {
+        if !locals.iter().all(|local| local.valid()) {
+            return Err(SceneError::InvalidTransform);
+        }
+        for (i, (joint, local)) in self.joints.iter().zip(locals).enumerate() {
             let matrix = local.matrix()?;
             let matrix = joint
                 .parent
@@ -548,23 +561,37 @@ impl Skeleton {
             if !matrix.into_iter().all(f32::is_finite) {
                 return Err(SceneError::InvalidTransform);
             }
-            world.push(matrix);
+            world[i] = matrix;
         }
-        Ok(world)
+        Ok(())
     }
     /// Model-space joint world pose multiplied by inverse bind, ready for skinning.
     pub fn skin_palette(&self, locals: &[Transform]) -> Result<Vec<Matrix>, SceneError> {
-        let world = self.world_pose(locals)?;
-        let palette: Vec<_> = world
-            .into_iter()
-            .zip(&self.joints)
-            .map(|(pose, joint)| multiply(pose, joint.inverse_bind))
-            .collect();
-        if palette.iter().flatten().all(|v| v.is_finite()) {
-            Ok(palette)
-        } else {
-            Err(SceneError::InvalidTransform)
+        let mut world = vec![IDENTITY; self.joints.len()];
+        let mut palette = vec![IDENTITY; self.joints.len()];
+        self.skin_palette_into(locals, &mut world, &mut palette)?;
+        Ok(palette)
+    }
+    /// Model-space world * inverse-bind using preallocated buffers. Both outputs
+    /// are scratch on error. No heap allocation or hierarchy traversal recursion.
+    pub fn skin_palette_into(
+        &self,
+        locals: &[Transform],
+        world: &mut [Matrix],
+        palette: &mut [Matrix],
+    ) -> Result<(), SceneError> {
+        if palette.len() != self.joints.len() {
+            return Err(SceneError::InvalidSkeleton);
         }
+        self.world_pose_into(locals, world)?;
+        for ((out, pose), joint) in palette.iter_mut().zip(world).zip(&self.joints) {
+            let matrix = multiply(*pose, joint.inverse_bind);
+            if !matrix.into_iter().all(f32::is_finite) {
+                return Err(SceneError::InvalidTransform);
+            }
+            *out = matrix;
+        }
+        Ok(())
     }
 }
 

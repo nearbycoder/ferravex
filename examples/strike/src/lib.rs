@@ -1,4 +1,5 @@
 //! Original low-poly FPS vertical slice on Ferravex; native UDP or offline practice on the web.
+mod animation;
 mod controls;
 mod geometry;
 mod hud;
@@ -204,6 +205,11 @@ async fn game() {
     .expect("yard vertex AO");
     let operator = build_operator();
     let rifle = build_rifle();
+    let operator_rig = animation::OperatorRig::new();
+    let mut operator_motion: Vec<_> = (0..ferravex_fps::MAX_PLAYERS)
+        .map(|_| animation::OperatorMotion::new(&operator_rig))
+        .collect();
+    let mut weapon_motion = animation::WeaponMotion::new();
     let mut tracer_model = geometry::Model::new();
     tracer_model.cube(Vec3::ZERO, vec3(0.018, 0.018, 1.), rgb(0xe8b56a));
     let mut tracers = Vec::with_capacity(MAX_TRACERS);
@@ -356,7 +362,8 @@ async fn game() {
                 error.clear();
             }
         }
-        if local.ammo < was_ammo {
+        let fired = local.ammo < was_ammo;
+        if fired {
             sound.cue(Cue::Fire, 0.75);
             shot_timer = 0.09;
         }
@@ -391,6 +398,49 @@ async fn game() {
             tracer.life -= dt;
             tracer.life > 0.
         });
+        let animation_dt = if active {
+            controls.input.simulation_dt(dt)
+        } else {
+            dt
+        };
+        for p in &remote {
+            if p.id == local.id {
+                continue;
+            }
+            if let Some(motion) = operator_motion.get_mut(p.id as usize) {
+                motion.update(&operator_rig, p, animation_dt);
+                if active && p.id != local.id && p.health > 0 && p.grounded {
+                    for _ in 0..motion.footsteps() {
+                        audio::play(
+                            Cue::Footstep(Surface::Stone),
+                            VoiceParams {
+                                position: p.position.to_array(),
+                                gain: 0.28,
+                                priority: 1,
+                                spatial: Spatial::Attenuated {
+                                    min_distance: 1.,
+                                    max_distance: 25.,
+                                    rolloff: 0.45,
+                                },
+                                ..Default::default()
+                            },
+                        );
+                    }
+                }
+            }
+        }
+        // Predicted local state drives the first-person body even when remote
+        // interpolation includes an older copy of the local player.
+        if let Some(motion) = operator_motion.get_mut(local.id as usize) {
+            motion.update(&operator_rig, &local, animation_dt);
+        }
+        let magazine_events =
+            weapon_motion.update(&local, if active { animation_dt } else { 0. }, fired);
+        if active {
+            for _ in 0..magazine_events {
+                sound.cue(Cue::Click, 0.2);
+            }
+        }
         let sky = rgb(0xb8c4b7);
         clear_background(sky);
         let eye = if active {
@@ -471,12 +521,13 @@ async fn game() {
             .unwrap();
         }
         if active && local.health > 0 {
-            ferravex_render::draw_shadow(
-                operator.resident(),
+            ferravex_render::draw_skinned_shadow(
+                &operator,
                 Mat4::from_rotation_translation(
                     Quat::from_rotation_y(-local.yaw),
                     Vec3::from_array(local.position.to_array()),
                 ),
+                operator_motion[local.id as usize].palette(),
             );
         }
         arena.draw();
@@ -484,12 +535,13 @@ async fn game() {
             if (active && p.id == local.id) || p.health == 0 {
                 continue;
             }
-            draw_transformed(
+            ferravex_render::draw_skinned(
                 &operator,
                 Mat4::from_rotation_translation(
                     Quat::from_rotation_y(-p.yaw),
                     Vec3::from_array(p.position.to_array()),
                 ),
+                operator_motion[p.id as usize].palette(),
             );
         }
         if active {
@@ -511,15 +563,23 @@ async fn game() {
         if active && local.health > 0 {
             let side = direction.cross(Vec3::Y).normalize_or_zero();
             let up = side.cross(direction).normalize_or_zero();
-            let speed = vec2(local.velocity.x, local.velocity.z).length();
-            let bob = (get_time() as f32 * 10.).sin() * 0.008 * (speed / 7.).min(1.);
-            let offset = eye + side * 0.27 - up * (0.25 + shot_timer * 0.28)
-                + direction * (0.47 - shot_timer * 0.2)
-                + Vec3::Y * bob;
+            let offset = eye + side * 0.27 - up * 0.25 + direction * 0.47;
             let rot = Quat::from_rotation_y(-controls.yaw) * Quat::from_rotation_x(controls.pitch);
-            draw_transformed(&rifle, Mat4::from_rotation_translation(rot, offset));
+            ferravex_render::draw_skinned(
+                &rifle,
+                Mat4::from_rotation_translation(rot, offset),
+                weapon_motion.palette(),
+            );
             if shot_timer > 0.055 {
-                let muzzle = offset + rot * vec3(0., 0.05, -0.80);
+                let muzzle = offset
+                    + rot
+                        * weapon_motion
+                            .palette()
+                            .transform_point(
+                                vec3(0., 0.05, -0.80),
+                                ferravex_render::skinning::SkinWeights::rigid(0),
+                            )
+                            .expect("valid muzzle bone");
                 draw_cube(muzzle, vec3(0.065, 0.06, 0.12), None, rgb(0xffda87));
             }
         }
@@ -550,9 +610,9 @@ async fn game() {
                 .iter()
                 .filter(|p| p.health > 0 && (!active || p.id != local.id))
                 .count()
-                * operator.triangles()
+                * (operator.resident().vertex_count() / 3)
             + if active && local.health > 0 {
-                rifle.triangles()
+                rifle.resident().vertex_count() / 3
             } else {
                 0
             };

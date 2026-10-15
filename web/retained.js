@@ -19,11 +19,11 @@ export class RetainedRenderer {
    vertex=shader(gl.VERTEX_SHADER,'#version 300 es\nprecision highp float;\n'+vertexBody.replaceAll('attribute ','in ').replaceAll('varying ','out ')+'\n'+vertexHook);
    fragment=shader(gl.FRAGMENT_SHADER,depth?'#version 300 es\nprecision highp float;\nvoid main(){}':'#version 300 es\nprecision highp float;\nout vec4 ferravex_pixel;\n'+fragmentBody.replaceAll('varying ','in ').replaceAll('gl_FragColor','ferravex_pixel')+'\n'+fragmentHook);
    p=gl.createProgram();if(!p)throw new Error('Program allocation failed');gl.attachShader(p,vertex);gl.attachShader(p,fragment);
-   ['a_position','a_normal','a_color','a_model0','a_model1','a_model2','a_model3','a_normal0','a_normal1','a_normal2'].forEach((name,i)=>gl.bindAttribLocation(p,i,name));
+   ['a_position','a_normal','a_color','a_model0','a_model1','a_model2','a_model3','a_normal0','a_normal1','a_normal2','a_joints','a_weights'].forEach((name,i)=>gl.bindAttribLocation(p,i,name));
    gl.linkProgram(p);if(!gl.getProgramParameter(p,gl.LINK_STATUS))throw new Error(gl.getProgramInfoLog(p));
    let paramsCount=0,lightCount=0,pointsCount=0;
    for(let i=0;i<gl.getProgramParameter(p,gl.ACTIVE_UNIFORMS);i++) {const info=gl.getActiveUniform(p,i);if(info.name==='u_params[0]')paramsCount=info.size;if(info.name==='u_light[0]')lightCount=info.size;if(info.name==='u_points[0]')pointsCount=info.size;}
-   return {program:p,camera:gl.getUniformLocation(p,'u_camera'),light:gl.getUniformLocation(p,'u_light[0]'),params:gl.getUniformLocation(p,'u_params[0]'),paramsCount,lightCount,pointsCount,points:gl.getUniformLocation(p,'u_points[0]'),pointCount:gl.getUniformLocation(p,'u_point_count'),shadowMatrix:gl.getUniformLocation(p,'u_shadow_matrix'),shadowTexture:gl.getUniformLocation(p,'u_shadow_texture'),shadowOptions:gl.getUniformLocation(p,'u_shadow_options'),shadowExtra:gl.getUniformLocation(p,'u_shadow_extra')};
+   return {program:p,camera:gl.getUniformLocation(p,'u_camera'),light:gl.getUniformLocation(p,'u_light[0]'),params:gl.getUniformLocation(p,'u_params[0]'),paramsCount,lightCount,pointsCount,points:gl.getUniformLocation(p,'u_points[0]'),pointCount:gl.getUniformLocation(p,'u_point_count'),shadowMatrix:gl.getUniformLocation(p,'u_shadow_matrix'),shadowTexture:gl.getUniformLocation(p,'u_shadow_texture'),shadowOptions:gl.getUniformLocation(p,'u_shadow_options'),shadowExtra:gl.getUniformLocation(p,'u_shadow_extra'),skinCount:gl.getUniformLocation(p,'u_skin_count'),bones:gl.getUniformLocation(p,'u_bones[0]'),boneNormals:gl.getUniformLocation(p,'u_bone_normals[0]')};
   } catch(error) {if(p)gl.deleteProgram(p);throw error;}
   finally {if(vertex)gl.deleteShader(vertex);if(fragment)gl.deleteShader(fragment);}
  }
@@ -40,7 +40,7 @@ export class RetainedRenderer {
   }
  }
  begin(exports) {
-  this.exports=exports;this.uploadBytes=0;this.drawCalls=0;this.vertices=0;this.shadowDrawCalls=0;this.shadowVertices=0;
+  this.exports=exports;this.uploadBytes=0;this.drawCalls=0;this.vertices=0;this.shadowDrawCalls=0;this.shadowVertices=0;this.skinnedDrawCalls=0;
   const gl=this.gl;
   for(const [id,mesh] of this.meshes)if(!exports.ferravex_mesh_vertex_count(id)){gl.deleteBuffer(mesh.buffer);gl.deleteVertexArray(mesh.vao);this.meshes.delete(id);}
   for(const [id,entry] of this.materials)if(!exports.ferravex_material_revision(id)){if(entry.valid)this.deletePair(entry.valid);this.materials.delete(id);}
@@ -87,13 +87,18 @@ export class RetainedRenderer {
   if(!mesh){
    const vertices=e.ferravex_mesh_vertex_count(id);if(!vertices)return;
    const buffer=gl.createBuffer(),vao=gl.createVertexArray();gl.bindVertexArray(vao);gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
-   gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(e.memory.buffer,e.ferravex_mesh_vertices(id),vertices*10),gl.STATIC_DRAW);
+   const positions=new Float32Array(e.memory.buffer,e.ferravex_mesh_vertices(id),vertices*10),skin=e.ferravex_mesh_skin?.(id)||0;
+   if(skin){gl.bufferData(gl.ARRAY_BUFFER,vertices*72,gl.STATIC_DRAW);gl.bufferSubData(gl.ARRAY_BUFFER,0,positions);gl.bufferSubData(gl.ARRAY_BUFFER,vertices*40,new Float32Array(e.memory.buffer,skin,vertices*8));for(const [i,offset] of [[10,0],[11,16]]){gl.enableVertexAttribArray(i);gl.vertexAttribPointer(i,4,gl.FLOAT,false,32,vertices*40+offset);}this.uploadBytes+=vertices*32;}
+   else gl.bufferData(gl.ARRAY_BUFFER,positions,gl.STATIC_DRAW);
    [[0,3,0],[1,3,12],[2,4,24]].forEach(([i,size,offset])=>{gl.enableVertexAttribArray(i);gl.vertexAttribPointer(i,size,gl.FLOAT,false,40,offset);});
    mesh={buffer,vao,vertices};this.meshes.set(id,mesh);this.uploadBytes+=vertices*40;
   }
   const material=view.getUint32(at+208,true),pair=this.materials.get(material)?.valid||this.builtin,p=shadow?pair.depth:pair.color,env=this.environment;
   gl.bindVertexArray(mesh.vao);gl.useProgram(p.program);depth?gl.enable(gl.DEPTH_TEST):gl.disable(gl.DEPTH_TEST);gl.depthMask(shadow||(depth&&(flags&2)===0));
   if(shadow)gl.disable(gl.BLEND);else{gl.enable(gl.BLEND);gl.blendFuncSeparate(gl.SRC_ALPHA,(flags&4)?gl.ONE:gl.ONE_MINUS_SRC_ALPHA,gl.ONE,gl.ONE_MINUS_SRC_ALPHA);}
+  const skinFirst=view.getUint32(at+216,true),skinCount=view.getUint32(at+220,true);
+  gl.uniform1i(p.skinCount,skinCount);
+  if(skinCount){gl.uniformMatrix4fv(p.bones,false,new Float32Array(e.memory.buffer,e.ferravex_skin_matrices()+skinFirst*64,skinCount*16));gl.uniformMatrix3fv(p.boneNormals,false,new Float32Array(e.memory.buffer,e.ferravex_skin_normals()+skinFirst*36,skinCount*9));this.uploadBytes+=skinCount*((p.bones!==null?64:0)+(p.boneNormals!==null?36:0));}
   gl.uniformMatrix4fv(p.camera,false,shadow?env.matrix:new Float32Array(e.memory.buffer,at+16,16));
   if(p.lightCount)gl.uniform4fv(p.light,new Float32Array(e.memory.buffer,at+80,p.lightCount*4));
   if(p.paramsCount)gl.uniform4fv(p.params,new Float32Array(e.memory.buffer,at+144,p.paramsCount*4));
@@ -106,6 +111,7 @@ export class RetainedRenderer {
   }
   gl.bindBuffer(gl.ARRAY_BUFFER,this.instanceBuffer);
   for(let i=0;i<7;i++){const attribute=i+3;gl.enableVertexAttribArray(attribute);gl.vertexAttribPointer(attribute,4,gl.FLOAT,false,112,first*112+i*16);gl.vertexAttribDivisor(attribute,1);}
+  if(skinCount&&!shadow)this.skinnedDrawCalls++;
   gl.drawArraysInstanced(gl.TRIANGLES,0,mesh.vertices,count);gl.blendFuncSeparate(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA,gl.ONE,gl.ONE_MINUS_SRC_ALPHA);gl.bindVertexArray(null);if(shadow){this.shadowDrawCalls++;this.shadowVertices+=mesh.vertices*count;}else{this.drawCalls++;this.vertices+=mesh.vertices*count;}
  }
 }

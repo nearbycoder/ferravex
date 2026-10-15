@@ -21,6 +21,7 @@ pub mod mesh;
 pub mod native;
 pub mod retained;
 pub mod shaders;
+pub mod skinning;
 pub mod ui;
 pub mod visibility;
 pub use ferravex_core::telemetry;
@@ -364,6 +365,7 @@ impl State {
         mesh: &retained::ResidentMesh,
         model: Mat4,
         bounds: ferravex_graphics::Bounds,
+        skin: Option<&skinning::SkinPalette>,
     ) -> bool {
         let visible = self.test_visibility(bounds, model);
         let casts = self.depth
@@ -390,6 +392,7 @@ impl State {
                 params: self.shader_params,
                 shadow_only: !visible,
                 skip_shadow: !casts,
+                skin,
             },
         );
         visible && recorded
@@ -518,16 +521,47 @@ pub fn draw_resident(mesh: &retained::ResidentMesh, model: Mat4) -> bool {
             .shader
             .as_ref()
             .map_or(mesh.bounds(), |m| m.padded(mesh.bounds()));
-        s.submit(mesh, model, bounds)
+        s.submit(mesh, model, bounds, None)
     })
 }
 /// Submit a hidden opaque caster, for example a first-person character body.
 pub fn draw_shadow(mesh: &retained::ResidentMesh, model: Mat4) -> bool {
+    draw_shadow_pose(mesh, model, mesh.bounds(), None)
+}
+/// Record a GPU-skinned mesh using conservative deformed bounds. Position and
+/// inverse-transpose normal palettes are copied into this frame; later palette
+/// edits cannot change already recorded draws or their matching shadow pass.
+pub fn draw_skinned(
+    mesh: &skinning::SkinnedMesh,
+    model: Mat4,
+    palette: &skinning::SkinPalette,
+) -> bool {
+    let Ok(bounds) = mesh.bounds(palette) else {
+        return false;
+    };
     edit(|s| {
-        let bounds = s
-            .shader
-            .as_ref()
-            .map_or(mesh.bounds(), |m| m.padded(mesh.bounds()));
+        let bounds = s.shader.as_ref().map_or(bounds, |m| m.padded(bounds));
+        s.submit(mesh.resident(), model, bounds, Some(palette))
+    })
+}
+pub fn draw_skinned_shadow(
+    mesh: &skinning::SkinnedMesh,
+    model: Mat4,
+    palette: &skinning::SkinPalette,
+) -> bool {
+    let Ok(bounds) = mesh.bounds(palette) else {
+        return false;
+    };
+    draw_shadow_pose(mesh.resident(), model, bounds, Some(palette))
+}
+fn draw_shadow_pose(
+    mesh: &retained::ResidentMesh,
+    model: Mat4,
+    bounds: ferravex_graphics::Bounds,
+    skin: Option<&skinning::SkinPalette>,
+) -> bool {
+    edit(|s| {
+        let bounds = s.shader.as_ref().map_or(bounds, |m| m.padded(bounds));
         if !s.depth
             || !mesh.is_opaque()
             || s.shader.as_ref().is_some_and(|m| {
@@ -552,6 +586,7 @@ pub fn draw_shadow(mesh: &retained::ResidentMesh, model: Mat4) -> bool {
                 params: s.shader_params,
                 shadow_only: true,
                 skip_shadow: false,
+                skin,
             },
         )
     })
@@ -617,7 +652,7 @@ pub fn draw_lod(
             .shader
             .as_ref()
             .map_or(chain.bounds(), |m| m.padded(chain.bounds()));
-        s.submit(mesh, model, bounds)
+        s.submit(mesh, model, bounds, None)
     })
 }
 pub fn draw_mesh_transformed(m: &Mesh, model: Mat4) {
@@ -1223,7 +1258,8 @@ pub fn run(conf: Conf, future: impl Future<Output = ()> + 'static) {
                 vertices: Some(window.render_counts().1),
                 upload_bytes: Some(
                     (s.vertices.len() * 32 + s.retained.instances.len() * 112) as u64
-                        + window.last_mesh_upload_bytes(),
+                        + window.last_mesh_upload_bytes()
+                        + window.skin_upload_bytes(),
                 ),
                 ..Default::default()
             })));
@@ -1342,6 +1378,24 @@ mod wasm {
     #[unsafe(no_mangle)]
     pub extern "C" fn ferravex_mesh_vertices(id: u32) -> *const [f32; 10] {
         retained::geometry(id).map_or(std::ptr::null(), |m| m.vertices.as_ptr())
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_mesh_skin(id: u32) -> *const [f32; 8] {
+        retained::geometry(id)
+            .and_then(|m| m.skin.as_ref().map(|v| v.as_ptr()))
+            .unwrap_or(std::ptr::null())
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_skin_matrices() -> *const [f32; 16] {
+        read(|s| s.retained.skin_matrices.as_ptr())
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_skin_normals() -> *const [f32; 9] {
+        read(|s| s.retained.skin_normals.as_ptr())
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_skin_joint_count() -> u32 {
+        read(|s| s.retained.skin_matrices.len() as u32)
     }
     #[unsafe(no_mangle)]
     pub extern "C" fn ferravex_mesh_vertex_count(id: u32) -> u32 {

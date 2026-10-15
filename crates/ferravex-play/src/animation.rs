@@ -1,10 +1,21 @@
-//! Scalar/vector tracks, shortest-arc quaternion interpolation, and timed sprite clips.
+//! Tracks, bounded playback/events, pose blending and reusable animation controllers.
+mod graph;
+mod playback;
+mod pose;
+pub use graph::*;
+pub use playback::*;
+pub use pose::*;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AnimationError {
     Empty,
     InvalidKey,
     UnorderedKeys,
     InvalidTime,
+    InvalidClip,
+    InvalidPose,
+    InvalidWeight,
+    JointCount,
+    Capacity,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LoopMode {

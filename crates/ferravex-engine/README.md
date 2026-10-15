@@ -5,7 +5,8 @@ Rust std; check the resolved graph with `python3 scripts/audit-owned.py`.
 
 Reexports `math`, `ecs`, `dynamics`, `graphics`, `play`, and `net`. Additional
 owned modules provide buffered input actions, profiling, bundles/hot reload,
-PCM WAV audio/mixing, and input replay files.
+PCM WAV audio/mixing, animation playback/state graphs/GPU skinning, and input replay files.
+See [animation](../../docs/ANIMATION.md) for clip banks, pose layers and retained skins.
 
 ```rust
 use ferravex_engine::{dynamics::{PhysicsWorld,BodyDesc,Shape},input::{ActionMap,Binding,InputCode}};
