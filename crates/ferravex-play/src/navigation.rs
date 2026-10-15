@@ -1,4 +1,8 @@
 //! Deterministic weighted-grid A* and small 2D steering helpers.
+mod route;
+mod search;
+pub use route::*;
+pub use search::*;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
@@ -14,6 +18,9 @@ pub enum NavigationError {
     BlockedEndpoint,
     NoPath,
     InvalidCost,
+    Capacity,
+    InvalidInput,
+    RevisionExhausted,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Connectivity {
@@ -21,9 +28,12 @@ pub enum Connectivity {
     Eight,
 }
 
+static NEXT_GRID_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 pub struct Grid {
+    identity: u64,
     width: u32,
     height: u32,
+    revision: u64,
     costs: Vec<u16>, // zero is impassable; positive values multiply edge cost.
 }
 impl Grid {
@@ -32,9 +42,18 @@ impl Grid {
             .checked_mul(height)
             .filter(|n| *n > 0 && *n <= 4_000_000)
             .ok_or(NavigationError::InvalidDimensions)?;
+        let identity = NEXT_GRID_ID
+            .fetch_update(
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+                |v| v.checked_add(1),
+            )
+            .map_err(|_| NavigationError::RevisionExhausted)?;
         Ok(Self {
+            identity,
             width,
             height,
+            revision: 0,
             costs: vec![1; count as usize],
         })
     }
@@ -46,15 +65,26 @@ impl Grid {
     }
     pub fn set_blocked(&mut self, cell: Cell, blocked: bool) -> Result<(), NavigationError> {
         let index = self.index(cell)?;
-        self.costs[index] = if blocked { 0 } else { 1 };
-        Ok(())
+        self.change_cost(index, if blocked { 0 } else { 1 })
     }
     pub fn set_cost(&mut self, cell: Cell, cost: u16) -> Result<(), NavigationError> {
         if cost == 0 {
             return Err(NavigationError::InvalidCost);
         }
         let index = self.index(cell)?;
-        self.costs[index] = cost;
+        self.change_cost(index, cost)
+    }
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+    fn change_cost(&mut self, index: usize, cost: u16) -> Result<(), NavigationError> {
+        if self.costs[index] != cost {
+            self.revision = self
+                .revision
+                .checked_add(1)
+                .ok_or(NavigationError::RevisionExhausted)?;
+            self.costs[index] = cost;
+        }
         Ok(())
     }
     pub fn walkable(&self, cell: Cell) -> bool {

@@ -1,5 +1,6 @@
 //! Original low-poly FPS vertical slice on Ferravex; native UDP or offline practice on the web.
 mod animation;
+mod bots;
 mod controls;
 mod effects;
 mod geometry;
@@ -10,8 +11,7 @@ use effects::CombatEffects;
 use ferravex_core::{FixedClock, FrameStats};
 #[cfg(not(target_arch = "wasm32"))]
 use ferravex_fps::GameClient;
-use ferravex_fps::{Arena, Match, Player, TICK_RATE, forward};
-use ferravex_net::{BUTTON_FIRE, InputFrame};
+use ferravex_fps::{Arena, Match, TICK_RATE, forward};
 use ferravex_play::camera::{Input3, Mode3, NoObstructions, Rig3, Settings3, Target3};
 use ferravex_render::audio::{self, Cue, GameAudio, Spatial, Surface, VoiceParams};
 use ferravex_render::prelude::*;
@@ -72,29 +72,6 @@ fn practice() -> Match {
         game.spawn_player(id);
     }
     game
-}
-
-fn bot_input(bot: &Player, target: &Player, tick: u32) -> InputFrame {
-    let mut to = target.position - bot.eye_position();
-    to.y += 1.0;
-    let yaw = to.x.atan2(-to.z);
-    let pitch = (to.y / to.length().max(0.001)).asin();
-    // Slow, imperfect opponents; same authoritative collision/fire code as human players.
-    let phase = tick as f32 * 0.014 + bot.id as f32 * 1.7;
-    InputFrame {
-        sequence: tick,
-        move_x: phase.sin() * 0.42,
-        move_z: if to.length() > 12. { 0.28 } else { -0.12 },
-        yaw: yaw + phase.cos() * 0.09,
-        pitch,
-        buttons: if tick > 320 && tick.wrapping_add(bot.id as u32 * 47).is_multiple_of(320) {
-            BUTTON_FIRE
-        } else if bot.ammo == 0 {
-            ferravex_net::BUTTON_RELOAD
-        } else {
-            0
-        },
-    }
 }
 
 const MAX_TRACERS: usize = 32;
@@ -180,6 +157,8 @@ async fn game() {
     let opts = options();
     simulate_mouse_with_touch(false);
     let mut game = practice();
+    let mut bots = bots::PracticeBots::new(&game.arena);
+    let mut commands = Vec::with_capacity(ferravex_fps::MAX_PLAYERS);
     ferravex_render::set_quality(ferravex_render::lighting::Quality::Medium);
     let mut arena = build_yard(&game.arena);
     let ao =
@@ -325,19 +304,9 @@ async fn game() {
                 continue;
             }
             if !network && active && controls.input.gameplay_active() {
-                let mut commands = Vec::with_capacity(6);
-                commands.push((
-                    0,
-                    InputFrame {
-                        sequence: game.tick,
-                        ..input
-                    },
-                ));
-                let target = game.players[0].clone();
-                for bot in game.players.iter().skip(1) {
-                    commands.push((bot.id, bot_input(bot, &target, game.tick)));
-                }
+                bots.commands(&game, input, &mut commands);
                 let events = game.step(&commands);
+                bots.events(&events);
                 apply_game_events(events, 0, &mut effects, &mut hit_timer, &mut damage_timer);
                 local = game.players[0].clone();
                 remote.clone_from(&game.players);

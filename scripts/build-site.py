@@ -28,6 +28,7 @@ DOCS = [
  ('audio','Runtime audio','Engine','docs/AUDIO.md'),
  ('animation','Animation and GPU skinning','Engine','docs/ANIMATION.md'),
  ('effects','Particles, trails and effects','Engine','docs/EFFECTS.md'),
+ ('ai','AI and navigation','Engine','docs/AI.md'),
  ('contact-stability','Contacts and sleep islands','Engine','docs/CONTACT_STABILITY.md'),
  ('joints-and-compounds','Joints and compound bodies','Engine','docs/JOINTS_AND_COMPOUNDS.md'),
  ('rigid-bodies','Rotational rigid bodies','Engine','crates/ferravex-physics/README.md'),
