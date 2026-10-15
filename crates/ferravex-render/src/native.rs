@@ -34,6 +34,17 @@ impl NativeWindow {
         vec![Event::Quit]
     }
     pub fn present(&mut self, _: &[[f32; 8]], _: &[Batch], _: Color) {}
+    pub(crate) fn present_scene(
+        &mut self,
+        _: &[[f32; 8]],
+        _: &[Batch],
+        _: Color,
+        _: Option<&crate::retained::Frame>,
+    ) {
+    }
+    pub fn last_mesh_upload_bytes(&self) -> u64 {
+        0
+    }
     pub fn pixels(&self) -> Vec<u8> {
         Vec::new()
     }
@@ -373,6 +384,11 @@ mod linux {
             offset: *const c_void,
         );
         fn glDrawArrays(mode: c_uint, first: c_int, count: c_int);
+        fn glDrawArraysInstanced(mode: c_uint, first: c_int, count: c_int, instances: c_int);
+        fn glVertexAttribDivisor(index: c_uint, divisor: c_uint);
+        fn glGetUniformLocation(program: c_uint, name: *const c_char) -> c_int;
+        fn glUniformMatrix4fv(location: c_int, count: c_int, transpose: u8, values: *const f32);
+        fn glUniform4fv(location: c_int, count: c_int, values: *const f32);
         fn glReadBuffer(buffer: c_uint);
         fn glPixelStorei(parameter: c_uint, value: c_int);
         fn glReadPixels(
@@ -390,6 +406,14 @@ mod linux {
 
     /// The display, window and GL context must stay on their creating thread.
     /// Raw-pointer ownership prevents automatic Send/Sync implementations.
+    struct RetainedGpu {
+        program: c_uint,
+        instances: c_uint,
+        camera: c_int,
+        light: c_int,
+        meshes: BTreeMap<u32, (c_uint, c_int)>,
+        batches: Vec<crate::retained::RetainedBatch>,
+    }
     pub struct NativeWindow {
         display: *mut Display,
         window: c_ulong,
@@ -397,6 +421,9 @@ mod linux {
         context: GlxContext,
         program: c_uint,
         vertex_buffer: c_uint,
+        retained: Option<RetainedGpu>,
+        last_commands: Vec<crate::retained::Command>,
+        mesh_upload_bytes: u64,
         width: u32,
         height: u32,
         delete_atom: c_ulong,
@@ -436,6 +463,9 @@ mod linux {
                     context: ptr::null_mut(),
                     program: 0,
                     vertex_buffer: 0,
+                    retained: None,
+                    last_commands: Vec::new(),
+                    mesh_upload_bytes: 0,
                     width: conf.window_width as u32,
                     height: conf.window_height as u32,
                     delete_atom: 0,
@@ -858,6 +888,18 @@ mod linux {
         /// Uploads one complete clip-space stream and draws valid triangle batches.
         /// Invalid or out-of-range batch ranges are ignored. Call on the creating thread.
         pub fn present(&mut self, vertices: &[[f32; 8]], batches: &[Batch], clear: Color) {
+            self.present_scene(vertices, batches, clear, None);
+        }
+        pub fn last_mesh_upload_bytes(&self) -> u64 {
+            self.mesh_upload_bytes
+        }
+        pub(crate) fn present_scene(
+            &mut self,
+            vertices: &[[f32; 8]],
+            batches: &[Batch],
+            clear: Color,
+            frame: Option<&crate::retained::Frame>,
+        ) {
             if !self.make_current() {
                 return;
             }
@@ -865,6 +907,20 @@ mod linux {
                 return;
             };
             self.last_clear = clear;
+            self.last_commands.clear();
+            if let Some(frame) = frame {
+                self.last_commands.extend_from_slice(&frame.commands);
+            }
+            self.mesh_upload_bytes = 0;
+            if let Some(frame) = frame {
+                self.upload_retained(frame);
+            }
+            if let Some(gpu) = &mut self.retained {
+                gpu.batches.clear();
+                if let Some(frame) = frame {
+                    gpu.batches.extend_from_slice(&frame.batches);
+                }
+            }
             self.last_batches.clear();
             for batch in batches {
                 if batch.count == 0
@@ -876,7 +932,14 @@ mod linux {
                         .checked_add(batch.count)
                         .is_none_or(|end| end as usize > vertices.len())
                 {
+                    self.last_batches.push((0, 0, false));
                     continue;
+                }
+                if frame.is_none() {
+                    self.last_commands.push(crate::retained::Command {
+                        kind: 0,
+                        index: self.last_batches.len() as u32,
+                    });
                 }
                 self.last_batches
                     .push((batch.start as i32, batch.count as i32, batch.depth));
@@ -899,6 +962,101 @@ mod linux {
             }
             self.presented = true;
         }
+        fn upload_retained(&mut self, frame: &crate::retained::Frame) {
+            if frame.batches.is_empty() {
+                return;
+            }
+            if self.retained.is_none() {
+                // SAFETY: The current context owns this static driver string.
+                let version_pointer = unsafe { glGetString(0x1f02) };
+                assert!(!version_pointer.is_null(), "OpenGL version unavailable");
+                // SAFETY: GL returned a non-null context-owned, NUL-terminated version string.
+                let version = unsafe { CStr::from_ptr(version_pointer.cast()) }.to_string_lossy();
+                let mut numbers = version.split(['.', ' ']);
+                let major = numbers
+                    .next()
+                    .and_then(|s| s.parse::<u32>().ok())
+                    .unwrap_or(0);
+                let minor = numbers
+                    .next()
+                    .and_then(|s| s.parse::<u32>().ok())
+                    .unwrap_or(0);
+                assert!(
+                    (major, minor) >= (3, 3),
+                    "retained rendering requires OpenGL 3.3 or newer: {version}"
+                );
+                let source =
+                    CString::new(format!("#version 120\n{}", crate::retained::VERTEX_BODY))
+                        .unwrap();
+                let attributes = [
+                    (0, c"a_position"),
+                    (1, c"a_normal"),
+                    (2, c"a_color"),
+                    (3, c"a_model0"),
+                    (4, c"a_model1"),
+                    (5, c"a_model2"),
+                    (6, c"a_model3"),
+                    (7, c"a_normal0"),
+                    (8, c"a_normal1"),
+                    (9, c"a_normal2"),
+                ];
+                let program =
+                    create_program_with(&source, &attributes).expect("native retained shader");
+                // SAFETY: The owned context is current. Names are NUL terminated.
+                unsafe {
+                    let mut instances = 0;
+                    glGenBuffers(1, &mut instances);
+                    assert_ne!(instances, 0, "allocate retained instance buffer");
+                    self.retained = Some(RetainedGpu {
+                        program,
+                        instances,
+                        camera: glGetUniformLocation(program, c"u_camera".as_ptr()),
+                        light: glGetUniformLocation(program, c"u_light[0]".as_ptr()),
+                        meshes: BTreeMap::new(),
+                        batches: Vec::new(),
+                    });
+                }
+            }
+            let gpu = self.retained.as_mut().unwrap();
+            // SAFETY: All handles are owned by this context; uploads copy live bounded slices.
+            unsafe {
+                gpu.meshes.retain(|id, (buffer, _)| {
+                    if crate::retained::is_live(*id) {
+                        true
+                    } else {
+                        glDeleteBuffers(1, buffer);
+                        false
+                    }
+                });
+                for batch in &frame.batches {
+                    if let std::collections::btree_map::Entry::Vacant(slot) =
+                        gpu.meshes.entry(batch.mesh)
+                    {
+                        let mesh = crate::retained::geometry(batch.mesh).expect("live frame mesh");
+                        let mut buffer = 0;
+                        glGenBuffers(1, &mut buffer);
+                        assert_ne!(buffer, 0, "allocate retained mesh buffer");
+                        glBindBuffer(GL_ARRAY_BUFFER, buffer);
+                        let bytes = mesh.vertices.len() * 40;
+                        glBufferData(
+                            GL_ARRAY_BUFFER,
+                            bytes as isize,
+                            mesh.vertices.as_ptr().cast(),
+                            0x88e4,
+                        );
+                        self.mesh_upload_bytes += bytes as u64;
+                        slot.insert((buffer, mesh.vertices.len() as i32));
+                    }
+                }
+                glBindBuffer(GL_ARRAY_BUFFER, gpu.instances);
+                glBufferData(
+                    GL_ARRAY_BUFFER,
+                    (frame.instances.len() * 112) as isize,
+                    frame.instances.as_ptr().cast(),
+                    GL_STREAM_DRAW,
+                );
+            }
+        }
         fn draw_uploaded(&self) {
             // SAFETY: Called with this context current. Attribute pointers are byte offsets
             // into the owned VBO and all saved ranges were checked against its uploaded length.
@@ -917,24 +1075,26 @@ mod linux {
                     self.last_clear.a,
                 );
                 glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-                glUseProgram(self.program);
-                glBindBuffer(GL_ARRAY_BUFFER, self.vertex_buffer);
-                glEnableVertexAttribArray(0);
-                glEnableVertexAttribArray(1);
-                glVertexAttribPointer(0, 4, GL_FLOAT, 0, 32, ptr::null());
-                glVertexAttribPointer(1, 4, GL_FLOAT, 0, 32, 16_usize as *const c_void);
-                for &(start, count, depth) in &self.last_batches {
-                    if depth {
-                        glEnable(GL_DEPTH_TEST);
-                        glDepthMask(1);
-                    } else {
-                        glDisable(GL_DEPTH_TEST);
-                        glDepthMask(0);
+                for command in &self.last_commands {
+                    if command.kind == 1 {
+                        if let Some(gpu) = &self.retained {
+                            gpu.draw(command.index as usize);
+                        }
+                    } else if let Some(&(start, count, depth)) =
+                        self.last_batches.get(command.index as usize)
+                    {
+                        glUseProgram(self.program);
+                        glBindBuffer(GL_ARRAY_BUFFER, self.vertex_buffer);
+                        glEnableVertexAttribArray(0);
+                        glEnableVertexAttribArray(1);
+                        glVertexAttribPointer(0, 4, GL_FLOAT, 0, 32, ptr::null());
+                        glVertexAttribPointer(1, 4, GL_FLOAT, 0, 32, 16_usize as *const c_void);
+                        set_depth(depth);
+                        glDrawArrays(GL_TRIANGLES, start, count);
+                        glDisableVertexAttribArray(0);
+                        glDisableVertexAttribArray(1);
                     }
-                    glDrawArrays(GL_TRIANGLES, start, count);
                 }
-                glDisableVertexAttribArray(0);
-                glDisableVertexAttribArray(1);
                 glBindBuffer(GL_ARRAY_BUFFER, 0);
                 glUseProgram(0);
                 glDepthMask(1);
@@ -996,6 +1156,13 @@ mod linux {
                         if self.program != 0 {
                             glDeleteProgram(self.program);
                         }
+                        if let Some(gpu) = &self.retained {
+                            for (buffer, _) in gpu.meshes.values() {
+                                glDeleteBuffers(1, buffer);
+                            }
+                            glDeleteBuffers(1, &gpu.instances);
+                            glDeleteProgram(gpu.program);
+                        }
                     }
                     glXMakeCurrent(self.display, 0, ptr::null_mut());
                     glXDestroyContext(self.display, self.context);
@@ -1008,6 +1175,69 @@ mod linux {
                 }
                 if !self.display.is_null() {
                     XCloseDisplay(self.display);
+                }
+            }
+        }
+    }
+    unsafe fn set_depth(depth: bool) {
+        // SAFETY: Caller owns the current GL context.
+        unsafe {
+            if depth {
+                glEnable(GL_DEPTH_TEST);
+                glDepthMask(1);
+            } else {
+                glDisable(GL_DEPTH_TEST);
+                glDepthMask(0);
+            }
+        }
+    }
+    impl RetainedGpu {
+        unsafe fn draw(&self, index: usize) {
+            let Some(batch) = self.batches.get(index) else {
+                return;
+            };
+            let Some(&(buffer, count)) = self.meshes.get(&batch.mesh) else {
+                return;
+            };
+            // SAFETY: Recorded batch/instance ranges were produced by the bounded Frame recorder.
+            // Attributes refer to the owned static mesh and streamed instance buffers.
+            unsafe {
+                set_depth(batch.depth != 0);
+                glUseProgram(self.program);
+                glUniformMatrix4fv(self.camera, 1, 0, batch.camera.as_ptr());
+                glUniform4fv(self.light, 4, batch.light.as_ptr());
+                glBindBuffer(GL_ARRAY_BUFFER, buffer);
+                for (attribute, size, offset) in [(0, 3, 0), (1, 3, 12), (2, 4, 24)] {
+                    glEnableVertexAttribArray(attribute);
+                    glVertexAttribPointer(
+                        attribute,
+                        size,
+                        GL_FLOAT,
+                        0,
+                        40,
+                        offset as *const c_void,
+                    );
+                }
+                glBindBuffer(GL_ARRAY_BUFFER, self.instances);
+                for i in 0..7 {
+                    let at = 3 + i;
+                    glEnableVertexAttribArray(at);
+                    glVertexAttribPointer(
+                        at,
+                        4,
+                        GL_FLOAT,
+                        0,
+                        112,
+                        (batch.first as usize * 112 + i as usize * 16) as *const c_void,
+                    );
+                    glVertexAttribDivisor(at, 1);
+                }
+                glDrawArraysInstanced(GL_TRIANGLES, 0, count, batch.count as i32);
+                for at in 0..10 {
+                    glDisableVertexAttribArray(at);
+                    if at >= 3 {
+                        glVertexAttribDivisor(at, 0);
+                    }
                 }
             }
         }
@@ -1058,7 +1288,10 @@ mod linux {
         }
     }
     fn create_program() -> Result<c_uint, String> {
-        let vertex = compile_shader(GL_VERTEX_SHADER, c"#version 120\nattribute vec4 a_position;\nattribute vec4 a_color;\nvarying vec4 v_color;\nvoid main(){ gl_Position=a_position; v_color=a_color; }\n")?;
+        create_program_with(c"#version 120\nattribute vec4 a_position;\nattribute vec4 a_color;\nvarying vec4 v_color;\nvoid main(){ gl_Position=a_position; v_color=a_color; }\n", &[(0,c"a_position"),(1,c"a_color")])
+    }
+    fn create_program_with(source: &CStr, attributes: &[(u32, &CStr)]) -> Result<c_uint, String> {
+        let vertex = compile_shader(GL_VERTEX_SHADER, source)?;
         let fragment = match compile_shader(
             GL_FRAGMENT_SHADER,
             c"#version 120\nvarying vec4 v_color;\nvoid main(){ gl_FragColor=v_color; }\n",
@@ -1082,8 +1315,9 @@ mod linux {
             }
             glAttachShader(program, vertex);
             glAttachShader(program, fragment);
-            glBindAttribLocation(program, 0, c"a_position".as_ptr());
-            glBindAttribLocation(program, 1, c"a_color".as_ptr());
+            for &(index, name) in attributes {
+                glBindAttribLocation(program, index, name.as_ptr());
+            }
             glLinkProgram(program);
             glDeleteShader(vertex);
             glDeleteShader(fragment);
@@ -1111,6 +1345,80 @@ mod linux {
     #[cfg(test)]
     mod tests {
         use super::*;
+        #[test]
+        #[ignore = "requires a live X11 display and OpenGL context"]
+        fn retained_instances_share_upload_and_preserve_ui_order() {
+            use crate::{
+                Mat4, Mesh, Vec2, Vec3, Vertex,
+                retained::{Command, Frame, ResidentMesh},
+            };
+            let mut window = NativeWindow::new(&Conf {
+                window_width: 96,
+                window_height: 64,
+                ..Default::default()
+            })
+            .unwrap();
+            window.set_swap_interval(0);
+            let mesh = ResidentMesh::new(&Mesh {
+                vertices: vec![
+                    Vertex::new2(Vec3::new(-0.6, -0.6, -0.5), Vec2::ZERO, crate::GREEN),
+                    Vertex::new2(Vec3::new(0.6, -0.6, -0.5), Vec2::ZERO, crate::GREEN),
+                    Vertex::new2(Vec3::new(0., 0.6, -0.5), Vec2::ZERO, crate::GREEN),
+                ],
+                indices: vec![0, 1, 2],
+                texture: None,
+            })
+            .unwrap();
+            let mut frame = Frame::default();
+            frame.commands.push(Command { kind: 0, index: 0 });
+            for x in [-0.5, 0.5] {
+                frame.record(
+                    &mesh,
+                    Mat4::from_translation(Vec3::new(x, 0., 0.))
+                        * Mat4::from_scale(Vec3::splat(0.5)),
+                    Mat4::IDENTITY,
+                    true,
+                    None,
+                );
+            }
+            frame.commands.push(Command { kind: 0, index: 1 });
+            assert_eq!(frame.batches[0].count, 2);
+            let vertices = [
+                [-1., -1., 0.8, 1., 1., 0., 0., 1.],
+                [3., -1., 0.8, 1., 1., 0., 0., 1.],
+                [-1., 3., 0.8, 1., 1., 0., 0., 1.],
+                [-0.15, -0.15, 0., 1., 0., 0., 1., 1.],
+                [0.15, -0.15, 0., 1., 0., 0., 1., 1.],
+                [0., 0.15, 0., 1., 0., 0., 1., 1.],
+            ];
+            let batches = [
+                Batch {
+                    start: 0,
+                    count: 3,
+                    depth: true,
+                },
+                Batch {
+                    start: 3,
+                    count: 3,
+                    depth: false,
+                },
+            ];
+            window.present_scene(&vertices, &batches, crate::BLACK, Some(&frame));
+            assert_eq!(window.last_mesh_upload_bytes(), 120);
+            window.present_scene(&vertices, &batches, crate::BLACK, Some(&frame));
+            assert_eq!(window.last_mesh_upload_bytes(), 0);
+            let pixels = window.pixels();
+            let (w, h) = window.size();
+            for x in [w / 4, w * 3 / 4] {
+                let at = ((h / 2 * w + x) * 4) as usize;
+                assert!(
+                    pixels[at + 1] > 150 && pixels[at] < 80,
+                    "instanced green triangle missing"
+                );
+            }
+            let at = ((h / 2 * w + w / 2) * 4) as usize;
+            assert_eq!(&pixels[at..at + 4], &[0, 0, 255, 255]);
+        }
         #[test]
         fn event_union_covers_all_public_records() {
             assert_eq!(

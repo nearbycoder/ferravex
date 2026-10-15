@@ -25,7 +25,7 @@ The default release profile favors throughput. The `small` profile favors size a
 
 ## Render measurements
 
-The immediate renderer records transformed clip-space triangles and vertex colors in Rust. GPU hosts submit batches through WebGL2 in the browser and OpenGL/GLX on Linux. Mesh construction can be cached, but transformed vertices are still emitted each frame. Measure CPU transformation/lighting, generated vertices, draw batches, upload bytes and GPU frame time separately before choosing further optimizations. Built-in text is triangle geometry from bitmap glyphs. This path has no shadow-map pass, retained instancing or general LOD system.
+The immediate renderer records transformed clip-space triangles and vertex colors in Rust. GPU hosts submit batches through WebGL2 in the browser and OpenGL/GLX on Linux. Mesh construction can be cached, but transformed vertices are still emitted each frame. Measure CPU transformation/lighting, generated vertices, draw batches, upload bytes and GPU frame time separately before choosing further optimizations. Built-in text is triangle geometry from bitmap glyphs. The retained path added in iteration 2 keeps immutable mesh geometry on the GPU and streams instance transforms; immediate primitives/text still use the CPU path. There is no shared shadow-map pass or general LOD system yet.
 
 Courtyard retains its own persistent mesh/instancing renderer and scene tools for CPU mean/p99, visible instances, draw calls and asynchronous GPU timers where the browser supports them. Its timings do not automatically characterize `ferravex-render`. CPU frame timing includes JavaScript submission and Rust simulation; GPU timing excludes DOM/audio work.
 
@@ -98,3 +98,25 @@ tail variation in unchanged binaries. Use a measured host-specific timing floor
 default remains useful on quiet dedicated machines. Keep the chosen budget with
 the comparison result rather than claiming every timing fluctuation is a code
 regression.
+
+### Retained rendering iteration
+
+On the same Linux x86_64 host, the fixed 120-frame workload (30 warmup, two
+fresh processes) produced the following local means, in microseconds. The browser
+verification tab was closed before the final recording. These are CPU wall-time
+measurements; they are not GPU execution times or portable frame-rate promises.
+
+| Game | Previous CPU preparation | Retained CPU preparation | Previous submission | Retained submission |
+|---|---:|---:|---:|---:|
+| Strike | 154.1 | 7.0 | 46.9 | 61.9 |
+| Dune Skimmer | 311.4 | 121.1 | 59.4 | 89.7 |
+| Sky Courier | 310.6 | 121.4 | 54.1 | 95.6 |
+| Marble Run | 177.9 | 72.4 | 54.5 | 114.0 |
+| Crystal Cavern | 258.8 | 118.7 | 53.0 | 224.3 |
+
+Strike's mean uploads fell from 421,152 to 34,480 bytes/frame. Crystal Cavern
+illustrates the remaining tradeoff: many small unique meshes increase draw and
+submission work, offsetting CPU preparation savings. Retained buffers are a
+foundation, not a claim that every example is already faster. Visibility/LOD is
+next, and final iteration validation must revisit total CPU, GPU where available,
+and artifact budgets. Raw reports remain in `target/perf/iteration-02-final`.

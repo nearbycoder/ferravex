@@ -80,13 +80,11 @@ fn ribbon(inner: f32, outer: f32, height: f32, colors: [Color; 2]) -> Mesh3d {
         }
         indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
     }
-    Mesh3d {
-        mesh: Mesh {
-            vertices,
-            indices,
-            texture: None,
-        },
-    }
+    Mesh3d::from_mesh(Mesh {
+        vertices,
+        indices,
+        texture: None,
+    })
 }
 
 fn merge_meshes(first: Mesh3d, second: Mesh3d) -> Mesh3d {
@@ -95,7 +93,7 @@ fn merge_meshes(first: Mesh3d, second: Mesh3d) -> Mesh3d {
     mesh.vertices.extend(second.mesh.vertices);
     mesh.indices
         .extend(second.mesh.indices.into_iter().map(|i| i + offset));
-    Mesh3d { mesh }
+    Mesh3d::from_mesh(mesh)
 }
 
 impl Scene {

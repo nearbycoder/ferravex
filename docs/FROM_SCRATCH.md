@@ -15,7 +15,7 @@ python3 scripts/build-web.py release
 python3 scripts/serve-web.py --port 8000
 ```
 
-Open the local root page for all fifteen examples. `/owned/` is Courtyard and `/owned-orbit/` is Orbit Breaker. The thirteen restored games/labs use the shared direct-WebGL2 host and original `ferravex-render` runtime: Rust records clip-space triangles with CPU vertex lighting/fog and built-in text glyphs. This immediate path has no shadow map. Courtyard retains persistent WebGL2 mesh buffers, instancing, a shadow map and Rust visibility tests. Orbit writes an original RGBA framebuffer to Canvas2D. No external runtime libraries, fonts or CDN loaders are used.
+Open the local root page for all fifteen examples. `/owned/` is Courtyard and `/owned-orbit/` is Orbit Breaker. The thirteen restored games/labs use the shared direct-WebGL2 host and original `ferravex-render` runtime: Rust records immediate primitives/text and retained mesh instances. Retained meshes use GPU transforms/vertex lighting/fog; immediate primitives retain the CPU path. This immediate path has no shadow map. Courtyard retains persistent WebGL2 mesh buffers, instancing, a shadow map and Rust visibility tests. Orbit writes an original RGBA framebuffer to Canvas2D. No external runtime libraries, fonts or CDN loaders are used.
 
 Courtyard: WASD, mouse aim, click fire, Space jump, R reload, Escape menu. The
 inspector edits positions and collision geometry, saves edits locally, exports
@@ -34,7 +34,7 @@ finished.
 | # | Feature | Working implementation | Remaining work |
 |---|---|---|---|
 | 1 | Profiling and budgets | Fixed-size CPU samples, budget flags, p99; browser CPU frame and asynchronous GPU timer measurements; binary size/audit scripts | Allocator instrumentation, trace timelines, device budgets |
-| 2 | Retained rendering | CPU mesh handles/generations; Courtyard WebGL static buffers/instancing and transformed bounds/frustum culling; headless clipped depth rasterizer | General LOD policy, shared retained submission, Windows/macOS/iOS GPU hosts, GPU-driven submission |
+| 2 | Retained rendering | Shared native/WebGL2 retained buffers and opaque-pass instancing; Courtyard static buffers/instancing and transformed bounds/frustum culling; headless clipped depth rasterizer | General LOD policy, Windows/macOS/iOS GPU hosts, GPU-driven submission |
 | 3 | Character movement | Owned sphere slide/step/snap helper; existing shared FPS AABB motor and prediction | Unified capsule motor, slopes, moving platforms, body pushing |
 | 4 | Input actions | Bounded remappable action map, deadzones, buffered edges; browser keyboard/mouse/gamepad/touch adapters; Linux host events for restored games | Interactive rebinding UI and physical-device testing |
 | 5 | Spatial audio | Strict PCM16 WAV decoder, bounded resampling stereo mixer, distance attenuation/panning; browser AudioWorklet output | Occlusion, streaming/compressed audio, native sinks and authored footsteps |
