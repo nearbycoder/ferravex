@@ -4,6 +4,7 @@ use ferravex_physics::character::{
     CharacterSettings, CharacterShape, Obstacle, ObstacleShape, QueryBounds, Terrain,
     move_and_slide,
 };
+use ferravex_play::camera::{Input3, Mode3, NoObstructions, Rig3, Settings3, Target3};
 type Aabb2 = ferravex_core::collision::Aabb2<Vec2>;
 use ferravex_render::{
     demo::Demo,
@@ -660,6 +661,13 @@ async fn game() {
     let mut demo = Demo::new();
     ferravex_render::set_quality(ferravex_render::lighting::Quality::Medium);
     let mut game = Game::new();
+    let mut view_rig = Rig3::new(Settings3 {
+        position_half_life: 0.,
+        target_half_life: 0.,
+        fov_half_life: 0.,
+        ..Default::default()
+    })
+    .unwrap();
     let scene = Scene::new();
     let material = LitMaterial::new().expect("Ferravex cave shader");
     let mut clock = FixedClock::new(60.0, 8);
@@ -676,6 +684,7 @@ async fn game() {
             game = Game::new();
             clock.reset();
             pilot = Pilot::default();
+            view_rig.cut();
             pitch = -0.03;
             pending_interact = false;
         }
@@ -711,20 +720,30 @@ async fn game() {
             game.step(input, frame.dt);
         }
         clear_background(INK);
-        let eye = world(game.position, 1.55);
-        let direction = forward(game.yaw);
+        let view = view_rig
+            .update(
+                dt,
+                Input3 {
+                    target: Target3::at(world(game.position, 0.)),
+                    mode: Mode3::FirstPerson {
+                        eye_offset: Vec3::Y * 1.55,
+                        yaw: game.yaw,
+                        pitch,
+                    },
+                    fov_y: 67_f32.to_radians(),
+                },
+                &NoObstructions,
+            )
+            .expect("valid cavern view")
+            .pose;
+        let eye = view.position;
         set_camera(&Camera3D {
             position: eye,
-            target: eye
-                + vec3(
-                    direction.x * pitch.cos(),
-                    pitch.sin(),
-                    direction.y * pitch.cos(),
-                ),
-            up: Vec3::Y,
-            fovy: 67_f32.to_radians(),
+            target: view.target,
+            up: view.up,
+            fovy: view.fov_y,
             z_near: 0.06,
-            z_far: 80.0,
+            z_far: 80.,
             ..Default::default()
         });
         scene.draw(&game, &material, eye, demo.time());

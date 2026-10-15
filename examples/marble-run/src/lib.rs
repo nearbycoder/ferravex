@@ -1,6 +1,9 @@
 //! An asset-free rolling-ball time trial over a suspended, low-poly aqueduct.
 mod sim;
 use ferravex_core::FixedClock;
+use ferravex_engine::camera::{
+    Input3, Mode3, ObstructionSettings, Rig3, RigidObstructions, Settings3, Target3,
+};
 use ferravex_render::{
     demo::Demo,
     mesh::Mesh3d,
@@ -288,7 +291,18 @@ async fn game() {
     let mut clock = FixedClock::new(120., 12);
     let mut demo = Demo::new();
     let mut touch_mode = false;
-    let mut camera_target = game.position();
+    let mut camera = Rig3::new(Settings3 {
+        position_half_life: std::f32::consts::LN_2 / 6.,
+        target_half_life: std::f32::consts::LN_2 / 6.,
+        teleport_distance: Some(8.),
+        obstruction: Some(ObstructionSettings {
+            radius: 0.16,
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .unwrap();
+    let mut previous_falls = 0;
     let forward = vec3(-8., 0., -19.).normalize();
     let right = vec3(-forward.z, 0., forward.x);
     loop {
@@ -300,7 +314,7 @@ async fn game() {
         if restart {
             game = Run::new();
             clock.reset();
-            camera_target = game.position();
+            camera.cut();
         }
         let held = |a, b| f32::from(is_key_down(a) || is_key_down(b));
         let horizontal =
@@ -322,24 +336,46 @@ async fn game() {
         }
         let position = game.previous_position.lerp(game.position(), frame.alpha);
         let rotation = game.previous_rotation.slerp(game.rotation(), frame.alpha);
-        camera_target = camera_target.lerp(position, 1. - (-demo.dt() * 6.).exp());
+        if game.falls != previous_falls {
+            camera.cut();
+        }
+        previous_falls = game.falls;
+        let view = camera
+            .update(
+                demo.dt(),
+                Input3 {
+                    target: Target3::at(position),
+                    mode: Mode3::Follow {
+                        eye_offset: vec3(8., 12., 14.),
+                        look_offset: vec3(0., -0.2, -5.),
+                    },
+                    fov_y: 48_f32.to_radians(),
+                },
+                &RigidObstructions {
+                    world: &game.physics,
+                    mask: u32::MAX,
+                    ignore: Some(game.marble),
+                },
+            )
+            .expect("valid rolling camera")
+            .pose;
         clear_background(SKY);
         let overview = is_key_down(KeyCode::Tab);
         let camera_position = if overview {
             vec3(31., 40., 20.)
         } else {
-            camera_target + vec3(8., 12., 14.)
+            view.position
         };
         let target = if overview {
             vec3(3., 0., -18.)
         } else {
-            camera_target + vec3(0., -0.2, -5.)
+            view.target
         };
         set_camera(&Camera3D {
             position: camera_position,
             target,
-            up: Vec3::Y,
-            fovy: 48.0_f32.to_radians(),
+            up: if overview { Vec3::Y } else { view.up },
+            fovy: view.fov_y,
             z_near: 0.1,
             z_far: 220.,
             ..Default::default()

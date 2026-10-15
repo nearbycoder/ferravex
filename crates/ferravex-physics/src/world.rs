@@ -506,10 +506,24 @@ impl<B: Access> World<B> {
         direction: Vec3,
         max_distance: f32,
     ) -> Option<(RigidBodyHandle, ColliderHandle, f32, Vec3, Vec3)> {
+        self.cast_sphere(origin, direction, max_distance, 0., u32::MAX, None)
+    }
+    /// Current-pose sphere sweep. Radius zero preserves the raycast behavior.
+    pub(crate) fn cast_sphere(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        max_distance: f32,
+        radius: f32,
+        mask: u32,
+        ignore: Option<RigidBodyHandle>,
+    ) -> Option<(RigidBodyHandle, ColliderHandle, f32, Vec3, Vec3)> {
         if !origin.is_finite()
             || !direction.is_finite()
             || !max_distance.is_finite()
             || max_distance < 0.
+            || !radius.is_finite()
+            || !(0. ..=1000.).contains(&radius)
         {
             return None;
         }
@@ -517,7 +531,7 @@ impl<B: Access> World<B> {
         let mut best = None;
         let mut limit = max_distance;
         for (id, c) in self.colliders.iter() {
-            if c.sensor {
+            if c.sensor || c.membership & mask == 0 || c.parent == ignore {
                 continue;
             }
             let body = c.parent.unwrap();
@@ -525,13 +539,13 @@ impl<B: Access> World<B> {
             let pose = c.pose(b);
             let (d, n) =
                 geometry::distance(c.shape, pose.position, pose.rotation, origin, self.planar);
-            let hit = if d <= 0. {
+            let hit = if d <= radius {
                 Some((0., n))
             } else {
                 geometry::sweep_ball(
                     origin,
                     origin + direction * limit,
-                    0.,
+                    radius,
                     c.shape,
                     pose.position,
                     pose.rotation,

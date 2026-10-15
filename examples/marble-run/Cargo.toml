@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+ferravex-engine.workspace = true
 ferravex-core.workspace = true
 ferravex-physics = { workspace = true, features = ["dim3"] }
 ferravex-render.workspace = true

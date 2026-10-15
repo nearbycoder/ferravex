@@ -19,6 +19,11 @@ class SearchTests(unittest.TestCase):
         for game in json.loads((ROOT/'examples/catalog.json').read_text()):
             self.assertIn('/examples/'+game['id']+'/',urls)
         self.assertIn('/docs/architecture/#netcode',urls)
+        self.assertIn('/docs/cameras/',urls)
+        self.assertIn('/api/ferravex_play/camera/struct.Rig3.html#method.update',urls)
+        self.assertIn('/api/ferravex_engine/camera/struct.RigidObstructions.html',urls)
+        self.assertFalse(any('/camera/follow/' in u for u in urls),'private-module Rustdoc redirects must not be indexed')
+        self.assertFalse(any('/api/ferravex_engine/camera/struct.Rig3.html' in u or '/api/ferravex_engine/camera/trait.CollisionQuery.html' in u for u in urls),'camera re-export mirrors must use the defining gameplay crate')
         self.assertIn('/api/ferravex_dynamics/struct.PhysicsWorld.html#method.cast_ball',urls)
         self.assertIn('/api/ferravex_net/struct.Snapshot.html',urls)
         self.assertFalse(any('/api/ferravex/dynamics/' in url for url in urls),'facade mirrors must not duplicate defining-crate results')
@@ -43,6 +48,20 @@ class SearchTests(unittest.TestCase):
         method=rows['/api/ferravex_dynamics/struct.PhysicsWorld.html#method.cast_ball']
         self.assertIn('cast_ball',method['text'])
         self.assertNotIn('borrow_mut',method['text'])
+
+    def test_api_parser_keeps_methods_with_and_without_doc_wrappers(self):
+        parser=ContentParser(api=True)
+        parser.feed('<main id="main-content"><div class="main-heading"><a class="src" href="../../src/ferravex_play/camera/mod.rs.html">Source</a></div>'
+                    '<h2 id="implementations">Implementations</h2>'
+                    '<section id="method.update"><a class="src" href="../../src/ferravex_play/camera/mod.rs.html">Source</a><h4>pub fn update</h4></section>'
+                    '<details class="method-toggle"><summary><section id="method.cut"><a class="src" href="../../src/ferravex_play/camera/mod.rs.html">Source</a><h4>pub fn cut</h4></section></summary><p>Teleport feedback.</p></details></main>')
+        self.assertEqual(parser.definition_crate,'ferravex_play')
+        self.assertEqual([m['anchor'] for m in parser.methods],['method.update','method.cut'])
+        self.assertIn('Teleport feedback',''.join(parser.methods[1]['text']))
+        redirect=ContentParser(api=True);redirect.feed('<title>Redirection</title><meta http-equiv="refresh" content="0;URL=../index.html">')
+        self.assertFalse(redirect.has_main)
+        mirror=ContentParser(api=True);mirror.feed('<main id="main-content"><div class="main-heading">A re-exported trait</div><section id="implementors-list"><a class="src" href="../../src/ferravex_engine/camera.rs.html">Impl source</a></section></main>')
+        self.assertIsNone(mirror.definition_crate,'an implementation source must not masquerade as the defining trait source')
 
     def test_pinned_modules_are_complete_and_unchanged(self):
         base=ROOT/'website/static/vendor/qikbar'

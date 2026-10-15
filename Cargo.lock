@@ -8,6 +8,7 @@ version = "0.1.0"
 dependencies = [
  "ferravex-core",
  "ferravex-physics",
+ "ferravex-play",
  "ferravex-render",
 ]
 
@@ -16,6 +17,7 @@ name = "dune-skimmer"
 version = "0.1.0"
 dependencies = [
  "ferravex-core",
+ "ferravex-play",
  "ferravex-render",
 ]
 
@@ -25,6 +27,7 @@ version = "0.1.0"
 dependencies = [
  "ferravex-core",
  "ferravex-physics",
+ "ferravex-play",
  "ferravex-render",
 ]
 
@@ -110,6 +113,9 @@ dependencies = [
 [[package]]
 name = "ferravex-play"
 version = "0.1.0"
+dependencies = [
+ "ferravex-math",
+]
 
 [[package]]
 name = "ferravex-render"
@@ -125,6 +131,7 @@ name = "marble-run"
 version = "0.1.0"
 dependencies = [
  "ferravex-core",
+ "ferravex-engine",
  "ferravex-physics",
  "ferravex-render",
 ]
@@ -178,6 +185,7 @@ version = "0.1.0"
 dependencies = [
  "ferravex-core",
  "ferravex-physics",
+ "ferravex-play",
  "ferravex-render",
 ]
 
@@ -212,6 +220,7 @@ name = "sky-courier"
 version = "0.1.0"
 dependencies = [
  "ferravex-core",
+ "ferravex-play",
  "ferravex-render",
 ]
 
@@ -222,5 +231,6 @@ dependencies = [
  "ferravex-core",
  "ferravex-fps",
  "ferravex-net",
+ "ferravex-play",
  "ferravex-render",
 ]

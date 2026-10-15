@@ -18,6 +18,8 @@ class ContentParser(HTMLParser):
         self.api = api
         self.stack = []
         self.root = None
+        self.has_main = False
+        self.definition_crate = None
         self.title = []
         self.description = ''
         self.text = []
@@ -41,6 +43,7 @@ class ContentParser(HTMLParser):
         if self.root is None and ((not self.api and tag == 'article' and 'prose' in classes)
                                   or (self.api and attrs.get('id') == 'main-content')):
             self.root = depth
+            self.has_main = True
         if self.root is None:
             return
         if tag in ('script', 'style', 'button', 'nav') or attrs.get('id', '').startswith(('blanket-implementations-list', 'synthetic-implementations-list')):
@@ -50,10 +53,16 @@ class ContentParser(HTMLParser):
             return
         if self.api and attrs.get('id') in ('implementations', 'trait-implementations', 'synthetic-implementations', 'blanket-implementations'):
             self.intro_done = True
+        if self.api and tag == 'a' and 'src' in classes and any('main-heading' in attrs.get('class', '').split() for _, attrs in self.stack):
+            href = attrs.get('href', '')
+            if not href.startswith(('https:', 'http:')) and '/src/' in href:
+                self.definition_crate = href.split('/src/', 1)[1].split('/', 1)[0]
+        if self.api and tag == 'section' and attrs.get('id', '').startswith(('method.', 'tymethod.', 'associatedconstant.', 'associatedtype.')) and self.method is None:
+            self.method = {'depth': depth, 'anchor': '', 'text': [], 'local': False}
         if self.api and tag == 'details' and 'method-toggle' in classes:
             self.method = {'depth': depth, 'anchor': '', 'text': [], 'local': False}
         if self.method:
-            if tag == 'section' and attrs.get('id', '').startswith(('method.', 'associatedconstant.', 'associatedtype.')):
+            if tag == 'section' and attrs.get('id', '').startswith(('method.', 'tymethod.', 'associatedconstant.', 'associatedtype.')):
                 self.method['anchor'] = attrs['id']
             if tag == 'a' and 'src' in classes and '/src/' in attrs.get('href', '') and not attrs['href'].startswith(('https:', 'http:')):
                 self.method['local'] = True
@@ -132,13 +141,14 @@ def build_index(root, docs, games, repository):
         relative = path.relative_to(root / 'api')
         if relative.parts[0] in ('src', 'static.files', 'trait.impl', 'type.impl') or path.name in ('all.html', 'help.html', 'settings.html'):
             continue
-        # Facade module mirrors lead to identical results for each public method.
-        # The defining crate remains indexed and is the stable canonical destination.
-        if len(relative.parts) > 2 and relative.parts[0] in ('ferravex', 'ferravex_engine'):
-            continue
         parser = ContentParser(api=True)
         parser.feed(path.read_text())
-        if not parser.title:
+        if not parser.title or not parser.has_main:
+            continue
+        # Re-export mirrors have no defining source in this crate. Keep the
+        # facade's real modules (input/audio/assets/camera), rather than dropping
+        # all nested APIs. Private-module redirect stubs have no main content.
+        if len(relative.parts) > 2 and relative.parts[0] in ('ferravex', 'ferravex_engine') and parser.definition_crate != relative.parts[0]:
             continue
         title = compact(''.join(parser.title)).removesuffix(' - Rust')
         name, _, context = title.partition(' in ')

@@ -1,4 +1,7 @@
 use ferravex_core::FixedClock;
+use ferravex_play::camera::{
+    Input3, Mode3, NoObstructions, Rig3, Settings3, ShakeImpulse, Target3,
+};
 use ferravex_render::{
     demo::Demo,
     mesh::Mesh3d,
@@ -474,6 +477,14 @@ async fn game() {
     let material = LitMaterial::new().expect("portable flight material");
     let mut touch_mode = false;
     let mut reported = false;
+    let mut camera = Rig3::new(Settings3 {
+        position_half_life: 0.1,
+        target_half_life: 0.06,
+        teleport_distance: Some(35.),
+        ..Default::default()
+    })
+    .unwrap();
+    let mut previous_hull = flight.hull;
     loop {
         ferravex_render::ui::warm_up_font_sizes(&[13, 14, 16, 17, 18, 19, 20, 22, 24, 26, 38]);
         touch_mode |= !ferravex_render::input::logical_touches().is_empty();
@@ -486,6 +497,8 @@ async fn game() {
             flight = Flight::new();
             clock.reset();
             reported = false;
+            camera.cut();
+            previous_hull = flight.hull;
         }
         let steps = clock.advance(demo.dt() as f64);
         let human = human_input();
@@ -497,14 +510,51 @@ async fn game() {
             };
             flight.tick(input, steps.dt);
         }
-        let forward = vec3(flight.yaw.sin(), 0., flight.yaw.cos());
-        let camera_pos = flight.pos - forward * 24. + Vec3::Y * 10.;
+        if flight.hull < previous_hull {
+            camera.cut();
+            camera
+                .shake
+                .push(ShakeImpulse {
+                    translation: vec3(0.06, 0.04, 0.02),
+                    rotation: vec3(0.008, 0.004, 0.02),
+                    duration: 0.25,
+                    frequency: 20.,
+                })
+                .expect("hull changes bound shake layers");
+        }
+        previous_hull = flight.hull;
+        let view = camera
+            .update(
+                demo.dt(),
+                Input3 {
+                    target: Target3 {
+                        position: flight.pos,
+                        rotation: Quat::from_rotation_y(flight.yaw),
+                        velocity: flight.forward() * flight.speed,
+                    },
+                    mode: Mode3::Chase {
+                        distance: 24.,
+                        height: 10.,
+                        look_ahead: 20.,
+                        look_height: 0.,
+                        speed_distance: 0.,
+                        speed_height: 0.,
+                        prediction: 0.,
+                        level: true,
+                    },
+                    fov_y: 55_f32.to_radians(),
+                },
+                &NoObstructions,
+            )
+            .expect("valid flight camera")
+            .pose;
+        let camera_pos = view.position;
         clear_background(SKY);
         set_camera(&Camera3D {
             position: camera_pos,
-            target: flight.pos + forward * 20.,
-            up: Vec3::Y,
-            fovy: 55f32.to_radians(),
+            target: view.target,
+            up: view.up,
+            fovy: view.fov_y,
             z_near: 0.2,
             z_far: 650.,
             ..Default::default()

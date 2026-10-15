@@ -287,3 +287,50 @@ other work and artifact flags remain visible. Baselines and tolerances were not
 changed. Raw results: `target/perf/iteration-08-final/report.json` (all fifteen
 current release binary hashes verified). Carry these flags, plus iteration 6
 and 7's costs, into the final iteration-20 audit.
+
+
+### Shared-camera iteration
+
+The same Linux/Radeon release workload as iteration 8 (120 measured frames,
+30 warmup frames, two fresh processes) gives these observations for the seven
+camera integrations:
+
+| Game | Previous Wasm bytes | New Wasm bytes | New gzip bytes | CPU mean µs |
+|---|---:|---:|---:|---:|
+| emberline | 164810 | 168355 | 65047 | 73.4 |
+| dune-skimmer | 204640 | 221081 | 86077 | 127.6 |
+| marble-run | 286067 | 298660 | 114956 | 95.7 |
+| sky-courier | 187586 | 199723 | 77178 | 123.4 |
+| strike | 249113 | 260333 | 100838 | 17.6 |
+| crystal-cavern | 233634 | 244537 | 94236 | 99.5 |
+| physics-3d | 313205 | 324181 | 123928 | 616.5 |
+
+All fifteen recordings passed CPU/GPU timing and work comparisons with the
+recorded 1000 µs CPU / 20 µs GPU host floors. The comparison retains **four size
+flags**: Dune Skimmer's raw/gzip Wasm and Sky Courier's raw/gzip Wasm exceed the
+default 5% growth gate. Native and other artifact comparisons passed. The prior
+baseline and tolerances were preserved; these flags join the earlier costs for
+the final iteration-20 audit. Raw report:
+`target/perf/iteration-09-final/report.json` (current native binary hashes checked).
+
+Dune's whole-update CPU mean was 127.6 µs versus 88.5 before, and Marble's 95.7
+versus 92.5. These include scenery queries, changed views/culling and game/HUD
+work, not an isolated camera benchmark. Other observed decreases are shared-host
+measurements, not portable speedup claims. A dedicated allocator test exercises
+all modes, live obstruction sweeps and layered shake with **zero heap allocations**,
+including initialization. Dune builds its static authored blocker vector once;
+Marble's adapter reads its current rigid colliders without a copied query scene.
+
+Local gameplay checks completed Dune's three laps with zero impacts/recoveries,
+Marble's six-crystal course with zero falls, and Sky Courier's six-beacon delivery
+with full hull. Browser checks also completed Emberline with zero falls and
+Crystal Cavern's three-crystal escape, checked Strike practice aiming, and
+exercised the lab's drag-to-orbit controls. These are local functional checks,
+not device-wide performance or collision guarantees.
+
+The camera guide also exposed a search coverage gap: the indexer now retains
+real facade-owned APIs and methods without Rustdoc detail wrappers, while
+excluding re-export mirrors and redirect stubs. The current corpus is 2719
+entries, roughly 1.4 MB raw JSON / 190 KB gzip, loaded when search opens. Local
+retrieval checks averaged about 0.7 ms/query; the extra searchable API content
+has a transfer/storage cost even though it is separate from game modules.

@@ -2,6 +2,9 @@
 mod race;
 
 use ferravex_core::FixedClock;
+use ferravex_play::camera::{
+    Blocker, Input3, Mode3, ObstructionSettings, Rig3, Settings3, ShakeImpulse, Target3,
+};
 use ferravex_render::{
     demo::Demo,
     material::{MaterialOptions, ShaderMaterial, ShaderSource},
@@ -221,6 +224,43 @@ impl Scene {
             dust: Mesh3d::cuboid(vec3(0.22, 0.22, 0.22), PALE),
             sun: Mesh3d::sphere(6.0, Color::from_rgba(255, 226, 166, 255), 12, 8),
         }
+    }
+    fn camera_blockers(&self, course: &Course) -> Vec<Blocker> {
+        let mut blockers = vec![Blocker::Plane {
+            normal: Vec3::Y,
+            offset: 0.,
+        }];
+        for prop in &self.props {
+            let bounds = self.prop_meshes[prop.mesh].resident().bounds();
+            blockers.push(Blocker::Box {
+                center: prop.position + prop.rotation * bounds.center(),
+                half: bounds.half_extents(),
+                rotation: prop.rotation,
+            });
+        }
+        blockers.extend(course.rocks.iter().map(|&(p, radius)| Blocker::Sphere {
+            center: world(p, 0.65),
+            radius,
+        }));
+        for gate in &course.gates {
+            let rotation = Quat::from_rotation_y(heading(gate.direction));
+            for side in [-1., 1.] {
+                blockers.push(Blocker::Box {
+                    center: world(
+                        gate.position + right(gate.direction) * (HALF_WIDTH + 0.4) * side,
+                        3.7,
+                    ),
+                    half: vec3(0.375, 3.8, 0.575),
+                    rotation,
+                });
+            }
+            blockers.push(Blocker::Box {
+                center: world(gate.position, 7.55),
+                half: vec3(HALF_WIDTH + 0.75, 0.35, 0.575),
+                rotation,
+            });
+        }
+        blockers
     }
     fn draw(&self, course: &Course, race: &Race, position: Vec2, yaw: f32, time: f32) {
         use ferravex_render::lighting::{PointLight, SunShadow};
@@ -516,9 +556,19 @@ async fn game() {
     let mut demo = Demo::new();
     ferravex_render::set_quality(ferravex_render::lighting::Quality::Medium);
     let mut touch_mode = false;
-    let mut fovy = 51.0_f32;
-    let mut camera_position = world(race.position - race.forward() * 11.0, 5.1);
-    let mut camera_target = world(race.position + race.forward() * 5.0, 1.8);
+    let mut camera = Rig3::new(Settings3 {
+        position_half_life: std::f32::consts::LN_2 / 5.5,
+        target_half_life: std::f32::consts::LN_2 / 8.,
+        obstruction: Some(ObstructionSettings {
+            radius: 0.23,
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .unwrap();
+    let blockers = scene.camera_blockers(&course);
+    let mut previous_impacts = 0;
+    let mut previous_recoveries = 0;
     loop {
         ferravex_render::ui::warm_up_font_sizes(&[13, 14, 16, 17, 18, 20, 22, 28, 47, 49, 54, 74]);
         ui::warm_up_font();
@@ -532,8 +582,9 @@ async fn game() {
         {
             race = Race::new();
             clock.reset();
-            camera_position = world(race.position - race.forward() * 11.0, 5.1);
-            camera_target = world(race.position + race.forward() * 5.0, 1.8);
+            camera.cut();
+            previous_impacts = 0;
+            previous_recoveries = 0;
         }
         let input = read_input(touch_mode);
         let dt = demo.dt();
@@ -552,21 +603,58 @@ async fn game() {
         let position = race.previous_position.lerp(race.position, frame.alpha);
         let yaw =
             race.previous_yaw + race::angle_difference(race.yaw, race.previous_yaw) * frame.alpha;
-        let forward = vec2(yaw.sin(), yaw.cos());
-        let eye = world(
-            position - forward * (10.7 + race.speed() * 0.035),
-            4.8 + race.speed() * 0.015,
-        );
-        let target = world(position + forward * 6.0, 1.6);
-        camera_position = camera_position.lerp(eye, 1.0 - (-dt * 5.5).exp());
-        camera_target = camera_target.lerp(target, 1.0 - (-dt * 8.0).exp());
-        fovy += ((if race.boosting { 54.0 } else { 51.0 }) - fovy) * (dt * 5.0).min(1.0);
+        if race.recovery_count != previous_recoveries {
+            camera.cut();
+        }
+        if race.impacts > previous_impacts {
+            camera
+                .shake
+                .push(ShakeImpulse {
+                    translation: vec3(0.025, 0.015, 0.),
+                    rotation: vec3(0.006, 0.004, 0.018),
+                    duration: 0.22,
+                    frequency: 24.,
+                })
+                .expect("impact cooldown bounds shake layers");
+        }
+        previous_impacts = race.impacts;
+        previous_recoveries = race.recovery_count;
+        let view = camera
+            .update(
+                dt,
+                Input3 {
+                    target: Target3 {
+                        position: world(position, HOVER_HEIGHT),
+                        rotation: Quat::from_rotation_y(yaw),
+                        velocity: world(race.velocity, 0.),
+                    },
+                    mode: Mode3::Chase {
+                        distance: 10.7,
+                        height: 4.8 - HOVER_HEIGHT,
+                        look_ahead: 6.,
+                        look_height: 1.6 - HOVER_HEIGHT,
+                        speed_distance: 0.035,
+                        speed_height: 0.015,
+                        prediction: 0.,
+                        level: true,
+                    },
+                    fov_y: if race.boosting {
+                        54_f32.to_radians()
+                    } else {
+                        51_f32.to_radians()
+                    },
+                },
+                &blockers[..],
+            )
+            .expect("valid hover camera")
+            .pose;
+        let camera_position = view.position;
         clear_background(SKY);
         set_camera(&Camera3D {
             position: camera_position,
-            target: camera_target,
-            up: Vec3::Y,
-            fovy: fovy.to_radians(),
+            target: view.target,
+            up: view.up,
+            fovy: view.fov_y,
             z_near: 0.12,
             z_far: 370.0,
             ..Default::default()
