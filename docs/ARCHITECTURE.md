@@ -1,6 +1,6 @@
 # Architecture
 
-Ferravex separates simulation, data and platform presentation. Every package depends only on other workspace packages and Rust std. The [dependency policy](../DEPENDENCIES.md) applies to all features and targets. The recovery described here is local; publication and full catalog validation are not implied.
+Ferravex separates simulation, data and platform presentation. Every package depends only on other workspace packages and Rust std. The [dependency policy](../DEPENDENCIES.md) applies to all features and targets. The [iteration series](ITERATION_PLAN.md) records merged improvements and available local validation.
 
 ## Engine modules
 
@@ -32,9 +32,9 @@ Orbit Breaker runs a 120 Hz arcade simulation and an original Rust RGBA rasteriz
 
 Two original solvers serve different examples. `ferravex-dynamics` handles circles/spheres and axis-aligned boxes, translational contact impulses, friction, restitution, sensors, filtered queries, bounded ball CCD and a sphere slide/step/snap helper. It has no angular dynamics and remains the solver used by the older headless examples.
 
-`ferravex-physics` provides dynamic circles/spheres and oriented boxes with angular impulses, world inertia, clipped box contact manifolds, friction and restitution. Static/kinematic 2D capsule rails and 3D cylinders collide with balls. The API includes generational handles, removal, sensors, contact start/stop events, layers, current-pose rays and conservative sphere sweeps with at most eight substeps. Sweeps freeze target orientation within a substep and have a forty-iteration bound.
+`ferravex-physics` provides dynamic circles/spheres and oriented boxes with angular impulses, world inertia, clipped box contact manifolds, friction and restitution. Dynamic/fixed/kinematic 2D capsules and 3D cylinders collide with balls. Bodies may own locally transformed primitive parts, with analytical mass centers and full inertia tensors. Fixed, hinge, distance and spring joints share contact solver iterations and connected sleep islands; hinge motors support torque caps and angle limits. The API includes generational handles, removal, sensors, contact start/stop events, layers, current-pose rays and conservative sphere sweeps with at most eight substeps. Sweeps freeze target orientation within a substep and have a forty-iteration bound.
 
-Dynamic capsules/cylinders, capsule/cylinder-versus-box contacts, joints, mesh collisions and swept box time-of-impact are unsupported. Consult the [crate README](../crates/ferravex-physics/README.md) for exact limits. This is an original bounded implementation, not production-engine feature parity. Recovery validation must exercise pinball flippers, rolling marbles, stacks and high-speed cannonballs in addition to compile checks.
+Capsule/cylinder-versus-box contacts, mesh collisions and swept box time-of-impact are unsupported. Consult the [crate README](../crates/ferravex-physics/README.md) for exact limits. This is an original bounded implementation, not production-engine feature parity. Recovery validation must exercise pinball flippers, rolling marbles, stacks and high-speed cannonballs in addition to compile checks.
 
 ## Netcode
 

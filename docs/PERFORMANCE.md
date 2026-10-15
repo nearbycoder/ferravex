@@ -239,3 +239,51 @@ CPU/GPU timing and the other work comparisons passed the recorded 1000 µs CPU /
 20 µs GPU floors. Neither baselines nor tolerances were changed to hide flags.
 Raw report: `target/perf/iteration-07-final/report.json`. Carry these and iteration
 6's artifact costs into the final size/performance audit.
+
+
+### Joints and compound-body iteration
+
+On the same Linux/Radeon native release workload as iteration 7 (120 measured
+frames after 30 warmup frames in each of two processes), the expanded examples
+and mass/joint implementation have these measured costs:
+
+| Game | Previous Wasm bytes | New Wasm bytes | New gzip bytes | CPU mean µs |
+|---|---:|---:|---:|---:|
+| salvage-pinball | 235050 | 278475 | 106396 | 151.2 |
+| marble-run | 271839 | 286067 | 109744 | 92.5 |
+| siege-foundry | 262213 | 280659 | 108562 | 190.0 |
+| physics-2d | 222577 | 273746 | 104883 | 544.8 |
+| physics-3d | 260510 | 313205 | 119267 | 539.1 |
+
+Pinball now drives dynamic capsule flippers with hinge motors. Both labs retain
+the original falling bodies and add four linked bodies, three anchors, compound
+parts and four connections. These scenes are therefore larger workloads than
+the previous baseline. Mean 3D lab draws are 13 versus 11 before the mechanisms;
+mesh grouping reduced an intermediate 20-draw version to 13. GPU mean is 31.0 µs
+versus 28.1 before; 2D lab CPU mean is 544.8 µs versus 353.3, and 3D lab 539.1 µs
+versus 388.9. These are machine/workload observations, not portable speed claims.
+Idle hinge motors no longer force maximum-speed substeps, and collision layers
+exclude unsupported flipper/fixture pairs. Pinball mean broadphase candidates are
+1.33/frame (previous 0.54); its p95/p99 both reach 6 during motor activity.
+
+Joint row implementations are installed when a world first inserts a joint.
+Linkers can discard them for games without connections: this removed about 22 KB
+raw / 8.5 KB gzip from an intermediate Marble Run/Siege build. Compound mass and
+query support still have a cost even in those existing games. All five affected
+Wasm modules exceed the original default 5% size-growth gate. Native/gzip size
+flags also remain for Pinball and both labs.
+
+The final comparison retains **46 flags** across size, lab geometry/upload/draw
+counts, broadphase/contact counts, lab allocation bytes and Pinball candidate
+quantiles. Both lab recordings include intermittent allocation growth inside the measured
+window: mean allocation bytes/frame are about 120 versus 17 previously, with
+p99 about 6161–6162 bytes, though calls stay around 3.02 versus 3. Dedicated
+steady-state solver tests verify zero heap allocations after warmup for contact
+stacks and continuously motor-driven compound mechanisms. That isolated result
+does not erase allocation growth observed by the complete game recording.
+
+CPU/GPU timing comparisons passed the recorded 1000 µs CPU / 20 µs GPU floors;
+other work and artifact flags remain visible. Baselines and tolerances were not
+changed. Raw results: `target/perf/iteration-08-final/report.json` (all fifteen
+current release binary hashes verified). Carry these flags, plus iteration 6
+and 7's costs, into the final iteration-20 audit.

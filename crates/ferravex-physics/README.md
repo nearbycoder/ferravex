@@ -11,20 +11,20 @@ This is separate from `ferravex-dynamics`, the smaller translational array-based
 | Circle/circle or sphere/sphere | Dynamic, fixed, kinematic | Dynamic, fixed, kinematic |
 | Ball/oriented box | Dynamic, fixed, kinematic | Dynamic, fixed, kinematic |
 | Oriented box/oriented box | Dynamic, fixed, kinematic | Dynamic, fixed, kinematic |
-| Ball/capsule | Fixed or kinematic capsule | Not exposed |
-| Ball/capped cylinder | Not exposed | Fixed or kinematic cylinder |
+| Ball/capsule | Dynamic, fixed, kinematic capsule | Not exposed |
+| Ball/capped cylinder | Not exposed | Dynamic, fixed, kinematic cylinder |
 
-Boxes use separating axes and clipped face contact manifolds; edge contacts use closest supporting edges. Balls collide against the actual curved capsule/cylinder surfaces. Capsules and cylinders are supported only as ball obstacles, and inserting them as dynamic bodies explicitly panics. Box/capsule, box/cylinder, and capsule/cylinder combinations have no collision response.
+Boxes use separating axes and clipped face contact manifolds; edge contacts use closest supporting edges. Balls collide against the actual curved capsule/cylinder surfaces. Capsules and cylinders have analytical dynamic mass properties, with contacts supported only against balls. Box/capsule, box/cylinder, and capsule/cylinder combinations have no collision response.
 
-- Density-derived circle/sphere/box mass and local inertia; world-space inertia handles rotated boxes.
+- Density-derived primitive and compound mass, center of mass, rotated full inertia tensors and the parallel-axis theorem.
 - Linear/angular impulses, impulses at a point, force/torque accumulation, gravity scale, and damping. Forces and torques clear after each outer step.
 - Persistent local-anchor manifolds, warm-started accumulated normal/tangent impulses, averaged restitution, Coulomb friction, and separate angular positional correction. Restitution is suppressed below impact speed 1 to allow resting stacks.
 - Position-driven kinematics calculate linear and angular velocity from the requested next pose. Contact-point angular velocity lets a pinball flipper launch the ball.
-- Generation-checked body/collider handles, one collider per body, removal, sleeping and impact wake-up.
+- Generation-checked body/collider/joint handles, up to 32 locally transformed collider parts per body, removal, connected sleeping and impact wake-up.
 - Sweep-and-prune AABB broadphase, collision membership/filter masks, sensor overlaps, contact begin/end events, and direct current-pose raycasts. Rays exclude sensors and return the nearest solid hit.
 - Sphere/circle CCD uses signed-distance conservative sweeps against supported convex shapes. Target translation is included in the relative path. Target rotation is frozen within each substep. Adaptive substeps (maximum 8) reduce rotational motion per query; each sweep has a maximum of 40 iterations. Existing penetration goes to the contact solver. Grazing sweeps can exhaust their iteration budget; this is not a universal no-tunneling guarantee. Boxes use substeps only, not swept time of impact.
 
-The public `d2` and `d3` adapters preserve the small builder/body/contact API used by these games. `raw` exposes this original solver, **not** a Rapier-compatible world. No hook, joint, mesh, compound collider, ray filter callback, or external plugin API is implied.
+The public `d2` and `d3` adapters preserve the small builder/body/contact API used by these games. `raw` exposes this original solver, **not** a Rapier-compatible world. Fixed, hinge, distance and spring joints support connected mechanisms, motors and limits. No mesh collider, hook, ray filter callback, or external plugin API is implied. See [joints and compound bodies](../../docs/JOINTS_AND_COMPOUNDS.md) for builders, lifecycle semantics and limits.
 
 ## Using a fixed tick
 

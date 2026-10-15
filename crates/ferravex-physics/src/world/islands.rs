@@ -95,6 +95,31 @@ fn moving(b: &crate::body::Core) -> bool {
         && b.velocity.length_squared() + b.angular_velocity.length_squared() > 1e-12
 }
 impl<B: Access> World<B> {
+    fn join_joint_islands(&mut self) {
+        for (_, j) in self.joints.iter() {
+            if j.desc.enabled {
+                self.islands.join(j.a, j.b);
+            }
+        }
+    }
+    fn request_joint_wakes(&mut self) {
+        for (_, j) in self.joints.iter() {
+            if !j.desc.enabled {
+                continue;
+            }
+            let a = self.bodies[j.a].core();
+            let b = self.bodies[j.b].core();
+            if a.solver_dirty
+                || b.solver_dirty
+                || moving(a)
+                || moving(b)
+                || super::joints::motor_active(j, a, b)
+            {
+                self.islands.request(j.a);
+                self.islands.request(j.b);
+            }
+        }
+    }
     pub(super) fn wake_previous_islands(&mut self, gravity_changed: bool) {
         self.islands.reset(&self.bodies);
         for c in &self.contacts {
@@ -108,8 +133,10 @@ impl<B: Access> World<B> {
                 self.islands.join(a.parent.unwrap(), b.parent.unwrap());
             }
         }
+        self.join_joint_islands();
         self.islands
             .seed(&self.bodies, gravity_changed || !self.settings.allow_sleep);
+        self.request_joint_wakes();
         for c in &self.contacts {
             if c.sensor {
                 continue;
@@ -141,7 +168,9 @@ impl<B: Access> World<B> {
         for c in &self.constraints {
             self.islands.join(c.a, c.b);
         }
+        self.join_joint_islands();
         self.islands.seed(&self.bodies, !self.settings.allow_sleep);
+        self.request_joint_wakes();
         for c in &self.constraints {
             if moving(self.bodies[c.a].core()) || moving(self.bodies[c.b].core()) {
                 self.islands.request(c.a);
@@ -183,6 +212,27 @@ impl<B: Access> World<B> {
                     && normal.dot(-(self.gravity * b.gravity_scale).normalize_or_zero()) > 0.2
                 {
                     f.anchored = true;
+                }
+            }
+        }
+        for (_, j) in self.joints.iter() {
+            if !j.desc.enabled {
+                continue;
+            }
+            let aa = self.bodies[j.a].core();
+            let bb = self.bodies[j.b].core();
+            let motor = super::joints::motor_active(j, aa, bb);
+            for (id, other) in [(j.a, bb), (j.b, aa)] {
+                if self.bodies[id].core().kind != Kind::Dynamic {
+                    continue;
+                }
+                let root = self.islands.root(id.index);
+                let f = &mut self.islands.flags[root];
+                if other.kind != Kind::Dynamic {
+                    f.anchored = true;
+                }
+                if moving(other) || motor {
+                    f.quiet = false;
                 }
             }
         }

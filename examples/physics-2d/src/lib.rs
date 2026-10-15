@@ -1,6 +1,9 @@
 //! Interactive original 2D physics sandbox. No imported textures, fonts, or scene assets.
 use ferravex_core::{FixedClock, FrameStats};
-use ferravex_physics::d2::{self, PhysicsWorld, RigidBodyHandle};
+use ferravex_physics::JointHandle;
+use ferravex_physics::d2::{
+    self, ColliderBuilder, JointBuilder, PhysicsWorld, RigidBodyBuilder, RigidBodyHandle,
+};
 use ferravex_render::{prelude::*, ui};
 
 const MAX_BODIES: usize = 240;
@@ -10,6 +13,7 @@ const TICK_HZ: f64 = 120.0;
 enum Shape {
     Ball(f32),
     Box(Vec2),
+    Dumbbell,
 }
 
 struct Body {
@@ -24,6 +28,7 @@ struct Sandbox {
     physics: PhysicsWorld,
     bodies: Vec<Body>,
     platforms: Vec<(Vec2, Vec2)>,
+    links: Vec<JointHandle>,
 }
 
 impl Sandbox {
@@ -32,6 +37,7 @@ impl Sandbox {
             physics: PhysicsWorld::new([0.0, -9.81]),
             bodies: Vec::new(),
             platforms: vec![],
+            links: Vec::new(),
         };
         for (position, half) in [
             (vec2(0.0, -0.5), vec2(12.0, 0.5)),
@@ -65,7 +71,104 @@ impl Sandbox {
                 true,
             );
         }
+        world.mechanisms();
         world
+    }
+
+    fn mechanisms(&mut self) {
+        let anchor = self
+            .physics
+            .insert_body(RigidBodyBuilder::fixed().translation(vec2(-9., 11.)))
+            .unwrap();
+        let position = vec2(-8.5, 10.);
+        let (rod, _) = self.physics.insert(
+            RigidBodyBuilder::dynamic().translation(position),
+            ColliderBuilder::cuboid(0.18, 1.),
+        );
+        self.bodies.push(Body {
+            handle: rod,
+            shape: Shape::Box(vec2(0.18, 1.)),
+            color: ui::CYAN,
+            previous_position: position,
+            previous_angle: 0.,
+        });
+        self.links.push(
+            self.physics
+                .insert_joint(
+                    anchor,
+                    rod,
+                    JointBuilder::hinge()
+                        .local_anchor2(vec2(-0.5, 1.))
+                        .limits(-1.2, 1.2),
+                )
+                .unwrap(),
+        );
+        let position = vec2(-8.5, 8.4);
+        let (tip, _) = self.physics.insert(
+            RigidBodyBuilder::dynamic().translation(position),
+            ColliderBuilder::cuboid(0.4, 0.6),
+        );
+        self.bodies.push(Body {
+            handle: tip,
+            shape: Shape::Box(vec2(0.4, 0.6)),
+            color: ui::AMBER,
+            previous_position: position,
+            previous_angle: 0.,
+        });
+        self.links.push(
+            self.physics
+                .insert_joint(
+                    rod,
+                    tip,
+                    JointBuilder::fixed()
+                        .local_anchor1(vec2(0., -1.))
+                        .local_anchor2(vec2(0., 0.6)),
+                )
+                .unwrap(),
+        );
+        let anchor = self
+            .physics
+            .insert_body(RigidBodyBuilder::fixed().translation(vec2(-5.8, 11.)))
+            .unwrap();
+        self.spawn(vec2(-5., 9.), true);
+        let bob = self.bodies.last().unwrap().handle;
+        self.links.push(
+            self.physics
+                .insert_joint(
+                    anchor,
+                    bob,
+                    JointBuilder::distance((0.8_f32 * 0.8 + 4.).sqrt()),
+                )
+                .unwrap(),
+        );
+        let anchor = self
+            .physics
+            .insert_body(RigidBodyBuilder::fixed().translation(vec2(8.2, 12.)))
+            .unwrap();
+        let position = vec2(8.2, 10.);
+        let bob = self
+            .physics
+            .insert_compound(
+                RigidBodyBuilder::dynamic().translation(position),
+                [
+                    ColliderBuilder::cuboid(0.75, 0.1),
+                    ColliderBuilder::ball(0.28).translation(vec2(-0.75, 0.)),
+                    ColliderBuilder::ball(0.28).translation(vec2(0.75, 0.)),
+                ],
+            )
+            .unwrap();
+        self.bodies.push(Body {
+            handle: bob,
+            shape: Shape::Dumbbell,
+            color: ui::CYAN,
+            previous_position: position,
+            previous_angle: 0.,
+        });
+        self.links.push(
+            self.physics
+                .insert_joint(anchor, bob, JointBuilder::spring(2., 20., 3.))
+                .unwrap(),
+        );
     }
 
     fn spawn(&mut self, position: Vec2, ball: bool) {
@@ -212,6 +315,14 @@ async fn game() {
                 ui::MUTED,
             );
         }
+        for id in &sandbox.links {
+            if let Some([a, b]) = sandbox.physics.joint_anchors(*id) {
+                let a = to_screen(vec2(a.x, a.y));
+                let b = to_screen(vec2(b.x, b.y));
+                draw_line(a.x, a.y, b.x, b.y, 2., ui::MUTED);
+                draw_circle(a.x, a.y, 3.5, ui::AMBER);
+            }
+        }
         for body in &sandbox.bodies {
             let rigid_body = &sandbox.physics.bodies[body.handle];
             let position = body
@@ -226,6 +337,16 @@ async fn game() {
             let center = to_screen(position);
             let rotation = Vec2::from_angle(angle);
             match body.shape {
+                Shape::Dumbbell => {
+                    let a = to_screen(position + rotation.rotate(vec2(-0.75, 0.)));
+                    let b = to_screen(position + rotation.rotate(vec2(0.75, 0.)));
+                    draw_line(a.x, a.y, b.x, b.y, 0.2 * scale, ui::MUTED);
+                    for p in [a, b] {
+                        draw_circle(p.x, p.y, 0.28 * scale, body.color);
+                        draw_circle_lines(p.x, p.y, 0.28 * scale, 1.5, ui::AMBER);
+                    }
+                }
+
                 Shape::Ball(radius) => {
                     draw_circle(center.x, center.y, radius * scale, body.color);
                     draw_circle_lines(
@@ -358,6 +479,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn jointed_mechanisms_keep_their_constraints_under_load() {
+        let mut sandbox = Sandbox::new();
+        for _ in 0..1200 {
+            sandbox.step(1. / 120.);
+        }
+        assert_eq!(sandbox.links.len(), 4);
+        for &id in &sandbox.links {
+            let joint = &sandbox.physics.joints[id];
+            let [a, b] = sandbox.physics.joint_anchors(id).unwrap();
+            match joint.description().kind {
+                ferravex_physics::JointKind::Distance { length } => {
+                    assert!((a.distance(b) - length).abs() < 0.005)
+                }
+                ferravex_physics::JointKind::Spring {
+                    length, stiffness, ..
+                } => {
+                    let body = joint.bodies()[1];
+                    let extension = sandbox.physics.bodies[body].mass() * 9.81 / stiffness;
+                    assert!((a.distance(b) - length - extension).abs() < 0.025);
+                }
+                _ => assert!(a.distance(b) < 0.005),
+            }
+        }
+    }
+
+    #[test]
     fn recovered_sandbox_settles_with_finite_rotating_bodies() {
         let mut sandbox = Sandbox::new();
         let mut rotation_seen = false;
@@ -386,10 +533,10 @@ mod tests {
         assert_eq!(sandbox.bodies.len(), MAX_BODIES);
         assert_eq!(
             sandbox.physics.bodies.len(),
-            MAX_BODIES + sandbox.platforms.len()
+            MAX_BODIES + sandbox.platforms.len() + 3
         );
         sandbox = Sandbox::new();
-        assert_eq!(sandbox.bodies.len(), 30);
-        assert_eq!(sandbox.physics.bodies.len(), 35);
+        assert_eq!(sandbox.bodies.len(), 34);
+        assert_eq!(sandbox.physics.bodies.len(), 42);
     }
 }

@@ -68,3 +68,50 @@ fn steady_contact_steps_reuse_storage_awake_and_asleep() {
         );
     }
 }
+
+#[test]
+fn steady_joints_and_compounds_reuse_storage() {
+    use ferravex_math::Vec3;
+    use ferravex_physics::{
+        JointMotor, SolverSettings,
+        d3::{ColliderBuilder, JointBuilder, PhysicsWorld, RigidBodyBuilder},
+    };
+    let mut w = PhysicsWorld::default();
+    w.set_solver_settings(SolverSettings {
+        allow_sleep: false,
+        ..Default::default()
+    })
+    .unwrap();
+    let anchor = w.insert_body(RigidBodyBuilder::fixed()).unwrap();
+    for i in 0..8 {
+        let x = i as f32 * 4.;
+        let body = w
+            .insert_compound(
+                RigidBodyBuilder::dynamic().translation(Vec3::new(x, 0., 0.)),
+                [
+                    ColliderBuilder::cuboid(0.7, 0.1, 0.1),
+                    ColliderBuilder::ball(0.3).translation(Vec3::X * 0.7),
+                    ColliderBuilder::ball(0.3).translation(-Vec3::X * 0.7),
+                ],
+            )
+            .unwrap();
+        w.insert_joint(
+            anchor,
+            body,
+            JointBuilder::hinge()
+                .local_anchor1(Vec3::new(x, 0., 0.))
+                .motor(JointMotor::velocity(2., 5.)),
+        )
+        .unwrap();
+    }
+    for _ in 0..240 {
+        w.step(1. / 120.);
+    }
+    CALLS.with(|n| n.set(0));
+    RECORD.with(|r| r.set(true));
+    for _ in 0..120 {
+        w.step(1. / 120.);
+    }
+    RECORD.with(|r| r.set(false));
+    assert_eq!(CALLS.with(Cell::get), 0, "steady joint step allocated");
+}

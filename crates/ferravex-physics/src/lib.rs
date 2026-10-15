@@ -1,17 +1,42 @@
 //! Original rigid-body simulation for the recovered Ferravex games.
 //!
-//! Circles/spheres and oriented boxes have dynamic mass and angular inertia.
-//! Capsules (2D) and cylinders (3D) are static or kinematic ball obstacles.
+//! Primitive parts have analytical mass and angular inertia.
+//! Bodies can own locally transformed primitive parts and fixed, hinge,
+//! distance or spring connections. Capsule/cylinder contact pairs remain limited
+//! to the documented primitive matrix.
 //! This is a small native solver, not a compatibility implementation of Rapier.
 mod body;
 pub mod character;
 mod geometry;
+mod joints;
+mod mass;
+pub use joints::{Joint, JointDesc, JointHandle, JointKind, JointMotor, JointSet, MAX_JOINTS};
 mod world;
 pub use body::{BodySet, Collider, ColliderHandle, ColliderSet, RigidBodyHandle};
 use ferravex_math::{Quat, Vec2, Vec3};
 pub use world::{
-    ContactEvent, ContactManifold, ContactPair, ContactPoint, SolverSettings, StepStats,
+    ContactEvent, ContactManifold, ContactPair, ContactPoint, MAX_CHILDREN, MAX_COLLIDERS,
+    SolverSettings, StepStats,
 };
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PhysicsError {
+    InvalidBody,
+    InvalidCollider,
+    InvalidMass,
+    InvalidHandle,
+    BodyCapacity,
+    ColliderCapacity,
+    ChildCapacity,
+    InvalidJoint,
+    JointCapacity,
+}
+impl std::fmt::Display for PhysicsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "rigid physics: {self:?}")
+    }
+}
+impl std::error::Error for PhysicsError {}
 
 /// A planar rotation, measured in radians.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -98,6 +123,15 @@ pub mod d3 {
     }
     const PLANAR: bool = false;
     include!("api.rs");
+    impl JointBuilder {
+        pub fn axes(mut self, axis1: Vector, axis2: Vector) -> Self {
+            self.desc.kind = crate::JointKind::Hinge {
+                axis1: to3(axis1).normalize_or_zero(),
+                axis2: to3(axis2).normalize_or_zero(),
+            };
+            self
+        }
+    }
     impl ColliderBuilder {
         pub fn cuboid(x: f32, y: f32, z: f32) -> Self {
             Self::shape(body::Shape::Box(Vec3::new(x, y, z)))

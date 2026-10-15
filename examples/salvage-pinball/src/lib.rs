@@ -1,9 +1,16 @@
 //! A small pinball table driven by Ferravex's original fixed-step physics world.
 use ferravex_physics::d2::{
-    ColliderBuilder, ColliderHandle, PhysicsWorld, RigidBodyBuilder, RigidBodyHandle, Rotation,
+    ColliderBuilder, ColliderHandle, JointBuilder, PhysicsWorld, RigidBodyBuilder, RigidBodyHandle,
     Vector,
 };
 
+use ferravex_physics::{JointHandle, JointMotor};
+
+// The ball interacts with table fixtures and flippers; capsule rails/flippers
+// do not have capsule/capsule contacts and cannot strike one another.
+const BALL_LAYER: u32 = 1;
+const FLIPPER_LAYER: u32 = 2;
+const FIXTURE_LAYER: u32 = 4;
 pub const BALL_RADIUS: f32 = 0.19;
 pub const FLIPPER_LENGTH: f32 = 1.65;
 pub const PIVOTS: [[f32; 2]; 2] = [[3.0, 13.2], [6.9, 13.2]];
@@ -37,6 +44,7 @@ pub struct Table {
     pub ball: RigidBodyHandle,
     ball_collider: ColliderHandle,
     flippers: [RigidBodyHandle; 2],
+    hinges: [JointHandle; 2],
     bumpers: [ColliderHandle; 3],
     contacts: [bool; 3],
     pub bumper_flash: [f32; 3],
@@ -69,6 +77,7 @@ impl Table {
                     Vector::from_array(b),
                     0.1,
                 )
+                .collision_layers(FIXTURE_LAYER, BALL_LAYER)
                 .restitution(0.65)
                 .friction(0.08),
             );
@@ -78,7 +87,10 @@ impl Table {
                 .raw
                 .insert(
                     RigidBodyBuilder::fixed().translation(Vector::from_array(p)),
-                    ColliderBuilder::ball(0.61).restitution(0.9).friction(0.02),
+                    ColliderBuilder::ball(0.61)
+                        .collision_layers(FIXTURE_LAYER, BALL_LAYER)
+                        .restitution(0.9)
+                        .friction(0.02),
                 )
                 .1
         });
@@ -87,7 +99,10 @@ impl Table {
             world
                 .raw
                 .insert(
-                    RigidBodyBuilder::kinematic_position_based()
+                    RigidBodyBuilder::dynamic()
+                        .gravity_scale(0.)
+                        .ccd_enabled(true)
+                        .angular_damping(0.4)
                         .translation(Vector::from_array(PIVOTS[i]))
                         .rotation(angles[i]),
                     ColliderBuilder::capsule_from_endpoints(
@@ -95,10 +110,28 @@ impl Table {
                         Vector::new(FLIPPER_LENGTH, 0.0),
                         0.16,
                     )
+                    .collision_layers(FLIPPER_LAYER, BALL_LAYER)
+                    .density(4.)
                     .friction(0.15)
                     .restitution(0.45),
                 )
                 .0
+        });
+        let anchor = world.insert_body(RigidBodyBuilder::fixed()).unwrap();
+        let hinges = std::array::from_fn(|i| {
+            world
+                .insert_joint(
+                    anchor,
+                    flippers[i],
+                    JointBuilder::hinge()
+                        .local_anchor1(Vector::from_array(PIVOTS[i]))
+                        .limits(
+                            if i == 0 { -1. } else { -0.15 },
+                            if i == 0 { 0.15 } else { 1. },
+                        )
+                        .motor(JointMotor::position(0., 40., 18., 1000.)),
+                )
+                .unwrap()
         });
         let (ball, ball_collider) = Self::spawn_ball(&mut world);
         Self {
@@ -106,6 +139,7 @@ impl Table {
             ball,
             ball_collider,
             flippers,
+            hinges,
             bumpers,
             angles,
             contacts: [false; 3],
@@ -130,6 +164,7 @@ impl Table {
                 .ccd_enabled(true)
                 .linear_damping(0.03),
             ColliderBuilder::ball(BALL_RADIUS)
+                .collision_layers(BALL_LAYER, FIXTURE_LAYER | FLIPPER_LAYER)
                 .density(2.0)
                 .friction(0.08)
                 .restitution(0.5),
@@ -162,14 +197,14 @@ impl Table {
         }
         self.time += dt;
         for (i, pressed) in [controls.left, controls.right].into_iter().enumerate() {
-            let target = if i == 0 {
-                if pressed { -0.5 } else { 0.4 }
+            let target = if pressed {
+                if i == 0 { -0.9 } else { 0.9 }
             } else {
-                std::f32::consts::PI - if pressed { -0.5 } else { 0.4 }
+                0.
             };
-            self.angles[i] += (target - self.angles[i]).clamp(-18.0 * dt, 18.0 * dt);
-            self.world.bodies[self.flippers[i]]
-                .set_next_kinematic_rotation(Rotation::from_angle(self.angles[i]));
+            self.world.joints[self.hinges[i]]
+                .set_motor(Some(JointMotor::position(target, 40., 18., 1000.)))
+                .unwrap();
         }
         if controls.launch && self.waiting {
             self.waiting = false;
@@ -179,6 +214,9 @@ impl Table {
             ball.apply_impulse(Vector::new(0.0, -25.0) * ball.mass(), true);
         }
         self.world.step(dt);
+        for i in 0..2 {
+            self.angles[i] = self.world.bodies[self.flippers[i]].rotation().angle();
+        }
         for (i, bumper) in self.bumpers.iter().enumerate() {
             self.bumper_flash[i] = (self.bumper_flash[i] - dt).max(0.0);
             let touching = self

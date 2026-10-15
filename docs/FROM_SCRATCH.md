@@ -2,7 +2,7 @@
 
 Every package in the Cargo workspace uses **zero external Cargo packages**, including all optional features and platform targets. The audit checks the complete resolved graph, not a selected subset. See the [dependency policy](../DEPENDENCIES.md).
 
-The local catalog contains fifteen examples: thirteen original games/labs recovered from this repository and ported to first-party APIs, plus Courtyard and Orbit Breaker. Browser hosts use standard APIs directly; Rust std and browser/system APIs are the platform boundary. This recovery has not been pushed or deployed, and validation is being repeated against the new renderer and physics code.
+The local catalog contains fifteen examples: thirteen original games/labs recovered from this repository and ported to first-party APIs, plus Courtyard and Orbit Breaker. Browser hosts use standard APIs directly; Rust std and browser/system APIs are the platform boundary. The [iteration series](ITERATION_PLAN.md) records merged improvements and current local validation; the deployed site may lag local work.
 
 ## Run the examples locally
 
@@ -87,4 +87,4 @@ names. Bundles use sorted names, a versioned envelope, per-file and whole-file
 checksums and an original RLE codec only where it reduces size. Checksums detect
 corruption and are not authentication. The packer does not execute asset code.
 
-See each crate README for numerical, allocation and feature limits. `ferravex-dynamics` remains a translational solver for circles/spheres and axis-aligned boxes. The restored physics games use separate original `ferravex-physics`: dynamic balls/oriented boxes, angular impulses, static/kinematic capsule rails and cylinders against balls, contact events/layers, rays and bounded sphere CCD. Dynamic capsules/cylinders, their contacts with boxes, joints, mesh collisions and swept box TOI remain unsupported; consult its README for numerical and CCD limits. It is not a claim of production-engine feature parity. Run the recovered game tests and interactive checks before relying on prior results.
+See each crate README for numerical, allocation and feature limits. `ferravex-dynamics` remains a translational solver for circles/spheres and axis-aligned boxes. The restored physics games use separate original `ferravex-physics`: dynamic primitives, rotated compound parts with full mass tensors, fixed/hinge/distance/spring joints, angular impulses, capsule rails and cylinders against balls, persistent contacts/islands, events/layers, rays and bounded sphere CCD. Capsule/cylinder contacts with boxes, mesh collisions and swept box TOI remain unsupported; consult its README for numerical and CCD limits. It is not a claim of production-engine feature parity. Run the recovered game tests and interactive checks before relying on prior results.
