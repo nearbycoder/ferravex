@@ -136,5 +136,8 @@ random request sequences, shape/cone bounds, world gravity, trail lifetime/rings
 teleport breaks, finite ribbon joins and beam overflow. Counting allocators cover
 simulation and warmed sorted billboard/ribbon recording. Real GLX readback checks
 alpha/additive/depth/HUD behavior and compares instanced shapes against CPU geometry,
-including buffer reuse and upload accounting. Game/browser/release performance
-validation proceeds in iteration 13; results are recorded in [performance](PERFORMANCE.md).
+including buffer reuse and upload accounting. All fifteen native smoke checks and
+release Wasm builds pass, with real-Wasm effects checks for the five adopting games.
+Browser checks show dust, exhaust and tire trails without shader errors. Performance
+reports retain nineteen flags and a separate longer effects workload; details and
+coverage limits are recorded in [performance](PERFORMANCE.md).

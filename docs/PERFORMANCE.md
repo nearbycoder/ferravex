@@ -546,3 +546,85 @@ The final run includes the additive-interruption fix and the two timing tails
 above. The 2D lab final GPU p99 is **28.77 µs**, within its allowance; no GPU
 optimization is inferred from the timing variation. Reports/thresholds were not
 rebased or selectively overwritten to hide failed runs.
+
+
+## Iteration 13: reusable effects
+
+Shared simulation now covers seeded moving emitters, analytic drag, distance-sampled
+trails, ribbons and bounded beams. Native GL/WebGL use instanced, texture-free
+billboards (64 streamed bytes per particle instead of 192 for an expanded quad),
+with sorted alpha, additive blending, conservative clip culling and explicit
+ordering against opaque geometry and HUD draws. Triangle ribbons use the existing
+32-byte vertex stream. Pools and simulation budgets are explicit; saturation is
+counted. Simulation and warmed renderer recording each passed a 1,000-frame
+zero-allocation test. This does not claim whole games or cold GPU setup allocate
+nothing.
+
+Validation: 413 regular workspace tests, nine actual GLX pixel/timer tests plus the
+ALSA null-device check, strict native/Wasm Clippy, strict Rustdoc, all 15 native
+release smoke checks and all 15 release Wasm builds. Real release Wasm exercised
+effects in Strike, Neon Swarm, Dune Skimmer, Pocket Rally and Sky Courier, validating
+finite instance data, ranges and flags; existing input/audio/animation contracts
+also passed. Live browser checks rendered Dune dust, Sky exhaust and Rally trails
+without console/shader errors. The dependency audit still finds 28 first-party
+workspace packages and zero external Cargo packages. iOS and unavailable Apple/
+Windows device checks were not run.
+
+`target/perf/iteration-13-final/report.json` records source commit
+`b5ddb5f7f6c588a59d784bc7b363ee7ce462880b` against iteration 12: release/default
+quality, two runs of 120 measured frames after 30 warmup frames. Timing tolerance
+remains 20%, CPU/submission floor 1,000 µs, GPU floor 20 µs, size/work allowance
+5%. All native SHA-256 hashes and raw/deterministic-gzip Wasm lengths match the
+recorded artifacts.
+
+**Nineteen flags remain; the performance gate did not pass.** Twelve are artifact
+sizes (ten Wasm/raw-gzip entries across the five adopting games, plus Sky native
+raw/gzip); five are Neon work/allocation metrics; two are physics-lab GPU tails:
+2D GPU p99 **70.93 µs > 48.77 µs** allowed, and 3D GPU p95
+**102.72 µs > 58.35 µs** allowed. Prior iteration flags remain evidence for the
+final audit; a later baseline does not resolve their costs.
+
+Neon now splits arena, additive sparks and following HUD into up to three draws:
+p95/p99 **1 → 3** (two allowed), mean **1 → 1.48**. Mean uploads were
+**433,931.20 → 433,651.80 bytes**, with unchanged p95/p99 uploads/vertices.
+Allocation p99 rose **15 → 21 calls**, mean bytes **227.30 → 259.04**, p99
+bytes **860 → 1,112**. This short run includes the first particle draw and lazy
+GPU/frame-buffer growth; isolated warmed recording is allocation-free, but the
+whole-game flags remain. No causal allocation or timing improvement is inferred
+from this comparison. Sky adds one exhaust draw and 448 instance bytes per frame
+in this workload; its allocation distributions remain unchanged. Strike draw,
+upload and allocation distributions match iteration 12.
+
+The short catalog workload does not exercise all new effects: Dune remains in its
+countdown, Rally has not yet drifted and Strike does not fire. A separate
+`target/perf/iteration-13-active/report.json` records the same source with two
+900-frame runs plus 30 warmup frames for Neon/Rally/Dune/Sky. It is supplemental,
+not a replacement baseline or a passing comparison. Respective CPU p95 values
+were **95.92 / 673.07 / 130.05 / 118.44 µs**, GPU p95
+**22.24 / 98.99 / 58.71 / 33.46 µs**, and draw p95 **3 / 1 / 78 / 40**.
+Strike firing and Sky boost trails are exercised by the real-Wasm effects test,
+not claimed as covered by those native autoplay timing samples.
+
+No textures or third-party runtime libraries were introduced. Download changes:
+
+| Game | Wasm bytes | Gzip-9 bytes | Raw change vs 12 | Gzip change vs 12 |
+|---|---:|---:|---:|---:|
+| owned-lab | 358,292 | 134,054 | +5,176 | +2,098 |
+| owned-orbit | 251,373 | 95,131 | +5,238 | +2,122 |
+| emberline | 263,846 | 100,733 | +2,179 | +651 |
+| neon-swarm | 297,600 | 110,911 | +27,349 | +10,123 |
+| pocket-rally | 261,867 | 98,801 | +19,278 | +7,178 |
+| salvage-pinball | 367,383 | 139,137 | +2,179 | +607 |
+| orchard-guard | 236,162 | 89,264 | +2,179 | +666 |
+| marble-run | 390,617 | 149,281 | +2,187 | +587 |
+| dune-skimmer | 344,396 | 132,181 | +32,788 | +12,266 |
+| crystal-cavern | 341,288 | 130,610 | +2,187 | +624 |
+| siege-foundry | 372,519 | 142,920 | +2,184 | +579 |
+| sky-courier | 340,636 | 129,346 | +50,748 | +18,730 |
+| strike | 443,268 | 167,937 | +36,720 | +13,326 |
+| physics-2d | 362,359 | 137,806 | +2,179 | +646 |
+| physics-3d | 415,685 | 158,485 | +2,184 | +670 |
+
+Sky native measures **835,112 bytes / 404,824 gzip-9 bytes**. Strike native
+measures **1,010,344 / 491,272 bytes**. All raw reports remain in ignored target
+storage. Thresholds and earlier reports were not overwritten to hide flags.
