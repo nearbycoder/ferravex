@@ -18,7 +18,7 @@ Boxes use separating axes and clipped face contact manifolds; edge contacts use 
 
 - Density-derived circle/sphere/box mass and local inertia; world-space inertia handles rotated boxes.
 - Linear/angular impulses, impulses at a point, force/torque accumulation, gravity scale, and damping. Forces and torques clear after each outer step.
-- Accumulated sequential normal impulses, averaged restitution, Coulomb friction, and separate angular positional correction. Restitution is suppressed below impact speed 1 to allow resting stacks.
+- Persistent local-anchor manifolds, warm-started accumulated normal/tangent impulses, averaged restitution, Coulomb friction, and separate angular positional correction. Restitution is suppressed below impact speed 1 to allow resting stacks.
 - Position-driven kinematics calculate linear and angular velocity from the requested next pose. Contact-point angular velocity lets a pinball flipper launch the ball.
 - Generation-checked body/collider handles, one collider per body, removal, sleeping and impact wake-up.
 - Sweep-and-prune AABB broadphase, collision membership/filter masks, sensor overlaps, contact begin/end events, and direct current-pose raycasts. Rays exclude sensors and return the nearest solid hit.
@@ -46,7 +46,7 @@ The caller supplies its fixed accumulator (`ferravex-core::FixedClock` in the ga
 
 `contact_pair` and `contact_events` cover the union of impacts/overlaps observed during the most recent outer step, including transient substep impacts. `has_any_active_contact` excludes sensors. A removal produces the corresponding stopped event on the next step. This supports scoring a fast bumper hit even if the ball has bounced away before the end of the outer tick.
 
-Sleeping is conservative and local: a quiet contacting dynamic body sleeps after 0.8 seconds; an energetic impact, loss of all contacts, or explicit waking mutation wakes it. There is no full constraint-island sleep manager or warm-start cache. The solver remains suitable for the bounded recovered games; it is not an unrestricted production physics replacement.
+Solid dynamic contacts now form islands that sleep and wake together. Independent stacks on a shared static floor remain separate. Default quiet time is 0.8 seconds; moving/removed supports, explicit requests and impacts wake connected members. Cached anchors and impulses persist with mutation/generation invalidation and bounded cold fallback. See [contact stability](../../docs/CONTACT_STABILITY.md) for settings, diagnostics, resource costs and limits.
 
 ## Validation
 

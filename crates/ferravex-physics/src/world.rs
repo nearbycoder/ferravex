@@ -3,7 +3,11 @@ use crate::{
     geometry::{self, Bounds, Point},
 };
 use ferravex_math::{Quat, Vec3};
-use std::collections::{BTreeMap, BTreeSet};
+mod cache;
+mod islands;
+use cache::Manifold;
+pub use cache::{ContactManifold, ContactPoint, SolverSettings};
+use islands::Islands;
 
 /// Contacts include transient impacts from all substeps of the latest outer step.
 #[derive(Clone, Copy, Debug)]
@@ -30,6 +34,15 @@ pub struct StepStats {
     pub contact_points: usize,
     pub ccd_impacts: usize,
     pub sleeping_bodies: usize,
+    pub islands: usize,
+    pub active_islands: usize,
+    pub sleeping_islands: usize,
+    pub persisted_points: usize,
+    pub warm_started_points: usize,
+    pub reused_manifolds: usize,
+    pub cached_manifolds: usize,
+    pub cache_dropped: usize,
+    pub velocity_constraints: usize,
 }
 #[derive(Clone, Debug)]
 struct Constraint {
@@ -43,6 +56,9 @@ struct Constraint {
     tangent_impulse: Vec3,
     bounce: f32,
     friction: f32,
+    key: (ColliderHandle, ColliderHandle),
+    feature: u64,
+    cache: Option<(usize, usize)>,
 }
 #[derive(Clone, Copy)]
 struct Proxy {
@@ -57,7 +73,15 @@ pub struct World<B> {
     pub colliders: ColliderSet,
     pub gravity: Vec3,
     planar: bool,
-    contacts: BTreeMap<(ColliderHandle, ColliderHandle), ContactPair>,
+    contacts: Vec<ContactPair>,
+    next_contacts: Vec<ContactPair>,
+    manifolds: Vec<Manifold>,
+    next_manifolds: Vec<Manifold>,
+    next_feature: u64,
+    settings: SolverSettings,
+    islands: Islands,
+    last_gravity: Vec3,
+    old_positions: Vec<(RigidBodyHandle, Vec3)>,
     events: Vec<ContactEvent>,
     constraints: Vec<Constraint>,
     proxies: Vec<Proxy>,
@@ -72,7 +96,15 @@ impl<B: Access> World<B> {
             colliders: ColliderSet::default(),
             gravity,
             planar,
-            contacts: BTreeMap::new(),
+            contacts: Vec::new(),
+            next_contacts: Vec::new(),
+            manifolds: Vec::new(),
+            next_manifolds: Vec::new(),
+            next_feature: 1,
+            settings: Default::default(),
+            islands: Default::default(),
+            last_gravity: gravity,
+            old_positions: Vec::new(),
             events: Vec::new(),
             constraints: Vec::new(),
             proxies: Vec::new(),
@@ -89,6 +121,10 @@ impl<B: Access> World<B> {
         let mut b = b.into();
         let mut c = c.into();
         b.core_mut().set_mass(&c);
+        // A cloned body is a new world entity; it must not retain another body's
+        // collider ownership or activation state.
+        b.core_mut().colliders.clear();
+        b.core_mut().wake();
         let body = self.bodies.insert(b);
         c.parent = Some(body);
         let collider = self.colliders.insert(c);
@@ -100,18 +136,43 @@ impl<B: Access> World<B> {
             return false;
         };
         for &c in &b.core().colliders {
+            for contact in &self.contacts {
+                if contact.sensor {
+                    continue;
+                }
+                let other = if contact.collider1 == c {
+                    Some(contact.collider2)
+                } else if contact.collider2 == c {
+                    Some(contact.collider1)
+                } else {
+                    None
+                };
+                if let Some(other) = other
+                    .and_then(|id| self.colliders.get(id))
+                    .and_then(|o| o.parent)
+                    && let Some(body) = self.bodies.get_mut(other)
+                {
+                    body.core_mut().wake();
+                }
+            }
+            self.manifolds.retain(|m| m.key.0 != c && m.key.1 != c);
+            self.next_manifolds.retain(|m| m.key.0 != c && m.key.1 != c);
             self.colliders.remove(c);
         }
         true
     }
     pub fn contact_pair(&self, a: ColliderHandle, b: ColliderHandle) -> Option<&ContactPair> {
-        self.contacts.get(&pair_key(a, b))
+        let key = pair_key(a, b);
+        self.contacts
+            .binary_search_by_key(&key, |c| pair_key(c.collider1, c.collider2))
+            .ok()
+            .map(|i| &self.contacts[i])
     }
     pub fn contact_events(&self) -> &[ContactEvent] {
         &self.events
     }
     pub fn contacts(&self) -> impl Iterator<Item = &ContactPair> {
-        self.contacts.values()
+        self.contacts.iter()
     }
     /// Advance a fixed simulation interval in (0, 0.1] seconds. Forces apply for
     /// this complete interval and are then cleared. The caller owns accumulation.
@@ -121,8 +182,7 @@ impl<B: Access> World<B> {
             "use a fixed timestep in (0, 0.1]"
         );
         assert!(self.gravity.is_finite());
-        let previous: BTreeSet<_> = self.contacts.keys().copied().collect();
-        self.contacts.clear();
+        self.next_contacts.clear();
         self.events.clear();
         let mut substeps = 1;
         for (_, body) in self.bodies.iter_mut() {
@@ -152,12 +212,15 @@ impl<B: Access> World<B> {
             substeps,
             ..StepStats::default()
         };
+        let gravity_changed = self.gravity != self.last_gravity;
+        self.wake_previous_islands(gravity_changed);
+        if gravity_changed {
+            self.manifolds.clear();
+        }
         for _ in 0..substeps {
-            let old: Vec<_> = self
-                .bodies
-                .iter()
-                .map(|(id, b)| (id, b.core().position))
-                .collect();
+            self.old_positions.clear();
+            self.old_positions
+                .extend(self.bodies.iter().map(|(id, b)| (id, b.core().position)));
             for (_, body) in self.bodies.iter_mut() {
                 let b = body.core_mut();
                 if b.kind == Kind::Dynamic && !b.sleeping {
@@ -171,33 +234,14 @@ impl<B: Access> World<B> {
                     b.set_rotation(Quat::from_scaled_axis(b.angular_velocity * h) * b.rotation);
                 }
             }
-            stats.ccd_impacts += self.sweep_balls(&old);
-            self.find_contacts(&mut stats);
-            self.solve_velocities();
+            stats.ccd_impacts += self.sweep_balls();
+            self.find_contacts(h, &mut stats);
+            self.wake_contact_islands();
+            self.warm_start(&mut stats);
+            self.solve_velocities(&mut stats);
             self.solve_positions();
-            let supported: BTreeSet<_> = self.constraints.iter().flat_map(|c| [c.a, c.b]).collect();
-            for (id, body) in self.bodies.iter_mut() {
-                let b = body.core_mut();
-                if b.kind != Kind::Dynamic {
-                    continue;
-                }
-                if !supported.contains(&id) {
-                    b.wake();
-                }
-                if supported.contains(&id)
-                    && b.velocity.length_squared() < 0.0016
-                    && b.angular_velocity.length_squared() < 0.0025
-                {
-                    b.quiet += h;
-                    if b.quiet > 0.8 {
-                        b.sleeping = true;
-                        b.velocity = Vec3::ZERO;
-                        b.angular_velocity = Vec3::ZERO;
-                    }
-                } else {
-                    b.quiet = 0.;
-                }
-            }
+            self.store_manifolds(h);
+            self.sleep_islands(h, &mut stats);
         }
         for (_, body) in self.bodies.iter_mut() {
             let b = body.core_mut();
@@ -211,20 +255,47 @@ impl<B: Access> World<B> {
                     b.set_rotation(q);
                 }
             }
+            b.wake_requested = false;
+            b.solver_dirty = false;
             if b.sleeping {
                 stats.sleeping_bodies += 1;
             }
         }
-        for &key in self.contacts.keys() {
-            if !previous.contains(&key) {
-                self.events.push(ContactEvent::Started(key.0, key.1));
+        self.next_contacts
+            .sort_unstable_by_key(|c| pair_key(c.collider1, c.collider2));
+        self.next_contacts
+            .dedup_by_key(|c| pair_key(c.collider1, c.collider2));
+        for c in &self.next_contacts {
+            if self
+                .contacts
+                .binary_search_by_key(&pair_key(c.collider1, c.collider2), |c| {
+                    pair_key(c.collider1, c.collider2)
+                })
+                .is_err()
+            {
+                self.events
+                    .push(ContactEvent::Started(c.collider1, c.collider2));
             }
         }
-        for key in previous {
-            if !self.contacts.contains_key(&key) {
-                self.events.push(ContactEvent::Stopped(key.0, key.1));
+        for c in &self.contacts {
+            if self
+                .next_contacts
+                .binary_search_by_key(&pair_key(c.collider1, c.collider2), |c| {
+                    pair_key(c.collider1, c.collider2)
+                })
+                .is_err()
+            {
+                self.events
+                    .push(ContactEvent::Stopped(c.collider1, c.collider2));
             }
         }
+        std::mem::swap(&mut self.contacts, &mut self.next_contacts);
+        self.next_contacts.clear();
+        for (_, c) in self.colliders.iter_mut() {
+            c.dirty = false;
+        }
+        self.last_gravity = self.gravity;
+        stats.cached_manifolds = self.manifolds.len();
         self.last_step = stats;
         ferravex_core::telemetry::record_physics(
             stats.broadphase_pairs,
@@ -233,9 +304,9 @@ impl<B: Access> World<B> {
         );
         stats
     }
-    fn sweep_balls(&mut self, old: &[(RigidBodyHandle, Vec3)]) -> usize {
+    fn sweep_balls(&mut self) -> usize {
         let mut hits = 0;
-        for &(id, start) in old {
+        for &(id, start) in &self.old_positions {
             let body = self.bodies[id].core();
             if !body.ccd || body.kind != Kind::Dynamic {
                 continue;
@@ -250,7 +321,7 @@ impl<B: Access> World<B> {
             let end = body.position;
             let mut closest = 1.;
             let mut correction = None;
-            for &(other, old_p) in old {
+            for &(other, old_p) in &self.old_positions {
                 if other == id {
                     continue;
                 }
@@ -295,112 +366,19 @@ impl<B: Access> World<B> {
         }
         hits
     }
-    fn find_contacts(&mut self, stats: &mut StepStats) {
-        self.proxies.clear();
-        self.constraints.clear();
-        for (collider, c) in self.colliders.iter() {
-            let id = c.parent.unwrap();
-            let b = self.bodies[id].core();
-            self.proxies.push(Proxy {
-                body: id,
-                collider,
-                bounds: geometry::bounds(c.shape, b.position, b.rotation),
-            });
-        }
-        self.proxies.sort_unstable_by(|a, b| {
-            a.bounds
-                .min
-                .x
-                .total_cmp(&b.bounds.min.x)
-                .then(a.collider.cmp(&b.collider))
-        });
-        for i in 0..self.proxies.len() {
-            let pa = self.proxies[i];
-            for j in i + 1..self.proxies.len() {
-                let pb = self.proxies[j];
-                if pb.bounds.min.x > pa.bounds.max.x {
-                    break;
-                }
-                if !pa.bounds.intersects(pb.bounds) {
-                    continue;
-                }
-                let ca = &self.colliders[pa.collider];
-                let cb = &self.colliders[pb.collider];
-                if ca.membership & cb.filter == 0 || cb.membership & ca.filter == 0 {
-                    continue;
-                }
-                let a = self.bodies[pa.body].core();
-                let b = self.bodies[pb.body].core();
-                if a.kind != Kind::Dynamic && b.kind != Kind::Dynamic && !ca.sensor && !cb.sensor {
-                    continue;
-                }
-                stats.broadphase_pairs += 1;
-                geometry::contacts(ca.shape, a, cb.shape, b, &mut self.points);
-                if self.points.is_empty() {
-                    continue;
-                }
-                let key = pair_key(pa.collider, pb.collider);
-                let sensor = ca.sensor || cb.sensor;
-                self.contacts.insert(
-                    key,
-                    ContactPair {
-                        collider1: pa.collider,
-                        collider2: pb.collider,
-                        normal: self.points[0].normal.to_array(),
-                        sensor,
-                    },
-                );
-                if sensor {
-                    continue;
-                }
-                let restitution = (ca.restitution + cb.restitution) * 0.5;
-                let friction = (ca.friction * cb.friction).sqrt();
-                let (a, b) = self.bodies.two_mut(pa.body, pb.body);
-                let a = a.core_mut();
-                let b = b.core_mut();
-                // A collision must wake sleepers before solving an energetic impact.
-                if self.points.iter().any(|p| {
-                    (b.point_velocity(p.point) - a.point_velocity(p.point)).length_squared() > 0.09
-                }) {
-                    if a.sleeping {
-                        a.wake();
-                    }
-                    if b.sleeping {
-                        b.wake();
-                    }
-                }
-                for p in &self.points {
-                    let speed =
-                        (b.point_velocity(p.point) - a.point_velocity(p.point)).dot(p.normal);
-                    self.constraints.push(Constraint {
-                        a: pa.body,
-                        b: pb.body,
-                        normal: p.normal,
-                        point: p.point,
-                        local_a: a.rotation.conjugate()
-                            * (p.point + p.normal * p.depth * 0.5 - a.position),
-                        local_b: b.rotation.conjugate()
-                            * (p.point - p.normal * p.depth * 0.5 - b.position),
-                        normal_impulse: 0.,
-                        tangent_impulse: Vec3::ZERO,
-                        bounce: if speed < -1. {
-                            -speed * restitution
-                        } else {
-                            0.
-                        },
-                        friction,
-                    });
-                }
-            }
-        }
-        stats.contact_points += self.constraints.len();
-    }
-    fn solve_velocities(&mut self) {
-        for _ in 0..24 {
+    fn solve_velocities(&mut self, stats: &mut StepStats) {
+        for _ in 0..self.settings.velocity_iterations {
             for c in &mut self.constraints {
                 let (a, b) = self.bodies.two_mut(c.a, c.b);
                 let a = a.core_mut();
                 let b = b.core_mut();
+                if a.sleeping && b.sleeping
+                    || a.sleeping && b.kind != Kind::Dynamic
+                    || b.sleeping && a.kind != Kind::Dynamic
+                {
+                    continue;
+                }
+                stats.velocity_constraints += 1;
                 let ra = c.point - a.position;
                 let rb = c.point - b.position;
                 let denom = effective_mass(a, b, ra, rb, c.normal);
@@ -416,27 +394,32 @@ impl<B: Access> World<B> {
                 b.impulse(j, c.point);
                 let relative = b.point_velocity(c.point) - a.point_velocity(c.point);
                 let tangent = relative - c.normal * relative.dot(c.normal);
+                let mut candidate = c.tangent_impulse;
                 if let Some(t) = tangent.try_normalize() {
                     let denominator = effective_mass(a, b, ra, rb, t);
                     if denominator > 1e-10 {
-                        let candidate = c.tangent_impulse - t * (relative.dot(t) / denominator);
-                        let limit = c.friction * c.normal_impulse;
-                        let new = candidate.clamp_length_max(limit);
-                        let j = new - c.tangent_impulse;
-                        c.tangent_impulse = new;
-                        a.impulse(-j, c.point);
-                        b.impulse(j, c.point);
+                        candidate -= t * (relative.dot(t) / denominator);
                     }
                 }
+                // Re-clamp even at zero slip: a reduced normal load also reduces
+                // the friction cone of an already accumulated tangent impulse.
+                let new = candidate.clamp_length_max(c.friction * c.normal_impulse);
+                let j = new - c.tangent_impulse;
+                c.tangent_impulse = new;
+                a.impulse(-j, c.point);
+                b.impulse(j, c.point);
             }
         }
     }
     fn solve_positions(&mut self) {
-        for _ in 0..8 {
+        for _ in 0..self.settings.position_iterations {
             for c in &self.constraints {
                 let (a, b) = self.bodies.two_mut(c.a, c.b);
                 let a = a.core_mut();
                 let b = b.core_mut();
+                if a.contact_inv_mass() + b.contact_inv_mass() == 0. {
+                    continue;
+                }
                 let ra = a.rotation * c.local_a;
                 let rb = b.rotation * c.local_b;
                 let depth = -((b.position + rb) - (a.position + ra)).dot(c.normal);
@@ -452,8 +435,12 @@ impl<B: Access> World<B> {
                 let ba = b.contact_inverse_inertia(rb.cross(j));
                 a.position -= j * a.contact_inv_mass();
                 b.position += j * b.contact_inv_mass();
-                a.set_rotation(Quat::from_scaled_axis(aa) * a.rotation);
-                b.set_rotation(Quat::from_scaled_axis(ba) * b.rotation);
+                if aa.length_squared() > 1e-20 {
+                    a.set_rotation(Quat::from_scaled_axis(aa) * a.rotation);
+                }
+                if ba.length_squared() > 1e-20 {
+                    b.set_rotation(Quat::from_scaled_axis(ba) * b.rotation);
+                }
             }
         }
     }
