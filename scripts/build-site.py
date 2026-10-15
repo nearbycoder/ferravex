@@ -27,6 +27,7 @@ DOCS = [
  ('input','Player input','Engine','docs/INPUT.md'),
  ('audio','Runtime audio','Engine','docs/AUDIO.md'),
  ('animation','Animation and GPU skinning','Engine','docs/ANIMATION.md'),
+ ('effects','Particles, trails and effects','Engine','docs/EFFECTS.md'),
  ('contact-stability','Contacts and sleep islands','Engine','docs/CONTACT_STABILITY.md'),
  ('joints-and-compounds','Joints and compound bodies','Engine','docs/JOINTS_AND_COMPOUNDS.md'),
  ('rigid-bodies','Rotational rigid bodies','Engine','crates/ferravex-physics/README.md'),
@@ -163,7 +164,7 @@ def main():
  stale=[p.name for p in (ROOT/'target/doc').iterdir() if p.is_dir() and p.name not in targets|support]
  sources=ROOT/'target/doc/src'
  if sources.exists():stale.extend('src/'+p.name for p in sources.iterdir() if p.is_dir() and p.name not in targets)
- allowed={'index.html','games.json','build-info.json','runtime.js','audio.js','audio-worklet.js','audio-ring.js','input.js','input-overlay.js','retained.js','retained-shader.js','material-tools.js'}
+ allowed={'index.html','games.json','build-info.json','runtime.js','audio.js','audio-worklet.js','audio-ring.js','input.js','input-overlay.js','retained.js','retained-shader.js','effects.js','effects-shader.js','material-tools.js'}
  for game in GAMES:
   allowed.add(game['host']+'/'+game['id'].replace('-','_')+'.wasm')
   allowed.update(game['host']+'/'+p.name for p in (ROOT/'web'/game['host']).iterdir() if p.is_file())

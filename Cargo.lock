@@ -142,6 +142,7 @@ name = "neon-swarm"
 version = "0.1.0"
 dependencies = [
  "ferravex-core",
+ "ferravex-play",
  "ferravex-render",
 ]
 
@@ -195,6 +196,7 @@ name = "pocket-rally"
 version = "0.1.0"
 dependencies = [
  "ferravex-core",
+ "ferravex-play",
  "ferravex-render",
 ]
 

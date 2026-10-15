@@ -2,7 +2,13 @@ use ferravex_core::FixedClock;
 use ferravex_play::camera::{
     Input3, Mode3, NoObstructions, Rig3, Settings3, ShakeImpulse, Target3,
 };
+use ferravex_play::particles::{
+    Emitter, EmitterTransform, ParticlePool, RibbonFacing, Trail, TrailConfig, TrailSample, presets,
+};
 use ferravex_render::audio::{Cue, GameAudio, Surface};
+use ferravex_render::effects::{
+    BillboardView, EffectStyle, ParticleRenderer, ParticleStyle, draw_ribbon,
+};
 use ferravex_render::input::{
     PlayerInput, Preset,
     touch::{Control, Output, Region},
@@ -453,7 +459,22 @@ ferravex_render::game!(conf, game);
 async fn game() {
     let mut demo = Demo::new();
     let mut sound = GameAudio::new();
+    let mut wing_trails: [Trail; 2] = std::array::from_fn(|_| {
+        Trail::new(TrailConfig {
+            capacity: 96,
+            lifetime: 0.9,
+            spacing: 0.5,
+            teleport_distance: 35.,
+            ..Default::default()
+        })
+        .unwrap()
+    });
+    let mut exhaust = ParticlePool::new(128);
+    let mut exhaust_emitter =
+        Emitter::new(presets::exhaust([0.68, 0.72, 0.69, 0.22]), 0x534b59).unwrap();
+    let mut exhaust_renderer = ParticleRenderer::new(128).unwrap();
     let mut flight = Flight::new();
+    let mut previous_effect_position = flight.pos;
     let mut clock = FixedClock::new(120., 12);
     let scene = Scene::new();
     let material = LitMaterial::new().expect("portable flight material");
@@ -502,6 +523,12 @@ async fn game() {
                         .any(|t| t.phase == TouchPhase::Started)))
         {
             flight = Flight::new();
+            previous_effect_position = flight.pos;
+            for trail in &mut wing_trails {
+                trail.clear();
+            }
+            exhaust.clear();
+            exhaust_emitter.reset(0x534b59);
             clock.reset();
             reported = false;
             camera.cut();
@@ -543,6 +570,41 @@ async fn game() {
                 );
             }
         }
+        let rotation = Quat::from_rotation_y(flight.yaw)
+            * Quat::from_rotation_x(-flight.pitch)
+            * Quat::from_rotation_z(flight.bank);
+        for (side, trail) in [-1., 1.].into_iter().zip(&mut wing_trails) {
+            let position = flight.pos + rotation * vec3(side * 5.65, 0.2, -0.4);
+            trail
+                .update(
+                    dt,
+                    (flight.outcome == Outcome::Flying && flight.speed > 28.).then_some(
+                        TrailSample {
+                            position: position.to_array(),
+                            color: [0.91, 0.93, 0.87, 0.2],
+                            width: 0.16,
+                        },
+                    ),
+                )
+                .unwrap();
+        }
+        exhaust.update(dt).unwrap();
+        exhaust_emitter
+            .set_rate(if flight.outcome == Outcome::Flying {
+                14.
+            } else {
+                0.
+            })
+            .unwrap();
+        let nozzle = EmitterTransform {
+            position: (flight.pos + rotation * vec3(0.72, -0.35, 1.8)).to_array(),
+            rotation: rotation.to_array(),
+        };
+        if flight.pos.distance(previous_effect_position) > 35. {
+            exhaust_emitter.teleport(nozzle).unwrap();
+        }
+        previous_effect_position = flight.pos;
+        exhaust_emitter.update(dt, nozzle, &mut exhaust).unwrap();
         sound.motor(
             flight.speed,
             38.,
@@ -608,6 +670,30 @@ async fn game() {
         });
         scene.draw(&flight, demo.time());
         material.end();
+        for trail in &wing_trails {
+            draw_ribbon(
+                trail,
+                RibbonFacing::Camera {
+                    eye: camera_pos.to_array(),
+                    up: view.up.to_array(),
+                },
+                2.,
+                EffectStyle::default(),
+            )
+            .unwrap();
+        }
+        exhaust_renderer
+            .draw_3d(
+                &exhaust,
+                BillboardView::new(
+                    camera_pos,
+                    (view.target - camera_pos).cross(view.up),
+                    view.up,
+                )
+                .unwrap(),
+                ParticleStyle::default(),
+            )
+            .unwrap();
         set_default_camera();
         hud(&flight, touch_mode);
         if demo.autoplay && flight.outcome != Outcome::Flying && !reported {

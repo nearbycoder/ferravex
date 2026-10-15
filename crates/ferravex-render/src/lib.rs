@@ -12,6 +12,7 @@ pub mod ao;
 pub mod audio;
 pub mod canvas;
 pub mod demo;
+pub mod effects;
 mod font;
 pub mod input;
 pub mod lighting;
@@ -273,6 +274,7 @@ struct State {
     vertices: Vec<[f32; 8]>,
     batches: Vec<Batch>,
     retained: retained::Frame,
+    effect_stats: effects::EffectStats,
     lighting: Option<shaders::LitSettings>,
     shader: Option<material::ShaderMaterial>,
     shader_params: [f32; 16],
@@ -320,6 +322,7 @@ impl Default for State {
             vertices: Vec::new(),
             batches: Vec::new(),
             retained: retained::Frame::default(),
+            effect_stats: effects::EffectStats::default(),
             lighting: None,
             shader: None,
             shader_params: [0.; 16],
@@ -444,8 +447,11 @@ impl State {
         if count == 0 {
             return;
         }
+        self.record_immediate(start, count, self.depth);
+    }
+    fn record_immediate(&mut self, start: u32, count: u32, depth: bool) {
         if let Some(last) = self.batches.last_mut().filter(|b| {
-            b.depth == self.depth && self.retained.commands.last().is_some_and(|c| c.kind == 0)
+            b.depth == depth && self.retained.commands.last().is_some_and(|c| c.kind == 0)
         }) {
             last.count += count;
         } else {
@@ -456,7 +462,7 @@ impl State {
             self.batches.push(Batch {
                 start,
                 count,
-                depth: self.depth,
+                depth,
             });
         }
     }
@@ -498,6 +504,7 @@ pub fn clear_background(c: Color) {
         s.vertices.clear();
         s.batches.clear();
         s.retained.clear();
+        s.effect_stats = effects::EffectStats::default();
         s.points.clear();
         s.sun = None;
         s.refresh_environment();
@@ -960,6 +967,7 @@ fn begin_host_frame(dt: f32, w: u32, h: u32) {
         s.vertices.clear();
         s.batches.clear();
         s.retained.clear();
+        s.effect_stats = effects::EffectStats::default();
         s.points.clear();
         s.sun = None;
         s.refresh_environment();
@@ -1259,7 +1267,8 @@ pub fn run(conf: Conf, future: impl Future<Output = ()> + 'static) {
                 upload_bytes: Some(
                     (s.vertices.len() * 32 + s.retained.instances.len() * 112) as u64
                         + window.last_mesh_upload_bytes()
-                        + window.skin_upload_bytes(),
+                        + window.skin_upload_bytes()
+                        + window.sprite_upload_bytes(),
                 ),
                 ..Default::default()
             })));
@@ -1362,6 +1371,34 @@ mod wasm {
     #[unsafe(no_mangle)]
     pub extern "C" fn ferravex_command_count() -> u32 {
         read(|s| s.retained.commands.len() as u32)
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_sprite_batches() -> *const effects::SpriteBatch {
+        read(|s| s.retained.sprite_batches.as_ptr())
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_sprite_batch_count() -> u32 {
+        read(|s| s.retained.sprite_batches.len() as u32)
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_sprite_instances() -> *const [f32; 16] {
+        read(|s| s.retained.sprites.as_ptr())
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_sprite_instance_count() -> u32 {
+        read(|s| s.retained.sprites.len() as u32)
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_effect_batches() -> *const effects::EffectBatch {
+        read(|s| s.retained.effects.as_ptr())
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_effect_batch_count() -> u32 {
+        read(|s| s.retained.effects.len() as u32)
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_effect_vertex_count() -> u32 {
+        effects::stats().vertices
     }
     #[unsafe(no_mangle)]
     pub extern "C" fn ferravex_retained_batches() -> *const retained::RetainedBatch {

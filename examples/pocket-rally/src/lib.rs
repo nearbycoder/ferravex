@@ -6,9 +6,10 @@ use ferravex_render::input::{
 };
 mod sim;
 use ferravex_core::FixedClock;
+use ferravex_play::particles::{RibbonFacing, Trail, TrailConfig, TrailSample};
+use ferravex_render::effects::{EffectStyle, draw_ribbon};
 use ferravex_render::{demo::Demo, prelude::*};
 use sim::{Controls, LAPS, Pose, Race, Track};
-use std::collections::VecDeque;
 
 const CREAM: Color = Color::new(0.96, 0.92, 0.81, 1.);
 const INK: Color = Color::new(0.12, 0.19, 0.17, 1.);
@@ -262,7 +263,17 @@ async fn game() {
     let mut clock = FixedClock::new(120., 8);
     let mut demo = Demo::new();
     let mut sound = GameAudio::new();
-    let mut marks: VecDeque<(Vec2, Vec2)> = VecDeque::new();
+    let mut marks: [Trail; 2] = std::array::from_fn(|_| {
+        Trail::new(TrailConfig {
+            capacity: 256,
+            lifetime: 7.,
+            spacing: 3.5,
+            teleport_distance: 80.,
+            fade_width: false,
+            ..Default::default()
+        })
+        .unwrap()
+    });
     let mut player_input = PlayerInput::preset("pocket-rally", Preset::Racer);
     player_input
         .add_default_binding(
@@ -306,7 +317,9 @@ async fn game() {
         {
             race.reset(&track);
             clock.reset();
-            marks.clear();
+            for trail in &mut marks {
+                trail.clear();
+            }
         }
         let movement = player_input.movement();
         let brake = player_input.held("brake");
@@ -322,7 +335,6 @@ async fn game() {
         };
         let frame = clock.advance(dt as f64);
         for _ in 0..frame.steps {
-            let previous = race.car.pose.position;
             let input = if demo.autoplay {
                 race.autopilot(&track)
             } else {
@@ -337,14 +349,23 @@ async fn game() {
             if race.finished() && !finished {
                 sound.cue(Cue::Success, 0.65);
             }
-            if !race.finished()
-                && (race.car.sliding || race.car.offroad)
-                && race.ticks.is_multiple_of(3)
-            {
-                marks.push_back((previous, race.car.pose.position));
-                if marks.len() > 500 {
-                    marks.pop_front();
-                }
+            for (side, trail) in [-1., 1.].into_iter().zip(&mut marks) {
+                let pose = race.car.pose;
+                let point =
+                    pose.position + Vec2::from_angle(pose.angle).rotate(vec2(-7., side * 6.));
+                let emitting = !race.finished()
+                    && (race.car.sliding || race.car.offroad)
+                    && race.car.velocity.length() > 15.;
+                trail
+                    .update(
+                        frame.dt,
+                        emitting.then_some(TrailSample {
+                            position: [point.x, point.y, 0.],
+                            color: [0.20, 0.22, 0.17, 0.34],
+                            width: 1.6,
+                        }),
+                    )
+                    .unwrap();
             }
         }
         let pos = race.car.pose.position;
@@ -377,8 +398,16 @@ async fn game() {
         camera.zoom.y = camera.zoom.y.abs();
         set_camera(&camera);
         draw_land(&track);
-        for (a, b) in &marks {
-            line(*a, *b, 3., Color::new(0.20, 0.22, 0.17, 0.34));
+        for trail in &marks {
+            draw_ribbon(
+                trail,
+                RibbonFacing::Plane {
+                    normal: [0., 0., 1.],
+                },
+                2.,
+                EffectStyle::default(),
+            )
+            .unwrap();
         }
         if !race.finished() {
             let (gate, tangent) = track.gate(race.next_gate);

@@ -1,10 +1,12 @@
 //! Original low-poly FPS vertical slice on Ferravex; native UDP or offline practice on the web.
 mod animation;
 mod controls;
+mod effects;
 mod geometry;
 mod hud;
 
 use controls::Controls;
+use effects::CombatEffects;
 use ferravex_core::{FixedClock, FrameStats};
 #[cfg(not(target_arch = "wasm32"))]
 use ferravex_fps::GameClient;
@@ -14,7 +16,7 @@ use ferravex_play::camera::{Input3, Mode3, NoObstructions, Rig3, Settings3, Targ
 use ferravex_render::audio::{self, Cue, GameAudio, Spatial, Surface, VoiceParams};
 use ferravex_render::prelude::*;
 use ferravex_render::shaders::{LitMaterial, LitSettings};
-use geometry::{build_operator, build_rifle, build_yard, draw_transformed, rgb};
+use geometry::{build_operator, build_rifle, build_yard, rgb};
 
 fn window_conf() -> Conf {
     let mut conf = ferravex_render::window_conf("Ferravex / Strike — Dockyard");
@@ -96,18 +98,12 @@ fn bot_input(bot: &Player, target: &Player, tick: u32) -> InputFrame {
 }
 
 const MAX_TRACERS: usize = 32;
-struct Tracer {
-    origin: Vec3,
-    end: Vec3,
-    life: f32,
-}
-
 // Both offline authority and replicated network events feed the same effects.
 // Client prediction never manufactures a hit confirmation.
 fn apply_game_events(
     events: impl IntoIterator<Item = ferravex_fps::GameEvent>,
     local_id: u8,
-    tracers: &mut Vec<Tracer>,
+    effects: &mut CombatEffects,
     hit_timer: &mut f32,
     damage_timer: &mut f32,
 ) {
@@ -135,15 +131,12 @@ fn apply_game_events(
                 player,
                 origin,
                 end,
-            } if player != local_id => {
-                if tracers.len() == MAX_TRACERS {
-                    tracers.remove(0);
-                }
-                tracers.push(Tracer {
-                    origin: Vec3::from_array(origin.to_array()),
-                    end: Vec3::from_array(end.to_array()),
-                    life: 0.09,
-                });
+            } => {
+                effects.shot(
+                    player != local_id,
+                    Vec3::from_array(origin.to_array()),
+                    Vec3::from_array(end.to_array()),
+                );
             }
             ferravex_fps::GameEvent::Hit {
                 attacker, victim, ..
@@ -210,9 +203,7 @@ async fn game() {
         .map(|_| animation::OperatorMotion::new(&operator_rig))
         .collect();
     let mut weapon_motion = animation::WeaponMotion::new();
-    let mut tracer_model = geometry::Model::new();
-    tracer_model.cube(Vec3::ZERO, vec3(0.018, 0.018, 1.), rgb(0xe8b56a));
-    let mut tracers = Vec::with_capacity(MAX_TRACERS);
+    let mut effects = CombatEffects::new();
 
     let shader = LitMaterial::new();
     #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
@@ -313,7 +304,7 @@ async fn game() {
             apply_game_events(
                 c.drain_events().into_iter().map(|message| message.event),
                 local_id,
-                &mut tracers,
+                &mut effects,
                 &mut hit_timer,
                 &mut damage_timer,
             );
@@ -347,7 +338,7 @@ async fn game() {
                     commands.push((bot.id, bot_input(bot, &target, game.tick)));
                 }
                 let events = game.step(&commands);
-                apply_game_events(events, 0, &mut tracers, &mut hit_timer, &mut damage_timer);
+                apply_game_events(events, 0, &mut effects, &mut hit_timer, &mut damage_timer);
                 local = game.players[0].clone();
                 remote.clone_from(&game.players);
                 server_tick = game.tick;
@@ -394,10 +385,7 @@ async fn game() {
         shot_timer = (shot_timer - dt).max(0.);
         hit_timer = (hit_timer - dt).max(0.);
         damage_timer = (damage_timer - dt).max(0.);
-        tracers.retain_mut(|tracer| {
-            tracer.life -= dt;
-            tracer.life > 0.
-        });
+        effects.update(dt);
         let animation_dt = if active {
             controls.input.simulation_dt(dt)
         } else {
@@ -544,22 +532,6 @@ async fn game() {
                 operator_motion[p.id as usize].palette(),
             );
         }
-        if active {
-            for tracer in &tracers {
-                let delta = tracer.end - tracer.origin;
-                let length = delta.length();
-                if length > 0.001 {
-                    draw_transformed(
-                        &tracer_model,
-                        Mat4::from_scale_rotation_translation(
-                            vec3(1., 1., length),
-                            Quat::from_rotation_arc(Vec3::Z, delta / length),
-                            (tracer.origin + tracer.end) * 0.5,
-                        ),
-                    );
-                }
-            }
-        }
         if active && local.health > 0 {
             let side = direction.cross(Vec3::Y).normalize_or_zero();
             let up = side.cross(direction).normalize_or_zero();
@@ -570,7 +542,7 @@ async fn game() {
                 Mat4::from_rotation_translation(rot, offset),
                 weapon_motion.palette(),
             );
-            if shot_timer > 0.055 {
+            if fired {
                 let muzzle = offset
                     + rot
                         * weapon_motion
@@ -580,12 +552,18 @@ async fn game() {
                                 ferravex_render::skinning::SkinWeights::rigid(0),
                             )
                             .expect("valid muzzle bone");
-                draw_cube(muzzle, vec3(0.065, 0.06, 0.12), None, rgb(0xffda87));
+                effects.muzzle(muzzle);
             }
         }
         if let Ok(s) = &shader {
             s.end();
         }
+        let effect_triangles = if active {
+            effects.draw(ferravex_render::effects::BillboardView::from_camera(&camera).unwrap())
+                as usize
+        } else {
+            0
+        };
         set_default_camera();
         if damage_timer > 0. {
             draw_rectangle(
@@ -596,16 +574,8 @@ async fn game() {
                 Color::new(0.6, 0.12, 0.05, damage_timer * 0.3),
             );
         }
-        let triangles = if active && local.health > 0 && shot_timer > 0.055 {
-            12
-        } else {
-            0
-        } + arena.triangles()
-            + if active {
-                tracers.len() * tracer_model.triangles()
-            } else {
-                0
-            }
+        let triangles = effect_triangles
+            + arena.triangles()
             + remote
                 .iter()
                 .filter(|p| p.health > 0 && (!active || p.id != local.id))
@@ -681,7 +651,7 @@ mod event_effect_tests {
     use super::*;
     #[test]
     fn replicated_hits_confirm_only_authority_and_remote_tracers_are_bounded() {
-        let mut tracers = Vec::new();
+        let mut effects = CombatEffects::new();
         let mut hit = 0.;
         let mut damage = 0.;
         apply_game_events(
@@ -692,7 +662,7 @@ mod event_effect_tests {
                 headshot: false,
             }],
             0,
-            &mut tracers,
+            &mut effects,
             &mut hit,
             &mut damage,
         );
@@ -706,12 +676,13 @@ mod event_effect_tests {
                     end: [0., 1., -5.].into(),
                 }],
                 0,
-                &mut tracers,
+                &mut effects,
                 &mut hit,
                 &mut damage,
             );
         }
-        assert_eq!(tracers.len(), MAX_TRACERS);
+        assert_eq!(effects.beams.len(), MAX_TRACERS);
+        assert!(effects.particles.len() <= effects.particles.capacity());
         apply_game_events(
             [ferravex_fps::GameEvent::Hit {
                 attacker: 1,
@@ -720,7 +691,7 @@ mod event_effect_tests {
                 headshot: false,
             }],
             0,
-            &mut tracers,
+            &mut effects,
             &mut hit,
             &mut damage,
         );

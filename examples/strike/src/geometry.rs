@@ -361,8 +361,3 @@ pub fn build_rifle() -> ferravex_render::skinning::SkinnedMesh {
     );
     m.into_skin(4)
 }
-
-/// Record a transformed cached model without rebuilding its source vertices.
-pub fn draw_transformed(model: &Model, matrix: Mat4) {
-    ferravex_render::draw_resident(model.resident(), matrix);
-}

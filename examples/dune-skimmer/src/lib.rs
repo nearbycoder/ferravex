@@ -10,6 +10,8 @@ use ferravex_core::FixedClock;
 use ferravex_play::camera::{
     Blocker, Input3, Mode3, ObstructionSettings, Rig3, Settings3, ShakeImpulse, Target3,
 };
+use ferravex_play::particles::{Emitter, EmitterTransform, ParticlePool, presets};
+use ferravex_render::effects::{BillboardView, ParticleRenderer, ParticleStyle};
 use ferravex_render::{
     demo::Demo,
     material::{MaterialOptions, ShaderMaterial, ShaderSource},
@@ -68,7 +70,6 @@ struct Scene {
     glow: Mesh3d,
     stripe: Mesh3d,
     shadow: Mesh3d,
-    dust: Mesh3d,
     sun: Mesh3d,
 }
 
@@ -226,7 +227,6 @@ impl Scene {
             glow: Mesh3d::cone(0.29, 1.25, ORANGE, 6),
             stripe: Mesh3d::cuboid(vec3(0.18, 0.015, 2.6), ORANGE),
             shadow: Mesh3d::cylinder(1.0, 0.006, Color::from_rgba(114, 100, 77, 255), 8),
-            dust: Mesh3d::cuboid(vec3(0.22, 0.22, 0.22), PALE),
             sun: Mesh3d::sphere(6.0, Color::from_rgba(255, 226, 166, 255), 12, 8),
         }
     }
@@ -371,19 +371,6 @@ impl Scene {
                 self.exhaust.end();
             }
         }
-        // Bounded analytic particles need no allocation or mutable emitter buffers.
-        if race.speed() > 3.0 && !race.finished {
-            for i in 0..22 {
-                let age = (time * 1.7 + i as f32 / 22.0).fract();
-                let side = (i as f32 * 2.39).sin() * (0.5 + age * 1.6);
-                let p =
-                    position - forward * (2.5 + age * race.speed() * 0.18) + right(forward) * side;
-                self.dust.draw(
-                    world(p, 0.25 + age * 0.8),
-                    Quat::from_rotation_y(i as f32 + time),
-                );
-            }
-        }
     }
 }
 
@@ -526,6 +513,10 @@ async fn game() {
     let mut clock = FixedClock::new(120.0, 16);
     let mut demo = Demo::new();
     let mut sound = GameAudio::new();
+    let mut dust = ParticlePool::new(256);
+    let mut dust_emitter =
+        Emitter::new(presets::dust([SAND.r, SAND.g, SAND.b, 0.32]), 0x44554e45).unwrap();
+    let mut dust_renderer = ParticleRenderer::new(256).unwrap();
     ferravex_render::set_quality(ferravex_render::lighting::Quality::Medium);
     let mut player_input = PlayerInput::preset("dune-skimmer", Preset::HoverRacer);
     player_input
@@ -567,6 +558,8 @@ async fn game() {
                         .any(|t| t.phase == TouchPhase::Started)))
         {
             race = Race::new();
+            dust.clear();
+            dust_emitter.reset(0x44554e45);
             clock.reset();
             camera.cut();
             previous_impacts = 0;
@@ -613,6 +606,13 @@ async fn game() {
             race.previous_yaw + race::angle_difference(race.yaw, race.previous_yaw) * frame.alpha;
         if race.recovery_count != previous_recoveries {
             camera.cut();
+            dust.clear();
+            dust_emitter
+                .teleport(EmitterTransform {
+                    position: world(position - vec2(yaw.sin(), yaw.cos()) * 2., 0.25).to_array(),
+                    rotation: Quat::from_rotation_y(yaw).to_array(),
+                })
+                .unwrap();
         }
         if race.impacts > previous_impacts {
             sound.cue(Cue::Impact(Surface::Metal), 0.7);
@@ -628,6 +628,29 @@ async fn game() {
         }
         previous_impacts = race.impacts;
         previous_recoveries = race.recovery_count;
+        dust.update(dt).unwrap();
+        let density = match ferravex_render::quality() {
+            ferravex_render::lighting::Quality::Low => 0.5,
+            ferravex_render::lighting::Quality::Medium => 1.,
+            ferravex_render::lighting::Quality::High => 1.5,
+        };
+        dust_emitter
+            .set_rate(if race.speed() > 3. && !race.finished {
+                32. * density * if race.boosting { 1.5 } else { 1. }
+            } else {
+                0.
+            })
+            .unwrap();
+        dust_emitter
+            .update(
+                dt,
+                EmitterTransform {
+                    position: world(position - vec2(yaw.sin(), yaw.cos()) * 2., 0.25).to_array(),
+                    rotation: Quat::from_rotation_y(yaw).to_array(),
+                },
+                &mut dust,
+            )
+            .unwrap();
         let view = camera
             .update(
                 dt,
@@ -678,6 +701,18 @@ async fn game() {
         });
         scene.draw(&course, &race, position, yaw, demo.time());
         material.end();
+        dust_renderer
+            .draw_3d(
+                &dust,
+                BillboardView::new(
+                    camera_position,
+                    (view.target - camera_position).cross(view.up),
+                    view.up,
+                )
+                .unwrap(),
+                ParticleStyle::default(),
+            )
+            .unwrap();
         set_default_camera();
         draw_hud(&race, touch_mode);
         if touch_mode && !race.finished {
