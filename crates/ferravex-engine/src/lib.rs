@@ -7,6 +7,8 @@ pub use ferravex_net as net;
 pub use ferravex_play as play;
 pub mod assets;
 pub mod audio;
+/// Shared follow, orbit, chase and first-person presentation rigs.
+pub mod camera;
 pub mod input;
 pub mod profile;
 pub mod replay;

@@ -332,6 +332,35 @@ impl PhysicsWorld {
     }
     /// Queries use current body poses directly; no separate broadphase synchronization is needed.
     pub fn refresh_queries(&mut self) {}
+    /// Sweep a ball through current collider poses, filtering sensors, membership
+    /// and an optional ignored body (all its compound children). The hit point
+    /// is the swept ball center at impact. Invalid inputs return None.
+    pub fn spherecast(
+        &self,
+        origin: [f32; DIM],
+        direction: [f32; DIM],
+        max_distance: f32,
+        radius: f32,
+        mask: u32,
+        ignore: Option<RigidBodyHandle>,
+    ) -> Option<RayHit> {
+        self.raw
+            .cast_sphere(
+                to3(Vector::from_array(origin)),
+                to3(Vector::from_array(direction)),
+                max_distance,
+                radius,
+                mask,
+                ignore,
+            )
+            .map(|h| RayHit {
+                body: Some(h.0),
+                collider: h.1,
+                distance: h.2,
+                point: from3(h.3).to_array(),
+                normal: from3(h.4).to_array(),
+            })
+    }
     pub fn raycast(
         &self,
         origin: [f32; DIM],

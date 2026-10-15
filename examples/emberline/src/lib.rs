@@ -3,6 +3,7 @@ use ferravex_core::FixedClock;
 use ferravex_physics::character::{
     Character, CharacterInput, CharacterSettings, CharacterShape, Obstacle, QueryBounds, Terrain,
 };
+use ferravex_play::camera::{Follow2, Follow2Settings, Limits2};
 use ferravex_render::{demo::Demo, prelude::*};
 
 const WIDTH: f32 = 1280.0;
@@ -423,8 +424,21 @@ async fn game() {
     let mut jump_pending = false;
     let mut touch_jump_was_down = false;
     let mut touch_mode = false;
-    let mut camera_x = 0.0;
+    let mut camera = Follow2::new(Follow2Settings {
+        offset: vec2(WIDTH * 0.15, 0.),
+        dead_zone: vec2(28., 0.),
+        half_life: std::f32::consts::LN_2 / 9.,
+        look_ahead_time: 0.05,
+        max_look_ahead: 28.,
+        teleport_distance: Some(600.),
+        limits: Some(Limits2 {
+            min: vec2(WIDTH * 0.5, HEIGHT * 0.5),
+            max: vec2(WORLD_END - WIDTH * 0.5, HEIGHT * 0.5),
+        }),
+    })
+    .unwrap();
     let mut font_dpi = 0.0;
+    let mut previous_deaths = 0;
     loop {
         let dpi = screen_dpi_scale();
         if font_dpi != dpi {
@@ -438,7 +452,7 @@ async fn game() {
         if is_key_pressed(KeyCode::R) {
             game = Game::new();
             clock.reset();
-            camera_x = 0.0;
+            camera.cut();
         }
         let canvas = ferravex_render::canvas::Canvas2D::fit(
             vec2(WIDTH, HEIGHT),
@@ -460,6 +474,8 @@ async fn game() {
             }
             if game.won && point.y > 350.0 && point.y < 470.0 {
                 game = Game::new();
+                clock.reset();
+                camera.cut();
             }
         }
         jump_pending |= is_key_pressed(KeyCode::Space)
@@ -483,8 +499,20 @@ async fn game() {
             game.update(input, frame.dt);
             jump_pending = false;
         }
-        let target = (game.position().x - WIDTH * 0.35).clamp(0.0, WORLD_END - WIDTH);
-        camera_x += (target - camera_x) * (1.0 - (-9.0 * demo.dt()).exp());
+        if game.deaths != previous_deaths {
+            camera.cut();
+        }
+        previous_deaths = game.deaths;
+        let camera_x = camera
+            .update(
+                demo.dt(),
+                vec2(game.position().x, HEIGHT * 0.5),
+                vec2(game.velocity().x, 0.),
+            )
+            .expect("valid platformer camera")
+            .center
+            .x
+            - WIDTH * 0.5;
         set_camera(&canvas.camera());
         world(&game, camera_x, demo.time());
         let collected = game.embers.iter().filter(|(_, found)| *found).count();

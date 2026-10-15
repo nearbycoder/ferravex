@@ -1,11 +1,12 @@
 # ferravex-play
 
-Original, standard-library-only gameplay systems. No third-party dependencies, unsafe Rust, renderer requirements, or copied vendor code. Public math values use fixed arrays so hosts can adapt their own math types without coupling.
+Original gameplay systems using Rust std and the workspace's first-party scalar math crate. No third-party dependencies, unsafe Rust, renderer requirements, or copied vendor code. Existing scene/animation math values use fixed arrays; camera rigs use the shared math vectors/quaternions.
 
 ## Implemented systems
 
 | Module | Working behavior | Current scope |
 | --- | --- | --- |
+| `camera` | 2D dead-zone follow and 3D follow/orbit/first-person/chase, exponential damping, FOV, cuts, obstruction sphere sweeps and seeded bounded shake | Renderer/input independent. Optional rigid-world adapter is in ferravex-engine; authored boxes use conservative inflation. See [camera rigs](../../docs/CAMERAS.md). |
 | `rounds` | Fixed teams, buy phase, weapon/armor/kit purchases, money validation, kill rewards, escalating loss rewards, plant/defuse channels, dropped bomb pickup, death and timeout outcomes, match score, respawn, capped event queue | Host must supply server-validated positions and hit results. This is a reusable rules module, not a transport or collision engine. No halftime, overtime, weapon-specific damage, shop UI, or matchmaking. |
 | `navigation` | Deterministic weighted-grid A*, four/eight neighbors, blocked endpoints, no diagonal corner cutting, arrival and separation steering | Grid navigation, not a navigation mesh or crowd solver. Each path search allocates scratch arrays. Unblocking a cell resets its cost to one. |
 | `animation` | Validated scalar and Vec3 key tracks, step/linear interpolation, normalized shortest-arc quaternion slerp, clamp/repeat modes, variable-duration sprite frames | No asset-format importer, animation state machine, root motion, or GPU skinning. |
@@ -28,6 +29,6 @@ cargo test -p ferravex-play
 cargo clippy -p ferravex-play --all-targets -- -D warnings
 ```
 
-Twenty-four unit regressions cover rule transitions/economy, timer partitioning, spatial and team checks, path correctness, weighted detours, corner blocking, animation boundaries and antipodal quaternions, particle bounds and integration, scene identity/cycles/copies/binary validation, bind-pose palettes, and UI focus/capture.
+Unit regressions cover rule transitions/economy, timer partitioning, spatial and team checks, path correctness, weighted detours, corner blocking, animation boundaries and antipodal quaternions, particle bounds and integration, scene identity/cycles/copies/binary validation, bind-pose palettes, and UI focus/capture.
 
 `tests/tactical_scenario.rs` additionally integrates all six modules in one headless host: route an attacker around a blocked grid cell, sample that route as an animation track, update the scene hierarchy, plant the bomb, spawn a particle, activate a defuse button through UI hit testing, finish the match, and round-trip the scene data. This proves subsystem composition without claiming that an existing graphical FPS has been migrated to these systems.

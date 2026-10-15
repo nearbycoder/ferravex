@@ -4,6 +4,7 @@ use ferravex_physics::d3::{
     ColliderBuilder, JointBuilder, PhysicsWorld, RigidBodyBuilder, RigidBodyHandle,
 };
 use ferravex_physics::{JointHandle, JointMotor};
+use ferravex_play::camera::{Input3, Mode3, NoObstructions, Rig3, Settings3, Target3};
 use ferravex_render::{
     mesh::Mesh3d,
     prelude::*,
@@ -232,6 +233,12 @@ async fn game() {
     let mut pitch: f32 = 0.48;
     let mut radius: f32 = 25.0;
     let mut previous_mouse = Vec2::from(mouse_position());
+    let mut camera = Rig3::new(Settings3 {
+        position_half_life: 0.045,
+        target_half_life: 0.,
+        ..Default::default()
+    })
+    .unwrap();
     loop {
         ui::warm_up_font();
         stats.record(get_frame_time());
@@ -282,18 +289,30 @@ async fn game() {
         }
         let alpha = if paused { 1.0 } else { frame.alpha };
         clear_background(ui::BACKGROUND);
-        let target = vec3(0.0, 2.2, 0.0);
-        let eye = target
-            + vec3(
-                yaw.sin() * pitch.cos(),
-                pitch.sin(),
-                yaw.cos() * pitch.cos(),
-            ) * radius;
+        let view = camera
+            .update(
+                demo.dt(),
+                Input3 {
+                    target: Target3::at(vec3(0., 2.2, 0.)),
+                    mode: Mode3::Orbit {
+                        yaw,
+                        pitch,
+                        distance: radius,
+                        pivot: Vec3::ZERO,
+                    },
+                    fov_y: 43_f32.to_radians(),
+                },
+                &NoObstructions,
+            )
+            .expect("valid laboratory orbit")
+            .pose;
+        let eye = view.position;
+        let target = view.target;
         set_camera(&Camera3D {
             position: eye,
             target,
-            up: Vec3::Y,
-            fovy: 43.0_f32.to_radians(),
+            up: view.up,
+            fovy: view.fov_y,
             z_near: 0.1,
             z_far: 100.0,
             ..Default::default()

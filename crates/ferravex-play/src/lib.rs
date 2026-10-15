@@ -1,8 +1,9 @@
 //! Original, dependency-free gameplay systems shared by small Ferravex games.
-//! Arrays keep these systems independent of a renderer or a particular math crate.
+//! Renderer-independent systems; cameras share the first-party scalar math crate.
 #![forbid(unsafe_code)]
 
 pub mod animation;
+pub mod camera;
 pub mod navigation;
 pub mod particles;
 pub mod rounds;

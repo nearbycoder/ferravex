@@ -23,6 +23,7 @@ DOCS = [
  ('lighting','Low-poly lighting','Engine','docs/LIGHTING.md'),
  ('materials','Materials and shader reload','Engine','docs/MATERIALS.md'),
  ('characters','Character controllers','Engine','docs/CHARACTERS.md'),
+ ('cameras','Camera rigs','Engine','docs/CAMERAS.md'),
  ('contact-stability','Contacts and sleep islands','Engine','docs/CONTACT_STABILITY.md'),
  ('joints-and-compounds','Joints and compound bodies','Engine','docs/JOINTS_AND_COMPOUNDS.md'),
  ('rigid-bodies','Rotational rigid bodies','Engine','crates/ferravex-physics/README.md'),

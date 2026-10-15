@@ -13,7 +13,7 @@ Ferravex separates simulation, data and platform presentation. Every package dep
 | ferravex-physics | Original rotational rigid-body API used by the restored physics games |
 | ferravex-graphics | Mesh generation/cooking, clipping, software rasterization and PNG export |
 | ferravex-render | Immediate drawing, procedural meshes, CPU vertex lighting, input, frame scheduling and native/browser presentation ABI |
-| ferravex-play | Scenes, animation, navigation, steering, particles and UI data |
+| ferravex-play | Scenes, camera rigs, animation, navigation, steering, particles and UI data |
 | ferravex-net | Packet codecs, reliable events, sequence/queue helpers and native UDP |
 | ferravex-engine | Facade over engine modules plus input, audio, assets, replay and profiling |
 | ferravex-fps | Authoritative shooter simulation, prediction, interpolation and rewind |
@@ -45,3 +45,10 @@ Native UDP is a trusted-development transport without account authentication or 
 ## Platform boundary
 
 Hosts own OS/browser events, GPU submission and the window lifecycle. Linux interactive and browser bindings are implemented. Native Windows, macOS and iOS window/GPU/input hosts and native audio sinks remain unimplemented. Portable simulation compilation is distinct from interactive device support; see [platform status](PLATFORMS.md).
+
+## Presentation cameras
+
+[Shared camera rigs](CAMERAS.md) live in `ferravex-play`, with a current rigid-world
+obstruction adapter in `ferravex-engine::camera`. Their bounded state/queries are
+independent of renderers and simulation clocks. Seven examples now exercise 2D
+framing, orbit, first-person, follow and chase, including cuts and impact shake.

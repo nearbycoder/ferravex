@@ -9,6 +9,7 @@ use ferravex_core::{FixedClock, FrameStats};
 use ferravex_fps::GameClient;
 use ferravex_fps::{Arena, Match, Player, TICK_RATE, forward};
 use ferravex_net::{BUTTON_FIRE, InputFrame};
+use ferravex_play::camera::{Input3, Mode3, NoObstructions, Rig3, Settings3, Target3};
 use ferravex_render::prelude::*;
 use ferravex_render::shaders::{LitMaterial, LitSettings};
 use geometry::{build_operator, build_rifle, build_yard, draw_transformed, rgb};
@@ -222,6 +223,14 @@ async fn game() {
     let mut was_ammo = local.ammo;
     let mut was_health = local.health;
     let mut previous_local_position = local.position;
+    let mut view_rig = Rig3::new(Settings3 {
+        position_half_life: 0.,
+        target_half_life: 0.,
+        fov_half_life: 0.,
+        teleport_distance: Some(2.),
+        ..Default::default()
+    })
+    .unwrap();
     if active && opts.smoke_frames.is_none() {
         set_cursor_grab(true);
         show_mouse(false);
@@ -355,16 +364,38 @@ async fn game() {
             vec3(17. + t.sin() * 2., 11., 24.)
         };
         let direction = Vec3::from_array(forward(controls.yaw, controls.pitch).to_array());
-        let target = if active {
-            eye + direction
+        let camera_input = if active {
+            Input3 {
+                target: Target3::at(eye),
+                mode: Mode3::FirstPerson {
+                    eye_offset: Vec3::ZERO,
+                    yaw: controls.yaw,
+                    pitch: controls.pitch,
+                },
+                fov_y: 68_f32.to_radians(),
+            }
         } else {
-            vec3(-3., 1., -3.)
+            let focus = vec3(-3., 1., -3.);
+            Input3 {
+                target: Target3::at(focus),
+                mode: Mode3::Follow {
+                    eye_offset: eye - focus,
+                    look_offset: Vec3::ZERO,
+                },
+                fov_y: 68_f32.to_radians(),
+            }
         };
+        let view = view_rig
+            .update(dt, camera_input, &NoObstructions)
+            .expect("valid shooter view")
+            .pose;
+        let eye = view.position;
+        let target = view.target;
         let camera = Camera3D {
             position: eye,
             target,
-            up: Vec3::Y,
-            fovy: 68f32.to_radians(),
+            up: view.up,
+            fovy: view.fov_y,
             z_near: 0.04,
             z_far: 150.,
             ..Default::default()
