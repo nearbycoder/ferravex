@@ -21,6 +21,10 @@ for game in games:
     wasm=ROOT/'target/wasm32-unknown-unknown'/folder/(package+'.wasm');shutil.copy2(wasm,out/wasm.name)
     report[package]={'profile':args.profile,'wasm_bytes':wasm.stat().st_size,'files':{p.name:p.stat().st_size for p in out.iterdir() if p.is_file()},'third_party_runtime_packages':0}
 shutil.copy2(ROOT/'web/runtime.js',output/'runtime.js')
+shutil.copy2(ROOT/'web/retained.js',output/'retained.js')
+# One shader implementation supplies both native GL and browser WebGL2.
+shader=(ROOT/'crates/ferravex-render/src/retained.rs').read_text().split('pub const VERTEX_BODY: &str = r#"',1)[1].split('"#;',1)[0]
+(output/'retained-shader.js').write_text('export const vertexBody = '+json.dumps(shader)+';\n')
 shutil.copy2(ROOT/'web/index.html',output/'index.html')
 shutil.copy2(ROOT/'examples/catalog.json',output/'games.json')
 manifest={str(p.relative_to(output)):{'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in output.rglob('*') if p.is_file()}

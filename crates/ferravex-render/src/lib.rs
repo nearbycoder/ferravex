@@ -1,4 +1,4 @@
-//! Original immediate renderer and platform ABI. Game code, input, geometry and
+//! Original immediate/retained renderer and platform ABI. Game code, input, geometry and
 //! scheduling live in Rust; hosts only bind OS events and GPU submission.
 pub use ferravex_math::{Color, Mat4, Quat, Rect, Vec2, Vec3, Vec4, vec2, vec3, vec4};
 use std::{
@@ -15,6 +15,7 @@ pub mod input;
 pub mod mesh;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native;
+pub mod retained;
 pub mod shaders;
 pub mod ui;
 pub use ferravex_core::telemetry;
@@ -255,6 +256,7 @@ struct State {
     clear: Color,
     vertices: Vec<[f32; 8]>,
     batches: Vec<Batch>,
+    retained: retained::Frame,
     lighting: Option<shaders::LitSettings>,
     keys: BTreeSet<u32>,
     pressed: BTreeSet<u32>,
@@ -286,6 +288,7 @@ impl Default for State {
             clear: BLACK,
             vertices: Vec::new(),
             batches: Vec::new(),
+            retained: retained::Frame::default(),
             lighting: None,
             keys: BTreeSet::new(),
             pressed: BTreeSet::new(),
@@ -336,9 +339,15 @@ impl State {
         if count == 0 {
             return;
         }
-        if let Some(last) = self.batches.last_mut().filter(|b| b.depth == self.depth) {
+        if let Some(last) = self.batches.last_mut().filter(|b| {
+            b.depth == self.depth && self.retained.commands.last().is_some_and(|c| c.kind == 0)
+        }) {
             last.count += count;
         } else {
+            self.retained.commands.push(retained::Command {
+                kind: 0,
+                index: self.batches.len() as u32,
+            });
             self.batches.push(Batch {
                 start,
                 count,
@@ -371,10 +380,19 @@ pub fn clear_background(c: Color) {
         s.clear = c;
         s.vertices.clear();
         s.batches.clear();
+        s.retained.clear();
     });
 }
 pub fn draw_mesh(m: &Mesh) {
     draw_mesh_transformed(m, Mat4::IDENTITY)
+}
+/// Submit an immutable mesh snapshot. Compatible adjacent draws share one instanced call.
+/// Returns false for non-affine/singular transforms or a full frame instance budget.
+pub fn draw_resident(mesh: &retained::ResidentMesh, model: Mat4) -> bool {
+    edit(|s| {
+        s.retained
+            .record(mesh, model, s.matrix, s.depth, s.lighting)
+    })
 }
 pub fn draw_mesh_transformed(m: &Mesh, model: Mat4) {
     edit(|s| {
@@ -668,6 +686,7 @@ fn frame(dt: f32, w: u32, h: u32) -> bool {
         s.h = h.max(1);
         s.vertices.clear();
         s.batches.clear();
+        s.retained.clear();
         s.default_camera();
     });
     let mut future = edit(|s| s.future.take());
@@ -678,6 +697,7 @@ fn frame(dt: f32, w: u32, h: u32) -> bool {
     });
     edit(|s| {
         s.future = future;
+        s.retained.finalize();
         s.finished = finished;
         s.frame += 1;
         s.pressed.clear();
@@ -808,14 +828,17 @@ pub fn run(conf: Conf, future: impl Future<Output = ()> + 'static) {
         read(|s| window.set_cursor(s.grab, s.visible));
         let cpu_us = token.as_ref().map_or(0., |t| t.elapsed_us());
         let submit_start = std::time::Instant::now();
-        read(|s| window.present(&s.vertices, &s.batches, s.clear));
+        read(|s| window.present_scene(&s.vertices, &s.batches, s.clear, Some(&s.retained)));
         if let (Some(session), Some(token)) = (&mut performance, token) {
             session.record(token.finish(read(|s| telemetry::FrameSample {
                 cpu_us,
                 submit_us: Some(submit_start.elapsed().as_secs_f64() * 1e6),
-                draw_calls: Some(s.batches.len() as u64),
-                vertices: Some(s.vertices.len() as u64),
-                upload_bytes: Some((s.vertices.len() * 32) as u64),
+                draw_calls: Some(s.retained.commands.len() as u64),
+                vertices: Some(s.vertices.len() as u64 + s.retained.vertices()),
+                upload_bytes: Some(
+                    (s.vertices.len() * 32 + s.retained.instances.len() * 112) as u64
+                        + window.last_mesh_upload_bytes(),
+                ),
                 ..Default::default()
             })));
         }
@@ -874,6 +897,34 @@ macro_rules! game {
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use super::*;
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_commands() -> *const retained::Command {
+        read(|s| s.retained.commands.as_ptr())
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_command_count() -> u32 {
+        read(|s| s.retained.commands.len() as u32)
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_retained_batches() -> *const retained::RetainedBatch {
+        read(|s| s.retained.batches.as_ptr())
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_retained_instances() -> *const [f32; 28] {
+        read(|s| s.retained.instances.as_ptr())
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_retained_instance_count() -> u32 {
+        read(|s| s.retained.instances.len() as u32)
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_mesh_vertices(id: u32) -> *const [f32; 10] {
+        retained::geometry(id).map_or(std::ptr::null(), |m| m.vertices.as_ptr())
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_mesh_vertex_count(id: u32) -> u32 {
+        retained::geometry(id).map_or(0, |m| m.vertices.len() as u32)
+    }
     #[unsafe(no_mangle)]
     pub extern "C" fn ferravex_frame(dt: f32, w: u32, h: u32) -> u32 {
         frame(dt, w, h) as u32

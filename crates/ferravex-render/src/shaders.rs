@@ -1,8 +1,8 @@
 //! Original built-in vertex lighting and distance fog.
 //!
-//! Lighting is evaluated on the CPU as geometry is recorded. The host GPU draws
-//! the resulting clip-space vertices. This preserves the examples' faceted look
-//! without compiling platform-specific shader source or allocating per material.
+//! Immediate geometry evaluates lighting on the CPU. Retained meshes evaluate
+//! the same equations in the built-in GPU vertex shader. Both preserve flat
+//! face normals and require no external material resources.
 use crate::prelude::{Color, Vec3, vec3};
 
 #[derive(Clone, Copy, Debug, PartialEq)]

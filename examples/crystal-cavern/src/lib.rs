@@ -363,13 +363,11 @@ fn faceted_wall(color: Color, seed: usize) -> Mesh3d {
             }
         }
     }
-    Mesh3d {
-        mesh: Mesh {
-            indices: (0..vertices.len() as u16).collect(),
-            vertices,
-            texture: None,
-        },
-    }
+    Mesh3d::from_mesh(Mesh {
+        indices: (0..vertices.len() as u16).collect(),
+        vertices,
+        texture: None,
+    })
 }
 
 struct Piece {

@@ -5,9 +5,33 @@ use crate::prelude::*;
 /// draw transforms use only rotation/translation to keep normals correct.
 pub struct Mesh3d {
     pub mesh: Mesh,
+    cached: std::cell::OnceCell<crate::retained::ResidentMesh>,
 }
 
 impl Mesh3d {
+    pub fn from_mesh(mesh: Mesh) -> Self {
+        Self {
+            mesh,
+            cached: Default::default(),
+        }
+    }
+    /// Invalidate the GPU snapshot after editing the public source mesh.
+    pub fn invalidate_gpu(&mut self) {
+        self.cached.take();
+    }
+    pub fn resident(&self) -> &crate::retained::ResidentMesh {
+        self.cached.get_or_init(|| {
+            crate::retained::ResidentMesh::new(&self.mesh).expect("valid retained Mesh3d")
+        })
+    }
+    pub fn draw_transformed(&self, model: Mat4) {
+        crate::draw_resident(self.resident(), model);
+    }
+    /// CPU path for geometry whose exact submission order must be preserved.
+    pub fn draw_immediate(&self, model: Mat4) {
+        crate::draw_mesh_transformed(&self.mesh, model);
+    }
+
     /// Tessellated XZ ground plane centered at the origin, facing positive Y.
     /// Subdivision provides nearby vertices for vertex lighting/distance fog on large surfaces.
     /// Bounded to 1..=28 cells per side to keep low-poly scenes inexpensive.
@@ -37,6 +61,7 @@ impl Mesh3d {
             }
         }
         Self {
+            cached: Default::default(),
             mesh: Mesh {
                 vertices,
                 indices,
@@ -99,6 +124,7 @@ impl Mesh3d {
         }
         let indices = (0..vertices.len() as u16).collect();
         Self {
+            cached: Default::default(),
             mesh: Mesh {
                 vertices,
                 indices,
@@ -136,6 +162,7 @@ impl Mesh3d {
             indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
         }
         Self {
+            cached: Default::default(),
             mesh: Mesh {
                 vertices,
                 indices,
@@ -215,6 +242,7 @@ impl Mesh3d {
         );
         let flat_indices = (0..flat_vertices.len() as u16).collect();
         Self {
+            cached: Default::default(),
             mesh: Mesh {
                 vertices: flat_vertices,
                 indices: flat_indices,
@@ -224,10 +252,7 @@ impl Mesh3d {
     }
 
     pub fn draw(&self, position: Vec3, rotation: Quat) {
-        draw_mesh_transformed(
-            &self.mesh,
-            Mat4::from_rotation_translation(rotation, position),
-        );
+        self.draw_transformed(Mat4::from_rotation_translation(rotation, position));
     }
 }
 

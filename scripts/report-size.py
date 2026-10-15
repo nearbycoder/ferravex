@@ -29,7 +29,7 @@ def main():
     candidates += [(f"wasm/{name.replace('-', '_')}.wasm", wasm / f"{name.replace('-', '_')}.wasm") for name in EXAMPLES]
     for game in GAMES:
         candidates += [(f"web/{game['host']}/{path.name}", path) for path in (ROOT / 'dist/web' / game['host']).glob('*') if path.is_file() and path.suffix != '.wasm']
-    candidates += [("web/runtime.js", ROOT / "dist/web/runtime.js")]
+    candidates += [(f"web/{name}", ROOT / "dist/web" / name) for name in ("runtime.js", "retained.js", "retained-shader.js")]
     rows = []
     missing = []
     for label, path in candidates:

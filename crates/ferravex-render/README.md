@@ -3,7 +3,7 @@
 `ferravex-render` implements the shared runtime for thirteen recovered Ferravex games. It depends only on the original core, math and graphics crates. There is no re-export of a third-party engine or window library.
 
 - Rust owns game futures, frame scheduling, keyboard/pointer/touch state, cameras, procedural meshes, 2D primitives, static bitmap glyph geometry, faceted directional lighting and distance fog.
-- Geometry is transformed to homogeneous clip space and submitted as a contiguous triangle stream. Adjacent draws with the same depth mode share a GPU batch; transparent UI retains submission order.
+- Immediate primitives/text use a clip-space triangle stream. Mesh3d and explicit ResidentMesh handles use persistent GPU buffers, GPU transforms/lighting/fog and instanced submission. Opaque retained draws group within a camera/material pass; transparent draws and immediate UI preserve ordering barriers.
 - Linux uses original Rust FFI declarations for system X11, GLX and OpenGL. A persistent GPU program and streamed vertex buffer present the frame; pointer grabbing and GPU PNG readback support native FPS play and local validation.
 - Web uses the original `web/runtime.js` host to call WebGL2 and forward DOM input through a direct Wasm ABI. Logical input pixels stay independent of framebuffer DPI. Hosts reset held input when focus is lost.
 
@@ -26,4 +26,6 @@ A native binary calls the library's `run()`. A Wasm library exports `ferravex_in
 
 ## Current limits
 
-This is an immediate triangle renderer optimized for the small low-poly examples. Vertex transforms, lighting, fog and text geometry are prepared on the CPU; meshes are not yet resident/instanced in this shared backend. It has no user shader compiler, textures, skeletal animation, realtime shadows or deferred lighting. Courtyard retains its separate original instanced WebGL2/shadow renderer. The shared native runtime currently supports Linux/X11. Native Windows, macOS and iOS window/GPU bindings, lifecycle integration and device validation remain work to do. System graphics drivers, OS libraries, browser implementations and Rust std are the platform boundary.
+This runtime has both immediate and retained paths. Immediate vertex transforms, lighting/fog and text geometry are prepared on the CPU. Retained meshes keep immutable geometry on the GPU and stream instance transforms/normal matrices. See [retained rendering](../../docs/RETAINED_RENDERING.md) for storage limits, mutation invalidation, ordering and backend requirements. It has no user shader compiler, textures, skeletal animation, realtime shadows or deferred lighting. Courtyard retains its separate original instanced WebGL2/shadow renderer. The shared native runtime currently supports Linux/X11. Native Windows, macOS and iOS window/GPU bindings, lifecycle integration and device validation remain work to do. System graphics drivers, OS libraries, browser implementations and Rust std are the platform boundary.
+
+Retained rendering requires WebGL2 or Linux OpenGL 3.3+. Draw-call and submission overhead can outweigh CPU savings for small independently authored meshes; use the local performance harness and the immediate escape hatch where appropriate.

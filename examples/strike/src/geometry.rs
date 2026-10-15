@@ -8,10 +8,12 @@ pub fn rgb(hex: u32) -> Color {
 
 pub struct Model {
     pub mesh: Mesh,
+    cached: std::cell::OnceCell<ferravex_render::retained::ResidentMesh>,
 }
 impl Model {
     pub fn new() -> Self {
         Self {
+            cached: Default::default(),
             mesh: Mesh {
                 vertices: Vec::new(),
                 indices: Vec::new(),
@@ -19,7 +21,13 @@ impl Model {
             },
         }
     }
+    pub fn resident(&self) -> &ferravex_render::retained::ResidentMesh {
+        self.cached.get_or_init(|| {
+            ferravex_render::retained::ResidentMesh::new(&self.mesh).expect("valid retained model")
+        })
+    }
     pub fn quad(&mut self, points: [Vec3; 4], color: Color) {
+        self.cached.take();
         assert!(self.mesh.vertices.len() + 4 < u16::MAX as usize);
         let base = self.mesh.vertices.len() as u16;
         let normal = (points[1] - points[0])
@@ -100,7 +108,7 @@ impl Model {
         );
     }
     pub fn draw(&self) {
-        draw_mesh(&self.mesh);
+        ferravex_render::draw_resident(self.resident(), Mat4::IDENTITY);
     }
     pub fn triangles(&self) -> usize {
         self.mesh.indices.len() / 3
@@ -324,5 +332,5 @@ pub fn build_rifle() -> Model {
 
 /// Record a transformed cached model without rebuilding its source vertices.
 pub fn draw_transformed(model: &Model, matrix: Mat4) {
-    draw_mesh_transformed(&model.mesh, matrix);
+    ferravex_render::draw_resident(model.resident(), matrix);
 }

@@ -1,4 +1,5 @@
 // Original Ferravex browser platform: WebGL2, DOM input, direct Rust/Wasm ABI.
+import {RetainedRenderer} from './retained.js';
 const canvas = document.querySelector('canvas');
 const status = document.querySelector('[role=status]');
 const gl = canvas.getContext('webgl2', {alpha:false, antialias:true, depth:true});
@@ -22,6 +23,7 @@ const buffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
 gl.enableVertexAttribArray(0);gl.vertexAttribPointer(0,4,gl.FLOAT,false,32,0);
 gl.enableVertexAttribArray(1);gl.vertexAttribPointer(1,4,gl.FLOAT,false,32,16);
 gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);gl.depthFunc(gl.LEQUAL);
+const retained=new RetainedRenderer(gl);
 let exports,playing=false,active=true,allocated=0,frames=0,last=0;
 const keyboard=new Map([['F1',0xffbe],['F2',0xffbf],['F3',0xffc0],['Space',32],['Escape',0xff1b],['Enter',0xff0d],['Tab',0xff09],['ArrowLeft',0xff51],['ArrowUp',0xff52],['ArrowRight',0xff53],['ArrowDown',0xff54],['ShiftLeft',0xffe1],['ShiftRight',0xffe2],['ControlLeft',0xffe3],['ControlRight',0xffe4]]);
 const keyCode=e=>keyboard.get(e.code)??(/^Key[A-Z]$/.test(e.code)?e.code.charCodeAt(3)+32:/^Digit\d$/.test(e.code)?e.code.charCodeAt(5):0);
@@ -57,11 +59,21 @@ try {
   gl.clearColor(...[0,1,2,3].map(c=>exports.ferravex_clear(c)));gl.depthMask(true);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
   const count=exports.ferravex_vertex_count(),ptr=exports.ferravex_vertices();
   const vertices=new Float32Array(exports.memory.buffer,ptr,count*8);
+  gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
   if(vertices.byteLength>allocated){allocated=Math.max(vertices.byteLength,allocated*2,65536);gl.bufferData(gl.ARRAY_BUFFER,allocated,gl.DYNAMIC_DRAW);}
   gl.bufferSubData(gl.ARRAY_BUFFER,0,vertices);
   const batches=exports.ferravex_batch_count(),bp=exports.ferravex_batches(),view=new DataView(exports.memory.buffer);
-  for(let i=0;i<batches;i++){const at=bp+i*12,depth=view.getUint8(at+8)!==0;depth?gl.enable(gl.DEPTH_TEST):gl.disable(gl.DEPTH_TEST);gl.depthMask(depth);gl.drawArrays(gl.TRIANGLES,view.getUint32(at,true),view.getUint32(at+4,true));}
-  canvas.dataset.frames=String(++frames);canvas.dataset.vertices=String(count);
+  retained.begin(exports);
+  const commands=exports.ferravex_command_count(),cp=exports.ferravex_commands();
+  for(let i=0;i<commands;i++){
+   const kind=view.getUint32(cp+i*8,true),index=view.getUint32(cp+i*8+4,true);
+   if(kind===1){retained.draw(index);continue;}
+   if(index>=batches)continue;
+   gl.useProgram(program);gl.bindVertexArray(null);
+   const at=bp+index*12,depth=view.getUint8(at+8)!==0;depth?gl.enable(gl.DEPTH_TEST):gl.disable(gl.DEPTH_TEST);gl.depthMask(depth);gl.drawArrays(gl.TRIANGLES,view.getUint32(at,true),view.getUint32(at+4,true));
+  }
+  canvas.dataset.frames=String(++frames);canvas.dataset.vertices=String(count+retained.vertices);
+  canvas.dataset.drawCalls=String(commands);canvas.dataset.residentMeshes=String(retained.meshes.size);canvas.dataset.uploadBytes=String(vertices.byteLength+retained.uploadBytes);
   if(running)requestAnimationFrame(loop);
  };
  requestAnimationFrame(loop);
