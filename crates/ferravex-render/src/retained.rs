@@ -101,6 +101,9 @@ impl ResidentMesh {
     pub fn vertex_count(&self) -> usize {
         self.0.vertices.len()
     }
+    pub(crate) fn is_opaque(&self) -> bool {
+        self.0.opaque
+    }
     pub fn bounds(&self) -> ferravex_graphics::Bounds {
         self.0.bounds
     }
@@ -146,6 +149,7 @@ pub(crate) struct Frame {
     pub commands: Vec<Command>,
     pub batches: Vec<RetainedBatch>,
     pub instances: Vec<[f32; 28]>,
+    pub environment: crate::lighting::Environment,
     scratch_instances: Vec<[f32; 28]>,
     scratch_batches: Vec<RetainedBatch>,
     keep_alive: Vec<ResidentMesh>,
@@ -156,6 +160,8 @@ pub(crate) struct DrawStyle<'a> {
     pub light: Option<LitSettings>,
     pub material: Option<&'a crate::material::ShaderMaterial>,
     pub params: [f32; 16],
+    pub shadow_only: bool,
+    pub skip_shadow: bool,
 }
 impl RetainedBatch {
     fn same_pass(&self, other: &Self) -> bool {
@@ -164,10 +170,10 @@ impl RetainedBatch {
             && self.params == other.params
             && self.material == other.material
             && self.revision == other.revision
-            && self.depth == other.depth
+            && self.depth & 7 == other.depth & 7
     }
     fn compatible(&self, other: &Self) -> bool {
-        self.mesh == other.mesh && self.same_pass(other)
+        self.mesh == other.mesh && self.depth == other.depth && self.same_pass(other)
     }
 }
 impl Frame {
@@ -261,6 +267,18 @@ impl Frame {
             if m.0.options.blend == crate::material::BlendMode::Additive {
                 depth_flags |= 4;
             }
+            if !m.0.options.casts_shadows {
+                depth_flags |= 8;
+            }
+            if !m.0.options.receives_shadows {
+                depth_flags |= 16;
+            }
+        }
+        if style.skip_shadow {
+            depth_flags |= 8;
+        }
+        if style.shadow_only {
+            depth_flags |= 32;
         }
         let batch = RetainedBatch {
             mesh: mesh.id(),
@@ -292,19 +310,12 @@ impl Frame {
         self.instances.push(instance);
         true
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn vertices(&self) -> u64 {
-        self.batches
-            .iter()
-            .map(|b| geometry(b.mesh).map_or(0, |m| m.vertices.len() as u64 * b.count as u64))
-            .sum()
-    }
     /// Group opaque depth-tested draws within an uninterrupted camera/material pass.
     /// Transparent draws and every immediate command are strict ordering barriers.
     pub fn finalize(&mut self) {
         let opaque = |c: &Command| {
             c.kind == 1
-                && self.batches[c.index as usize].depth == 1
+                && self.batches[c.index as usize].depth & 7 == 1
                 && self.batches[c.index as usize].light[15] > 0.5
         };
         let mut begin = 0;
@@ -322,7 +333,10 @@ impl Frame {
                 }
                 end += 1;
             }
-            self.commands[begin..end].sort_unstable_by_key(|c| self.batches[c.index as usize].mesh);
+            self.commands[begin..end].sort_unstable_by_key(|c| {
+                let b = self.batches[c.index as usize];
+                (b.mesh, b.depth)
+            });
             begin = end;
         }
         self.scratch_instances.clear();
@@ -384,13 +398,7 @@ void main(){
  vec4 world=model*vec4(ferravex_vertex(a_position),1.0);
  vec3 normal=mat3(a_normal0.xyz,a_normal1.xyz,a_normal2.xyz)*ferravex_normal(a_normal);
  float n=length(normal);normal=n>0.0?normal/n:vec3(0.0);
- vec4 color=a_color;
- if(u_light[0].w>0.5){
-  float shade=u_light[1].w+(1.0-u_light[1].w)*clamp(dot(normal,u_light[0].xyz),0.0,1.0);
-  float fog=clamp((distance(world.xyz,u_light[1].xyz)-u_light[3].x)/max(u_light[3].y-u_light[3].x,0.001),0.0,1.0);
-  color.rgb=mix(color.rgb*shade,u_light[2].rgb,fog);
- }
- gl_Position=u_camera*world;v_color=color;v_world=world.xyz;v_normal=normal;
+ gl_Position=u_camera*world;v_color=a_color;v_world=world.xyz;v_normal=normal;
 }
 "#;
 #[cfg(test)]

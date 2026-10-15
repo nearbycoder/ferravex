@@ -1,4 +1,4 @@
-//! Opt-in local performance recordings. Durations are CPU wall time, never inferred GPU time.
+//! Opt-in local recordings. GPU durations come only from tagged driver queries.
 use std::cell::Cell;
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -72,6 +72,7 @@ mod recording {
         /// CPU time issuing driver work and swapping; includes possible presentation blocking.
         pub submit_us: Option<f64>,
         pub software_render_us: Option<f64>,
+        pub gpu_us: Option<f64>,
         pub draw_calls: Option<u64>,
         pub vertices: Option<u64>,
         pub upload_bytes: Option<u64>,
@@ -110,6 +111,8 @@ mod recording {
         seen: usize,
         dropped: usize,
         samples: Vec<FrameSample>,
+        gpu_source: Option<&'static str>,
+        render_quality: Option<u32>,
     }
     impl Session {
         pub fn from_env() -> Option<Self> {
@@ -125,6 +128,8 @@ mod recording {
                 seen: 0,
                 dropped: 0,
                 samples: Vec::with_capacity(8192),
+                gpu_source: None,
+                render_quality: None,
             };
             ENABLED.store(true, Ordering::Relaxed);
             Some(session)
@@ -140,20 +145,38 @@ mod recording {
                 self.dropped += 1;
             }
         }
+        pub fn render_quality(&mut self, quality: u32) {
+            self.render_quality = Some(quality);
+        }
+        pub fn gpu_source(&mut self, source: &'static str) {
+            self.gpu_source = Some(source);
+        }
+        /// Results are tagged with the 1-based presented frame, including discarded warmup.
+        pub fn gpu_result(&mut self, frame: u64, microseconds: f64) {
+            if !microseconds.is_finite() || microseconds < 0. || frame <= self.warmup as u64 {
+                return;
+            }
+            let index = frame - self.warmup as u64 - 1;
+            if let Some(sample) = self.samples.get_mut(index as usize) {
+                sample.gpu_us = Some(microseconds);
+            }
+        }
         pub fn write(&self, backend: &str, width: u32, height: u32) -> std::io::Result<()> {
             let mut out = format!(
-                "{{\"schema\":1,\"backend\":{},\"os\":{},\"arch\":{},\"width\":{width},\"height\":{height},\"warmup\":{},\"dropped\":{},\"gpu_us\":null,\"frames\":[",
+                "{{\"schema\":2,\"backend\":{},\"os\":{},\"arch\":{},\"width\":{width},\"height\":{height},\"warmup\":{},\"dropped\":{},\"gpu_source\":{},\"render_quality\":{},\"frames\":[",
                 json_string(backend),
                 json_string(std::env::consts::OS),
                 json_string(std::env::consts::ARCH),
                 self.warmup,
-                self.dropped
+                self.dropped,
+                self.gpu_source.map_or_else(|| "null".into(), json_string),
+                optional(self.render_quality)
             );
             for (i, s) in self.samples.iter().enumerate() {
                 if i > 0 {
                     out.push(',');
                 }
-                out.push_str(&format!("{{\"cpu_us\":{},\"submit_us\":{},\"software_render_us\":{},\"draw_calls\":{},\"vertices\":{},\"upload_bytes\":{},\"allocation_calls\":{},\"allocation_bytes\":{},\"physics_steps\":{},\"physics_pairs\":{},\"contact_points\":{},\"ccd_impacts\":{}}}",s.cpu_us,optional(s.submit_us),optional(s.software_render_us),optional(s.draw_calls),optional(s.vertices),optional(s.upload_bytes),s.allocation_calls,s.allocation_bytes,s.physics.steps,s.physics.candidate_pairs,s.physics.contact_points,s.physics.ccd_impacts));
+                out.push_str(&format!("{{\"cpu_us\":{},\"submit_us\":{},\"software_render_us\":{},\"draw_calls\":{},\"vertices\":{},\"upload_bytes\":{},\"allocation_calls\":{},\"allocation_bytes\":{},\"physics_steps\":{},\"physics_pairs\":{},\"contact_points\":{},\"ccd_impacts\":{},\"gpu_us\":{}}}",s.cpu_us,optional(s.submit_us),optional(s.software_render_us),optional(s.draw_calls),optional(s.vertices),optional(s.upload_bytes),s.allocation_calls,s.allocation_bytes,s.physics.steps,s.physics.candidate_pairs,s.physics.contact_points,s.physics.ccd_impacts,optional(s.gpu_us)));
             }
             out.push_str("]}\n");
             std::fs::write(&self.output, out)
@@ -202,11 +225,21 @@ mod recording {
                 seen: 0,
                 dropped: 0,
                 samples: Vec::with_capacity(2),
+                gpu_source: None,
+                render_quality: None,
             };
             for _ in 0..5 {
                 s.record(FrameSample::default());
             }
             assert_eq!((s.samples.len(), s.dropped), (2, 1));
+            s.gpu_result(2, 999.); // Warmup result arriving late.
+            s.gpu_result(4, 17.);
+            s.gpu_result(3, 12.);
+            s.gpu_result(3, f64::NAN);
+            s.gpu_result(4, -1.);
+            s.gpu_result(8, 4.); // Unrecorded overflow.
+            assert_eq!(s.samples[0].gpu_us, Some(12.));
+            assert_eq!(s.samples[1].gpu_us, Some(17.));
         }
     }
 }

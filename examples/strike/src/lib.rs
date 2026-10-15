@@ -166,7 +166,22 @@ async fn game() {
     let opts = options();
     simulate_mouse_with_touch(false);
     let mut game = practice();
-    let arena = build_yard(&game.arena);
+    ferravex_render::set_quality(ferravex_render::lighting::Quality::Medium);
+    let mut arena = build_yard(&game.arena);
+    let ao =
+        ferravex_render::ao::AoScene::new([(&arena.mesh, Mat4::IDENTITY)]).expect("yard AO scene");
+    ao.bake(
+        &mut arena.mesh,
+        Mat4::IDENTITY,
+        ferravex_render::ao::AoSettings {
+            samples: 8,
+            radius: 1.5,
+            strength: 0.3,
+            max_tests: 20_000_000,
+            ..Default::default()
+        },
+    )
+    .expect("yard vertex AO");
     let operator = build_operator();
     let rifle = build_rifle();
     let mut tracer_model = geometry::Model::new();
@@ -364,6 +379,32 @@ async fn game() {
         };
         if let Ok(s) = &shader {
             s.begin(light);
+        }
+        ferravex_render::set_sun_shadow(Some(ferravex_render::lighting::SunShadow {
+            center: vec3(eye.x, 0., eye.z),
+            direction: light.light_direction,
+            extent: 34.,
+            depth: 90.,
+            ..Default::default()
+        }))
+        .unwrap();
+        if shot_timer > 0. {
+            ferravex_render::set_point_lights(&[ferravex_render::lighting::PointLight {
+                position: eye + direction * 0.8,
+                color: rgb(0xffb65c),
+                radius: 5.,
+                intensity: shot_timer * 18.,
+            }])
+            .unwrap();
+        }
+        if active && local.health > 0 {
+            ferravex_render::draw_shadow(
+                operator.resident(),
+                Mat4::from_rotation_translation(
+                    Quat::from_rotation_y(-local.yaw),
+                    Vec3::from_array(local.position.to_array()),
+                ),
+            );
         }
         arena.draw();
         for p in &remote {

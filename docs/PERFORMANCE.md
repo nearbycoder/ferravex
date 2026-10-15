@@ -25,7 +25,7 @@ The default release profile favors throughput. The `small` profile favors size a
 
 ## Render measurements
 
-The immediate renderer records transformed clip-space triangles and vertex colors in Rust. GPU hosts submit batches through WebGL2 in the browser and OpenGL/GLX on Linux. Mesh construction can be cached, but transformed vertices are still emitted each frame. Measure CPU transformation/lighting, generated vertices, draw batches, upload bytes and GPU frame time separately before choosing further optimizations. Built-in text is triangle geometry from bitmap glyphs. The retained path added in iteration 2 keeps immutable mesh geometry on the GPU and streams instance transforms; immediate primitives/text still use the CPU path. There is no shared shadow-map pass or general LOD system yet.
+The immediate renderer records transformed clip-space triangles and vertex colors in Rust. GPU hosts submit batches through WebGL2 in the browser and OpenGL/GLX on Linux. Mesh construction can be cached, but transformed vertices are still emitted each frame. Measure CPU transformation/lighting, generated vertices, draw batches, upload bytes and GPU frame time separately before choosing further optimizations. Built-in text is triangle geometry from bitmap glyphs. The retained path added in iteration 2 keeps immutable mesh geometry on the GPU and streams instance transforms; immediate primitives/text still use the CPU path. Frustum/distance culling and hysteretic LOD are shared; Low/Medium/High lighting selects bounded local lights and directional shadow cost.
 
 Courtyard retains its own persistent mesh/instancing renderer and scene tools for CPU mean/p99, visible instances, draw calls and asynchronous GPU timers where the browser supports them. Its timings do not automatically characterize `ferravex-render`. CPU frame timing includes JavaScript submission and Rust simulation; GPU timing excludes DOM/audio work.
 
@@ -56,17 +56,23 @@ Each run uses fixed simulation intervals and the games' existing autoplay inputs
 discard 60 warmup frames and record 180 measured frames. Select a subset with
 repeated `--game` arguments. Linux interactive examples need DISPLAY and OpenGL;
 Courtyard and Orbit Breaker use their software renderers. Platform, renderer,
-dimensions and workload configuration must match the baseline.
+dimensions, GPU timer source, render quality and workload configuration must match the baseline. Use `--quality low|medium|high` for explicit shared-renderer overrides.
 
 `target/perf/current` contains raw per-frame JSON and a summarized `report.json`.
 Metrics include CPU update/geometry preparation, CPU driver submission/swap,
-software rendering where applicable, immediate draw calls, submitted vertices,
+software rendering where applicable, actual draw calls/vertices including directional shadow passes,
 upload bytes, successful Rust allocation/reallocation calls and requested bytes,
 and rigid-physics step/pair/contact/CCD counts. Allocations exclude C/driver
 allocations and do not measure live heap size. Rigid solver counters sum all
 catch-up steps. No rigid solver calls means zero work, not an inferred timing.
-Unsupported counters are null. GPU time is currently null: submission wall time
-can include driver/swap blocking and is never called GPU execution time.
+Unsupported counters are null. Schema 2 records asynchronous GPU execution queries
+on the shared native host with source and per-metric sample count/coverage. GPU
+results are tagged to their actual frame; missing results remain null. Submission
+wall time can include driver/swap blocking and is separate from GPU execution.
+The query surrounds clear/shadow/main drawing, excluding uploads and swap. A final
+finish drains outstanding results outside the measured interval. Software hosts
+retain null GPU results. Browser `?profile` exposes disjoint-aware GPU results;
+see [lighting](LIGHTING.md).
 
 Native reporting is opt-in through `FERRAVEX_PERF_OUTPUT`; normal play does not
 allocate a recording buffer. The game entry macro installs a forwarding System
@@ -78,10 +84,10 @@ report serialization are outside measured frames. Presentation pacing is disable
 for interactive recordings, but drivers can still impose blocking.
 
 The runner compares mean/p95/p99: timing budgets allow the greater of 20% or
-200 microseconds of noise; work budgets allow the greater of 5% or one unit.
+200 microseconds of CPU noise (GPU query noise has a separate 20-microsecond floor); work budgets allow the greater of 5% or one unit.
 Native/available Wasm raw and gzip artifact budgets allow the greater of 5% or
-1024 bytes growth. Tolerances are explicit CLI options. Missing metrics, changed
-artifact coverage and incompatible machines fail comparison. Wasm size is only
+1024 bytes growth. Tolerances are explicit CLI options. GPU query coverage below 50% or a drop of over 10 percentage points fails. Other
+partial metrics fail. Missing metrics, changed artifact coverage and incompatible machines fail comparison. Wasm size is only
 included when an artifact exists; rebuild it before claiming current Web sizes.
 Use `--no-build` only when taking responsibility for executable freshness.
 
@@ -131,3 +137,27 @@ show small-scene test overhead or host timing noise; use the raw workload and
 full-frame measurements before making broader performance claims. The per-frame
 object visibility counters are also available through the runtime API and browser
 canvas attributes. Raw recordings are in `target/perf/iteration-03`.
+
+
+### Shared lighting iteration
+
+Native release recordings on Linux x86_64 with AMD Radeon 8060S (Mesa 26.2.4),
+120 measured frames after 30 warmup frames in each of two fresh processes, gave
+these GPU draw-time means in microseconds. Browser verification tabs were closed.
+
+| Game | Low | Medium (game default) | High |
+|---|---:|---:|---:|
+| Strike | 36.3 | 55.2 | 66.8 |
+| Dune Skimmer | 41.2 | 55.6 | 64.5 |
+| Crystal Cavern | 53.0 | 59.8 | 59.8 |
+
+GPU query coverage was 100% for the thirteen shared-host native examples; the two
+software hosts correctly had no GPU duration. Crystal's Medium/High light cap
+covers its three local lights and it has no sun/shadow pass. Strike's mean calls
+rose from 4 on Low to 9 on Medium/High; Dune's rose from 23 to 60. These costs
+include extra off-camera casters, and exclude uploads/swap. CPU preparation and
+submission remain separate metrics. A same-configuration repeat of all fifteen
+examples passed using a 1000-microsecond CPU host noise floor and the separate
+20-microsecond GPU floor. This is a reproducibility check, not a speedup claim.
+Schema-1 recordings cannot be compared to the new GPU/quality-aware schema.
+Raw reports are in ignored `target/perf/iteration-05-{default,low,high,repeat}`.

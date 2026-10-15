@@ -1,5 +1,5 @@
 // Original Ferravex browser platform: WebGL2, DOM input, direct Rust/Wasm ABI.
-import {RetainedRenderer} from './retained.js';
+import {RetainedRenderer,GpuTimer} from './retained.js';
 const canvas = document.querySelector('canvas');
 const status = document.querySelector('[role=status]');
 const gl = canvas.getContext('webgl2', {alpha:false, antialias:true, depth:true});
@@ -24,6 +24,7 @@ gl.enableVertexAttribArray(0);gl.vertexAttribPointer(0,4,gl.FLOAT,false,32,0);
 gl.enableVertexAttribArray(1);gl.vertexAttribPointer(1,4,gl.FLOAT,false,32,16);
 gl.enable(gl.BLEND);gl.blendFuncSeparate(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA,gl.ONE,gl.ONE_MINUS_SRC_ALPHA);gl.depthFunc(gl.LEQUAL);
 const retained=new RetainedRenderer(gl);
+const gpuTimer=new GpuTimer(gl,canvas,new URLSearchParams(location.search).has('profile'));
 let exports,playing=false,active=true,allocated=0,frames=0,last=0;
 const keyboard=new Map([['F1',0xffbe],['F2',0xffbf],['F3',0xffc0],['Space',32],['Escape',0xff1b],['Enter',0xff0d],['Tab',0xff09],['ArrowLeft',0xff51],['ArrowUp',0xff52],['ArrowRight',0xff53],['ArrowDown',0xff54],['ShiftLeft',0xffe1],['ShiftRight',0xffe2],['ControlLeft',0xffe3],['ControlRight',0xffe4]]);
 const editing=e=>e.target instanceof Element&&!!e.target.closest('input,textarea,select,button,[contenteditable]');
@@ -47,7 +48,9 @@ try {
  const imports={env:{ferravex_set_playing:value=>{playing=!!value;if(!playing&&document.pointerLockElement)document.exitPointerLock();}}};
  const response=await fetch(`${game.replaceAll('-','_')}.wasm`);if(!response.ok)throw new Error(`Game download failed (${response.status})`);
  const {instance}=await WebAssembly.instantiate(await response.arrayBuffer(),imports);exports=instance.exports;
- exports.ferravex_init();exports.ferravex_autoplay(new URLSearchParams(location.search).has('autoplay')?1:0);
+ exports.ferravex_init();
+ const requestedQuality=new URLSearchParams(location.search).get('quality');if(requestedQuality!==null){const quality=['low','medium','high'].indexOf(requestedQuality);if(quality<0)throw new Error('quality must be low, medium or high');exports.ferravex_quality_override(quality);}
+ exports.ferravex_autoplay(new URLSearchParams(location.search).has('autoplay')?1:0);
  let materialTools=null;if(new URLSearchParams(location.search).has('material-tools')){materialTools=(await import('./material-tools.js')).createMaterialTools(exports);}
  status.textContent='';canvas.focus();
  const loop=time=>{
@@ -58,7 +61,6 @@ try {
   const dt=last?Math.min((time-last)/1000,0.1):1/60;last=time;
   // Rust receives logical pixels; the GPU viewport alone uses framebuffer pixels.
   const running=exports.ferravex_frame(dt,Math.round(r.width),Math.round(r.height));
-  gl.clearColor(...[0,1,2,3].map(c=>exports.ferravex_clear(c)));gl.depthMask(true);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
   const count=exports.ferravex_vertex_count(),ptr=exports.ferravex_vertices();
   const vertices=new Float32Array(exports.memory.buffer,ptr,count*8);
   gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
@@ -66,18 +68,23 @@ try {
   gl.bufferSubData(gl.ARRAY_BUFFER,0,vertices);
   const batches=exports.ferravex_batch_count(),bp=exports.ferravex_batches();
   retained.begin(exports);
+  gpuTimer.begin(frames+1);
+  gl.clearColor(...[0,1,2,3].map(c=>exports.ferravex_clear(c)));gl.depthMask(true);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+  retained.renderShadow(w,h);
   const view=new DataView(exports.memory.buffer);
   const commands=exports.ferravex_command_count(),cp=exports.ferravex_commands();
+  let immediateDraws=0;
   for(let i=0;i<commands;i++){
    const kind=view.getUint32(cp+i*8,true),index=view.getUint32(cp+i*8+4,true);
    if(kind===1){retained.draw(index);continue;}
    if(index>=batches)continue;
    gl.useProgram(program);gl.bindVertexArray(null);
-   const at=bp+index*12,depth=view.getUint8(at+8)!==0;depth?gl.enable(gl.DEPTH_TEST):gl.disable(gl.DEPTH_TEST);gl.depthMask(depth);gl.drawArrays(gl.TRIANGLES,view.getUint32(at,true),view.getUint32(at+4,true));
+   const at=bp+index*12,depth=view.getUint8(at+8)!==0;depth?gl.enable(gl.DEPTH_TEST):gl.disable(gl.DEPTH_TEST);gl.depthMask(depth);gl.drawArrays(gl.TRIANGLES,view.getUint32(at,true),view.getUint32(at+4,true));immediateDraws++;
   }
-  canvas.dataset.frames=String(++frames);canvas.dataset.vertices=String(count+retained.vertices);
+  gpuTimer.end();
+  canvas.dataset.frames=String(++frames);canvas.dataset.vertices=String(count+retained.vertices+retained.shadowVertices);
   canvas.dataset.culled=String(exports.ferravex_culled_count());canvas.dataset.visible=String(exports.ferravex_visible_count());
-  canvas.dataset.drawCalls=String(commands);canvas.dataset.residentMeshes=String(retained.meshes.size);canvas.dataset.uploadBytes=String(count*32+retained.uploadBytes);
+  canvas.dataset.drawCalls=String(immediateDraws+retained.drawCalls+retained.shadowDrawCalls);canvas.dataset.shadowDrawCalls=String(retained.shadowDrawCalls);canvas.dataset.quality=String(retained.environment.quality);canvas.dataset.lightingError=retained.lightingError;canvas.dataset.residentMeshes=String(retained.meshes.size);canvas.dataset.uploadBytes=String(count*32+retained.uploadBytes);
   canvas.dataset.materialError=retained.lastError;materialTools?.update();
   if(running)requestAnimationFrame(loop);
  };

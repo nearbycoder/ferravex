@@ -15,7 +15,7 @@ python3 scripts/build-web.py release
 python3 scripts/serve-web.py --port 8000
 ```
 
-Open the local root page for all fifteen examples. `/owned/` is Courtyard and `/owned-orbit/` is Orbit Breaker. The thirteen restored games/labs use the shared direct-WebGL2 host and original `ferravex-render` runtime: Rust records immediate primitives/text and retained mesh instances. Retained meshes use GPU transforms/vertex lighting/fog; immediate primitives retain the CPU path. This immediate path has no shadow map. Courtyard retains persistent WebGL2 mesh buffers, instancing, a shadow map and Rust visibility tests. Orbit writes an original RGBA framebuffer to Canvas2D. No external runtime libraries, fonts or CDN loaders are used.
+Open the local root page for all fifteen examples. `/owned/` is Courtyard and `/owned-orbit/` is Orbit Breaker. The thirteen restored games/labs use the shared direct-WebGL2 host and original `ferravex-render` runtime: Rust records immediate primitives/text and retained mesh instances. Retained meshes use GPU transforms/fragment lighting/fog; immediate primitives retain the CPU path. The retained path shares directional shadows, bounded point lights and baked vertex AO; immediate primitives keep their CPU path. Courtyard retains persistent WebGL2 mesh buffers, instancing, a shadow map and Rust visibility tests. Orbit writes an original RGBA framebuffer to Canvas2D. No external runtime libraries, fonts or CDN loaders are used.
 
 Courtyard: WASD, mouse aim, click fire, Space jump, R reload, Escape menu. The
 inspector edits positions and collision geometry, saves edits locally, exports
@@ -48,7 +48,7 @@ finished.
 | 13 | Editor | Courtyard browser scene inspector with live position editing, save/load and reset | Viewport picking/gizmos, undo/redo and full prefab/property editing |
 | 14 | Hot reload | Transactional live asset bundles; shared material revision/parameter API, native bounded file polling and browser last-valid vertex/fragment hook reload/editor; Courtyard last-valid GLSL replacement with visible errors | OS event-based filesystem watching and full content dependency invalidation |
 | 15 | Animation | Scalar/vector/quaternion tracks, sprite clips, skeleton world poses and inverse-bind skin palettes | GPU skinning, blend/state graphs, event tracks and importer integration |
-| 16 | Low-poly lighting | Flat normals and CPU directional vertex lighting/fog in the restored renderer; Courtyard separately retains vertex AO and browser PCF shadows | Baked lightmaps/probes, cascades and platform quality tiers |
+| 16 | Low-poly lighting | Shared retained directional shadows, point lights, BVH vertex AO and Low/Medium/High tiers; Courtyard retains its separate renderer | Baked lightmaps/probes, cascades and point-light shadows |
 | 17 | Navigation and AI | Weighted deterministic A*, no corner cutting, arrival/separation steering | Navmesh baking, perception, behavior/state tooling and bot integration |
 | 18 | VFX | Bounded particle pool, constant-acceleration integration, lifetime/color/size curves; shot impacts in Courtyard | GPU simulation, trails and effect authoring |
 | 19 | Responsive UI | Anchor layout, clipping/hit tests, focus/capture, browser safe areas; original bitmap text glyphs in the immediate renderer | General text shaping/font loading, retained UI renderer and richer accessibility |

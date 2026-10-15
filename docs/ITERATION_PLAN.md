@@ -11,8 +11,8 @@ unsupported platforms or features are complete.
 | 1 | Performance regression harness | Merged: [PR 1](https://github.com/nearbycoder/ferravex/pull/1) |
 | 2 | Shared retained GPU renderer | Merged: [PR 2](https://github.com/nearbycoder/ferravex/pull/2) |
 | 3 | Visibility and detail management | Merged: [PR 3](https://github.com/nearbycoder/ferravex/pull/3) |
-| 4 | Materials and custom shader pipeline | Implemented; local checks passed |
-| 5 | Shared low-poly lighting | Pending |
+| 4 | Materials and custom shader pipeline | Merged: [PR 4](https://github.com/nearbycoder/ferravex/pull/4), editor layout fix [PR 5](https://github.com/nearbycoder/ferravex/pull/5) |
+| 5 | Shared low-poly lighting | Implemented; local Linux/GPU, browser/Wasm and regression checks passed |
 | 6 | Reusable character controllers | Pending |
 | 7 | More stable rigid-body contacts | Pending |
 | 8 | Joints and compound colliders | Pending |

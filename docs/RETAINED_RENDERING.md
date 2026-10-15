@@ -44,7 +44,8 @@ primitives continue through their original immediate path.
 The native retained path requires OpenGL 3.3+; the browser path requires WebGL2.
 Custom vertex/fragment materials, blending and transactional reload are described
 in [materials](MATERIALS.md); [visibility/LOD](VISIBILITY.md) is also implemented.
-Textures, skinning, shadows and indirect draws remain separate work. Courtyard keeps its separate
+Directional shadows, local lights and vertex AO are described in [lighting](LIGHTING.md).
+General texture assets, skinning and indirect draws remain separate work. Courtyard keeps its separate
 renderer. Native CPU savings and driver submission cost must be measured together:
 more resident draw calls can offset savings in small scenes, especially on a
 software GPU. This is not a blanket frame-rate improvement claim.
