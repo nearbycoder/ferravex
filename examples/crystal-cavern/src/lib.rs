@@ -456,6 +456,27 @@ impl Scene {
                 }
             }
         }
+        let occlusion = ferravex_render::ao::AoScene::new(stone.iter().map(|p| {
+            (
+                &p.mesh.mesh,
+                Mat4::from_rotation_translation(p.rotation, p.position),
+            )
+        }))
+        .expect("cave AO scene");
+        for p in &mut stone {
+            occlusion
+                .bake(
+                    &mut p.mesh.mesh,
+                    Mat4::from_rotation_translation(p.rotation, p.position),
+                    ferravex_render::ao::AoSettings {
+                        radius: 1.5,
+                        strength: 0.3,
+                        ..Default::default()
+                    },
+                )
+                .expect("cave vertex AO");
+            p.mesh.invalidate_gpu();
+        }
         let pulse = ShaderMaterial::new(
             ShaderSource::fragment(include_str!("../shaders/crystal.frag")),
             MaterialOptions {
@@ -488,6 +509,20 @@ impl Scene {
         {
             eprintln!("Crystal shader reload: {error}");
         }
+        let mut lights = [ferravex_render::lighting::PointLight {
+            position: Vec3::ZERO,
+            color: MINT,
+            radius: 4.8,
+            intensity: 1.8,
+        }; 3];
+        let mut count = 0;
+        for (i, &p) in game.crystals.iter().enumerate() {
+            if !game.collected[i] {
+                lights[count].position = world(p, 1.35);
+                count += 1;
+            }
+        }
+        ferravex_render::set_point_lights(&lights[..count]).unwrap();
         let settings = LitSettings {
             camera_position: eye,
             light_direction: vec3(-0.3, 0.8, 0.4),
@@ -574,6 +609,7 @@ async fn game() {
         font.populate_font_cache(&characters, size);
     }
     let mut demo = Demo::new();
+    ferravex_render::set_quality(ferravex_render::lighting::Quality::Medium);
     let mut game = Game::new();
     let scene = Scene::new();
     let material = LitMaterial::new().expect("Ferravex cave shader");

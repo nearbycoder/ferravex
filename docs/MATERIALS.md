@@ -14,7 +14,7 @@ let material = ShaderMaterial::new(
             return vec4(color.rgb * pulse, color.a);
         }
     "#),
-    MaterialOptions { blend: BlendMode::Opaque, bounds_padding: 0.0 },
+    MaterialOptions { blend: BlendMode::Opaque, bounds_padding: 0.0, ..Default::default() },
 )?;
 // In the frame loop, after selecting the camera and lighting:
 material.begin([[time, 0.0, 0.0, 0.0], [0.0;4], [0.0;4], [0.0;4]])?;
@@ -46,6 +46,7 @@ BlendMode::Opaque is an explicit promise that shader output is opaque. It enable
 depth writes and compatible opaque-pass regrouping. Alpha (the default) uses
 straight-alpha blending; Additive uses source-alpha-weighted addition. Both keep
 the camera's depth test, disable depth writes and preserve submission barriers.
+Only opaque materials cast directional shadows. MaterialOptions also has casts_shadows and receives_shadows flags (both true by default); see [lighting](LIGHTING.md).
 There is no automatic transparent-object sorting; draw them in the desired order.
 Blend state is restored before following HUD/immediate draws.
 
@@ -56,7 +57,7 @@ request unchanged. Actual compilation occurs at the next shared GPU host present
 live materials whose meshes are currently off-screen. The latest source request applies at presentation time;
 queue changes between frames when a frame must use one revision consistently.
 
-Hosts replace their program only after both stages compile and link successfully.
+Hosts replace their color/depth program pair only after both programs compile and link successfully.
 A failed replacement keeps that host's last valid program. If the initial source
 fails, the built-in material is used. `material.status()` reports Pending, Ready,
 or Failed with a bounded compiler message, the requested revision, and the latest

@@ -45,6 +45,14 @@ impl NativeWindow {
     pub fn last_mesh_upload_bytes(&self) -> u64 {
         0
     }
+    pub fn enable_gpu_timing(&mut self) -> bool {
+        false
+    }
+    pub fn drain_gpu_results(&mut self, _: impl FnMut(u64, f64)) {}
+    pub fn finish_gpu_timing(&mut self) {}
+    pub fn render_counts(&self) -> (u64, u64) {
+        (0, 0)
+    }
     pub fn pixels(&self) -> Vec<u8> {
         Vec::new()
     }
@@ -388,6 +396,41 @@ mod linux {
         fn glVertexAttribDivisor(index: c_uint, divisor: c_uint);
         fn glGetUniformLocation(program: c_uint, name: *const c_char) -> c_int;
         fn glUniformMatrix4fv(location: c_int, count: c_int, transpose: u8, values: *const f32);
+        fn glGenQueries(count: c_int, queries: *mut c_uint);
+        fn glDeleteQueries(count: c_int, queries: *const c_uint);
+        fn glBeginQuery(target: c_uint, query: c_uint);
+        fn glEndQuery(target: c_uint);
+        fn glGetQueryObjectiv(query: c_uint, parameter: c_uint, value: *mut c_int);
+        fn glGetQueryObjectui64v(query: c_uint, parameter: c_uint, value: *mut u64);
+        fn glUniform1i(location: c_int, value: c_int);
+        fn glGenTextures(count: c_int, textures: *mut c_uint);
+        fn glDeleteTextures(count: c_int, textures: *const c_uint);
+        fn glBindTexture(target: c_uint, texture: c_uint);
+        fn glActiveTexture(texture: c_uint);
+        fn glTexParameteri(target: c_uint, parameter: c_uint, value: c_int);
+        fn glTexImage2D(
+            target: c_uint,
+            level: c_int,
+            internal: c_int,
+            width: c_int,
+            height: c_int,
+            border: c_int,
+            format: c_uint,
+            kind: c_uint,
+            data: *const c_void,
+        );
+        fn glGenFramebuffers(count: c_int, framebuffers: *mut c_uint);
+        fn glDeleteFramebuffers(count: c_int, framebuffers: *const c_uint);
+        fn glBindFramebuffer(target: c_uint, framebuffer: c_uint);
+        fn glFramebufferTexture2D(
+            target: c_uint,
+            attachment: c_uint,
+            texture_target: c_uint,
+            texture: c_uint,
+            level: c_int,
+        );
+        fn glCheckFramebufferStatus(target: c_uint) -> c_uint;
+        fn glDrawBuffer(buffer: c_uint);
         fn glUniform4fv(location: c_int, count: c_int, values: *const f32);
         fn glReadBuffer(buffer: c_uint);
         fn glPixelStorei(parameter: c_uint, value: c_int);
@@ -406,18 +449,106 @@ mod linux {
 
     /// The display, window and GL context must stay on their creating thread.
     /// Raw-pointer ownership prevents automatic Send/Sync implementations.
+    struct GpuTimer {
+        queries: [u32; 32],
+        free: Vec<u32>,
+        pending: std::collections::VecDeque<(u32, u64)>,
+        completed: Vec<(u64, f64)>,
+    }
+    impl GpuTimer {
+        fn new() -> Option<Self> {
+            // SAFETY: The caller owns the current context. Core 3.3 includes timer queries.
+            unsafe {
+                let p = glGetString(0x1f02);
+                if p.is_null() {
+                    return None;
+                }
+                let v = CStr::from_ptr(p.cast()).to_string_lossy();
+                let mut n = v.split(['.', ' ']);
+                let major = n.next()?.parse::<u32>().ok()?;
+                let minor = n.next()?.parse::<u32>().ok()?;
+                if (major, minor) < (3, 3) {
+                    return None;
+                }
+                let mut queries = [0; 32];
+                glGenQueries(32, queries.as_mut_ptr());
+                if queries.contains(&0) {
+                    glDeleteQueries(32, queries.as_ptr());
+                    return None;
+                }
+                Some(Self {
+                    free: queries.to_vec(),
+                    queries,
+                    pending: std::collections::VecDeque::with_capacity(32),
+                    completed: Vec::with_capacity(32),
+                })
+            }
+        }
+        fn poll(&mut self) {
+            // SAFETY: Queries are uniquely owned; an unavailable result is never read or waited on.
+            unsafe {
+                while let Some(&(query, frame)) = self.pending.front() {
+                    let mut ready = 0;
+                    glGetQueryObjectiv(query, 0x8867, &mut ready);
+                    if ready == 0 {
+                        break;
+                    }
+                    let mut nanoseconds = 0;
+                    glGetQueryObjectui64v(query, 0x8866, &mut nanoseconds);
+                    self.pending.pop_front();
+                    self.free.push(query);
+                    if self.completed.len() < 32 {
+                        self.completed.push((frame, nanoseconds as f64 / 1000.));
+                    }
+                }
+            }
+        }
+        fn begin(&mut self) -> Option<u32> {
+            self.poll();
+            let query = self.free.pop()?;
+            unsafe {
+                glBeginQuery(0x88bf, query);
+            }
+            Some(query)
+        }
+        fn end(&mut self, query: u32, frame: u64) {
+            unsafe {
+                glEndQuery(0x88bf);
+            }
+            self.pending.push_back((query, frame));
+        }
+    }
     struct GpuProgram {
         handle: c_uint,
         camera: c_int,
         light: c_int,
         params: c_int,
+        points: c_int,
+        point_count: c_int,
+        shadow_matrix: c_int,
+        shadow_texture: c_int,
+        shadow_options: c_int,
+        shadow_extra: c_int,
+    }
+    struct ProgramPair {
+        color: GpuProgram,
+        depth: GpuProgram,
+    }
+    struct ShadowTarget {
+        framebuffer: c_uint,
+        texture: c_uint,
+        size: u32,
     }
     struct MaterialProgram {
         revision: u32,
-        valid: Option<GpuProgram>,
+        valid: Option<ProgramPair>,
     }
     struct RetainedGpu {
-        builtin: GpuProgram,
+        builtin: ProgramPair,
+        environment: crate::lighting::Environment,
+        white_texture: c_uint,
+        shadow: Option<ShadowTarget>,
+        shadow_failed_size: u32,
         materials: BTreeMap<u32, MaterialProgram>,
         instances: c_uint,
         meshes: BTreeMap<u32, (c_uint, c_int)>,
@@ -433,6 +564,8 @@ mod linux {
         retained: Option<RetainedGpu>,
         last_commands: Vec<crate::retained::Command>,
         mesh_upload_bytes: u64,
+        gpu_timer: Option<GpuTimer>,
+        present_count: u64,
         width: u32,
         height: u32,
         delete_atom: c_ulong,
@@ -475,6 +608,8 @@ mod linux {
                     retained: None,
                     last_commands: Vec::new(),
                     mesh_upload_bytes: 0,
+                    gpu_timer: None,
+                    present_count: 0,
                     width: conf.window_width as u32,
                     height: conf.window_height as u32,
                     delete_atom: 0,
@@ -902,6 +1037,63 @@ mod linux {
         pub fn last_mesh_upload_bytes(&self) -> u64 {
             self.mesh_upload_bytes
         }
+        pub fn enable_gpu_timing(&mut self) -> bool {
+            if !self.make_current() {
+                return false;
+            }
+            if self.gpu_timer.is_none() {
+                self.gpu_timer = GpuTimer::new();
+            }
+            self.gpu_timer.is_some()
+        }
+        pub fn drain_gpu_results(&mut self, mut f: impl FnMut(u64, f64)) {
+            if !self.make_current() {
+                return;
+            }
+            if let Some(timer) = &mut self.gpu_timer {
+                timer.poll();
+                for (frame, time) in timer.completed.drain(..) {
+                    f(frame, time);
+                }
+            }
+        }
+        pub fn finish_gpu_timing(&mut self) {
+            if self.gpu_timer.is_some() && self.make_current() {
+                unsafe {
+                    glFinish();
+                }
+                if let Some(timer) = &mut self.gpu_timer {
+                    timer.poll();
+                }
+            }
+        }
+        pub fn render_counts(&self) -> (u64, u64) {
+            let mut calls = 0;
+            let mut vertices = 0;
+            for &(_, count, _) in &self.last_batches {
+                if count > 0 {
+                    calls += 1;
+                    vertices += count as u64;
+                }
+            }
+            if let Some(gpu) = &self.retained {
+                for b in &gpu.batches {
+                    if let Some((_, count)) = gpu.meshes.get(&b.mesh) {
+                        let main = b.depth & 32 == 0;
+                        let shadow = gpu.environment.shadow_size > 0
+                            && gpu.shadow.is_some()
+                            && b.depth & 1 != 0
+                            && b.depth & 8 == 0
+                            && b.light[15] > 0.5;
+                        let passes = main as u64 + shadow as u64;
+                        calls += passes;
+                        vertices += *count as u64 * b.count as u64 * passes;
+                    }
+                }
+            }
+            (calls, vertices)
+        }
+
         pub(crate) fn present_scene(
             &mut self,
             vertices: &[[f32; 8]],
@@ -964,7 +1156,12 @@ mod linux {
                     GL_STREAM_DRAW,
                 );
             }
+            self.present_count += 1;
+            let query = self.gpu_timer.as_mut().and_then(|t| t.begin());
             self.draw_uploaded();
+            if let (Some(timer), Some(query)) = (&mut self.gpu_timer, query) {
+                timer.end(query, self.present_count);
+            }
             // SAFETY: The live, current drawable owns the completed back buffer.
             unsafe {
                 glXSwapBuffers(self.display, self.window);
@@ -972,7 +1169,8 @@ mod linux {
             self.presented = true;
         }
         fn upload_retained(&mut self, frame: &crate::retained::Frame) {
-            if frame.batches.is_empty() && crate::material::count() == 0 {
+            if frame.batches.is_empty() && crate::material::count() == 0 && self.retained.is_none()
+            {
                 return;
             }
             if self.retained.is_none() {
@@ -994,7 +1192,7 @@ mod linux {
                     (major, minor) >= (3, 3),
                     "retained rendering requires OpenGL 3.3 or newer: {version}"
                 );
-                let builtin = GpuProgram::compile(&crate::material::ShaderSource::default())
+                let builtin = ProgramPair::compile(&crate::material::ShaderSource::default())
                     .expect("native retained shader");
                 // SAFETY: The owned context is current. Names are NUL terminated.
                 unsafe {
@@ -1003,6 +1201,10 @@ mod linux {
                     assert_ne!(instances, 0, "allocate retained instance buffer");
                     self.retained = Some(RetainedGpu {
                         builtin,
+                        environment: Default::default(),
+                        white_texture: create_texture(1, false).expect("fallback texture"),
+                        shadow: None,
+                        shadow_failed_size: 0,
                         materials: BTreeMap::new(),
                         instances,
                         meshes: BTreeMap::new(),
@@ -1011,6 +1213,8 @@ mod linux {
                 }
             }
             let gpu = self.retained.as_mut().unwrap();
+            gpu.environment = frame.environment;
+            gpu.configure_shadow();
             gpu.prepare_materials();
             // SAFETY: All handles are owned by this context; uploads copy live bounded slices.
             unsafe {
@@ -1055,6 +1259,11 @@ mod linux {
             // SAFETY: Called with this context current. Attribute pointers are byte offsets
             // into the owned VBO and all saved ranges were checked against its uploaded length.
             unsafe {
+                if let Some(gpu) = &self.retained {
+                    gpu.render_shadow();
+                }
+                glBindFramebuffer(0x8d40, 0);
+                glDrawBuffer(0x0405);
                 glViewport(
                     0,
                     0,
@@ -1072,7 +1281,7 @@ mod linux {
                 for command in &self.last_commands {
                     if command.kind == 1 {
                         if let Some(gpu) = &self.retained {
-                            gpu.draw(command.index as usize);
+                            gpu.draw(command.index as usize, false);
                         }
                     } else if let Some(&(start, count, depth)) =
                         self.last_batches.get(command.index as usize)
@@ -1144,6 +1353,9 @@ mod linux {
                 }
                 if !self.context.is_null() {
                     if self.make_current() {
+                        if let Some(timer) = &self.gpu_timer {
+                            glDeleteQueries(timer.queries.len() as i32, timer.queries.as_ptr());
+                        }
                         if self.vertex_buffer != 0 {
                             glDeleteBuffers(1, &self.vertex_buffer);
                         }
@@ -1155,10 +1367,14 @@ mod linux {
                                 glDeleteBuffers(1, buffer);
                             }
                             glDeleteBuffers(1, &gpu.instances);
-                            glDeleteProgram(gpu.builtin.handle);
+                            gpu.builtin.delete();
+                            glDeleteTextures(1, &gpu.white_texture);
+                            if let Some(target) = &gpu.shadow {
+                                target.delete();
+                            }
                             for m in gpu.materials.values() {
                                 if let Some(p) = &m.valid {
-                                    glDeleteProgram(p.handle);
+                                    p.delete();
                                 }
                             }
                         }
@@ -1190,8 +1406,107 @@ mod linux {
             }
         }
     }
-    impl GpuProgram {
+    fn create_texture(size: u32, depth: bool) -> Result<c_uint, String> {
+        // SAFETY: A live current context owns the allocation and copies the optional pixel.
+        unsafe {
+            let mut texture = 0;
+            glGenTextures(1, &mut texture);
+            if texture == 0 {
+                return Err("texture allocation failed".into());
+            }
+            glBindTexture(0x0de1, texture);
+            glTexParameteri(0x0de1, 0x2801, 0x2600);
+            glTexParameteri(0x0de1, 0x2800, 0x2600);
+            glTexParameteri(0x0de1, 0x2802, 0x812f);
+            glTexParameteri(0x0de1, 0x2803, 0x812f);
+            if depth {
+                glTexImage2D(
+                    0x0de1,
+                    0,
+                    0x81a6,
+                    size as i32,
+                    size as i32,
+                    0,
+                    0x1902,
+                    0x1405,
+                    ptr::null(),
+                );
+            } else {
+                let white = [255u8; 4];
+                glTexImage2D(
+                    0x0de1,
+                    0,
+                    0x8058,
+                    1,
+                    1,
+                    0,
+                    0x1908,
+                    0x1401,
+                    white.as_ptr().cast(),
+                );
+            }
+            Ok(texture)
+        }
+    }
+    impl ShadowTarget {
+        fn new(size: u32) -> Result<Self, String> {
+            let texture = create_texture(size, true)?;
+            // SAFETY: The target and texture are owned by this current context.
+            unsafe {
+                let mut framebuffer = 0;
+                glGenFramebuffers(1, &mut framebuffer);
+                glBindFramebuffer(0x8d40, framebuffer);
+                glFramebufferTexture2D(0x8d40, 0x8d00, 0x0de1, texture, 0);
+                glDrawBuffer(0);
+                glReadBuffer(0);
+                let status = glCheckFramebufferStatus(0x8d40);
+                glBindFramebuffer(0x8d40, 0);
+                glDrawBuffer(0x0405);
+                glReadBuffer(0x0405);
+                if framebuffer == 0 || status != 0x8cd5 {
+                    glDeleteFramebuffers(1, &framebuffer);
+                    glDeleteTextures(1, &texture);
+                    return Err(format!("shadow framebuffer incomplete: {status:#x}"));
+                }
+                Ok(Self {
+                    framebuffer,
+                    texture,
+                    size,
+                })
+            }
+        }
+        unsafe fn delete(&self) {
+            unsafe {
+                glDeleteFramebuffers(1, &self.framebuffer);
+                glDeleteTextures(1, &self.texture);
+            }
+        }
+    }
+    impl ProgramPair {
         fn compile(source: &crate::material::ShaderSource) -> Result<Self, String> {
+            let color = GpuProgram::compile_stage(source, false)?;
+            match GpuProgram::compile_stage(source, true) {
+                Ok(depth) => Ok(Self { color, depth }),
+                Err(error) => {
+                    unsafe {
+                        glDeleteProgram(color.handle);
+                    }
+                    Err(error)
+                }
+            }
+        }
+        unsafe fn delete(&self) {
+            unsafe {
+                glDeleteProgram(self.color.handle);
+                glDeleteProgram(self.depth.handle);
+            }
+        }
+    }
+    impl GpuProgram {
+        fn compile_stage(
+            source: &crate::material::ShaderSource,
+            depth: bool,
+        ) -> Result<Self, String> {
             let vertex = CString::new(format!(
                 "#version 330\n{}\n{}",
                 crate::retained::VERTEX_BODY
@@ -1200,14 +1515,18 @@ mod linux {
                 source.vertex
             ))
             .map_err(|e| e.to_string())?;
-            let fragment = CString::new(format!(
-                "#version 330\nout vec4 ferravex_pixel;\n{}\n{}",
-                crate::material::FRAGMENT_BODY
-                    .replace("varying ", "in ")
-                    .replace("gl_FragColor", "ferravex_pixel"),
-                source.fragment
-            ))
-            .map_err(|e| e.to_string())?;
+            let fragment = if depth {
+                CString::new("#version 330\nvoid main(){}\n").unwrap()
+            } else {
+                CString::new(format!(
+                    "#version 330\nout vec4 ferravex_pixel;\n{}\n{}",
+                    crate::material::FRAGMENT_BODY
+                        .replace("varying ", "in ")
+                        .replace("gl_FragColor", "ferravex_pixel"),
+                    source.fragment
+                ))
+                .map_err(|e| e.to_string())?
+            };
             let attributes = [
                 (0, c"a_position"),
                 (1, c"a_normal"),
@@ -1228,11 +1547,72 @@ mod linux {
                     camera: glGetUniformLocation(handle, c"u_camera".as_ptr()),
                     light: glGetUniformLocation(handle, c"u_light[0]".as_ptr()),
                     params: glGetUniformLocation(handle, c"u_params[0]".as_ptr()),
+                    points: glGetUniformLocation(handle, c"u_points[0]".as_ptr()),
+                    point_count: glGetUniformLocation(handle, c"u_point_count".as_ptr()),
+                    shadow_matrix: glGetUniformLocation(handle, c"u_shadow_matrix".as_ptr()),
+                    shadow_texture: glGetUniformLocation(handle, c"u_shadow_texture".as_ptr()),
+                    shadow_options: glGetUniformLocation(handle, c"u_shadow_options".as_ptr()),
+                    shadow_extra: glGetUniformLocation(handle, c"u_shadow_extra".as_ptr()),
                 })
             }
         }
     }
     impl RetainedGpu {
+        fn configure_shadow(&mut self) {
+            let wanted = self.environment.shadow_size;
+            if wanted == 0 {
+                if let Some(old) = self.shadow.take() {
+                    unsafe {
+                        old.delete();
+                    }
+                }
+                self.shadow_failed_size = 0;
+                return;
+            }
+            if self.shadow.as_ref().is_some_and(|s| s.size == wanted)
+                || self.shadow_failed_size == wanted
+            {
+                return;
+            }
+            match ShadowTarget::new(wanted) {
+                Ok(target) => {
+                    if let Some(old) = self.shadow.replace(target) {
+                        unsafe {
+                            old.delete();
+                        }
+                    }
+                    self.shadow_failed_size = 0;
+                }
+                Err(error) => {
+                    eprintln!("Ferravex shadows: {error}");
+                    self.shadow_failed_size = wanted;
+                }
+            }
+        }
+        unsafe fn render_shadow(&self) {
+            let Some(target) = &self.shadow else {
+                return;
+            };
+            if self.environment.shadow_size == 0 {
+                return;
+            }
+            // SAFETY: This context owns the complete depth target and all recorded ranges.
+            unsafe {
+                glActiveTexture(0x84c0);
+                glBindTexture(0x0de1, self.white_texture);
+                glBindFramebuffer(0x8d40, target.framebuffer);
+                glViewport(0, 0, target.size as i32, target.size as i32);
+                glDepthMask(1);
+                glClear(GL_DEPTH_BUFFER_BIT);
+                glDisable(GL_BLEND);
+                for index in 0..self.batches.len() {
+                    self.draw(index, true);
+                }
+                glEnable(GL_BLEND);
+                glBindFramebuffer(0x8d40, 0);
+                glDrawBuffer(0x0405);
+            }
+        }
         fn prepare_materials(&mut self) {
             self.materials.retain(|id, entry| {
                 if crate::material::lookup(*id).is_some() {
@@ -1241,7 +1621,7 @@ mod linux {
                     // SAFETY: This cache owns the program and its context is current.
                     if let Some(program) = &entry.valid {
                         unsafe {
-                            glDeleteProgram(program.handle);
+                            program.delete();
                         }
                     }
                     false
@@ -1258,11 +1638,11 @@ mod linux {
                     return;
                 }
                 entry.revision = revision;
-                match GpuProgram::compile(&data.source.borrow()) {
+                match ProgramPair::compile(&data.source.borrow()) {
                     Ok(program) => {
                         if let Some(old) = entry.valid.replace(program) {
                             unsafe {
-                                glDeleteProgram(old.handle);
+                                old.delete();
                             }
                         }
                         crate::material::feedback(id, revision, Ok(()));
@@ -1274,10 +1654,15 @@ mod linux {
                 }
             });
         }
-        unsafe fn draw(&self, index: usize) {
+        unsafe fn draw(&self, index: usize, shadow: bool) {
             let Some(batch) = self.batches.get(index) else {
                 return;
             };
+            if (shadow && (batch.depth & 1 == 0 || batch.depth & 8 != 0 || batch.light[15] < 0.5))
+                || (!shadow && batch.depth & 32 != 0)
+            {
+                return;
+            }
             let Some(&(buffer, count)) = self.meshes.get(&batch.mesh) else {
                 return;
             };
@@ -1285,26 +1670,83 @@ mod linux {
             // Attributes refer to the owned static mesh and streamed instance buffers.
             unsafe {
                 set_depth(batch.depth & 1 != 0);
-                glDepthMask((batch.depth & 1 != 0 && batch.depth & 2 == 0) as u8);
-                glBlendFuncSeparate(
-                    GL_SRC_ALPHA,
-                    if batch.depth & 4 != 0 {
-                        1
-                    } else {
-                        GL_ONE_MINUS_SRC_ALPHA
-                    },
-                    1,
-                    GL_ONE_MINUS_SRC_ALPHA,
-                );
-                let program = self
+                glDepthMask((shadow || (batch.depth & 1 != 0 && batch.depth & 2 == 0)) as u8);
+                if shadow {
+                    glDisable(GL_BLEND);
+                } else {
+                    glEnable(GL_BLEND);
+                    glBlendFuncSeparate(
+                        GL_SRC_ALPHA,
+                        if batch.depth & 4 != 0 {
+                            1
+                        } else {
+                            GL_ONE_MINUS_SRC_ALPHA
+                        },
+                        1,
+                        GL_ONE_MINUS_SRC_ALPHA,
+                    );
+                }
+                let pair = self
                     .materials
                     .get(&batch.material)
                     .and_then(|m| m.valid.as_ref())
                     .unwrap_or(&self.builtin);
+                let program = if shadow { &pair.depth } else { &pair.color };
                 glUseProgram(program.handle);
-                glUniformMatrix4fv(program.camera, 1, 0, batch.camera.as_ptr());
+                glUniformMatrix4fv(
+                    program.camera,
+                    1,
+                    0,
+                    if shadow {
+                        self.environment.shadow_matrix.as_ptr()
+                    } else {
+                        batch.camera.as_ptr()
+                    },
+                );
                 glUniform4fv(program.light, 4, batch.light.as_ptr());
                 glUniform4fv(program.params, 4, batch.params.as_ptr());
+                if !shadow {
+                    let e = &self.environment;
+                    let count = if batch.light[3] > 0.5 {
+                        e.light_count
+                    } else {
+                        0
+                    };
+                    glUniform1i(program.point_count, count as i32);
+                    if count > 0 {
+                        glUniform4fv(program.points, 16, e.points.as_ptr());
+                    }
+                    glUniformMatrix4fv(program.shadow_matrix, 1, 0, e.shadow_matrix.as_ptr());
+                    let mut options = e.shadow_options;
+                    let matches = batch.light[0] * e.shadow_direction[0]
+                        + batch.light[1] * e.shadow_direction[1]
+                        + batch.light[2] * e.shadow_direction[2]
+                        > 0.999;
+                    options[3] = if self.shadow.is_some()
+                        && e.shadow_size > 0
+                        && batch.depth & 16 == 0
+                        && matches
+                    {
+                        1.
+                    } else {
+                        0.
+                    };
+                    let mut extra = e.shadow_extra;
+                    if let Some(target) = &self.shadow {
+                        extra[1] = 1. / target.size as f32;
+                    }
+                    glUniform4fv(program.shadow_options, 1, options.as_ptr());
+                    glUniform4fv(program.shadow_extra, 1, extra.as_ptr());
+                    glUniform1i(program.shadow_texture, 0);
+                    glActiveTexture(0x84c0);
+                    glBindTexture(
+                        0x0de1,
+                        self.shadow
+                            .as_ref()
+                            .filter(|_| e.shadow_size > 0)
+                            .map_or(self.white_texture, |s| s.texture),
+                    );
+                }
                 glBindBuffer(GL_ARRAY_BUFFER, buffer);
                 for (attribute, size, offset) in [(0, 3, 0), (1, 3, 12), (2, 4, 24)] {
                     glEnableVertexAttribArray(attribute);
@@ -1460,6 +1902,142 @@ mod linux {
         use super::*;
         #[test]
         #[ignore = "requires a live X11 display and OpenGL context"]
+        fn shared_shadow_map_and_point_lights_change_rendered_pixels() {
+            use crate::{
+                Mat4, Vec3,
+                lighting::{Environment, PointLight, Quality, SunShadow},
+                mesh::Mesh3d,
+                retained::Frame,
+                shaders::LitSettings,
+            };
+            let mut window = NativeWindow::new(&Conf {
+                window_width: 192,
+                window_height: 128,
+                ..Default::default()
+            })
+            .unwrap();
+            window.set_swap_interval(0);
+            let floor = Mesh3d::plane(crate::Vec2::splat(8.), crate::WHITE, 1);
+            let cube = Mesh3d::cuboid(Vec3::ONE, crate::RED);
+            let eye = Vec3::new(4., 5., 6.);
+            let camera = Mat4::perspective_rh_gl(0.8, 1.5, 0.1, 50.)
+                * Mat4::look_at_rh(eye, Vec3::ZERO, Vec3::Y);
+            let sun = SunShadow {
+                direction: Vec3::new(-0.5, 1., -0.2),
+                extent: 6.,
+                depth: 15.,
+                strength: 1.,
+                ..Default::default()
+            };
+            let light = LitSettings {
+                camera_position: eye,
+                light_direction: sun.direction,
+                ambient: 0.3,
+                fog_start: 100.,
+                fog_end: 200.,
+                ..Default::default()
+            }
+            .sanitized();
+            let mut frame = Frame::default();
+            frame.record(floor.resident(), Mat4::IDENTITY, camera, true, Some(light));
+            frame.record(
+                cube.resident(),
+                Mat4::from_translation(Vec3::Y * 0.5),
+                camera,
+                true,
+                Some(light),
+            );
+            window.present_scene(&[], &[], crate::BLACK, Some(&frame));
+            let lit = window.pixels();
+            frame
+                .environment
+                .update(&[], Some(sun), Quality::High, Some(eye));
+            window.present_scene(&[], &[], crate::BLACK, Some(&frame));
+            let shaded = window.pixels();
+            let darker = lit
+                .chunks_exact(4)
+                .zip(shaded.chunks_exact(4))
+                .filter(|(a, b)| {
+                    a[0] > 150
+                        && a[0].abs_diff(a[1]) < 3
+                        && a[1].abs_diff(a[2]) < 3
+                        && a[0].saturating_sub(b[0]) > 40
+                })
+                .count();
+            assert!(darker > 20, "no cast shadow found: {darker}");
+            assert_eq!(
+                window
+                    .retained
+                    .as_ref()
+                    .unwrap()
+                    .shadow
+                    .as_ref()
+                    .unwrap()
+                    .size,
+                1024
+            );
+            frame
+                .environment
+                .update(&[], Some(sun), Quality::Medium, Some(eye));
+            window.present_scene(&[], &[], crate::BLACK, Some(&frame));
+            assert_eq!(
+                window
+                    .retained
+                    .as_ref()
+                    .unwrap()
+                    .shadow
+                    .as_ref()
+                    .unwrap()
+                    .size,
+                512
+            );
+            drop(cube);
+            frame.clear();
+            frame.environment = Environment::default();
+            window.present_scene(&[], &[], crate::BLACK, Some(&frame));
+            assert!(
+                window.retained.as_ref().unwrap().shadow.is_none(),
+                "empty Low frame must release the old shadow target"
+            );
+            assert_eq!(
+                window.retained.as_ref().unwrap().meshes.len(),
+                1,
+                "empty frame must collect expired GPU meshes"
+            );
+            let light = LitSettings {
+                light_direction: Vec3::ZERO,
+                ambient: 0.1,
+                ..light
+            };
+            frame.record(floor.resident(), Mat4::IDENTITY, camera, true, Some(light));
+            window.present_scene(&[], &[], crate::BLACK, Some(&frame));
+            let dark = window.pixels();
+            frame.environment.update(
+                &[PointLight {
+                    position: Vec3::new(0., 1., 0.),
+                    color: Color::new(1., 0., 0., 1.),
+                    radius: 4.,
+                    intensity: 2.,
+                }],
+                None,
+                Quality::Medium,
+                Some(eye),
+            );
+            window.present_scene(&[], &[], crate::BLACK, Some(&frame));
+            let points = window.pixels();
+            assert!(
+                dark.chunks_exact(4)
+                    .zip(points.chunks_exact(4))
+                    .filter(
+                        |(a, b)| b[0] > a[0].saturating_add(20) && b[0] > b[1].saturating_add(20)
+                    )
+                    .count()
+                    > 50,
+                "point light did not illuminate floor"
+            );
+        }
+        #[test]
+        #[ignore = "requires a live X11 display and OpenGL context"]
         fn material_alpha_and_additive_preserve_depth_and_following_ui() {
             use crate::{
                 Mat4,
@@ -1594,6 +2172,7 @@ mod linux {
                 MaterialOptions {
                     blend: crate::material::BlendMode::Opaque,
                     bounds_padding: 1.,
+                    ..Default::default()
                 },
             )
             .unwrap();
@@ -1783,6 +2362,30 @@ mod linux {
                 }
                 frame.save_png(path).unwrap();
             }
+        }
+        #[test]
+        #[ignore = "requires a live X11 display and OpenGL context"]
+        fn timer_results_preserve_frame_tags_and_render_counts() {
+            let mut window = NativeWindow::new(&Conf {
+                window_width: 96,
+                window_height: 64,
+                ..Default::default()
+            })
+            .unwrap();
+            window.set_swap_interval(0);
+            assert!(window.enable_gpu_timing());
+            for _ in 0..4 {
+                window.present(&[], &[], crate::BLACK);
+            }
+            window.finish_gpu_timing();
+            let mut results = Vec::new();
+            window.drain_gpu_results(|frame, us| results.push((frame, us)));
+            assert_eq!(
+                results.iter().map(|r| r.0).collect::<Vec<_>>(),
+                [1, 2, 3, 4]
+            );
+            assert!(results.iter().all(|r| r.1.is_finite() && r.1 >= 0.));
+            assert_eq!(window.render_counts(), (0, 0));
         }
         #[test]
         fn screenshot_rows_flip_without_channel_or_center_row_changes() {

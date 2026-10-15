@@ -167,6 +167,8 @@ impl Scene {
                 MaterialOptions {
                     blend: ferravex_render::material::BlendMode::Opaque,
                     bounds_padding: 0.1,
+                    casts_shadows: false,
+                    receives_shadows: false,
                 },
             )
             .expect("exhaust material"),
@@ -221,6 +223,24 @@ impl Scene {
         }
     }
     fn draw(&self, course: &Course, race: &Race, position: Vec2, yaw: f32, time: f32) {
+        use ferravex_render::lighting::{PointLight, SunShadow};
+        ferravex_render::set_sun_shadow(Some(SunShadow {
+            center: world(position, 0.),
+            direction: vec3(-0.45, 0.9, -0.4),
+            extent: 38.,
+            depth: 100.,
+            ..Default::default()
+        }))
+        .unwrap();
+        let engine_light = if race.speed() > 1. { 1.4 } else { 0. };
+        ferravex_render::set_point_lights(&[PointLight {
+            position: world(position - race.forward() * 1.8, HOVER_HEIGHT),
+            color: ORANGE,
+            radius: 5.,
+            intensity: engine_light,
+        }])
+        .unwrap();
+
         self.ground.draw(vec3(0.0, -0.03, 0.0), Quat::IDENTITY);
         self.road.draw(Vec3::ZERO, Quat::IDENTITY);
         self.curbs.draw(Vec3::ZERO, Quat::IDENTITY);
@@ -269,9 +289,11 @@ impl Scene {
         let draw = |mesh: &Mesh3d, offset: Vec3, local: Quat| {
             mesh.draw(center + rotation * offset, rotation * local);
         };
-        for z in [-0.8, 0.8] {
-            self.shadow
-                .draw(world(position + forward * z, 0.022), Quat::IDENTITY);
+        if ferravex_render::quality() == ferravex_render::lighting::Quality::Low {
+            for z in [-0.8, 0.8] {
+                self.shadow
+                    .draw(world(position + forward * z, 0.022), Quat::IDENTITY);
+            }
         }
         draw(&self.hull, Vec3::ZERO, Quat::IDENTITY);
         draw(
@@ -492,6 +514,7 @@ async fn game() {
     let mut race = Race::new();
     let mut clock = FixedClock::new(120.0, 16);
     let mut demo = Demo::new();
+    ferravex_render::set_quality(ferravex_render::lighting::Quality::Medium);
     let mut touch_mode = false;
     let mut fovy = 51.0_f32;
     let mut camera_position = world(race.position - race.forward() * 11.0, 5.1);

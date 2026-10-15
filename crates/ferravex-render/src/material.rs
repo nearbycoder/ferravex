@@ -19,8 +19,46 @@ varying vec4 v_color;
 varying vec3 v_world;
 varying vec3 v_normal;
 uniform vec4 u_params[4];
+uniform vec4 u_light[4];
+uniform vec4 u_points[16];
+uniform int u_point_count;
+uniform mat4 u_shadow_matrix;
+uniform sampler2D u_shadow_texture;
+uniform vec4 u_shadow_options;
+uniform vec4 u_shadow_extra;
 vec4 ferravex_fragment(vec4 color,vec3 world,vec3 normal);
-void main(){gl_FragColor=ferravex_fragment(v_color,v_world,v_normal);}
+float ferravex_visibility(vec3 world,vec3 normal){
+ if(u_shadow_options.w<0.5)return 1.0;
+ vec4 clip=u_shadow_matrix*vec4(world+normal*u_shadow_extra.x,1.0);
+ vec3 p=clip.xyz/clip.w*0.5+0.5;
+ if(any(lessThan(p,vec3(0.0)))||any(greaterThan(p,vec3(1.0))))return 1.0;
+ float lit=0.0;float samples=0.0;
+ for(int y=-1;y<=1;y++)for(int x=-1;x<=1;x++){
+  if(abs(float(x))>u_shadow_options.z||abs(float(y))>u_shadow_options.z)continue;
+  float depth=texture(u_shadow_texture,p.xy+vec2(float(x),float(y))*u_shadow_extra.y).r;
+  lit+=(p.z-u_shadow_options.x<=depth)?1.0:0.0;samples+=1.0;
+ }
+ return mix(1.0,lit/max(samples,1.0),u_shadow_options.y);
+}
+void main(){
+ vec3 normal=v_normal;float n=length(normal);normal=n>0.0?normal/n:vec3(0.0);
+ vec4 color=v_color;
+ if(u_light[0].w>0.5){
+  float ambient=u_light[1].w;
+  float diffuse=clamp(dot(normal,u_light[0].xyz),0.0,1.0);
+  vec3 light=vec3(ambient+(1.0-ambient)*diffuse*ferravex_visibility(v_world,normal));
+  for(int i=0;i<8;i++){
+   if(i>=u_point_count)break;
+   vec4 point=u_points[i*2];vec4 tint=u_points[i*2+1];vec3 delta=point.xyz-v_world;float distance=length(delta);
+   float falloff=max(0.0,1.0-distance/point.w);vec3 direction=distance>0.0001?delta/distance:normal;
+   light+=tint.rgb*tint.w*falloff*falloff*max(dot(normal,direction),0.0)*(1.0-ambient);
+  }
+  color.rgb*=light;
+  float fog=clamp((distance(v_world,u_light[1].xyz)-u_light[3].x)/max(u_light[3].y-u_light[3].x,0.001),0.0,1.0);
+  color.rgb=mix(color.rgb,u_light[2].rgb,fog);
+ }
+ gl_FragColor=ferravex_fragment(color,v_world,normal);
+}
 "#;
 
 #[derive(Clone, Debug)]
@@ -61,11 +99,23 @@ pub enum BlendMode {
     Alpha,
     Additive,
 }
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct MaterialOptions {
     pub blend: BlendMode,
     /// Authored local-space bound expansion for vertex displacement.
     pub bounds_padding: f32,
+    pub casts_shadows: bool,
+    pub receives_shadows: bool,
+}
+impl Default for MaterialOptions {
+    fn default() -> Self {
+        Self {
+            blend: BlendMode::Alpha,
+            bounds_padding: 0.,
+            casts_shadows: true,
+            receives_shadows: true,
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CompileStatus {

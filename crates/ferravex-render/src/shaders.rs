@@ -1,7 +1,7 @@
-//! Original built-in vertex lighting and distance fog.
+//! Original built-in faceted lighting and distance fog.
 //!
 //! Immediate geometry evaluates lighting on the CPU. Retained meshes evaluate
-//! the same equations in the built-in GPU vertex shader. Both preserve flat
+//! directional lighting/fog plus scene lights/shadows in the GPU fragment shader. Both preserve flat
 //! face normals and require no external material resources.
 use crate::prelude::{Color, Vec3, vec3};
 

@@ -8,10 +8,12 @@ use std::{
     pin::Pin,
     task::{Context, Poll, Waker},
 };
+pub mod ao;
 pub mod canvas;
 pub mod demo;
 mod font;
 pub mod input;
+pub mod lighting;
 pub mod material;
 pub mod mesh;
 #[cfg(not(target_arch = "wasm32"))]
@@ -272,6 +274,10 @@ struct State {
     lighting: Option<shaders::LitSettings>,
     shader: Option<material::ShaderMaterial>,
     shader_params: [f32; 16],
+    quality: lighting::Quality,
+    quality_override: Option<lighting::Quality>,
+    points: Vec<lighting::PointLight>,
+    sun: Option<lighting::SunShadow>,
     keys: BTreeSet<u32>,
     pressed: BTreeSet<u32>,
     buttons: BTreeSet<u32>,
@@ -310,6 +316,10 @@ impl Default for State {
             lighting: None,
             shader: None,
             shader_params: [0.; 16],
+            quality: Default::default(),
+            quality_override: None,
+            points: Vec::new(),
+            sun: None,
             keys: BTreeSet::new(),
             pressed: BTreeSet::new(),
             buttons: BTreeSet::new(),
@@ -333,6 +343,46 @@ impl Default for State {
     }
 }
 impl State {
+    fn refresh_environment(&mut self) {
+        self.retained
+            .environment
+            .update(&self.points, self.sun, self.quality, self.eye);
+    }
+    fn submit(
+        &mut self,
+        mesh: &retained::ResidentMesh,
+        model: Mat4,
+        bounds: ferravex_graphics::Bounds,
+    ) -> bool {
+        let visible = self.test_visibility(bounds, model);
+        let casts = self.depth
+            && mesh.is_opaque()
+            && self.shader.as_ref().is_none_or(|m| {
+                m.0.options.blend == material::BlendMode::Opaque && m.0.options.casts_shadows
+            })
+            && self
+                .retained
+                .environment
+                .frustum()
+                .is_some_and(|f| f.intersects_bounds(bounds, model));
+        if !visible && !casts {
+            return false;
+        }
+        let recorded = self.retained.record_style(
+            mesh,
+            model,
+            self.matrix,
+            self.depth,
+            retained::DrawStyle {
+                light: self.lighting,
+                material: self.shader.as_ref(),
+                params: self.shader_params,
+                shadow_only: !visible,
+                skip_shadow: !casts,
+            },
+        );
+        visible && recorded
+    }
     fn test_visibility(&mut self, bounds: ferravex_graphics::Bounds, model: Mat4) -> bool {
         use visibility::Visibility;
         self.visibility_stats.tested += 1;
@@ -409,6 +459,9 @@ pub fn set_camera(camera: &impl Camera) {
         s.matrix = camera.matrix(s.w as f32, s.h as f32);
         s.depth = camera.depth();
         s.eye = camera.position();
+        if s.eye.is_some() {
+            s.refresh_environment();
+        }
         s.frustum = if s.depth {
             ferravex_graphics::Frustum::from_matrix(
                 s.matrix,
@@ -431,6 +484,9 @@ pub fn clear_background(c: Color) {
         s.vertices.clear();
         s.batches.clear();
         s.retained.clear();
+        s.points.clear();
+        s.sun = None;
+        s.refresh_environment();
         s.visibility_stats = Default::default();
     });
 }
@@ -451,19 +507,80 @@ pub fn draw_resident(mesh: &retained::ResidentMesh, model: Mat4) -> bool {
             .shader
             .as_ref()
             .map_or(mesh.bounds(), |m| m.padded(mesh.bounds()));
-        s.test_visibility(bounds, model)
-            && s.retained.record_style(
-                mesh,
-                model,
-                s.matrix,
-                s.depth,
-                retained::DrawStyle {
-                    light: s.lighting,
-                    material: s.shader.as_ref(),
-                    params: s.shader_params,
-                },
-            )
+        s.submit(mesh, model, bounds)
     })
+}
+/// Submit a hidden opaque caster, for example a first-person character body.
+pub fn draw_shadow(mesh: &retained::ResidentMesh, model: Mat4) -> bool {
+    edit(|s| {
+        let bounds = s
+            .shader
+            .as_ref()
+            .map_or(mesh.bounds(), |m| m.padded(mesh.bounds()));
+        if !s.depth
+            || !mesh.is_opaque()
+            || s.shader.as_ref().is_some_and(|m| {
+                !m.0.options.casts_shadows || m.0.options.blend != material::BlendMode::Opaque
+            })
+            || !s
+                .retained
+                .environment
+                .frustum()
+                .is_some_and(|f| f.intersects_bounds(bounds, model))
+        {
+            return false;
+        }
+        s.retained.record_style(
+            mesh,
+            model,
+            s.matrix,
+            s.depth,
+            retained::DrawStyle {
+                light: s.lighting,
+                material: s.shader.as_ref(),
+                params: s.shader_params,
+                shadow_only: true,
+                skip_shadow: false,
+            },
+        )
+    })
+}
+pub fn set_quality(quality: lighting::Quality) {
+    edit(|s| {
+        s.quality = s.quality_override.unwrap_or(quality);
+        s.refresh_environment();
+    });
+}
+pub fn quality() -> lighting::Quality {
+    read(|s| s.quality)
+}
+pub fn set_point_lights(lights: &[lighting::PointLight]) -> Result<(), &'static str> {
+    if lights.len() > lighting::MAX_POINT_LIGHTS || lights.iter().any(|l| !l.valid()) {
+        return Err("invalid point lights or capacity exceeded");
+    }
+    edit(|s| {
+        s.points.clear();
+        s.points.extend_from_slice(lights);
+        s.refresh_environment();
+    });
+    Ok(())
+}
+pub fn set_sun_shadow(sun: Option<lighting::SunShadow>) -> Result<(), &'static str> {
+    if sun.is_some_and(|s| !s.valid()) {
+        return Err("invalid sun shadow");
+    }
+    edit(|s| {
+        s.sun = sun;
+        s.refresh_environment();
+    });
+    Ok(())
+}
+fn quality_override(quality: lighting::Quality) {
+    edit(|s| {
+        s.quality_override = Some(quality);
+        s.quality = quality;
+        s.refresh_environment();
+    });
 }
 pub fn set_visibility(settings: visibility::VisibilitySettings) -> bool {
     if !settings.valid() {
@@ -481,27 +598,15 @@ pub fn draw_lod(
     state: &mut visibility::LodState,
 ) -> bool {
     edit(|s| {
+        let distance = s.eye.map_or(0., |eye| {
+            visibility::distance_to_bounds(chain.bounds(), model, eye)
+        });
+        let mesh = chain.select(distance, state);
         let bounds = s
             .shader
             .as_ref()
             .map_or(chain.bounds(), |m| m.padded(chain.bounds()));
-        if !s.test_visibility(bounds, model) {
-            return false;
-        }
-        let distance = s.eye.map_or(0., |eye| {
-            visibility::distance_to_bounds(chain.bounds(), model, eye)
-        });
-        s.retained.record_style(
-            chain.select(distance, state),
-            model,
-            s.matrix,
-            s.depth,
-            retained::DrawStyle {
-                light: s.lighting,
-                material: s.shader.as_ref(),
-                params: s.shader_params,
-            },
-        )
+        s.submit(mesh, model, bounds)
     })
 }
 pub fn draw_mesh_transformed(m: &Mesh, model: Mat4) {
@@ -797,6 +902,9 @@ fn frame(dt: f32, w: u32, h: u32) -> bool {
         s.vertices.clear();
         s.batches.clear();
         s.retained.clear();
+        s.points.clear();
+        s.sun = None;
+        s.refresh_environment();
         s.visibility_stats = Default::default();
         s.default_camera();
     });
@@ -901,10 +1009,19 @@ pub fn run(conf: Conf, future: impl Future<Output = ()> + 'static) {
     let mut window = native::NativeWindow::new(&conf)
         .unwrap_or_else(|e| panic!("Ferravex native platform: {e}"));
     start(conf, future);
+    if let Ok(value) = std::env::var("FERRAVEX_QUALITY") {
+        quality_override(
+            lighting::Quality::from_name(&value)
+                .expect("FERRAVEX_QUALITY must be low, medium or high"),
+        );
+    }
     let fixed = std::env::args().any(|s| s == "--smoke-frames");
     let mut performance = telemetry::Session::from_env();
-    if performance.is_some() {
+    if let Some(session) = &mut performance {
         window.set_swap_interval(0);
+        if window.enable_gpu_timing() {
+            session.gpu_source("OpenGL TIME_ELAPSED");
+        }
     }
     let mut last = std::time::Instant::now();
     loop {
@@ -944,14 +1061,17 @@ pub fn run(conf: Conf, future: impl Future<Output = ()> + 'static) {
             session.record(token.finish(read(|s| telemetry::FrameSample {
                 cpu_us,
                 submit_us: Some(submit_start.elapsed().as_secs_f64() * 1e6),
-                draw_calls: Some(s.retained.commands.len() as u64),
-                vertices: Some(s.vertices.len() as u64 + s.retained.vertices()),
+                draw_calls: Some(window.render_counts().0),
+                vertices: Some(window.render_counts().1),
                 upload_bytes: Some(
                     (s.vertices.len() * 32 + s.retained.instances.len() * 112) as u64
                         + window.last_mesh_upload_bytes(),
                 ),
                 ..Default::default()
             })));
+        }
+        if let Some(session) = &mut performance {
+            window.drain_gpu_results(|frame, time| session.gpu_result(frame, time));
         }
         let paths = edit(|s| std::mem::take(&mut s.screenshots));
         if !paths.is_empty() {
@@ -980,7 +1100,10 @@ pub fn run(conf: Conf, future: impl Future<Output = ()> + 'static) {
             }
         }
     }
-    if let Some(session) = performance {
+    if let Some(mut session) = performance {
+        session.render_quality(quality() as u32);
+        window.finish_gpu_timing();
+        window.drain_gpu_results(|frame, time| session.gpu_result(frame, time));
         let (w, h) = window.size();
         session
             .write(&window.driver_info(), w, h)
@@ -1008,6 +1131,22 @@ macro_rules! game {
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use super::*;
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_light_environment() -> *const lighting::Environment {
+        read(|s| &s.retained.environment as *const lighting::Environment)
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_quality_override(value: u32) -> u32 {
+        let q = match value {
+            0 => lighting::Quality::Low,
+            1 => lighting::Quality::Medium,
+            2 => lighting::Quality::High,
+            _ => return 0,
+        };
+        quality_override(q);
+        1
+    }
+
     #[unsafe(no_mangle)]
     pub extern "C" fn ferravex_retained_batch_count() -> u32 {
         read(|s| s.retained.batches.len() as u32)
@@ -1129,6 +1268,32 @@ mod tests {
     use super::*;
     fn reset() {
         edit(|s| *s = State::default());
+    }
+    #[test]
+    fn camera_culled_meshes_remain_available_to_the_shadow_pass() {
+        reset();
+        set_quality(lighting::Quality::High);
+        set_sun_shadow(Some(lighting::SunShadow {
+            extent: 30.,
+            ..Default::default()
+        }))
+        .unwrap();
+        set_camera(&Camera3D {
+            position: vec3(0., 0., 5.),
+            target: Vec3::ZERO,
+            z_far: 20.,
+            ..Default::default()
+        });
+        let mesh = mesh::Mesh3d::cuboid(Vec3::ONE, WHITE);
+        assert!(!draw_resident(
+            mesh.resident(),
+            Mat4::from_translation(Vec3::X * 10.)
+        ));
+        read(|s| {
+            assert_eq!(s.retained.batches.len(), 1);
+            assert_ne!(s.retained.batches[0].depth & 32, 0);
+            assert_eq!(s.retained.batches[0].depth & 8, 0);
+        });
     }
     #[test]
     fn shared_camera_culls_residents_and_default_ui_camera_does_not() {

@@ -20,6 +20,7 @@ DOCS = [
  ('runtime','Window, input and GPU runtime','Engine','crates/ferravex-render/README.md'),
  ('retained-rendering','Retained GPU rendering','Engine','docs/RETAINED_RENDERING.md'),
  ('visibility','Visibility and level of detail','Engine','docs/VISIBILITY.md'),
+ ('lighting','Low-poly lighting','Engine','docs/LIGHTING.md'),
  ('materials','Materials and shader reload','Engine','docs/MATERIALS.md'),
  ('rigid-bodies','Rotational rigid bodies','Engine','crates/ferravex-physics/README.md'),
  ('gameplay','Scenes, animation and gameplay','Engine','crates/ferravex-play/README.md'),
