@@ -1,5 +1,8 @@
 pub use ferravex_core::collision::segment_circle;
 use ferravex_core::{Entity, World};
+use ferravex_play::particles::{
+    Emitter, EmitterDesc, EmitterTransform, ParticleDesc, ParticleMotion, ParticlePool,
+};
 use ferravex_render::prelude::*;
 
 pub const ARENA: Rect = Rect::new(72.0, 112.0, 1136.0, 604.0);
@@ -10,7 +13,6 @@ pub const COVER: [Rect; 4] = [
     Rect::new(834.0, 514.0, 96.0, 60.0),
 ];
 pub const PLAYER_RADIUS: f32 = 15.0;
-const TAU: f32 = std::f32::consts::TAU;
 
 #[derive(Clone, Copy)]
 pub struct Position(pub Vec2);
@@ -30,13 +32,6 @@ pub struct Bullet {
 #[derive(Clone, Copy)]
 pub struct Pickup {
     pub remaining: f32,
-}
-#[derive(Clone, Copy)]
-pub struct Particle {
-    pub pos: Vec2,
-    pub velocity: Vec2,
-    pub life: f32,
-    pub color: Color,
 }
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Phase {
@@ -67,7 +62,8 @@ pub struct Game {
     pub muzzle_time: f32,
     pub time: f32,
     pub wave_banner: f32,
-    pub particles: Vec<Particle>,
+    pub particles: ParticlePool,
+    sparks: Emitter,
     fire_cooldown: f32,
     spawn_timer: f32,
     remaining: u32,
@@ -93,7 +89,32 @@ impl Game {
             muzzle_time: 0.0,
             time: 0.0,
             wave_banner: 2.7,
-            particles: Vec::with_capacity(256),
+            particles: ParticlePool::new(512),
+            sparks: Emitter::new(
+                EmitterDesc {
+                    particle: ParticleDesc {
+                        lifetime: 0.45,
+                        start_color: [1., 0.49, 0.34, 1.],
+                        end_color: [1., 0.2, 0.08, 0.],
+                        start_size: 3.8,
+                        end_size: 1.,
+                        ..Default::default()
+                    },
+                    motion: ParticleMotion {
+                        drag: 4.,
+                        angular_velocity: 5.,
+                        ..Default::default()
+                    },
+                    velocity_jitter: [110., 110., 0.],
+                    lifetime_jitter: 0.25,
+                    size_jitter: 0.3,
+                    rotation_jitter: std::f32::consts::PI,
+                    rate: 0.,
+                    ..Default::default()
+                },
+                0x4e454f4e,
+            )
+            .unwrap(),
             fire_cooldown: 0.0,
             spawn_timer: 0.8,
             remaining: 8,
@@ -145,12 +166,7 @@ impl Game {
     }
 
     pub fn update(&mut self, input: Input, dt: f32) {
-        for particle in &mut self.particles {
-            particle.life -= dt;
-            particle.pos += particle.velocity * dt;
-            particle.velocity *= 1.0 - dt * 4.0;
-        }
-        self.particles.retain(|particle| particle.life > 0.0);
+        self.particles.update(dt).expect("validated game delta");
         if self.phase != Phase::Playing {
             return;
         }
@@ -335,15 +351,13 @@ impl Game {
                 self.world
                     .spawn((Position(point), Pickup { remaining: 16.0 }));
             }
-            for index in 0..9 {
-                let angle = index as f32 / 9.0 * TAU + self.time;
-                self.particles.push(Particle {
-                    pos: point,
-                    velocity: Vec2::from_angle(angle) * (45.0 + index as f32 * 9.0),
-                    life: 0.35 + index as f32 * 0.025,
-                    color: Color::from_rgba(255, 125, 86, 255),
-                });
-            }
+            self.sparks
+                .burst(
+                    9,
+                    EmitterTransform::at([point.x, point.y, 0.]),
+                    &mut self.particles,
+                )
+                .expect("finite hit position");
         }
     }
 }

@@ -25,6 +25,7 @@ ferravex_render::game!(conf, game);
 async fn game() {
     let mut demo = Demo::new();
     let mut sound = GameAudio::new();
+    let mut particles = ferravex_render::effects::ParticleRenderer::new(512).unwrap();
     let mut game = Game::new();
     let mut clock = FixedClock::new(120.0, 12);
     let mut started = demo.autoplay;
@@ -165,6 +166,20 @@ async fn game() {
         set_camera(&canvas.camera());
         draw_arena();
         draw_entities(&game);
+        particles
+            .draw_2d(
+                &game.particles,
+                ferravex_render::effects::ParticleStyle {
+                    draw: ferravex_render::effects::EffectStyle {
+                        blend: ferravex_render::effects::EffectBlend::Additive,
+                        ..Default::default()
+                    },
+                    stretch: 0.006,
+                    max_stretch: 3.,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
         draw_hud(&game, started, touch_mode);
         if started && !paused && game.phase == Phase::Playing && !touch_mode && !demo.autoplay {
             draw_circle_lines(mouse.x, mouse.y, 7.0, 1.2, CYAN);
@@ -408,15 +423,6 @@ fn draw_entities(game: &Game) {
         let tail = p.0 - bullet.velocity.normalize() * 16.0;
         draw_line(tail.x, tail.y, p.0.x, p.0.y, 2.5, CYAN);
         draw_circle(p.0.x, p.0.y, 2.0, PAPER);
-    }
-    for particle in &game.particles {
-        let color = Color::new(
-            particle.color.r,
-            particle.color.g,
-            particle.color.b,
-            (particle.life * 2.0).min(1.0),
-        );
-        draw_rectangle(particle.pos.x, particle.pos.y, 3.0, 3.0, color);
     }
     let p = game.player;
     let angle = game.facing.to_angle().to_degrees();

@@ -20,7 +20,7 @@ unsupported platforms or features are complete.
 | 10 | Unified player input | Merged: [PR 11](https://github.com/nearbycoder/ferravex/pull/11); 56 artifact-size flags recorded in PERFORMANCE.md |
 | 11 | Shared runtime audio | Merged: [PR 12](https://github.com/nearbycoder/ferravex/pull/12); 54 artifact-size flags recorded in PERFORMANCE.md |
 | 12 | Animation playback and blending | Merged: [PR 13](https://github.com/nearbycoder/ferravex/pull/13); 12 performance flags recorded in PERFORMANCE.md |
-| 13 | Reusable effects | Pending |
+| 13 | Reusable effects | In progress: shared simulation, instanced billboards, ribbons/trails/beams and five game integrations; validation pending |
 | 14 | AI perception and decisions | Pending |
 | 15 | Data-driven scenes and prefabs | Pending |
 | 16 | Shared HUD and menus | Pending |

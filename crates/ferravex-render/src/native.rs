@@ -46,6 +46,9 @@ impl NativeWindow {
     pub fn last_mesh_upload_bytes(&self) -> u64 {
         0
     }
+    pub fn sprite_upload_bytes(&self) -> u64 {
+        0
+    }
     pub fn skin_upload_bytes(&self) -> u64 {
         0
     }
@@ -565,6 +568,129 @@ mod linux {
         skin_normals: Vec<[f32; 9]>,
         batches: Vec<crate::retained::RetainedBatch>,
     }
+    struct SpriteGpu {
+        program: c_uint,
+        geometry: c_uint,
+        instances: c_uint,
+        batches: Vec<crate::effects::SpriteBatch>,
+    }
+    impl SpriteGpu {
+        fn new() -> Result<Self, String> {
+            let vertex = CString::new(format!(
+                "#version 330\n{}",
+                crate::effects::SPRITE_VERTEX_BODY
+                    .replace("attribute ", "in ")
+                    .replace("varying ", "out ")
+            ))
+            .unwrap();
+            let fragment = CString::new(format!(
+                "#version 330\nout vec4 ferravex_pixel;\n{}",
+                crate::effects::SPRITE_FRAGMENT_BODY
+                    .replace("varying ", "in ")
+                    .replace("gl_FragColor", "ferravex_pixel")
+            ))
+            .unwrap();
+            let program = create_program_stages(
+                &vertex,
+                &fragment,
+                &[
+                    (0, c"a_corner"),
+                    (1, c"a_center"),
+                    (2, c"a_right"),
+                    (3, c"a_up"),
+                    (4, c"a_tint"),
+                ],
+            )?;
+            let mut geometry = 0;
+            let mut instances = 0;
+            // SAFETY: The caller owns the current context; these buffers persist
+            // with it and copy the complete fixed corner array immediately.
+            unsafe {
+                glGenBuffers(1, &mut geometry);
+                glGenBuffers(1, &mut instances);
+                if geometry == 0 || instances == 0 {
+                    if geometry != 0 {
+                        glDeleteBuffers(1, &geometry);
+                    }
+                    if instances != 0 {
+                        glDeleteBuffers(1, &instances);
+                    }
+                    glDeleteProgram(program);
+                    return Err("allocate sprite buffers".into());
+                }
+                let corners: [f32; 18] = [
+                    -1., -1., -1., 1., 1., -1., 1., -1., -1., 1., 1., 1., 0., 1., -1., -1., 1., -1.,
+                ];
+                glBindBuffer(GL_ARRAY_BUFFER, geometry);
+                glBufferData(GL_ARRAY_BUFFER, 72, corners.as_ptr().cast(), 0x88e4);
+            }
+            Ok(Self {
+                program,
+                geometry,
+                instances,
+                batches: Vec::new(),
+            })
+        }
+        unsafe fn draw(&self, index: usize) {
+            let Some(batch) = self.batches.get(index).filter(|b| b.count > 0) else {
+                return;
+            };
+            // SAFETY: Upload validates every instance range/shape; byte offsets
+            // address the owned fixed geometry and current frame instance VBO.
+            unsafe {
+                glUseProgram(self.program);
+                set_depth(batch.flags & 1 != 0);
+                glDepthMask((batch.flags & 1 != 0 && batch.flags & 2 == 0) as u8);
+                glEnable(GL_BLEND);
+                glBlendFuncSeparate(
+                    GL_SRC_ALPHA,
+                    if batch.flags & 4 != 0 {
+                        1
+                    } else {
+                        GL_ONE_MINUS_SRC_ALPHA
+                    },
+                    1,
+                    GL_ONE_MINUS_SRC_ALPHA,
+                );
+                glBindBuffer(GL_ARRAY_BUFFER, self.geometry);
+                glEnableVertexAttribArray(0);
+                glVertexAttribPointer(0, 2, GL_FLOAT, 0, 8, ptr::null());
+                glBindBuffer(GL_ARRAY_BUFFER, self.instances);
+                for i in 0..4 {
+                    let attribute = i + 1;
+                    glEnableVertexAttribArray(attribute);
+                    glVertexAttribPointer(
+                        attribute,
+                        4,
+                        GL_FLOAT,
+                        0,
+                        64,
+                        (batch.first as usize * 64 + i as usize * 16) as *const c_void,
+                    );
+                    glVertexAttribDivisor(attribute, 1);
+                }
+                glDrawArraysInstanced(
+                    GL_TRIANGLES,
+                    if batch.triangles == 1 { 6 } else { 0 },
+                    batch.triangles as i32 * 3,
+                    batch.count as i32,
+                );
+                for i in 0..5 {
+                    glDisableVertexAttribArray(i);
+                    if i > 0 {
+                        glVertexAttribDivisor(i, 0);
+                    }
+                }
+            }
+        }
+        unsafe fn delete(&self) {
+            unsafe {
+                glDeleteBuffers(1, &self.geometry);
+                glDeleteBuffers(1, &self.instances);
+                glDeleteProgram(self.program);
+            }
+        }
+    }
     pub struct NativeWindow {
         display: *mut Display,
         window: c_ulong,
@@ -591,6 +717,9 @@ mod linux {
         warp_pending: bool,
         last_clear: Color,
         last_batches: Vec<(i32, i32, bool)>,
+        last_effects: Vec<crate::effects::EffectBatch>,
+        sprites: Option<SpriteGpu>,
+        sprite_uploaded_bytes: u64,
         presented: bool,
         keys: BTreeMap<u32, u32>,
         buttons: BTreeSet<u32>,
@@ -635,6 +764,9 @@ mod linux {
                     warp_pending: false,
                     last_clear: Color::new(0.0, 0.0, 0.0, 1.0),
                     last_batches: Vec::new(),
+                    last_effects: Vec::new(),
+                    sprites: None,
+                    sprite_uploaded_bytes: 0,
                     presented: false,
                     keys: BTreeMap::new(),
                     buttons: BTreeSet::new(),
@@ -1051,6 +1183,9 @@ mod linux {
             self.mesh_upload_bytes
         }
         /// Actual palette uniform bytes submitted in color and shadow programs.
+        pub fn sprite_upload_bytes(&self) -> u64 {
+            self.sprite_uploaded_bytes
+        }
         pub fn skin_upload_bytes(&self) -> u64 {
             let Some(gpu) = &self.retained else {
                 return 0;
@@ -1124,6 +1259,20 @@ mod linux {
                     vertices += count as u64;
                 }
             }
+            for b in &self.last_effects {
+                if b.count > 0 {
+                    calls += 1;
+                    vertices += b.count as u64;
+                }
+            }
+            if let Some(sprites) = &self.sprites {
+                for b in &sprites.batches {
+                    if b.count > 0 {
+                        calls += 1;
+                        vertices += b.count as u64 * b.triangles as u64 * 3;
+                    }
+                }
+            }
             if let Some(gpu) = &self.retained {
                 for b in &gpu.batches {
                     if let Some((_, count)) = gpu.meshes.get(&b.mesh) {
@@ -1161,6 +1310,13 @@ mod linux {
                 self.last_commands.extend_from_slice(&frame.commands);
             }
             self.mesh_upload_bytes = 0;
+            self.sprite_uploaded_bytes = 0;
+            if let Some(sprites) = &mut self.sprites {
+                sprites.batches.clear();
+            }
+            if let Some(frame) = frame {
+                self.upload_sprites(frame);
+            }
             if let Some(frame) = frame {
                 self.upload_retained(frame);
             }
@@ -1197,6 +1353,29 @@ mod linux {
                 self.last_batches
                     .push((batch.start as i32, batch.count as i32, batch.depth));
             }
+            self.last_effects.clear();
+            if let Some(frame) = frame {
+                for batch in &frame.effects {
+                    let valid = batch.count > 0
+                        && batch.count.is_multiple_of(3)
+                        && batch.start <= i32::MAX as u32
+                        && batch.count <= i32::MAX as u32
+                        && batch
+                            .start
+                            .checked_add(batch.count)
+                            .is_some_and(|end| end as usize <= vertices.len())
+                        && batch.flags & !7 == 0;
+                    self.last_effects.push(if valid {
+                        *batch
+                    } else {
+                        crate::effects::EffectBatch {
+                            start: 0,
+                            count: 0,
+                            flags: 0,
+                        }
+                    });
+                }
+            }
             // SAFETY: The source slice is valid for byte_count bytes and GL copies it during
             // BufferData. Subsequent saved draw ranges refer to this persistent GPU buffer.
             unsafe {
@@ -1219,6 +1398,49 @@ mod linux {
                 glXSwapBuffers(self.display, self.window);
             }
             self.presented = true;
+        }
+        fn upload_sprites(&mut self, frame: &crate::retained::Frame) {
+            if frame.sprites.is_empty() {
+                return;
+            }
+            if self.sprites.is_none() {
+                self.sprites =
+                    Some(SpriteGpu::new().expect("native sprite shader requires GL 3.3"));
+                self.sprite_uploaded_bytes += 72;
+            }
+            let gpu = self.sprites.as_mut().unwrap();
+            for batch in &frame.sprite_batches {
+                let valid = (1..=2).contains(&batch.triangles)
+                    && batch.flags & !7 == 0
+                    && batch.count > 0
+                    && batch.count <= i32::MAX as u32
+                    && batch
+                        .first
+                        .checked_add(batch.count)
+                        .is_some_and(|end| end as usize <= frame.sprites.len());
+                gpu.batches.push(if valid {
+                    *batch
+                } else {
+                    crate::effects::SpriteBatch {
+                        first: 0,
+                        count: 0,
+                        flags: 0,
+                        triangles: 1,
+                    }
+                });
+            }
+            let bytes = frame.sprites.len() * 64;
+            // SAFETY: Frame storage is live for this synchronous bounded upload.
+            unsafe {
+                glBindBuffer(GL_ARRAY_BUFFER, gpu.instances);
+                glBufferData(
+                    GL_ARRAY_BUFFER,
+                    bytes as isize,
+                    frame.sprites.as_ptr().cast(),
+                    GL_STREAM_DRAW,
+                );
+            }
+            self.sprite_uploaded_bytes += bytes as u64;
         }
         fn upload_retained(&mut self, frame: &crate::retained::Frame) {
             if frame.batches.is_empty() && crate::material::count() == 0 && self.retained.is_none()
@@ -1362,24 +1584,58 @@ mod linux {
                         if let Some(gpu) = &self.retained {
                             gpu.draw(command.index as usize, false);
                         }
-                    } else if let Some(&(start, count, depth)) =
-                        self.last_batches.get(command.index as usize)
-                    {
-                        glUseProgram(self.program);
-                        glBindBuffer(GL_ARRAY_BUFFER, self.vertex_buffer);
-                        glEnableVertexAttribArray(0);
-                        glEnableVertexAttribArray(1);
-                        glVertexAttribPointer(0, 4, GL_FLOAT, 0, 32, ptr::null());
-                        glVertexAttribPointer(1, 4, GL_FLOAT, 0, 32, 16_usize as *const c_void);
-                        set_depth(depth);
-                        glDrawArrays(GL_TRIANGLES, start, count);
-                        glDisableVertexAttribArray(0);
-                        glDisableVertexAttribArray(1);
+                    } else if command.kind == 3 {
+                        if let Some(sprites) = &self.sprites {
+                            sprites.draw(command.index as usize);
+                        }
+                    } else {
+                        let draw = if command.kind == 0 {
+                            self.last_batches
+                                .get(command.index as usize)
+                                .map(|&(start, count, depth)| (start, count, depth as u32))
+                        } else if command.kind == 2 {
+                            self.last_effects
+                                .get(command.index as usize)
+                                .map(|b| (b.start as i32, b.count as i32, b.flags))
+                        } else {
+                            None
+                        };
+                        if let Some((start, count, flags)) = draw.filter(|(_, count, _)| *count > 0)
+                        {
+                            glUseProgram(self.program);
+                            glBindBuffer(GL_ARRAY_BUFFER, self.vertex_buffer);
+                            glEnableVertexAttribArray(0);
+                            glEnableVertexAttribArray(1);
+                            glVertexAttribPointer(0, 4, GL_FLOAT, 0, 32, ptr::null());
+                            glVertexAttribPointer(1, 4, GL_FLOAT, 0, 32, 16_usize as *const c_void);
+                            set_depth(flags & 1 != 0);
+                            glDepthMask((flags & 1 != 0 && flags & 2 == 0) as u8);
+                            glEnable(GL_BLEND);
+                            glBlendFuncSeparate(
+                                GL_SRC_ALPHA,
+                                if flags & 4 != 0 {
+                                    1
+                                } else {
+                                    GL_ONE_MINUS_SRC_ALPHA
+                                },
+                                1,
+                                GL_ONE_MINUS_SRC_ALPHA,
+                            );
+                            glDrawArrays(GL_TRIANGLES, start, count);
+                            glDisableVertexAttribArray(0);
+                            glDisableVertexAttribArray(1);
+                        }
                     }
                 }
                 glBindBuffer(GL_ARRAY_BUFFER, 0);
                 glUseProgram(0);
                 glDepthMask(1);
+                glBlendFuncSeparate(
+                    GL_SRC_ALPHA,
+                    GL_ONE_MINUS_SRC_ALPHA,
+                    1,
+                    GL_ONE_MINUS_SRC_ALPHA,
+                );
             }
         }
         /// Reads the last presented image as top-to-bottom RGBA8.
@@ -1440,6 +1696,9 @@ mod linux {
                         }
                         if self.program != 0 {
                             glDeleteProgram(self.program);
+                        }
+                        if let Some(sprites) = &self.sprites {
+                            sprites.delete();
                         }
                         if let Some(gpu) = &self.retained {
                             for (buffer, _) in gpu.meshes.values() {
@@ -2014,6 +2273,273 @@ mod linux {
     #[cfg(test)]
     mod tests {
         use super::*;
+        #[test]
+        #[ignore = "requires a live X11 display and OpenGL context"]
+        fn instanced_particle_shapes_match_cpu_reference_and_reuse_their_buffers() {
+            use crate::{
+                Mat4, Vec3,
+                effects::{
+                    self, BillboardView, EffectBlend, EffectStyle, ParticleRenderer, ParticleShape,
+                    ParticleStyle,
+                },
+            };
+            use ferravex_play::particles::{ParticleDesc, ParticleMotion, ParticlePool};
+            let mut window = NativeWindow::new(&Conf {
+                window_width: 128,
+                window_height: 96,
+                ..Default::default()
+            })
+            .unwrap();
+            window.set_swap_interval(0);
+            let mut pool = ParticlePool::new(3);
+            for (x, z, color) in [
+                (-0.25, 0., [1., 0.2, 0., 0.6]),
+                (0.2, 0.2, [0., 1., 0.3, 0.5]),
+                (0., -0.2, [0.2, 0., 1., 0.7]),
+            ] {
+                pool.spawn_with(
+                    ParticleDesc {
+                        position: [x, 0., z],
+                        velocity: [0.3, 0.1, 0.],
+                        start_size: 0.7,
+                        end_size: 0.7,
+                        start_color: color,
+                        end_color: color,
+                        lifetime: 2.,
+                        ..Default::default()
+                    },
+                    ParticleMotion {
+                        rotation: 0.35,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            }
+            let view = BillboardView::new(Vec3::new(0., 0., 5.), Vec3::X, Vec3::Y).unwrap();
+            let mut renderer = ParticleRenderer::new(3).unwrap();
+            for shape in [
+                ParticleShape::Square,
+                ParticleShape::Diamond,
+                ParticleShape::Triangle,
+            ] {
+                for blend in [EffectBlend::Alpha, EffectBlend::Additive] {
+                    let style = ParticleStyle {
+                        shape,
+                        draw: EffectStyle {
+                            blend,
+                            ..Default::default()
+                        },
+                        stretch: 1.,
+                        max_stretch: 2.,
+                        ..Default::default()
+                    };
+                    let mut reference: Vec<_> = pool.iter().collect();
+                    if blend == EffectBlend::Alpha {
+                        reference.sort_by(|a, b| a.position[2].total_cmp(&b.position[2]));
+                    }
+                    crate::input::host_frame(1. / 60., 128, 96, || {
+                        crate::clear_background(crate::BLACK);
+                        crate::edit(|s| {
+                            s.matrix = Mat4::IDENTITY;
+                            s.depth = true;
+                        });
+                        let triangles = reference.iter().flat_map(|p| {
+                            effects::particle_triangles(*p, view, style)
+                                .unwrap()
+                                .into_iter()
+                                .flatten()
+                        });
+                        effects::draw_triangles(triangles, style.draw);
+                    });
+                    crate::read(|s| {
+                        window.present_scene(
+                            &s.vertices,
+                            &s.batches,
+                            crate::BLACK,
+                            Some(&s.retained),
+                        )
+                    });
+                    let expected = window.pixels();
+                    crate::input::host_frame(1. / 60., 128, 96, || {
+                        crate::clear_background(crate::BLACK);
+                        crate::edit(|s| {
+                            s.matrix = Mat4::IDENTITY;
+                            s.depth = true;
+                        });
+                        renderer.draw_3d(&pool, view, style).unwrap();
+                    });
+                    crate::read(|s| {
+                        window.present_scene(
+                            &s.vertices,
+                            &s.batches,
+                            crate::BLACK,
+                            Some(&s.retained),
+                        )
+                    });
+                    let actual = window.pixels();
+                    let different = expected
+                        .chunks_exact(4)
+                        .zip(actual.chunks_exact(4))
+                        .filter(|(a, b)| a.iter().zip(*b).any(|(a, b)| a.abs_diff(*b) > 2))
+                        .count();
+                    assert!(
+                        different < 12,
+                        "{shape:?}/{blend:?} mismatch: {different} pixels"
+                    );
+                    let triangles = if shape == ParticleShape::Triangle {
+                        1
+                    } else {
+                        2
+                    };
+                    assert_eq!(window.render_counts(), (1, 3 * triangles * 3));
+                    crate::read(|s| {
+                        window.present_scene(
+                            &s.vertices,
+                            &s.batches,
+                            crate::BLACK,
+                            Some(&s.retained),
+                        )
+                    });
+                    assert_eq!(
+                        window.sprite_upload_bytes(),
+                        3 * 64,
+                        "warmed sprites should upload only instances"
+                    );
+                }
+            }
+        }
+        #[test]
+        #[ignore = "requires a live X11 display and OpenGL context"]
+        fn effect_alpha_additive_depth_and_hud_order_match_actual_gpu_pixels() {
+            use crate::{
+                Mat4,
+                effects::{self, EffectBlend, EffectStyle, RibbonTriangle, RibbonVertex},
+            };
+            let mut window = NativeWindow::new(&Conf {
+                window_width: 96,
+                window_height: 64,
+                ..Default::default()
+            })
+            .unwrap();
+            window.set_swap_interval(0);
+            let triangle = |z: f32, color: [f32; 4], small: bool| {
+                let p = if small {
+                    [[-0.4, -0.4, z], [0.4, -0.4, z], [0., 0.4, z]]
+                } else {
+                    [[-1., -1., z], [3., -1., z], [-1., 3., z]]
+                };
+                RibbonTriangle {
+                    vertices: p.map(|position| RibbonVertex {
+                        position,
+                        color,
+                        uv: [0.; 2],
+                    }),
+                }
+            };
+            let render = |window: &mut NativeWindow,
+                          blue_z: f32,
+                          red: bool,
+                          hud: bool,
+                          additive: bool| {
+                crate::input::host_frame(1. / 60., 96, 64, || {
+                    crate::clear_background(crate::BLACK);
+                    crate::edit(|s| {
+                        s.matrix = Mat4::IDENTITY;
+                        s.depth = true;
+                    });
+                    effects::draw_triangles(
+                        [triangle(blue_z, [0., 0., 1., 1.], false)],
+                        EffectStyle {
+                            depth_write: true,
+                            ..Default::default()
+                        },
+                    );
+                    effects::draw_triangles(
+                        [triangle(
+                            0.,
+                            if additive {
+                                [1., 0., 0., 0.25]
+                            } else {
+                                [0., 1., 0., 0.5]
+                            },
+                            false,
+                        )],
+                        EffectStyle {
+                            blend: if additive {
+                                EffectBlend::Additive
+                            } else {
+                                EffectBlend::Alpha
+                            },
+                            ..Default::default()
+                        },
+                    );
+                    if red {
+                        effects::draw_triangles(
+                            [triangle(0.25, [1., 0., 0., 1.], true)],
+                            EffectStyle {
+                                depth_write: true,
+                                ..Default::default()
+                            },
+                        );
+                    }
+                    if hud {
+                        effects::draw_triangles(
+                            [triangle(
+                                0.9,
+                                if additive {
+                                    [0., 1., 0., 0.5]
+                                } else {
+                                    [1., 1., 0., 1.]
+                                },
+                                true,
+                            )],
+                            EffectStyle {
+                                depth_test: Some(false),
+                                ..Default::default()
+                            },
+                        );
+                    }
+                });
+                crate::read(|s| {
+                    window.present_scene(&s.vertices, &s.batches, crate::BLACK, Some(&s.retained))
+                });
+                let pixels = window.pixels();
+                let (w, h) = window.size();
+                let at = ((h / 2 * w + w / 2) * 4) as usize;
+                pixels[at..at + 4].to_vec()
+            };
+            let alpha = render(&mut window, 0.5, false, false, false);
+            assert!(
+                alpha[0] < 2 && (126..=129).contains(&alpha[1]) && (126..=129).contains(&alpha[2]),
+                "bad alpha: {alpha:?}"
+            );
+            let no_write = render(&mut window, 0.5, true, false, false);
+            assert_eq!(
+                &no_write[..3],
+                &[255, 0, 0],
+                "transparent effect wrote depth"
+            );
+            let hud = render(&mut window, 0.5, true, true, false);
+            assert_eq!(
+                &hud[..3],
+                &[255, 255, 0],
+                "HUD did not restore its overlay state"
+            );
+            let occluded = render(&mut window, -0.2, false, false, false);
+            assert_eq!(&occluded[..3], &[0, 0, 255], "effect ignored opaque depth");
+            let additive = render(&mut window, 0.5, false, false, true);
+            assert!(
+                (62..=65).contains(&additive[0]) && additive[2] == 255,
+                "bad additive: {additive:?}"
+            );
+            let restored = render(&mut window, 0.5, false, true, true);
+            assert!(
+                (30..=33).contains(&restored[0])
+                    && (126..=129).contains(&restored[1])
+                    && (126..=129).contains(&restored[2]),
+                "additive leaked into HUD: {restored:?}"
+            );
+        }
         #[test]
         #[ignore = "requires a live X11 display and OpenGL context"]
         fn four_weight_gpu_skin_matches_static_geometry_normals_and_shadows() {

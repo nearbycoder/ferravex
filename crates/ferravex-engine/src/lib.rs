@@ -10,6 +10,7 @@ pub mod assets;
 pub mod audio;
 /// Shared follow, orbit, chase and first-person presentation rigs.
 pub mod camera;
+pub mod effects;
 pub mod input;
 pub mod profile;
 pub mod replay;

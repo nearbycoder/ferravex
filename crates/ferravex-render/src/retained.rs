@@ -137,7 +137,7 @@ pub(crate) fn geometry(id: u32) -> Option<Rc<Geometry>> {
 pub(crate) fn is_live(id: u32) -> bool {
     geometry(id).is_some()
 }
-/// ABI: kind 0 = immediate batch, kind 1 = retained batch. Preserves transparency/UI order.
+/// ABI: kind 0 = immediate, kind 1 = retained, kind 2 = flagged triangles, kind 3 = instanced sprites. Preserves transparency/UI order.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct Command {
@@ -164,6 +164,9 @@ pub struct RetainedBatch {
 #[derive(Default)]
 pub(crate) struct Frame {
     pub commands: Vec<Command>,
+    pub effects: Vec<crate::effects::EffectBatch>,
+    pub sprite_batches: Vec<crate::effects::SpriteBatch>,
+    pub sprites: Vec<[f32; 16]>,
     pub batches: Vec<RetainedBatch>,
     pub instances: Vec<[f32; 28]>,
     pub skin_matrices: Vec<[f32; 16]>,
@@ -202,6 +205,9 @@ impl RetainedBatch {
 impl Frame {
     pub fn clear(&mut self) {
         self.commands.clear();
+        self.effects.clear();
+        self.sprite_batches.clear();
+        self.sprites.clear();
         self.batches.clear();
         self.instances.clear();
         self.skin_matrices.clear();
@@ -392,7 +398,7 @@ impl Frame {
         let mut previous_retained = false;
         for i in 0..self.commands.len() {
             let c = self.commands[i];
-            if c.kind == 0 {
+            if c.kind != 1 {
                 self.commands[written] = c;
                 written += 1;
                 previous_retained = false;

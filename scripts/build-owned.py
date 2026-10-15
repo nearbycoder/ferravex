@@ -25,6 +25,7 @@ for name in ('audio.js','audio-worklet.js','audio-ring.js'):shutil.copy2(ROOT/'w
 shutil.copy2(ROOT/'web/input.js',output/'input.js')
 shutil.copy2(ROOT/'web/input-overlay.js',output/'input-overlay.js')
 shutil.copy2(ROOT/'web/retained.js',output/'retained.js')
+shutil.copy2(ROOT/'web/effects.js',output/'effects.js')
 # One shader implementation supplies both native GL and browser WebGL2.
 parts=[]
 for file,name,export in [('retained.rs','VERTEX_BODY','vertexBody'),('material.rs','FRAGMENT_BODY','fragmentBody'),('material.rs','DEFAULT_VERTEX_HOOK','defaultVertexHook'),('material.rs','DEFAULT_FRAGMENT_HOOK','defaultFragmentHook')]:
@@ -33,6 +34,13 @@ for file,name,export in [('retained.rs','VERTEX_BODY','vertexBody'),('material.r
     if not match:raise SystemExit('Missing shared shader template: '+name)
     parts.append('export const '+export+' = '+json.dumps(match.group(1))+';')
 (output/'retained-shader.js').write_text('\n'.join(parts)+'\n')
+parts=[]
+for name,export in [('SPRITE_VERTEX_BODY','spriteVertexBody'),('SPRITE_FRAGMENT_BODY','spriteFragmentBody')]:
+    source=(ROOT/'crates/ferravex-render/src/effects.rs').read_text()
+    match=re.search(r'pub const '+name+r':\s*&str\s*=\s*r#"(.*?)"#;',source,re.S)
+    if not match:raise SystemExit('Missing shared sprite shader: '+name)
+    parts.append('export const '+export+' = '+json.dumps(match.group(1))+';')
+(output/'effects-shader.js').write_text('\n'.join(parts)+'\n')
 shutil.copy2(ROOT/'web/material-tools.js',output/'material-tools.js')
 shutil.copy2(ROOT/'web/index.html',output/'index.html')
 shutil.copy2(ROOT/'examples/catalog.json',output/'games.json')

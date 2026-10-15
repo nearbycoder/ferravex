@@ -1,5 +1,6 @@
 // Original Ferravex browser platform: WebGL2, DOM input, direct Rust/Wasm ABI.
 import {RetainedRenderer,GpuTimer} from './retained.js';
+import {SpriteRenderer} from './effects.js';
 import {bindInput} from './input.js';
 import {bindAudio} from './audio.js';
 const canvas = document.querySelector('canvas');
@@ -26,6 +27,7 @@ gl.enableVertexAttribArray(0);gl.vertexAttribPointer(0,4,gl.FLOAT,false,32,0);
 gl.enableVertexAttribArray(1);gl.vertexAttribPointer(1,4,gl.FLOAT,false,32,16);
 gl.enable(gl.BLEND);gl.blendFuncSeparate(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA,gl.ONE,gl.ONE_MINUS_SRC_ALPHA);gl.depthFunc(gl.LEQUAL);
 const retained=new RetainedRenderer(gl);
+const spriteEffects=new SpriteRenderer(gl);
 const gpuTimer=new GpuTimer(gl,canvas,new URLSearchParams(location.search).has('profile'));
 let exports,playing=false,active=true,allocated=0,frames=0,last=0;
 const game=canvas.dataset.game;
@@ -60,7 +62,7 @@ try {
   if(vertices.byteLength>allocated){allocated=Math.max(vertices.byteLength,allocated*2,65536);gl.bufferData(gl.ARRAY_BUFFER,allocated,gl.DYNAMIC_DRAW);}
   gl.bufferSubData(gl.ARRAY_BUFFER,0,vertices);
   const batches=exports.ferravex_batch_count(),bp=exports.ferravex_batches();
-  retained.begin(exports);
+  retained.begin(exports);spriteEffects.begin(exports);
   gpuTimer.begin(frames+1);
   gl.clearColor(...[0,1,2,3].map(c=>exports.ferravex_clear(c)));gl.depthMask(true);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
   retained.renderShadow(w,h);
@@ -70,14 +72,19 @@ try {
   for(let i=0;i<commands;i++){
    const kind=view.getUint32(cp+i*8,true),index=view.getUint32(cp+i*8+4,true);
    if(kind===1){retained.draw(index);continue;}
-   if(index>=batches)continue;
-   gl.useProgram(program);gl.bindVertexArray(null);
-   const at=bp+index*12,depth=view.getUint8(at+8)!==0;depth?gl.enable(gl.DEPTH_TEST):gl.disable(gl.DEPTH_TEST);gl.depthMask(depth);gl.drawArrays(gl.TRIANGLES,view.getUint32(at,true),view.getUint32(at+4,true));immediateDraws++;
+   if(kind===3){spriteEffects.draw(index);continue;}
+   let at,flags;
+   if(kind===2){if(index>=(exports.ferravex_effect_batch_count?.()||0))continue;at=exports.ferravex_effect_batches()+index*12;flags=view.getUint32(at+8,true);}
+   else if(kind===0){if(index>=batches)continue;at=bp+index*12;flags=view.getUint8(at+8)?1:0;}
+   else continue;
+   gl.useProgram(program);gl.bindVertexArray(null);gl.enable(gl.BLEND);gl.blendFuncSeparate(gl.SRC_ALPHA,(flags&4)?gl.ONE:gl.ONE_MINUS_SRC_ALPHA,gl.ONE,gl.ONE_MINUS_SRC_ALPHA);
+   (flags&1)?gl.enable(gl.DEPTH_TEST):gl.disable(gl.DEPTH_TEST);gl.depthMask((flags&1)!==0&&(flags&2)===0);gl.drawArrays(gl.TRIANGLES,view.getUint32(at,true),view.getUint32(at+4,true));immediateDraws++;
   }
   gpuTimer.end();
-  canvas.dataset.frames=String(++frames);canvas.dataset.vertices=String(count+retained.vertices+retained.shadowVertices);
+  canvas.dataset.frames=String(++frames);canvas.dataset.vertices=String(count+retained.vertices+retained.shadowVertices+spriteEffects.vertices);
   canvas.dataset.culled=String(exports.ferravex_culled_count());canvas.dataset.visible=String(exports.ferravex_visible_count());
-  canvas.dataset.drawCalls=String(immediateDraws+retained.drawCalls+retained.shadowDrawCalls);canvas.dataset.shadowDrawCalls=String(retained.shadowDrawCalls);canvas.dataset.quality=String(retained.environment.quality);canvas.dataset.lightingError=retained.lightingError;canvas.dataset.residentMeshes=String(retained.meshes.size);canvas.dataset.uploadBytes=String(count*32+retained.uploadBytes);
+  canvas.dataset.drawCalls=String(immediateDraws+retained.drawCalls+retained.shadowDrawCalls+spriteEffects.drawCalls);canvas.dataset.shadowDrawCalls=String(retained.shadowDrawCalls);canvas.dataset.quality=String(retained.environment.quality);canvas.dataset.lightingError=retained.lightingError;canvas.dataset.residentMeshes=String(retained.meshes.size);canvas.dataset.uploadBytes=String(count*32+retained.uploadBytes+spriteEffects.uploadBytes);
+  canvas.dataset.effectVertices=String(exports.ferravex_effect_vertex_count?.()||0);
   canvas.dataset.skinnedDrawCalls=String(retained.skinnedDrawCalls);canvas.dataset.skinJoints=String(exports.ferravex_skin_joint_count?.()||0);
   canvas.dataset.materialError=retained.lastError;materialTools?.update();
   if(running)requestAnimationFrame(loop);else audio.dispose();
