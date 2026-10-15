@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Build/stage every first-party browser game using Rust std and browser APIs."""
-import argparse,hashlib,json,pathlib,shutil,subprocess
+import argparse,hashlib,json,pathlib,re,shutil,subprocess
 ROOT=pathlib.Path(__file__).resolve().parent.parent
 parser=argparse.ArgumentParser();parser.add_argument('--profile',choices=['release','small','dev'],default='release');args=parser.parse_args()
 subprocess.run(['python3','scripts/audit-owned.py'],cwd=ROOT,check=True)
@@ -23,8 +23,14 @@ for game in games:
 shutil.copy2(ROOT/'web/runtime.js',output/'runtime.js')
 shutil.copy2(ROOT/'web/retained.js',output/'retained.js')
 # One shader implementation supplies both native GL and browser WebGL2.
-shader=(ROOT/'crates/ferravex-render/src/retained.rs').read_text().split('pub const VERTEX_BODY: &str = r#"',1)[1].split('"#;',1)[0]
-(output/'retained-shader.js').write_text('export const vertexBody = '+json.dumps(shader)+';\n')
+parts=[]
+for file,name,export in [('retained.rs','VERTEX_BODY','vertexBody'),('material.rs','FRAGMENT_BODY','fragmentBody'),('material.rs','DEFAULT_VERTEX_HOOK','defaultVertexHook'),('material.rs','DEFAULT_FRAGMENT_HOOK','defaultFragmentHook')]:
+    source=(ROOT/'crates/ferravex-render/src'/file).read_text()
+    match=re.search(r'pub const '+name+r':\s*&str\s*=\s*r#"(.*?)"#;',source,re.S)
+    if not match:raise SystemExit('Missing shared shader template: '+name)
+    parts.append('export const '+export+' = '+json.dumps(match.group(1))+';')
+(output/'retained-shader.js').write_text('\n'.join(parts)+'\n')
+shutil.copy2(ROOT/'web/material-tools.js',output/'material-tools.js')
 shutil.copy2(ROOT/'web/index.html',output/'index.html')
 shutil.copy2(ROOT/'examples/catalog.json',output/'games.json')
 manifest={str(p.relative_to(output)):{'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in output.rglob('*') if p.is_file()}

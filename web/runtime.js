@@ -22,15 +22,16 @@ gl.useProgram(program);
 const buffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
 gl.enableVertexAttribArray(0);gl.vertexAttribPointer(0,4,gl.FLOAT,false,32,0);
 gl.enableVertexAttribArray(1);gl.vertexAttribPointer(1,4,gl.FLOAT,false,32,16);
-gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);gl.depthFunc(gl.LEQUAL);
+gl.enable(gl.BLEND);gl.blendFuncSeparate(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA,gl.ONE,gl.ONE_MINUS_SRC_ALPHA);gl.depthFunc(gl.LEQUAL);
 const retained=new RetainedRenderer(gl);
 let exports,playing=false,active=true,allocated=0,frames=0,last=0;
 const keyboard=new Map([['F1',0xffbe],['F2',0xffbf],['F3',0xffc0],['Space',32],['Escape',0xff1b],['Enter',0xff0d],['Tab',0xff09],['ArrowLeft',0xff51],['ArrowUp',0xff52],['ArrowRight',0xff53],['ArrowDown',0xff54],['ShiftLeft',0xffe1],['ShiftRight',0xffe2],['ControlLeft',0xffe3],['ControlRight',0xffe4]]);
+const editing=e=>e.target instanceof Element&&!!e.target.closest('input,textarea,select,button,[contenteditable]');
 const keyCode=e=>keyboard.get(e.code)??(/^Key[A-Z]$/.test(e.code)?e.code.charCodeAt(3)+32:/^Digit\d$/.test(e.code)?e.code.charCodeAt(5):0);
 const reset=()=>exports?.ferravex_blur();
 window.addEventListener('blur',reset);document.addEventListener('visibilitychange',()=>{if(document.hidden)reset();last=0;});
-window.addEventListener('keydown',e=>{const code=keyCode(e);if(code&&exports){exports.ferravex_key(code,1);e.preventDefault();}});
-window.addEventListener('keyup',e=>{const code=keyCode(e);if(code&&exports){exports.ferravex_key(code,0);e.preventDefault();}});
+window.addEventListener('keydown',e=>{if(editing(e))return;const code=keyCode(e);if(code&&exports){exports.ferravex_key(code,1);e.preventDefault();}});
+window.addEventListener('keyup',e=>{if(editing(e))return;const code=keyCode(e);if(code&&exports){exports.ferravex_key(code,0);e.preventDefault();}});
 const coords=e=>{const r=canvas.getBoundingClientRect();return [e.clientX-r.left,e.clientY-r.top];};
 const buttons=[1,2,3];
 canvas.addEventListener('pointerdown',e=>{canvas.focus();canvas.setPointerCapture(e.pointerId);const [x,y]=coords(e);exports?.ferravex_pointer(x,y,0,0);if(e.pointerType==='touch'){exports?.ferravex_touch(e.pointerId,0,x,y);}if(e.pointerType!=='touch'||exports?.ferravex_touch_mouse())exports?.ferravex_button(buttons[e.button]??1,1);if(exports?.ferravex_grab()&&!document.pointerLockElement)canvas.requestPointerLock()?.catch(()=>{});e.preventDefault();});
@@ -47,6 +48,7 @@ try {
  const response=await fetch(`${game.replaceAll('-','_')}.wasm`);if(!response.ok)throw new Error(`Game download failed (${response.status})`);
  const {instance}=await WebAssembly.instantiate(await response.arrayBuffer(),imports);exports=instance.exports;
  exports.ferravex_init();exports.ferravex_autoplay(new URLSearchParams(location.search).has('autoplay')?1:0);
+ let materialTools=null;if(new URLSearchParams(location.search).has('material-tools')){materialTools=(await import('./material-tools.js')).createMaterialTools(exports);}
  status.textContent='';canvas.focus();
  const loop=time=>{
   if(!active)return;
@@ -62,8 +64,9 @@ try {
   gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
   if(vertices.byteLength>allocated){allocated=Math.max(vertices.byteLength,allocated*2,65536);gl.bufferData(gl.ARRAY_BUFFER,allocated,gl.DYNAMIC_DRAW);}
   gl.bufferSubData(gl.ARRAY_BUFFER,0,vertices);
-  const batches=exports.ferravex_batch_count(),bp=exports.ferravex_batches(),view=new DataView(exports.memory.buffer);
+  const batches=exports.ferravex_batch_count(),bp=exports.ferravex_batches();
   retained.begin(exports);
+  const view=new DataView(exports.memory.buffer);
   const commands=exports.ferravex_command_count(),cp=exports.ferravex_commands();
   for(let i=0;i<commands;i++){
    const kind=view.getUint32(cp+i*8,true),index=view.getUint32(cp+i*8+4,true);
@@ -74,7 +77,8 @@ try {
   }
   canvas.dataset.frames=String(++frames);canvas.dataset.vertices=String(count+retained.vertices);
   canvas.dataset.culled=String(exports.ferravex_culled_count());canvas.dataset.visible=String(exports.ferravex_visible_count());
-  canvas.dataset.drawCalls=String(commands);canvas.dataset.residentMeshes=String(retained.meshes.size);canvas.dataset.uploadBytes=String(vertices.byteLength+retained.uploadBytes);
+  canvas.dataset.drawCalls=String(commands);canvas.dataset.residentMeshes=String(retained.meshes.size);canvas.dataset.uploadBytes=String(count*32+retained.uploadBytes);
+  canvas.dataset.materialError=retained.lastError;materialTools?.update();
   if(running)requestAnimationFrame(loop);
  };
  requestAnimationFrame(loop);

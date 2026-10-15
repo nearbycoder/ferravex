@@ -3,6 +3,7 @@ use ferravex_core::FixedClock;
 type Aabb2 = ferravex_core::collision::Aabb2<Vec2>;
 use ferravex_render::{
     demo::Demo,
+    material::{MaterialOptions, ShaderMaterial, ShaderSource},
     mesh::Mesh3d,
     prelude::*,
     shaders::{LitMaterial, LitSettings},
@@ -376,6 +377,9 @@ struct Piece {
     rotation: Quat,
 }
 struct Scene {
+    pulse: ShaderMaterial,
+    #[cfg(not(target_arch = "wasm32"))]
+    watcher: std::cell::RefCell<Option<ferravex_render::material::MaterialFileWatcher>>,
     stone: Vec<Piece>,
     crystal: Mesh3d,
     tip: Mesh3d,
@@ -452,7 +456,22 @@ impl Scene {
                 }
             }
         }
+        let pulse = ShaderMaterial::new(
+            ShaderSource::fragment(include_str!("../shaders/crystal.frag")),
+            MaterialOptions {
+                blend: ferravex_render::material::BlendMode::Opaque,
+                ..Default::default()
+            },
+        )
+        .expect("crystal material");
+        #[cfg(not(target_arch = "wasm32"))]
+        let watcher = std::env::var_os("FERRAVEX_CRYSTAL_SHADER").map(|path| {
+            ferravex_render::material::MaterialFileWatcher::new(pulse.clone(), None, path.into())
+        });
         Self {
+            pulse,
+            #[cfg(not(target_arch = "wasm32"))]
+            watcher: std::cell::RefCell::new(watcher),
             stone,
             crystal: Mesh3d::frustum(0.32, 0.24, 0.8, MINT, 6),
             tip: Mesh3d::cone(0.25, 0.55, Color::from_rgba(160, 250, 235, 255), 6),
@@ -463,6 +482,12 @@ impl Scene {
         }
     }
     fn draw(&self, game: &Game, material: &LitMaterial, eye: Vec3, time: f32) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(watcher) = self.watcher.borrow_mut().as_mut()
+            && let Err(error) = watcher.poll()
+        {
+            eprintln!("Crystal shader reload: {error}");
+        }
         let settings = LitSettings {
             camera_position: eye,
             light_direction: vec3(-0.3, 0.8, 0.4),
@@ -486,6 +511,9 @@ impl Scene {
             ambient: 1.0,
             ..settings
         });
+        self.pulse
+            .begin([[time, 0., 0., 0.], [0.; 4], [0.; 4], [0.; 4]])
+            .unwrap();
         for (i, &p) in game.crystals.iter().enumerate() {
             if game.collected[i] {
                 continue;
@@ -499,6 +527,7 @@ impl Scene {
                 rotation * Quat::from_rotation_x(std::f32::consts::PI),
             );
         }
+        self.pulse.end();
         for (index, marker) in b"AB".iter().enumerate() {
             let p = at(*marker);
             for bar in 0..=index {

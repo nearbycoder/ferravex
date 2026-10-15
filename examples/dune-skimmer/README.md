@@ -33,3 +33,5 @@ cargo run --release -p dune-skimmer -- --autoplay --smoke-frames 3600 --screensh
 ```
 
 Autoplay uses the same throttle, steering, and boost input path as human play. The headless tests cover complete three-lap progress, forward-only 3D gate apertures, checkpoint recovery and shortcut rejection, obstacle impacts, sand drag, and boost recharge. `--smoke-frames` uses reproducible 60 Hz frame durations, while the game still simulates at 120 Hz. Capture fresh gameplay and result frames when validating the recovered renderer; historical screenshots do not establish its current output.
+
+Exhaust uses the shared material API for small vertex/fragment pulses. `?autoplay&material-tools` opens the optional browser shader editor without changing ordinary game URLs. Failed replacements preserve the last valid GPU program.

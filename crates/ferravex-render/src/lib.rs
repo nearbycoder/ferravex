@@ -12,6 +12,7 @@ pub mod canvas;
 pub mod demo;
 mod font;
 pub mod input;
+pub mod material;
 pub mod mesh;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native;
@@ -269,6 +270,8 @@ struct State {
     batches: Vec<Batch>,
     retained: retained::Frame,
     lighting: Option<shaders::LitSettings>,
+    shader: Option<material::ShaderMaterial>,
+    shader_params: [f32; 16],
     keys: BTreeSet<u32>,
     pressed: BTreeSet<u32>,
     buttons: BTreeSet<u32>,
@@ -305,6 +308,8 @@ impl Default for State {
             batches: Vec::new(),
             retained: retained::Frame::default(),
             lighting: None,
+            shader: None,
+            shader_params: [0.; 16],
             keys: BTreeSet::new(),
             pressed: BTreeSet::new(),
             buttons: BTreeSet::new(),
@@ -434,11 +439,30 @@ pub fn draw_mesh(m: &Mesh) {
 }
 /// Submit an immutable mesh snapshot. Compatible adjacent draws share one instanced call.
 /// Returns false when culled, for invalid transforms or a full frame instance budget.
+pub(crate) fn set_shader(shader: Option<material::ShaderMaterial>, params: [f32; 16]) {
+    edit(|s| {
+        s.shader = shader;
+        s.shader_params = params;
+    });
+}
 pub fn draw_resident(mesh: &retained::ResidentMesh, model: Mat4) -> bool {
     edit(|s| {
-        s.test_visibility(mesh.bounds(), model)
-            && s.retained
-                .record(mesh, model, s.matrix, s.depth, s.lighting)
+        let bounds = s
+            .shader
+            .as_ref()
+            .map_or(mesh.bounds(), |m| m.padded(mesh.bounds()));
+        s.test_visibility(bounds, model)
+            && s.retained.record_style(
+                mesh,
+                model,
+                s.matrix,
+                s.depth,
+                retained::DrawStyle {
+                    light: s.lighting,
+                    material: s.shader.as_ref(),
+                    params: s.shader_params,
+                },
+            )
     })
 }
 pub fn set_visibility(settings: visibility::VisibilitySettings) -> bool {
@@ -457,18 +481,26 @@ pub fn draw_lod(
     state: &mut visibility::LodState,
 ) -> bool {
     edit(|s| {
-        if !s.test_visibility(chain.bounds(), model) {
+        let bounds = s
+            .shader
+            .as_ref()
+            .map_or(chain.bounds(), |m| m.padded(chain.bounds()));
+        if !s.test_visibility(bounds, model) {
             return false;
         }
         let distance = s.eye.map_or(0., |eye| {
             visibility::distance_to_bounds(chain.bounds(), model, eye)
         });
-        s.retained.record(
+        s.retained.record_style(
             chain.select(distance, state),
             model,
             s.matrix,
             s.depth,
-            s.lighting,
+            retained::DrawStyle {
+                light: s.lighting,
+                material: s.shader.as_ref(),
+                params: s.shader_params,
+            },
         )
     })
 }
@@ -976,6 +1008,10 @@ macro_rules! game {
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use super::*;
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_retained_batch_count() -> u32 {
+        read(|s| s.retained.batches.len() as u32)
+    }
     #[unsafe(no_mangle)]
     pub extern "C" fn ferravex_culled_count() -> u32 {
         let s = visibility_stats();
