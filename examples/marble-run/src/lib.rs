@@ -6,6 +6,7 @@ use ferravex_render::{
     mesh::Mesh3d,
     prelude::*,
     shaders::{LitMaterial, LitSettings},
+    visibility::{LodChain, LodState},
 };
 use sim::{CHECKPOINTS, Controls, FINISH, GEMS, OBSTACLES, PLATFORMS, RADIUS, Run};
 
@@ -24,6 +25,8 @@ struct Prop {
     mesh: Mesh3d,
     position: Vec3,
     rotation: Quat,
+    lod: Option<LodChain>,
+    lod_state: std::cell::Cell<LodState>,
 }
 impl Prop {
     fn new(mesh: Mesh3d, position: Vec3) -> Self {
@@ -31,10 +34,33 @@ impl Prop {
             mesh,
             position,
             rotation: Quat::IDENTITY,
+            lod: None,
+            lod_state: Default::default(),
         }
     }
+    fn with_lod(mut self, low: Mesh3d) -> Self {
+        self.lod = Some(
+            LodChain::new(
+                vec![self.mesh.resident().clone(), low.resident().clone()],
+                vec![50.],
+                0.12,
+            )
+            .unwrap(),
+        );
+        self
+    }
     fn draw(&self) {
-        self.mesh.draw(self.position, self.rotation);
+        if let Some(chain) = &self.lod {
+            let mut state = self.lod_state.get();
+            ferravex_render::draw_lod(
+                chain,
+                Mat4::from_rotation_translation(self.rotation, self.position),
+                &mut state,
+            );
+            self.lod_state.set(state);
+        } else {
+            self.mesh.draw(self.position, self.rotation);
+        }
     }
 }
 struct Scene {
@@ -151,19 +177,17 @@ impl Scene {
             let angle = i as f32 * 2.39996;
             let distance = 40. + (i % 5) as f32 * 9.;
             let p = vec3(angle.cos() * distance, -15., -20. + angle.sin() * distance);
-            decoration.push(Prop::new(
-                Mesh3d::cone(
-                    8. + (i % 4) as f32 * 2.,
-                    15. + (i % 3) as f32 * 7.,
-                    if i % 2 == 0 {
-                        rgb(110, 144, 130)
-                    } else {
-                        rgb(131, 155, 139)
-                    },
-                    5,
-                ),
-                p,
-            ));
+            let radius = 8. + (i % 4) as f32 * 2.;
+            let height = 15. + (i % 3) as f32 * 7.;
+            let color = if i % 2 == 0 {
+                rgb(110, 144, 130)
+            } else {
+                rgb(131, 155, 139)
+            };
+            decoration.push(
+                Prop::new(Mesh3d::cone(radius, height, color, 5), p)
+                    .with_lod(Mesh3d::cone(radius, height, color, 3)),
+            );
         }
         let mut marble = Mesh3d::sphere(RADIUS, CREAM, 12, 8);
         for v in &mut marble.mesh.vertices {
