@@ -2,6 +2,8 @@
 //! -Z; orbit eye offsets and vehicle-local chase forward use +Z. No simulation
 //! or input state is changed by damping, obstruction recovery or shake.
 mod collision;
+mod composition;
+pub use composition::{CameraComposer, CameraZone};
 mod follow;
 mod shake;
 #[cfg(test)]

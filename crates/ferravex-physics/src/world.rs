@@ -401,7 +401,12 @@ impl<B: Access> World<B> {
                         let target_pose = tc.pose(target);
                         let target_start = old_origin + old_rotation * tc.local_translation;
                         let relative_start = start - target_start + target_pose.position;
-                        if relative_start.distance_squared(end) < 1e-12 {
+                        let minimum_motion = if matches!(collider.shape, Shape::Ball(_)) {
+                            radius * radius * 0.04
+                        } else {
+                            1e-12
+                        };
+                        if relative_start.distance_squared(end) < minimum_motion {
                             continue;
                         }
                         let swept = Bounds {

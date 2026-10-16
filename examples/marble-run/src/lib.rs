@@ -98,6 +98,24 @@ fn follow_input(position: Vec3) -> Input3 {
         fov_y: 48_f32.to_radians(),
     }
 }
+fn course_composition(level: &level::Level) -> ferravex_engine::camera::CameraComposer<1> {
+    use ferravex_engine::camera::{CameraComposer, CameraZone};
+    CameraComposer::new(
+        [CameraZone {
+            min: level.finish - Vec3::splat(8.),
+            max: level.finish + Vec3::splat(8.),
+            feather: 4.,
+            priority: 1,
+            focus_offset: vec3(0., 0., -0.8),
+            boom_scale: 1.,
+            fov_scale: 1.,
+        }],
+        0.2,
+        1.5,
+        0.18,
+    )
+    .unwrap()
+}
 fn touch_hud(size: Vec2) -> (Vec2, Vec2, f32) {
     let radius = (size.x * 0.15).min(size.y * 0.22).clamp(28., 66.);
     let y = (size.y - radius - 14.).max(radius + 14.);
@@ -454,6 +472,7 @@ async fn game() {
     }
     player_input.set_paused(picker);
     let mut camera = Rig3::new(follow_settings()).unwrap();
+    let mut composition = course_composition(&game.level);
     let mut previous_falls = 0;
     let forward = vec3(-8., 0., -19.).normalize();
     let right = vec3(-forward.z, 0., forward.x);
@@ -476,6 +495,7 @@ async fn game() {
             picker = false;
             clock.reset();
             camera.cut();
+            composition = course_composition(&game.level);
             previous_falls = 0;
             impact_cooldown = 0.;
             sound = GameAudio::new();
@@ -500,6 +520,7 @@ async fn game() {
             record_context = courses::context(content.current());
             clock.reset();
             camera.cut();
+            composition = course_composition(&game.level);
             previous_falls = 0;
             impact_cooldown = 0.;
             sound = GameAudio::new();
@@ -539,6 +560,7 @@ async fn game() {
             game.recover();
             clock.reset();
             camera.cut();
+            composition = course_composition(&game.level);
             sound.cue(Cue::Failure, 0.3);
         }
         let touch_mode = player_input.touch_seen();
@@ -549,6 +571,7 @@ async fn game() {
             game = Run::with_level(game.level.clone());
             clock.reset();
             camera.cut();
+            composition = course_composition(&game.level);
             previous_falls = 0;
             picker = false;
             player_input.set_paused(false);
@@ -613,10 +636,16 @@ async fn game() {
         let rotation = game.previous_rotation.slerp(game.rotation(), frame.alpha);
         if game.falls != previous_falls {
             camera.cut();
+            composition = course_composition(&game.level);
         }
         previous_falls = game.falls;
+        let mut camera_input = follow_input(position);
+        camera_input.target.velocity = game.physics.bodies[game.marble].linvel();
+        let camera_input = composition
+            .update(camera_input, Vec3::ZERO, demo.dt())
+            .unwrap();
         let view = camera
-            .update(demo.dt(), follow_input(position), &NoObstructions)
+            .update(demo.dt(), camera_input, &NoObstructions)
             .expect("valid rolling camera")
             .pose;
         clear_background(SKY);
@@ -773,6 +802,7 @@ async fn game() {
                     game.recover();
                     clock.reset();
                     camera.cut();
+                    composition = course_composition(&game.level);
                     sound.cue(Cue::Failure, 0.3);
                     None
                 }
