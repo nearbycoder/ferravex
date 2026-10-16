@@ -27,3 +27,5 @@ pub mod encounter;
 pub mod vehicle;
 
 pub mod racing;
+
+pub mod environment;

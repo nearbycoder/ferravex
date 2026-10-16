@@ -22,8 +22,8 @@ platform checks are recorded only when actually performed.
 | 12 | Fast-body collision robustness | [PR 35](https://github.com/nearbycoder/ferravex/pull/35), merged |
 | 13 | Breakable mechanisms | [PR 36](https://github.com/nearbycoder/ferravex/pull/36), merged |
 | 14 | Camera anticipation and authored zones | [PR 37](https://github.com/nearbycoder/ferravex/pull/37), merged |
-| 15 | Procedural contact animation | Implemented; locally validated |
-| 16 | Procedural environment builders | Pending |
+| 15 | Procedural contact animation | [PR 38](https://github.com/nearbycoder/ferravex/pull/38), merged |
+| 16 | Procedural environment builders | Implemented; locally validated |
 | 17 | Acoustic zones and adaptive music | Pending |
 | 18 | Editable touch and accessibility layouts | Pending |
 | 19 | Objective and puzzle graphs | Pending |
@@ -247,3 +247,15 @@ Milestone validation: 568 local workspace tests, strict Clippy, all-feature Wasm
 zero-external-dependency audit and a viewed native Strike render smoke passed.
 Tests include limb lengths, unreachable/degenerate poles, support movement/release
 and unchanged authoritative player state under rendered ground correction.
+
+## 16. Shared environment blueprints
+
+`environment::EnvironmentPlan` builds bounded parametric stairs, ramps and bridges
+as original solid-box descriptors. Rendering and collision instantiate the same
+center, half-extents and quaternion; material IDs remain host-defined. Invalid or
+oversized additions are transactional, with at most 1024 pieces and 128 steps/
+bridge spans. Plans allocate at construction and reuse reserved storage. The 3D
+physics lab now has generated stairs and a sloped ramp, with real collision and
+matching low-poly meshes. Local endpoint/bounds/transactional-capacity tests and
+an actual stair ray hit, existing sandbox containment/reset/cap tests, strict
+Clippy and Wasm checks pass. This is parametric construction, not terrain meshing.

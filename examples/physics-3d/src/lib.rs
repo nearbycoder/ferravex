@@ -32,6 +32,7 @@ struct Body {
 
 struct Sandbox {
     physics: PhysicsWorld,
+    terrain: Vec<(Mesh3d, ferravex_play::environment::BoxPiece)>,
     bodies: Vec<Body>,
     sequence: u32,
     links: Vec<JointHandle>,
@@ -44,6 +45,7 @@ impl Sandbox {
     fn new() -> Self {
         let mut sandbox = Self {
             physics: PhysicsWorld::new([0.0, -9.81, 0.0]),
+            terrain: Vec::new(),
             bodies: Vec::new(),
             sequence: 0,
             links: Vec::new(),
@@ -69,6 +71,27 @@ impl Sandbox {
                     .physics
                     .add_box([x, 0.4, z], [0.29, 0.4, 0.29], false);
             }
+        }
+        let mut plan = ferravex_play::environment::EnvironmentPlan::new(16).unwrap();
+        plan.stairs(vec3(5., 0., -5.), 2., 0.2, 0.6, 6, 0).unwrap();
+        plan.ramp(vec3(-7., 0., -5.), 2., 1.2, 3.6, 0.2, 1).unwrap();
+        for &part in plan.pieces() {
+            sandbox.physics.insert(
+                RigidBodyBuilder::fixed().translation(part.center),
+                ColliderBuilder::cuboid(
+                    part.half_extents.x,
+                    part.half_extents.y,
+                    part.half_extents.z,
+                )
+                .rotation(part.rotation),
+            );
+            sandbox.terrain.push((
+                Mesh3d::cuboid(
+                    part.half_extents * 2.,
+                    if part.material == 0 { CONCRETE } else { PAINT },
+                ),
+                part,
+            ));
         }
         // A compact crate stack built at physical scale: one unit is one meter.
         for y in 0..5 {
@@ -400,6 +423,9 @@ async fn game() {
             ..Default::default()
         });
         floor_mesh.draw(vec3(0.0, -0.4, 0.0), Quat::IDENTITY);
+        for (mesh, part) in &sandbox.terrain {
+            mesh.draw(part.center, part.rotation);
+        }
         for z in [-8.0, 8.0] {
             curb_x.draw(vec3(0.0, 0.25, z), Quat::IDENTITY);
         }
@@ -589,6 +615,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn procedural_stair_render_and_collision_share_dimensions() {
+        let s = Sandbox::new();
+        let (mesh, p) = &s.terrain[5];
+        assert_eq!(mesh.mesh.vertices.len(), 24);
+        let origin = p.center + Vec3::Y * 5.;
+        let hit = s
+            .physics
+            .raycast(origin.to_array(), (-Vec3::Y).to_array(), 10.)
+            .unwrap();
+        assert!((hit.distance - (5. - p.half_extents.y)).abs() < 0.01);
+    }
+    #[test]
     fn pulse_wakes_and_lifts_props_and_cannot_be_spammed() {
         let mut sandbox = Sandbox::new();
         assert!(sandbox.pulse(vec3(0., 0.5, 0.)));
@@ -680,9 +718,12 @@ mod tests {
             sandbox.drop_body(i % 2 == 0);
         }
         assert_eq!(sandbox.bodies.len(), MAX_BODIES);
-        assert_eq!(sandbox.physics.bodies.len(), MAX_BODIES + 12);
+        assert_eq!(
+            sandbox.physics.bodies.len(),
+            MAX_BODIES + 12 + sandbox.terrain.len()
+        );
         sandbox = Sandbox::new();
         assert_eq!(sandbox.bodies.len(), 39);
-        assert_eq!(sandbox.physics.bodies.len(), 51);
+        assert_eq!(sandbox.physics.bodies.len(), 51 + sandbox.terrain.len());
     }
 }
