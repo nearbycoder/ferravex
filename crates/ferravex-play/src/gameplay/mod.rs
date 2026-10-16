@@ -52,3 +52,5 @@ pub mod stagger;
 pub mod shield;
 
 pub mod checkpoint;
+
+pub mod trial;
