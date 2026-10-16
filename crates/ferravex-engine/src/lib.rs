@@ -65,3 +65,6 @@ pub mod pool;
 
 /// See [`bitset`] for the system contract and examples.
 pub mod bitset;
+
+/// See [`random`] for the system contract and examples.
+pub mod random;
