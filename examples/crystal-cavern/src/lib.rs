@@ -718,6 +718,18 @@ async fn game() {
     }
     let mut demo = Demo::new();
     let mut sound = GameAudio::new();
+    let mut score = ferravex_render::audio::AdaptiveScore::new(90, 17).unwrap();
+    use ferravex_play::audio::{AcousticProfile, AcousticScene, AcousticZone};
+    let acoustics = AcousticScene::new([AcousticZone {
+        min: vec3(0., -2., 19.),
+        max: vec3(35., 6., 40.),
+        feather: 4.,
+        profile: AcousticProfile {
+            gain: 0.9,
+            low_pass_hz: 3500.,
+        },
+    }])
+    .unwrap();
     ferravex_render::set_quality(ferravex_render::lighting::Quality::Medium);
     let mut game = Game::new();
     let mut view_rig = Rig3::new(Settings3 {
@@ -849,6 +861,8 @@ async fn game() {
                 sound.cue(Cue::Success, 0.65);
             }
         }
+        sound.set_acoustics(acoustics.sample(world(game.position, 0.), false).unwrap());
+        score.update(dt.min(0.25), (game.count() as f32 / 3.).clamp(0., 1.));
         sound.walk(
             world(game.position, 0.),
             true,

@@ -267,3 +267,6 @@ mod tests {
         assert!(Clip::wav(&odd).is_some());
     }
 }
+
+mod environment;
+pub use environment::*;

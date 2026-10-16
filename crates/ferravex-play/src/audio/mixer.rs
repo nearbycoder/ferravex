@@ -62,6 +62,8 @@ pub struct VoiceParams {
     pub priority: u8,
     /// Initial/changed channel gain smoothing. Zero gives sample-exact legacy playback.
     pub ramp_frames: u16,
+    /// One-pole source filter; 24 kHz bypass preserves legacy sample output.
+    pub low_pass_hz: f32,
 }
 impl Default for VoiceParams {
     fn default() -> Self {
@@ -74,12 +76,15 @@ impl Default for VoiceParams {
             bus: Bus::Effects,
             priority: 0,
             ramp_frames: 128,
+            low_pass_hz: 24000.,
         }
     }
 }
 impl VoiceParams {
     fn valid(self) -> bool {
-        self.position.iter().all(|v| v.is_finite())
+        self.low_pass_hz.is_finite()
+            && (80. ..=24000.).contains(&self.low_pass_hz)
+            && self.position.iter().all(|v| v.is_finite())
             && self.gain.is_finite()
             && (0. ..=4.).contains(&self.gain)
             && self.pitch.is_finite()
@@ -115,6 +120,7 @@ struct Voice {
     ramp_left: u16,
     release: Option<u32>,
     age: u64,
+    filtered: [f32; 2],
 }
 struct Slot {
     generation: u64,
@@ -261,6 +267,7 @@ impl Mixer {
             ramp_left: 0,
             release: None,
             age: self.age,
+            filtered: [0.; 2],
         });
         Some(VoiceHandle {
             slot: index as u8,
@@ -401,6 +408,12 @@ impl Mixer {
             let step = f64::from(voice.sound.0.sample_rate) / f64::from(self.sample_rate)
                 * f64::from(voice.params.pitch);
             let len = voice.sound.0.samples.len();
+            let filter = if voice.params.low_pass_hz >= 24000. {
+                1.
+            } else {
+                1. - (-std::f32::consts::TAU * voice.params.low_pass_hz / self.sample_rate as f32)
+                    .exp()
+            };
             for sample in out.iter_mut() {
                 if voice.cursor >= len as f64 {
                     if voice.params.looping {
@@ -427,11 +440,19 @@ impl Mixer {
                     index
                 };
                 let fraction = (voice.cursor - index as f64) as f32;
-                let source = std::array::from_fn::<_, 2, _>(|c| {
+                let mut source = std::array::from_fn::<_, 2, _>(|c| {
                     let a = voice.sound.0.samples[index][c];
                     let b = voice.sound.0.samples[next][c];
                     a + (b - a) * fraction
                 });
+                if filter == 1. {
+                    voice.filtered = source;
+                } else {
+                    for (value, state) in source.iter_mut().zip(&mut voice.filtered) {
+                        *state += (*value - *state) * filter;
+                        *value = *state;
+                    }
+                }
                 let mono = (source[0] + source[1]) * 0.5;
                 let tail = if !voice.params.looping && voice.params.ramp_frames > 0 {
                     (((len as f64 - voice.cursor) / step) / f64::from(voice.params.ramp_frames))

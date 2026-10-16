@@ -6,6 +6,7 @@ pub struct GameAudio {
     travel: f32,
     grounded: bool,
     seed: u32,
+    acoustics: AcousticProfile,
 }
 impl Default for GameAudio {
     fn default() -> Self {
@@ -21,6 +22,7 @@ impl GameAudio {
             travel: 0.,
             grounded: false,
             seed: 0x71da51,
+            acoustics: AcousticProfile::default(),
         }
     }
     pub fn reset(&mut self) {
@@ -31,11 +33,24 @@ impl GameAudio {
         self.travel = 0.;
         self.grounded = false;
     }
+    pub fn set_acoustics(&mut self, profile: AcousticProfile) -> bool {
+        if !profile.valid() {
+            return false;
+        }
+        self.acoustics = profile;
+        true
+    }
     pub fn cue(&mut self, cue: Cue, gain: f32) {
+        let profile = if matches!(cue, Cue::Click) {
+            AcousticProfile::default()
+        } else {
+            self.acoustics
+        };
         play(
             cue,
             VoiceParams {
-                gain,
+                gain: gain * profile.gain,
+                low_pass_hz: profile.low_pass_hz,
                 priority: if matches!(cue, Cue::Fire | Cue::Failure) {
                     5
                 } else {
@@ -55,7 +70,8 @@ impl GameAudio {
             cue,
             VoiceParams {
                 position: position.to_array(),
-                gain,
+                gain: gain * self.acoustics.gain,
+                low_pass_hz: self.acoustics.low_pass_hz,
                 spatial: Spatial::Attenuated {
                     min_distance: 1.,
                     max_distance: 65.,
@@ -110,8 +126,9 @@ impl GameAudio {
             play(
                 Cue::Footstep(surface),
                 VoiceParams {
-                    gain: 0.55,
+                    gain: 0.55 * self.acoustics.gain,
                     pitch,
+                    low_pass_hz: self.acoustics.low_pass_hz,
                     priority: 1,
                     ..Default::default()
                 },
@@ -129,7 +146,8 @@ impl GameAudio {
         }
         let amount = (speed.abs() / max_speed).clamp(0., 1.);
         let params = VoiceParams {
-            gain: 0.12 + amount * 0.28,
+            gain: (0.12 + amount * 0.28) * self.acoustics.gain,
+            low_pass_hz: self.acoustics.low_pass_hz,
             pitch: 0.6 + amount * 2.2,
             looping: true,
             bus: Bus::Ambience,
