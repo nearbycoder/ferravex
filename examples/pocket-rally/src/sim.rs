@@ -191,6 +191,7 @@ pub struct Race {
     ghost_track: Option<ferravex_play::replay::ghost::GhostTrack>,
     lap_ticks: u64,
     pub ticks: u64,
+    driver: ferravex_play::racing::RacingDriver,
 }
 impl Race {
     pub fn new(track: &Track) -> Self {
@@ -207,6 +208,7 @@ impl Race {
             ghost_track: None,
             lap_ticks: 0,
             ticks: 0,
+            driver: ferravex_play::racing::RacingDriver::new(0),
         }
     }
     pub fn finished(&self) -> bool {
@@ -289,25 +291,25 @@ impl Race {
         self.ghost_track = Some(track);
     }
     /// Pure pursuit driver feeds the exact same controls and vehicle model as a human.
-    pub fn autopilot(&self, track: &Track) -> Controls {
-        let (nearest, _) = track.nearest(self.car.pose.position);
-        let speed = self.car.velocity.length();
-        let lookahead = 42. + speed * 0.26;
-        let mut target = nearest;
-        let mut distance = 0.;
-        while distance < lookahead {
-            let next = (target + 1) % SAMPLES;
-            distance += track.points[target].distance(track.points[next]);
-            target = next;
-        }
-        let direction = track.points[target] - self.car.pose.position;
-        let error = (direction.y.atan2(direction.x) - self.car.pose.angle + std::f32::consts::PI)
-            .rem_euclid(std::f32::consts::TAU)
-            - std::f32::consts::PI;
-        let target_speed = 180. - error.abs().min(1.2) * 76.;
+    pub fn autopilot(&mut self, track: &Track) -> Controls {
+        use ferravex_play::racing::*;
+        let control = self
+            .driver
+            .step(
+                &track.points,
+                DriverSettings::default(),
+                DriverInput {
+                    position: self.car.pose.position,
+                    forward: Vec2::from_angle(self.car.pose.angle),
+                    velocity: self.car.velocity,
+                    rivals: &[],
+                },
+                1. / 120.,
+            )
+            .unwrap();
         Controls {
-            throttle: ((target_speed - speed) / 20.).clamp(-1., 1.),
-            steer: (error * 2.).clamp(-1., 1.),
+            throttle: control.throttle,
+            steer: control.steer,
             handbrake: false,
         }
     }
@@ -378,7 +380,8 @@ mod tests {
         let track = Track::new();
         let mut race = Race::new(&track);
         for _ in 0..24_000 {
-            race.step(&track, race.autopilot(&track), 1. / 120.);
+            let controls = race.autopilot(&track);
+            race.step(&track, controls, 1. / 120.);
             if race.finished() {
                 break;
             }

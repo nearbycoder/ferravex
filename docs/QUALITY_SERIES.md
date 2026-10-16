@@ -16,8 +16,8 @@ platform checks are recorded only when actually performed.
 | 6 | Squad tactics and cover selection | [PR 29](https://github.com/nearbycoder/ferravex/pull/29), merged |
 | 7 | Encounter director | [PR 30](https://github.com/nearbycoder/ferravex/pull/30), merged |
 | 8 | Navigation meshes and traversal links | [PR 31](https://github.com/nearbycoder/ferravex/pull/31), merged |
-| 9 | Vehicle and flight controllers | Implemented; locally validated |
-| 10 | Racing AI | Pending |
+| 9 | Vehicle and flight controllers | [PR 32](https://github.com/nearbycoder/ferravex/pull/32), merged |
+| 10 | Racing AI | Implemented; locally validated |
 | 11 | Richer physics materials | Pending |
 | 12 | Fast-body collision robustness | Pending |
 | 13 | Breakable mechanisms | Pending |
@@ -167,3 +167,16 @@ Courier now use these motors with their original handling values. These are
 arcade controllers, not simulated tire suspensions or aerodynamic airframes.
 Local brake/slip/invalid-input/flight-envelope tests and both full race/flight
 ordinary-input completions pass, with strict Clippy and Wasm checks.
+
+## 10. Shared racing decisions
+
+`racing::RacingDriver` follows closed polylines with speed-scaled lookahead,
+corner/curvature speed limits, bounded perceived traffic spacing and seeded passing
+lanes. A stalled driver attempts a short reverse using ordinary controls. Path
+work is bounded to 2048 segments and 32 supplied rivals, without update allocation.
+The host owns perception, road safety, collision, progress and recovery penalties.
+Pocket Rally's actual pilot now consumes this shared driver and still completes
+three laps and a save/ghost roundtrip. Traffic and recovery are shared API features;
+the current single-car example supplies no rivals. Midpoint validation: 555 local
+workspace tests passed, strict workspace Clippy and all-feature Wasm compilation
+passed, and the dependency audit confirms zero external Cargo packages.
