@@ -22,6 +22,7 @@ pub struct Level {
     pub money: u32,
     pub lives: u8,
     pub kill_reward: u32,
+    pub wave_hint: String,
 }
 fn field<'a>(c: &'a Component, name: &str) -> &'a Value {
     c.get(name).expect("schema-validated field")
@@ -198,7 +199,9 @@ impl Level {
             return Err(ContentError::domain("expected one economy component"));
         }
         let c = economy[0].1;
+        let wave_hint = format!("[SPACE]  Protect {} harvests", waves.len());
         Ok(Self {
+            wave_hint,
             path,
             plots: plots.into_iter().map(|(p, _, _, _)| p).collect(),
             autoplay,

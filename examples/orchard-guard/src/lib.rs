@@ -403,7 +403,7 @@ fn hud(g: &Game, pointer: Option<Vec2>, click: bool) -> Option<Action> {
         } else {
             "SEND NEXT WAVE"
         },
-        &format!("[SPACE]  Protect {} harvests", g.level.waves.len()),
+        &g.level.wave_hint,
         !g.active,
         pointer,
     ) && click
