@@ -56,3 +56,6 @@ pub mod scheduler;
 
 /// See [`system_order`] for the system contract and examples.
 pub mod system_order;
+
+/// See [`commands`] for the system contract and examples.
+pub mod commands;
