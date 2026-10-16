@@ -4,9 +4,10 @@ mod game;
 use ferravex_core::FixedClock;
 use ferravex_render::audio::{Cue, GameAudio, Surface};
 use ferravex_render::input::{
-    Binding, InputCode, PlayerInput, Preset,
+    PlayerInput, Preset,
     touch::{Control, Output, Region},
 };
+use ferravex_render::ui::{Align, ButtonStyle, TextStyle, Ui, UiRect, Viewport};
 use ferravex_render::{canvas::Canvas2D, demo::Demo, prelude::*};
 use game::{ARENA, Bullet, COVER, Enemy, Game, Input, Phase, Pickup, Position};
 
@@ -32,9 +33,7 @@ async fn game() {
     let mut started = demo.autoplay;
     let mut paused = false;
     let mut player_input = PlayerInput::preset("neon-swarm", Preset::TopDown);
-    player_input
-        .add_default_binding("confirm", Binding::digital(InputCode::Mouse(1)))
-        .unwrap();
+    let mut hud_ui = Ui::new();
     loop {
         ferravex_render::ui::warm_up_font_sizes(&[14, 15, 18, 22, 30, 32, 56]);
         let canvas = Canvas2D::fit(
@@ -75,18 +74,14 @@ async fn game() {
             ]
         };
         player_input
-            .set_touch_layout(&layout[..if scene_active { 2 } else { 1 }])
+            .set_touch_layout(&layout[..if scene_active { 2 } else { 0 }])
             .unwrap();
         player_input.sample(scene_active && !paused);
         let touch_mode = player_input.touch_seen();
-        let confirm = player_input.pressed("confirm");
-        if !started && confirm {
-            started = true;
-        }
         if player_input.pressed("pause") && started && game.phase == Phase::Playing {
             paused = !paused;
         }
-        if player_input.pressed("restart") || game.phase != Phase::Playing && confirm {
+        if player_input.pressed("restart") {
             game = Game::new();
             clock.reset();
             started = true;
@@ -181,7 +176,10 @@ async fn game() {
                 },
             )
             .unwrap();
-        draw_hud(&game, started, touch_mode);
+        hud_ui.begin(
+            Viewport::fit([screen_width(), screen_height()], [1280., 800.], [0.; 4]).unwrap(),
+        );
+        draw_hud(&mut hud_ui, &game, started, touch_mode);
         if started && !paused && game.phase == Phase::Playing && !touch_mode && !demo.autoplay {
             draw_circle_lines(mouse.x, mouse.y, 7.0, 1.2, CYAN);
             draw_line(mouse.x - 11.0, mouse.y, mouse.x - 5.0, mouse.y, 1.0, CYAN);
@@ -200,33 +198,28 @@ async fn game() {
         }
         if !started {
             overlay(
+                &mut hud_ui,
                 "NEON SWARM",
                 "Contain three waves. Keep moving.",
-                if touch_mode {
-                    "TAP TO START"
-                } else {
-                    "ENTER TO START"
-                },
+                "START",
             );
         } else if paused {
             overlay(
+                &mut hud_ui,
                 "PAUSED",
                 "Take a breath. The swarm can wait.",
-                "ESC TO RESUME",
+                "RESUME",
             );
         } else if game.phase != Phase::Playing {
             let won = game.phase == Phase::Won;
             overlay(
+                &mut hud_ui,
                 if won { "SECTOR SECURED" } else { "SIGNAL LOST" },
                 &format!(
                     "{} hostiles cleared  /  {:.0} seconds",
                     game.kills, game.time
                 ),
-                if touch_mode {
-                    "TAP TO RESTART"
-                } else {
-                    "R TO RESTART"
-                },
+                "RESTART",
             );
         } else if game.wave_banner > 0.0 {
             let alpha = game.wave_banner.min(1.0);
@@ -239,6 +232,19 @@ async fn game() {
                 22,
                 Color::new(CYAN.r, CYAN.g, CYAN.b, alpha),
             );
+        }
+        hud_ui.finish_player(
+            &mut player_input,
+            !started || paused || game.phase != Phase::Playing,
+        );
+        hud_ui.paint();
+        if hud_ui.activated(1) {
+            if game.phase != Phase::Playing {
+                game = Game::new();
+                clock.reset();
+            }
+            started = true;
+            paused = false;
         }
         set_default_camera();
         player_input.draw_settings();
@@ -466,86 +472,208 @@ fn draw_entities(game: &Game) {
     }
 }
 
-fn draw_hud(game: &Game, started: bool, touch: bool) {
-    label("NEON SWARM", 72.0, 57.0, 30, PAPER);
-    label("SECTOR 07 / CONTAINMENT", 73.0, 80.0, 14, MUTED);
+fn hud_label(
+    ui: &mut Ui,
+    position: [f32; 2],
+    width: f32,
+    size: f32,
+    color: Color,
+    align: Align,
+    args: std::fmt::Arguments<'_>,
+) {
+    let [x, y] = position;
+    ui.text_fmt(
+        UiRect {
+            min: [x, y - size * 0.875],
+            size: [width, size],
+        },
+        TextStyle {
+            size,
+            color,
+            align,
+            ..Default::default()
+        },
+        args,
+    )
+    .unwrap();
+}
+fn draw_hud(ui: &mut Ui, game: &Game, started: bool, touch: bool) {
+    hud_label(
+        ui,
+        [72., 57.],
+        380.,
+        30.,
+        PAPER,
+        Align::Left,
+        format_args!("NEON SWARM"),
+    );
+    hud_label(
+        ui,
+        [73., 80.],
+        400.,
+        14.,
+        MUTED,
+        Align::Left,
+        format_args!("SECTOR 07 / CONTAINMENT"),
+    );
     for wave in 1..=3 {
-        let x = 600.0 + (wave - 1) as f32 * 40.0;
-        draw_circle(x, 54.0, 5.0, if wave <= game.wave { CYAN } else { LINE });
+        ui.panel(
+            UiRect {
+                min: [595. + (wave - 1) as f32 * 40., 49.],
+                size: [10.; 2],
+            },
+            if wave <= game.wave { CYAN } else { LINE },
+        )
+        .unwrap();
     }
     if started {
-        label(
-            &format!("{} REMAIN", game.remaining_enemies()),
-            596.0,
-            80.0,
-            14,
+        hud_label(
+            ui,
+            [596., 80.],
+            260.,
+            14.,
             MUTED,
+            Align::Left,
+            format_args!("{} REMAIN", game.remaining_enemies()),
         );
     }
-    let hp_color = if game.health <= 30 { CORAL } else { CYAN };
-    draw_line(1088.0, 51.0, 1104.0, 51.0, 3.0, hp_color);
-    draw_line(1096.0, 43.0, 1096.0, 59.0, 3.0, hp_color);
-    label(&format!("{:03}", game.health), 1120.0, 61.0, 32, PAPER);
+    let hp = if game.health <= 30 { CORAL } else { CYAN };
+    ui.panel(
+        UiRect {
+            min: [1088., 49.5],
+            size: [16., 3.],
+        },
+        hp,
+    )
+    .unwrap();
+    ui.panel(
+        UiRect {
+            min: [1094.5, 43.],
+            size: [3., 16.],
+        },
+        hp,
+    )
+    .unwrap();
+    hud_label(
+        ui,
+        [1120., 61.],
+        110.,
+        32.,
+        PAPER,
+        Align::Left,
+        format_args!("{:03}", game.health),
+    );
     for pip in 0..10 {
-        draw_rectangle(
-            1088.0 + pip as f32 * 12.0,
-            76.0,
-            8.0,
-            3.0,
-            if game.health > pip * 10 {
-                hp_color
-            } else {
-                LINE
+        ui.panel(
+            UiRect {
+                min: [1088. + pip as f32 * 12., 76.],
+                size: [8., 3.],
             },
-        );
+            if game.health > pip * 10 { hp } else { LINE },
+        )
+        .unwrap();
     }
-    let ready = game.dash_cooldown <= 0.0;
-    label(
-        if ready { "DASH READY" } else { "DASH" },
-        73.0,
-        756.0,
-        15,
+    let ready = game.dash_cooldown <= 0.;
+    hud_label(
+        ui,
+        [73., 756.],
+        180.,
+        15.,
         if ready { CYAN } else { MUTED },
+        Align::Left,
+        format_args!("{}", if ready { "DASH READY" } else { "DASH" }),
     );
-    draw_rectangle(73.0, 768.0, 108.0, 2.0, LINE);
-    draw_rectangle(
-        73.0,
-        768.0,
-        108.0 * (1.0 - game.dash_cooldown / 1.7),
-        2.0,
+    ui.panel(
+        UiRect {
+            min: [73., 768.],
+            size: [108., 2.],
+        },
+        LINE,
+    )
+    .unwrap();
+    ui.panel(
+        UiRect {
+            min: [73., 768.],
+            size: [108. * (1. - game.dash_cooldown / 1.7).clamp(0., 1.), 2.],
+        },
         CYAN,
-    );
-    let controls = if touch {
-        "LEFT: MOVE     RIGHT: DASH     AUTO FIRE"
-    } else {
-        "WASD  MOVE       MOUSE  FIRE       SPACE  DASH       ESC  PAUSE"
-    };
-    let width = measure_text(controls, None, 14, 1.0).width;
-    label(controls, 640.0 - width / 2.0, 759.0, 14, MUTED);
-    label(
-        &format!("{:02} CLEARED", game.kills),
-        1097.0,
-        757.0,
-        15,
+    )
+    .unwrap();
+    hud_label(
+        ui,
+        [265., 759.],
+        750.,
+        14.,
         MUTED,
+        Align::Center,
+        format_args!(
+            "{}",
+            if touch {
+                "LEFT: MOVE     RIGHT: DASH     AUTO FIRE"
+            } else {
+                "WASD  MOVE     MOUSE  FIRE     SPACE  DASH     ESC  PAUSE"
+            }
+        ),
+    );
+    hud_label(
+        ui,
+        [1097., 757.],
+        160.,
+        15.,
+        MUTED,
+        Align::Left,
+        format_args!("{:02} CLEARED", game.kills),
     );
 }
-
-fn overlay(title: &str, detail: &str, action: &str) {
-    draw_rectangle(
-        0.0,
-        100.0,
-        1280.0,
-        626.0,
+fn overlay(ui: &mut Ui, title: &str, detail: &str, action: &str) {
+    ui.panel(
+        UiRect {
+            min: [0., 100.],
+            size: [1280., 626.],
+        },
         Color::new(0.025, 0.055, 0.07, 0.82),
+    )
+    .unwrap();
+    ui.panel(
+        UiRect {
+            min: [602., 323.],
+            size: [76., 3.],
+        },
+        CYAN,
+    )
+    .unwrap();
+    hud_label(
+        ui,
+        [80., 386.],
+        1120.,
+        52.,
+        PAPER,
+        Align::Center,
+        format_args!("{title}"),
     );
-    draw_line(602.0, 323.0, 678.0, 323.0, 3.0, CYAN);
-    for (text, y, size, color) in [
-        (title, 386.0, 52, PAPER),
-        (detail, 430.0, 21, MUTED),
-        (action, 495.0, 18, CYAN),
-    ] {
-        let width = measure_text(text, None, size, 1.0).width;
-        label(text, 640.0 - width * 0.5, y, size, color);
-    }
+    hud_label(
+        ui,
+        [80., 430.],
+        1120.,
+        21.,
+        MUTED,
+        Align::Center,
+        format_args!("{detail}"),
+    );
+    ui.button(
+        1,
+        UiRect {
+            min: [470., 468.],
+            size: [340., 52.],
+        },
+        action,
+        true,
+        ButtonStyle {
+            fill: FLOOR,
+            ink: CYAN,
+            focus: CYAN,
+            ..Default::default()
+        },
+    )
+    .unwrap();
 }

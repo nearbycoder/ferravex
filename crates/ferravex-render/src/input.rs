@@ -9,7 +9,7 @@ pub use player::{CaptureDevice, ControlsStatus, PlayerInput};
 pub use presets::Preset;
 mod storage;
 pub use platform::PadState;
-pub(crate) use platform::{PlatformEvent, PlatformInput};
+pub(crate) use platform::{MAX_EVENTS, PlatformEvent, PlatformInput};
 pub use storage::StorageError;
 pub fn logical_touches() -> Vec<Touch> {
     touches()

@@ -205,6 +205,7 @@ async fn game() {
     let mut browser_playing = active;
     sync_browser_ui(active);
     let mut controls = Controls::default();
+    let mut hud_ui = ferravex_render::ui::Ui::new();
     let mut sound = GameAudio::new();
     let mut was_reload = 0;
     let mut clock = FixedClock::new(TICK_RATE as f64, 8);
@@ -555,7 +556,16 @@ async fn game() {
             } else {
                 0
             };
+        hud_ui.begin(
+            ferravex_render::ui::Viewport::fit(
+                [screen_width(), screen_height()],
+                [screen_width(), screen_height()],
+                [0.; 4],
+            )
+            .unwrap(),
+        );
         hud::overlay(
+            &mut hud_ui,
             &local,
             hud::HudState {
                 active,
@@ -572,11 +582,14 @@ async fn game() {
         if active {
             controls.draw_touch();
             if controls.input.held("roster") {
-                hud::roster(&remote, local.id);
+                hud::roster(&mut hud_ui, &remote, local.id);
             }
-        } else if (hud::menu(network, has_played) || controls.input.pressed("confirm"))
-            && !controls.input.controls_open()
-        {
+        } else {
+            hud::menu(&mut hud_ui, network, has_played);
+        }
+        hud_ui.finish_player(&mut controls.input, !active);
+        hud_ui.paint();
+        if !active && hud_ui.activated(1) {
             active = true;
             has_played = true;
             controls.touch_mode |= !ferravex_render::input::logical_touches().is_empty();

@@ -86,3 +86,6 @@ pub fn stat(x: f32, y: f32, label: &str, value: &str) {
     draw_text(label, x, y, 14.0, MUTED);
     draw_text(value, x, y + 24.0, 25.0, INK);
 }
+
+mod shared;
+pub use shared::*;

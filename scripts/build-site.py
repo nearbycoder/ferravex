@@ -30,6 +30,7 @@ DOCS = [
  ('effects','Particles, trails and effects','Engine','docs/EFFECTS.md'),
  ('ai','AI and navigation','Engine','docs/AI.md'),
  ('scenes','Data-driven scenes and prefabs','Engine','docs/SCENES.md'),
+ ('ui','HUD and menus','Engine','docs/UI.md'),
  ('contact-stability','Contacts and sleep islands','Engine','docs/CONTACT_STABILITY.md'),
  ('joints-and-compounds','Joints and compound bodies','Engine','docs/JOINTS_AND_COMPOUNDS.md'),
  ('rigid-bodies','Rotational rigid bodies','Engine','crates/ferravex-physics/README.md'),
