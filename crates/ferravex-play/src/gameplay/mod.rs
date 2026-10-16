@@ -54,3 +54,5 @@ pub mod shield;
 pub mod checkpoint;
 
 pub mod trial;
+
+pub mod platforms;
