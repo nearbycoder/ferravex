@@ -42,6 +42,7 @@ struct Game {
     checkpoint_lit: bool,
     won: bool,
     deaths: u32,
+    score: ferravex_play::gameplay::combo::ScoreChain,
     jumps: u32,
     elapsed: f32,
     respawn_flash: f32,
@@ -86,6 +87,7 @@ impl Game {
             checkpoint_lit: false,
             won: false,
             deaths: 0,
+            score: ferravex_play::gameplay::combo::ScoreChain::new(5., 2, 4).unwrap(),
             jumps: 0,
             elapsed: 0.0,
             respawn_flash: 0.0,
@@ -108,6 +110,7 @@ impl Game {
     fn respawn(&mut self) {
         self.motor = Character::new(feet(self.checkpoint));
         self.deaths += 1;
+        self.score.break_chain();
         self.respawn_flash = 0.6;
     }
 
@@ -116,6 +119,7 @@ impl Game {
             return;
         }
         self.elapsed += dt;
+        self.score.advance(dt).unwrap();
         self.respawn_flash = (self.respawn_flash - dt).max(0.0);
         // A side platform moves before the motor, so standing passengers inherit its pose.
         self.platforms[5].x = 770.0 + (self.elapsed * 1.2).sin() * 28.0;
@@ -163,8 +167,11 @@ impl Game {
         }
         let body = self.body();
         for (position, collected) in &mut self.embers {
-            if body.overlaps(&Rect::new(position.x - 12.0, position.y - 12.0, 24.0, 24.0)) {
+            if !*collected
+                && body.overlaps(&Rect::new(position.x - 12.0, position.y - 12.0, 24.0, 24.0))
+            {
                 *collected = true;
+                self.score.award(100);
             }
         }
         if self.position().x > 1380.0 && self.position().x < 1490.0 && self.motor.grounded {
@@ -589,6 +596,17 @@ async fn game() {
             "03 / THE FURNACE"
         };
         label(zone, 34.0, 72.0, 15.0, Color::from_hex(0xa3ab91));
+        label(
+            &format!(
+                "{} POINTS / x{}",
+                game.score.total(),
+                game.score.multiplier()
+            ),
+            850.,
+            72.,
+            15.,
+            ORANGE,
+        );
         diamond(vec2(WIDTH - 121.0, 38.0), 8.0, ORANGE);
         label(
             &format!("{collected} / {}", game.embers.len()),
@@ -632,8 +650,9 @@ async fn game() {
             label("THE LIGHT CARRIES ON", 422.0, 280.0, 33.0, CREAM);
             label(
                 &format!(
-                    "{collected} embers    /    {:.1}s    /    {} falls",
-                    game.elapsed, game.deaths
+                    "{collected} embers / {} points / {} falls",
+                    game.score.total(),
+                    game.deaths
                 ),
                 432.0,
                 330.0,
@@ -792,5 +811,26 @@ mod tests {
         assert!(game.jumps >= 7);
         assert!(game.embers.iter().any(|(_, found)| *found));
         assert_eq!(game.deaths, 0);
+    }
+}
+
+#[cfg(test)]
+mod collectible_score_tests {
+    use super::*;
+    #[test]
+    fn each_ember_awards_once_and_falls_break_only_the_chain() {
+        let mut g = Game::new();
+        g.embers = vec![
+            (vec2(102., 540.), false),
+            (vec2(108., 540.), false),
+            (vec2(114., 540.), false),
+        ];
+        g.update(Input::default(), 1. / 120.);
+        assert_eq!(g.score.total(), 400);
+        g.update(Input::default(), 1. / 120.);
+        assert_eq!(g.score.total(), 400);
+        g.respawn();
+        assert_eq!(g.score.chain(), 0);
+        assert_eq!(g.score.total(), 400);
     }
 }

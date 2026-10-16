@@ -22,3 +22,5 @@ The example supplies a lightweight character controller because the engine does 
 ## Checks
 
 `cargo test -p emberline` covers floor collision, coyote/buffered jumping, checkpoint hazard respawn, and complete autoplay progression. Also run `cargo clippy -p emberline --all-targets -- -D warnings` and `cargo check -p emberline --target wasm32-unknown-unknown`, then exercise controls and capture a fresh screenshot with the restored runtime. Historical backend results are not current recovery validation.
+
+Optional embers now build a five-second score chain, with multipliers every two pickups up to x4. Each ember scores once. Falling breaks the chain while preserving collected embers and total score.
