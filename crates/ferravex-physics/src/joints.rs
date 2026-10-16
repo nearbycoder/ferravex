@@ -66,6 +66,31 @@ impl JointMotor {
             && self.max_speed <= 1000.
     }
 }
+/// Conservative sums of absolute constraint row forces/torques, avoiding
+/// cancellation between opposing rows. Units are newtons and newton-meters.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct JointLoad {
+    pub force: f32,
+    pub torque: f32,
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BreakLimits {
+    pub force: f32,
+    pub torque: f32,
+}
+impl BreakLimits {
+    fn valid(self) -> bool {
+        [self.force, self.torque]
+            .iter()
+            .all(|v| v.is_finite() && (0. ..=1e12).contains(v))
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct JointBreakEvent {
+    pub joint: JointHandle,
+    pub bodies: [RigidBodyHandle; 2],
+    pub load: JointLoad,
+}
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct JointDesc {
     pub kind: JointKind,
@@ -78,6 +103,7 @@ pub struct JointDesc {
     /// Twist range relative to the captured orientation, in radians [-pi, pi].
     pub limits: Option<[f32; 2]>,
     pub motor: Option<JointMotor>,
+    pub break_limits: Option<BreakLimits>,
 }
 impl JointDesc {
     pub fn new(kind: JointKind) -> Self {
@@ -90,6 +116,7 @@ impl JointDesc {
             enabled: true,
             limits: None,
             motor: None,
+            break_limits: None,
         }
     }
     pub(crate) fn valid(self, planar: bool) -> bool {
@@ -125,6 +152,7 @@ impl JointDesc {
                     && lo >= -std::f32::consts::PI
                     && hi <= std::f32::consts::PI
             })
+            && self.break_limits.is_none_or(BreakLimits::valid)
             && self.motor.is_none_or(|m| hinge && m.valid())
     }
 }
@@ -142,8 +170,13 @@ pub struct Joint {
     pub(crate) revisions: [u64; 2],
     pub(crate) dt: f32,
     pub(crate) cache: [CachedRow; 8],
+    pub(crate) load: JointLoad,
+    pub(crate) peak: JointLoad,
 }
 impl Joint {
+    pub fn peak_load(&self) -> JointLoad {
+        self.peak
+    }
     pub fn bodies(&self) -> [RigidBodyHandle; 2] {
         [self.a, self.b]
     }
