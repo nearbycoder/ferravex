@@ -50,3 +50,7 @@ limits separately.
 
 See the [thirty engine improvements](../../docs/ENGINE_30.md) for asset,
 profiling, replay, scheduling, storage and lifecycle APIs.
+
+Run `cargo run -p ferravex-engine --example engine_pipeline --all-features --offline --locked`
+for a headless ECS composition with tick scheduling, deferred commands, frame events,
+snapshot history and diagnostics.
