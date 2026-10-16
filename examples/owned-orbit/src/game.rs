@@ -56,6 +56,9 @@ pub struct Game {
     pub lives: u32,
     pub ball_save: f32,
     pub saves: u32,
+    pub serve_charge: ferravex_engine::gameplay::charge::ChargeAction,
+    pub serve_power: f32,
+    charged_volley: bool,
     pub sector: u32,
     pub score: u32,
     pub chain: ferravex_engine::gameplay::combo::ScoreChain,
@@ -109,6 +112,10 @@ impl Game {
             lives: 3,
             ball_save: 0.,
             saves: 0,
+            serve_charge: ferravex_engine::gameplay::charge::ChargeAction::new(0., 1.5, 0.)
+                .unwrap(),
+            serve_power: 0.,
+            charged_volley: false,
             sector: 1,
             score: 0,
             chain: ferravex_engine::gameplay::combo::ScoreChain::new(4., 3, 4).unwrap(),
@@ -214,13 +221,16 @@ impl Game {
             .set_position([self.paddle_x, PADDLE_Y])
             .expect("finite paddle");
         if self.phase == Phase::Ready {
+            self.serve_charge.step(dt, true).unwrap();
             self.ball = [self.paddle_x, PADDLE_Y - 8.0 - BALL_RADIUS - 1.0];
             if input.launch {
+                self.serve_power = self.serve_charge.step(0., false).unwrap().unwrap_or(0.);
+                self.charged_volley = self.serve_power >= 0.95;
                 self.phase = Phase::Playing;
                 self.launch_count += 1;
                 self.ball_save = 2.5;
                 let angle = 0.24 + (self.launch_count % 3) as f32 * 0.09;
-                let speed = self.speed();
+                let speed = self.speed() * (1. + self.serve_power * 0.2);
                 self.velocity = [angle.sin() * speed, -angle.cos() * speed];
             } else {
                 return;
@@ -239,6 +249,7 @@ impl Game {
         if self.ball[1] > 677.0 && self.ball_save > 0. {
             self.ball_save = 0.;
             self.saves += 1;
+            self.charged_volley = false;
             self.ball = [self.paddle_x, PADDLE_Y - 8. - BALL_RADIUS - 1.];
             let speed = self.speed();
             self.velocity = [speed * 0.24, -speed * (1. - 0.24_f32.powi(2)).sqrt()];
@@ -368,6 +379,7 @@ impl Game {
                     horizontal * next_speed,
                     -(1.0 - horizontal * horizontal).sqrt() * next_speed,
                 ];
+                self.charged_volley = false;
                 self.chain.break_chain();
                 self.emit(self.ball, [0.35, 0.85, 0.79, 1.0], 5);
             } else {
@@ -395,7 +407,9 @@ impl Game {
     }
     fn hit_block(&mut self, index: usize) {
         let block = &mut self.blocks[index];
-        block.health -= 1;
+        block.health = block
+            .health
+            .saturating_sub(if self.charged_volley { 2 } else { 1 });
         block.flash = 0.13;
         let position = block.center;
         let destroyed = block.health == 0;
@@ -696,5 +710,37 @@ mod ball_save_tests {
         g.velocity = [0., 325.];
         g.tick(Input::default(), 1. / 120.);
         assert_eq!(g.lives, 1);
+    }
+}
+
+#[cfg(test)]
+mod charge_serve_tests {
+    use super::*;
+    #[test]
+    fn waiting_charges_a_real_serve_and_full_power_breaks_reinforced_panels() {
+        let mut g = Game::new();
+        g.sector = 2;
+        g.build_sector();
+        for _ in 0..240 {
+            g.tick(Input::default(), 1. / 120.);
+        }
+        assert_eq!(g.serve_charge.power(), 1.);
+        g.tick(
+            Input {
+                launch: true,
+                ..Input::default()
+            },
+            1. / 120.,
+        );
+        assert!(g.charged_volley);
+        assert_eq!(g.serve_power, 1.);
+        assert!((g.velocity[0].hypot(g.velocity[1]) - g.speed() * 1.2).abs() < 0.01);
+        assert_eq!(g.blocks[0].health, 2);
+        g.hit_block(0);
+        assert_eq!(g.blocks[0].health, 0);
+        g.ball = [g.paddle_x, PADDLE_Y - 8. - BALL_RADIUS - 1.];
+        g.velocity = [0., 350.];
+        g.tick(Input::default(), 1. / 120.);
+        assert!(!g.charged_volley);
     }
 }

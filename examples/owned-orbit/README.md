@@ -37,3 +37,5 @@ Panel clears roll a seeded 25% capsule reward with a guarantee by the sixth elig
 Capsules within 100 pixels bend toward the paddle using the shared magnet rule. This rewards steering toward a drop without requiring a pixel-perfect catch; distant or already-missed drops keep falling.
 
 Each real launch has one 2.5-second ball save, shown in the HUD. An early drain returns the ball above the paddle without spending a life; the rescue consumes the window immediately. Later misses retain the normal three-life loss rule.
+
+While ready, a serve charges automatically over 1.5 seconds. Launch immediately for normal pace or wait for up to 20% more speed. A full charge breaks reinforced panels in one hit until the first paddle return. The ready overlay shows charge; the same tap-to-launch controls work on every host.
