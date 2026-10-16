@@ -38,6 +38,18 @@ impl Replay {
         self.frames.push(frame);
         true
     }
+    /// Exact tick lookup in the original FXRP0001 input stream.
+    pub fn frame_at(&self, tick: u64) -> Option<&Frame> {
+        self.frames
+            .binary_search_by_key(&tick, |f| f.tick)
+            .ok()
+            .map(|i| &self.frames[i])
+    }
+    /// Most recent input at or before a tick; gaps do not invent new frames.
+    pub fn frame_before_or_at(&self, tick: u64) -> Option<&Frame> {
+        let end = self.frames.partition_point(|f| f.tick <= tick);
+        end.checked_sub(1).map(|i| &self.frames[i])
+    }
     pub fn frames(&self) -> &[Frame] {
         &self.frames
     }
@@ -186,5 +198,27 @@ mod tests {
                 .len(),
             0
         );
+    }
+}
+
+#[cfg(test)]
+mod seek_tests {
+    use super::*;
+    #[test]
+    fn sparse_ticks_and_u64_boundaries() {
+        let mut r = Replay::default();
+        assert!(r.frame_before_or_at(0).is_none());
+        for tick in [2, 10, u64::MAX] {
+            assert!(r.record(Frame {
+                tick,
+                input: InputFrame::default(),
+                state_hash: tick
+            }));
+        }
+        assert!(r.frame_at(3).is_none());
+        assert!(r.frame_before_or_at(1).is_none());
+        assert_eq!(r.frame_before_or_at(9).unwrap().tick, 2);
+        assert_eq!(r.frame_at(10).unwrap().tick, 10);
+        assert_eq!(r.frame_before_or_at(u64::MAX).unwrap().tick, u64::MAX);
     }
 }
