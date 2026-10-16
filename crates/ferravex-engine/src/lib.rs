@@ -86,3 +86,6 @@ pub mod work_budget;
 
 /// See [`smoothing`] for the system contract and examples.
 pub mod smoothing;
+
+/// See [`spatial`] for the system contract and examples.
+pub mod spatial;
