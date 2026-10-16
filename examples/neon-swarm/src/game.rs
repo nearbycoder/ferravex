@@ -1,5 +1,6 @@
 pub use ferravex_core::collision::segment_circle;
 use ferravex_core::{Entity, World};
+use ferravex_play::ability::{AbilityBank, AbilitySpec, ResourcePool};
 use ferravex_play::particles::{
     Emitter, EmitterDesc, EmitterTransform, ParticleDesc, ParticleMotion, ParticlePool,
 };
@@ -70,7 +71,8 @@ pub struct Game {
     pub particles: ParticlePool,
     sparks: Emitter,
     ai: crate::ai::SwarmAi,
-    fire_cooldown: f32,
+    abilities: AbilityBank<2>,
+    resource: ResourcePool,
     spawn_timer: f32,
     remaining: u32,
     spawn_index: u32,
@@ -132,7 +134,23 @@ impl Game {
                 0x4e454f4e,
             )
             .unwrap(),
-            fire_cooldown: 0.0,
+            abilities: AbilityBank::new(
+                1,
+                &[
+                    AbilitySpec {
+                        charges: 1,
+                        recharge_seconds: 0.12,
+                        cost: 0.,
+                    },
+                    AbilitySpec {
+                        charges: 1,
+                        recharge_seconds: 1.7,
+                        cost: 0.,
+                    },
+                ],
+            )
+            .unwrap(),
+            resource: ResourcePool::new(0., 0., 0.).unwrap(),
             spawn_timer: 0.8,
             remaining: 8,
             spawn_index: 0,
@@ -188,8 +206,9 @@ impl Game {
             return;
         }
         self.time += dt;
-        self.fire_cooldown = (self.fire_cooldown - dt).max(0.0);
-        self.dash_cooldown = (self.dash_cooldown - dt).max(0.0);
+        self.abilities.advance(dt).unwrap();
+        self.resource.advance(dt).unwrap();
+        self.dash_cooldown = self.abilities.remaining(1).unwrap();
         self.dash_time = (self.dash_time - dt).max(0.0);
         self.hurt_time = (self.hurt_time - dt).max(0.0);
         self.muzzle_time = (self.muzzle_time - dt).max(0.0);
@@ -198,14 +217,14 @@ impl Game {
         if direction.length_squared() > 0.0 {
             self.facing = direction;
         }
-        if input.dash && self.dash_cooldown == 0.0 {
+        if input.dash && self.abilities.activate(1, &mut self.resource, true).is_ok() {
             self.dash_direction = if input.movement.length_squared() > 0.01 {
                 input.movement.normalize()
             } else {
                 self.facing
             };
             self.dash_time = 0.18;
-            self.dash_cooldown = 1.7;
+            self.dash_cooldown = self.abilities.remaining(1).unwrap();
         }
         let velocity = if self.dash_time > 0.0 {
             self.dash_direction * 700.0
@@ -224,7 +243,7 @@ impl Game {
             self.velocity = ((self.player - previous_player) / dt - self.recoil)
                 .clamp_length_max(self.tuning.motion.max_speed);
         }
-        let shot = input.fire && self.fire_cooldown == 0.0;
+        let shot = input.fire && self.abilities.activate(0, &mut self.resource, true).is_ok();
         if shot {
             self.world.spawn((
                 Position(self.player + self.facing * 24.0),
@@ -233,7 +252,6 @@ impl Game {
                     remaining: 1.4,
                 },
             ));
-            self.fire_cooldown = 0.12;
             self.muzzle_time = 0.055;
             self.shots += 1;
         }

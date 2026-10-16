@@ -8,8 +8,8 @@ platform checks are recorded only when actually performed.
 
 | # | Engine system | State |
 | --- | --- | --- |
-| 1 | Gameplay tuning profiles | Implemented; locally validated |
-| 2 | Ability system | Pending |
+| 1 | Gameplay tuning profiles | [PR 24](https://github.com/nearbycoder/ferravex/pull/24), merged |
+| 2 | Ability system | Implemented; locally validated |
 | 3 | Attributes and status effects | Pending |
 | 4 | Combat feedback controller | Pending |
 | 5 | Attack timelines and telegraphs | Pending |
@@ -50,3 +50,16 @@ not silently add aim/jump behavior to games that do not implement it.
 Local checks: shared profile serialization/invalid-edit/rules/record-identity
 regressions, real Rally acceleration and existing complete-race tests, existing
 Neon progression, strict Clippy and native/Wasm compilation of changed consumers.
+
+## 2. Abilities and resource reservations
+
+`ferravex_play::ability` / `ferravex_engine::ability` offers fixed-capacity ability
+banks (up to 64 configured slots), sequential charge recharge, resource costs and
+regeneration. Instant activation is atomic. Begin/commit/cancel supports delayed
+abilities, single-use reservations and exactly-once refunds. Hosts supply enabled
+conditions, unique generational owner IDs and the actual gameplay effect; tokens
+must stay with their originating owner/bank/resource account. Timers use simulation
+time and charging work is bounded by slots, without per-update allocation.
+Neon Swarm's actual shot and dash actions now use this system; its HUD reads the
+shared dash timer. Cancellation, denied activation, resource conservation, stale
+and foreign tokens, charge saturation and clock partitioning have local regressions.
