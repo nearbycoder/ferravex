@@ -78,6 +78,7 @@ pub struct Game {
     pub kills: u32,
     pub score: ferravex_play::gameplay::combo::ScoreChain,
     pub shots: u32,
+    pub magazine: ferravex_play::gameplay::magazine::Magazine,
     pub progression: ferravex_play::gameplay::progression::Progression,
     weapon_upgrades: ferravex_play::gameplay::upgrades::Upgrades<1>,
     pub dash_cooldown: f32,
@@ -123,6 +124,7 @@ impl Game {
             kills: 0,
             score: ferravex_play::gameplay::combo::ScoreChain::new(3.5, 3, 5).unwrap(),
             shots: 0,
+            magazine: ferravex_play::gameplay::magazine::Magazine::new(12, 12, 0.65).unwrap(),
             progression: ferravex_play::gameplay::progression::Progression::new(50, 30, 4).unwrap(),
             weapon_upgrades: ferravex_play::gameplay::upgrades::Upgrades::new([3]).unwrap(),
             dash_cooldown: 0.0,
@@ -236,6 +238,14 @@ impl Game {
         self.time += dt;
         self.score.advance(dt).unwrap();
         self.shield.advance(dt).unwrap();
+        self.magazine.advance(dt).unwrap();
+        if self.magazine.loaded() == 0 && !self.magazine.reloading() {
+            // Energy cells replenish automatically; reload still costs quiet time.
+            if self.magazine.reserve() == 0 {
+                self.magazine.add_reserve(12).unwrap();
+            }
+            self.magazine.reload();
+        }
         self.abilities.advance(dt).unwrap();
         self.resource.advance(dt).unwrap();
         self.dash_cooldown = self.abilities.remaining(1).unwrap();
@@ -273,7 +283,11 @@ impl Game {
             self.velocity = ((self.player - previous_player) / dt - self.recoil)
                 .clamp_length_max(self.tuning.motion.max_speed);
         }
-        let shot = input.fire && self.abilities.activate(0, &mut self.resource, true).is_ok();
+        let shot = input.fire
+            && self.magazine.loaded() > 0
+            && !self.magazine.reloading()
+            && self.abilities.activate(0, &mut self.resource, true).is_ok()
+            && self.magazine.fire();
         if shot {
             self.world.spawn((
                 Position(self.player + self.facing * 24.0),
@@ -920,5 +934,34 @@ mod shield_loop_tests {
         assert_eq!(g.shield.value(), 20.);
         assert_eq!(g.health, 100);
         assert_eq!(Game::new().shield.value(), 20.);
+    }
+}
+
+#[cfg(test)]
+mod magazine_loop_tests {
+    use super::*;
+    #[test]
+    fn continuous_fire_cycles_energy_cells_without_spending_denied_shots() {
+        let mut g = Game::new();
+        g.remaining = 0;
+        g.intermission = 100.;
+        let input = Input {
+            fire: true,
+            aim: g.player + Vec2::X,
+            ..Input::default()
+        };
+        let mut observed_reload = false;
+        for _ in 0..120 * 5 {
+            let before = g.shots;
+            let reloading = g.magazine.reloading();
+            g.update(input, 1. / 120.);
+            if reloading && g.magazine.reloading() {
+                assert_eq!(g.shots, before);
+            }
+            observed_reload |= g.magazine.reloading();
+        }
+        assert!(observed_reload);
+        assert!(g.shots > 24);
+        assert!(g.magazine.loaded() <= 12);
     }
 }
