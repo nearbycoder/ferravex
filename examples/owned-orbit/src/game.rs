@@ -54,6 +54,8 @@ pub struct Game {
     pub trail: Vec<[f32; 2]>,
     pub phase: Phase,
     pub lives: u32,
+    pub ball_save: f32,
+    pub saves: u32,
     pub sector: u32,
     pub score: u32,
     pub chain: ferravex_engine::gameplay::combo::ScoreChain,
@@ -105,6 +107,8 @@ impl Game {
             trail: Vec::with_capacity(18),
             phase: Phase::Ready,
             lives: 3,
+            ball_save: 0.,
+            saves: 0,
             sector: 1,
             score: 0,
             chain: ferravex_engine::gameplay::combo::ScoreChain::new(4., 3, 4).unwrap(),
@@ -172,6 +176,7 @@ impl Game {
             return;
         }
         self.time += dt;
+        self.ball_save = (self.ball_save - dt).max(0.);
         self.chain.advance(dt).unwrap();
         if self.phase == Phase::Transition {
             self.transition -= dt;
@@ -213,6 +218,7 @@ impl Game {
             if input.launch {
                 self.phase = Phase::Playing;
                 self.launch_count += 1;
+                self.ball_save = 2.5;
                 let angle = 0.24 + (self.launch_count % 3) as f32 * 0.09;
                 let speed = self.speed();
                 self.velocity = [angle.sin() * speed, -angle.cos() * speed];
@@ -230,7 +236,16 @@ impl Game {
             }
             self.trail.push(self.ball);
         }
-        if self.ball[1] > 677.0 {
+        if self.ball[1] > 677.0 && self.ball_save > 0. {
+            self.ball_save = 0.;
+            self.saves += 1;
+            self.ball = [self.paddle_x, PADDLE_Y - 8. - BALL_RADIUS - 1.];
+            let speed = self.speed();
+            self.velocity = [speed * 0.24, -speed * (1. - 0.24_f32.powi(2)).sqrt()];
+            self.chain.break_chain();
+            self.trail.clear();
+            self.emit(self.ball, [0.35, 0.85, 0.79, 1.], 18);
+        } else if self.ball[1] > 677.0 {
             self.lives -= 1;
             self.chain.break_chain();
             self.trail.clear();
@@ -643,5 +658,43 @@ mod drop_magnet_tests {
         let x = g.drops[0].position[0];
         g.update_drops(0.1);
         assert_eq!(g.drops[0].position[0], x);
+    }
+}
+
+#[cfg(test)]
+mod ball_save_tests {
+    use super::*;
+    #[test]
+    fn a_real_launch_gets_one_opening_save_without_making_late_misses_free() {
+        let mut g = Game::new();
+        g.tick(
+            Input {
+                launch: true,
+                ..Input::default()
+            },
+            1. / 120.,
+        );
+        g.ball = [100., 676.];
+        g.velocity = [0., 325.];
+        g.tick(Input::default(), 1. / 120.);
+        assert_eq!((g.lives, g.saves), (3, 1));
+        assert_eq!(g.ball_save, 0.);
+        assert!(g.velocity[1] < 0.);
+        g.ball = [100., 676.];
+        g.velocity = [0., 325.];
+        g.tick(Input::default(), 1. / 120.);
+        assert_eq!(g.lives, 2);
+        g.tick(
+            Input {
+                launch: true,
+                ..Input::default()
+            },
+            1. / 120.,
+        );
+        g.ball_save = 0.;
+        g.ball = [100., 676.];
+        g.velocity = [0., 325.];
+        g.tick(Input::default(), 1. / 120.);
+        assert_eq!(g.lives, 1);
     }
 }

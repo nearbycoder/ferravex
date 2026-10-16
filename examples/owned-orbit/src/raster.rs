@@ -193,6 +193,9 @@ impl Canvas {
         }
         self.text(&format!("{:02} PANELS", g.remaining()), 104, 679, 1, MUTED);
         self.text_right("A D / ARROWS / DRAG", 600, 679, 1, MUTED);
+        if g.ball_save > 0. && g.phase == Phase::Playing {
+            self.text("BALL SAVE", 270, 679, 1, CYAN);
+        }
         match g.phase {
             Phase::Ready => self.overlay(
                 if g.lives == 3 && g.sector == 1 && g.clears == 0 {
