@@ -70,3 +70,7 @@ This is an engine foundation with original native/browser hosts, shared GPU rend
 ## License
 
 MIT. Engine/game source and authored assets are first-party. Build toolchains, operating systems and browser implementations have their own licenses.
+
+## Compose gameplay quickly
+
+[Gameplay recipes](docs/GAMEPLAY_RECIPES.md) map reusable reward, weapon, encounter, interaction, platform and trial rules to their host contracts. Run `cargo run -p ferravex-play --example gameplay_recipe --offline --locked` for a small survival/crafting composition. The [40-feature series](docs/GAMEPLAY_40.md) applies the rules to Neon Swarm, Emberline and Orbit Breaker.

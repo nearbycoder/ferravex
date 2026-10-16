@@ -39,6 +39,8 @@ DOCS = [
  ('rigid-bodies','Rotational rigid bodies','Engine','crates/ferravex-physics/README.md'),
  ('quality-series','Shared game-quality systems','Engine','docs/QUALITY_SERIES.md'),
  ('gameplay','Scenes, animation and gameplay','Engine','crates/ferravex-play/README.md'),
+ ('gameplay-recipes','Compose game loops','Engine','docs/GAMEPLAY_RECIPES.md'),
+ ('gameplay-series','Forty gameplay improvements','Engine','docs/GAMEPLAY_40.md'),
  ('systems','Input, audio, assets and replay','Engine','crates/ferravex-engine/README.md'),
  ('networking','FPS simulation and netcode','Multiplayer','crates/ferravex-fps/README.md'),
  ('protocol','Protocol and replication','Multiplayer','crates/ferravex-net/README.md'),

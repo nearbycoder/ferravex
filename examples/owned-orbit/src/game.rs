@@ -65,6 +65,7 @@ pub struct Game {
     pub time: f32,
     pub wide_time: f32,
     pub hits: u32,
+    pub precision: ferravex_engine::gameplay::skill::PrecisionReturns,
     pub clears: u32,
     pub ccd_impacts: u64,
     transition: f32,
@@ -122,6 +123,8 @@ impl Game {
             time: 0.0,
             wide_time: 0.0,
             hits: 0,
+            precision: ferravex_engine::gameplay::skill::PrecisionReturns::new(0.18, 50, 4)
+                .unwrap(),
             clears: 0,
             ccd_impacts: 0,
             transition: 0.0,
@@ -249,6 +252,7 @@ impl Game {
         if self.ball[1] > 677.0 && self.ball_save > 0. {
             self.ball_save = 0.;
             self.saves += 1;
+            self.precision.reset();
             self.charged_volley = false;
             self.ball = [self.paddle_x, PADDLE_Y - 8. - BALL_RADIUS - 1.];
             let speed = self.speed();
@@ -258,6 +262,7 @@ impl Game {
             self.emit(self.ball, [0.35, 0.85, 0.79, 1.], 18);
         } else if self.ball[1] > 677.0 {
             self.lives -= 1;
+            self.precision.reset();
             self.chain.break_chain();
             self.trail.clear();
             self.velocity = [0.0; 2];
@@ -381,7 +386,13 @@ impl Game {
                 ];
                 self.charged_volley = false;
                 self.chain.break_chain();
-                self.emit(self.ball, [0.35, 0.85, 0.79, 1.0], 5);
+                let bonus = self.precision.returned(offset).unwrap();
+                self.score = self.score.saturating_add(bonus);
+                self.emit(
+                    self.ball,
+                    [0.35, 0.85, 0.79, 1.0],
+                    if bonus > 0 { 15 } else { 5 },
+                );
             } else {
                 let dot = self.velocity[0] * hit.normal[0] + self.velocity[1] * hit.normal[1];
                 if dot < 0.0 {
@@ -414,6 +425,7 @@ impl Game {
         let position = block.center;
         let destroyed = block.health == 0;
         self.hits += 1;
+        self.precision.progress();
         let award = self.chain.award(if destroyed { 100 } else { 25 });
         self.score = self.score.saturating_add(award as u32);
         if destroyed {
@@ -742,5 +754,39 @@ mod charge_serve_tests {
         g.velocity = [0., 350.];
         g.tick(Input::default(), 1. / 120.);
         assert!(!g.charged_volley);
+    }
+}
+
+#[cfg(test)]
+mod precision_loop_tests {
+    use super::*;
+    fn paddle_return(g: &mut Game, offset: f32) {
+        g.phase = Phase::Playing;
+        g.ball = [
+            g.paddle_x + offset * g.paddle_half,
+            PADDLE_Y - 8. - BALL_RADIUS - 1.,
+        ];
+        g.velocity = [0., 325.];
+        g.tick(Input::default(), 1. / 120.);
+    }
+    #[test]
+    fn actual_center_returns_reward_progress_but_empty_bounces_cannot_farm() {
+        let mut g = Game::new();
+        for (index, expected) in [(0, 50), (1, 100)] {
+            g.hit_block(index);
+            let score = g.score;
+            paddle_return(&mut g, 0.);
+            assert_eq!(g.score - score, expected);
+            assert!(g.velocity[1] < 0.);
+        }
+        let score = g.score;
+        paddle_return(&mut g, 0.);
+        assert_eq!(g.score, score);
+        g.hit_block(2);
+        let score = g.score;
+        paddle_return(&mut g, 0.7);
+        assert_eq!(g.score, score);
+        assert_eq!(g.precision.streak(), 0);
+        assert_eq!(g.precision.best(), 2);
     }
 }

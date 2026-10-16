@@ -174,7 +174,13 @@ impl Canvas {
         }
         self.look = Default::default();
         self.text("ORBIT BREAKER", 38, 33, 3, PAPER);
-        self.text(&format!("SALVAGE / SECTOR 0{}", g.sector), 39, 68, 1, MUTED);
+        self.text(
+            &format!("SECTOR 0{} / PRECISE {}", g.sector, g.precision.streak()),
+            39,
+            68,
+            1,
+            MUTED,
+        );
         self.text_right(&format!("{:05}", g.score), 600, 32, 3, GOLD);
         self.text_right(
             &format!("SCORE / X{}", g.chain.multiplier()),
