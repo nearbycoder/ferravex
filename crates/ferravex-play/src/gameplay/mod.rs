@@ -20,3 +20,5 @@ fn seconds(value: f32) -> Result<f64, LoopError> {
 pub mod combo;
 
 pub mod progression;
+
+pub mod loot;
