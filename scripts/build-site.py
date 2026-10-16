@@ -21,6 +21,7 @@ DOCS = [
  ('retained-rendering','Retained GPU rendering','Engine','docs/RETAINED_RENDERING.md'),
  ('visibility','Visibility and level of detail','Engine','docs/VISIBILITY.md'),
  ('lighting','Low-poly lighting','Engine','docs/LIGHTING.md'),
+ ('visuals','Visual presets and demo polish','Engine','docs/VISUALS.md'),
  ('materials','Materials and shader reload','Engine','docs/MATERIALS.md'),
  ('characters','Character controllers','Engine','docs/CHARACTERS.md'),
  ('cameras','Camera rigs','Engine','docs/CAMERAS.md'),
@@ -148,7 +149,7 @@ def pages():
  write(OUT/'examples/index.html',layout('Examples',body,'/examples/',section='Examples'))
  for g in GAMES:
   engine='First-party Rust engine. Browser standards only; no third-party runtime packages.'
-  body=f'''<main id="main" class="container"><a class="example-back" href="/examples/">Back to all examples</a><div class="page-heading example-title"><div><h1>{esc(g['title'])}</h1>{meta(g)}</div><div class="button-row"><a class="button secondary" href="{g['play']}" target="_blank" rel="noopener">Open game</a><a class="text-link" href="/api/src/{g['id'].replace('-', '_')}/lib.rs.html">Source code</a></div></div><div class="player" data-game="{g['play']}" data-title="{esc(g['title'])}"><img src="/assets/{g['image']}" alt="{esc(g['title'])} gameplay preview" width="960" height="600"><div class="launch"><button class="button" data-launch>Play {esc(g['title'])}</button><p>Loads the game when you are ready.</p></div></div><p class="mono" style="font-size:12px">{esc(g['controls'])}</p><section class="example-info"><div><h2>About this example</h2><p>{esc(g['description'])}</p><p>{engine}</p></div><div><h2>Run it locally</h2><pre><code>cargo run --release -p {g['id']}</code></pre><p>The restored games have an original Linux window and GPU host. Courtyard and Orbit Breaker also offer headless PNG export. All examples are playable in the browser.</p><a class="text-link" href="/docs/getting-started/">Setup instructions</a></div></section></main>'''
+  body=f'''<main id="main" class="container"><a class="example-back" href="/examples/">Back to all examples</a><div class="page-heading example-title"><div><h1>{esc(g['title'])}</h1>{meta(g)}</div><div class="button-row"><a class="button secondary" href="{g['play']}" target="_blank" rel="noopener">Open game</a><a class="text-link" href="/api/src/{g['id'].replace('-', '_')}/lib.rs.html">Source code</a></div></div><div class="player" data-game="{g['play']}" data-title="{esc(g['title'])}"><img src="/assets/{g['image']}" alt="{esc(g['title'])} gameplay preview" width="960" height="600"><div class="launch"><button class="button" data-launch>Play {esc(g['title'])}</button><p>Loads the game when you are ready.</p></div></div><p class="mono" style="font-size:12px">{esc(g['controls'])}</p><section class="example-info"><div><h2>About this example</h2><p>{esc(g['description'])}</p><p>{engine}</p><p>Compare palettes: <a href="{g['play']}?look=warm" target="_blank" rel="noopener">Warm</a> · <a href="{g['play']}?look=cool" target="_blank" rel="noopener">Cool</a> · <a href="{g['play']}?look=ink" target="_blank" rel="noopener">Ink</a>. <a href="/docs/visuals/">Style and performance settings</a></p></div><div><h2>Run it locally</h2><pre><code>cargo run --release -p {g['id']}</code></pre><p>The restored games have an original Linux window and GPU host. Courtyard and Orbit Breaker also offer headless PNG export. All examples are playable in the browser.</p><a class="text-link" href="/docs/getting-started/">Setup instructions</a></div></section></main>'''
 
   write(OUT/f'examples/{g["id"]}/index.html',layout(g['title'],body,f'/examples/{g["id"]}/',g['description'],'Examples'));SEARCH.append(dict(title=g['title'],url=f'/examples/{g["id"]}/',type='Example',text=g['description']+' '+g['genre']+' '+g['controls']))
 
@@ -169,7 +170,7 @@ def main():
  stale=[p.name for p in (ROOT/'target/doc').iterdir() if p.is_dir() and p.name not in targets|support]
  sources=ROOT/'target/doc/src'
  if sources.exists():stale.extend('src/'+p.name for p in sources.iterdir() if p.is_dir() and p.name not in targets)
- allowed={'index.html','games.json','build-info.json','runtime.js', 'lifecycle.js','audio.js','audio-worklet.js','audio-ring.js','input.js','storage.js','input-overlay.js','retained.js','retained-shader.js','effects.js','effects-shader.js','material-tools.js','content-tools.js','replay-tools.js','multiplayer-tools.js'}
+ allowed={'index.html','games.json','build-info.json','runtime.js', 'lifecycle.js','visuals.js','audio.js','audio-worklet.js','audio-ring.js','input.js','storage.js','input-overlay.js','retained.js','retained-shader.js','effects.js','effects-shader.js','material-tools.js','content-tools.js','replay-tools.js','multiplayer-tools.js'}
  for game in GAMES:
   allowed.add(game['host']+'/'+game['id'].replace('-','_')+'.wasm')
   allowed.update(game['host']+'/'+p.name for p in (ROOT/'web'/game['host']).iterdir() if p.is_file())

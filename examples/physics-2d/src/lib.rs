@@ -313,6 +313,7 @@ async fn game() {
         let alpha = if paused { 1.0 } else { frame.alpha };
 
         clear_background(ui::BACKGROUND);
+        ferravex_render::set_world_colors(true);
         for x in -12..=12 {
             let start = to_screen(vec2(x as f32, 0.0));
             let end = to_screen(vec2(x as f32, 13.0));
@@ -446,6 +447,7 @@ async fn game() {
                 );
             }
         }
+        ferravex_render::set_world_colors(false);
         ui::header(
             "2D RIGID BODIES",
             "Gravity, in two dimensions.",

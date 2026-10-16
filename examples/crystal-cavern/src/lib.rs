@@ -532,6 +532,30 @@ impl Scene {
                 .expect("cave vertex AO");
             p.mesh.invalidate_gpu();
         }
+        // Bake once, then merge nearby opaque pieces into 3x3-tile chunks.
+        // Authored AO and normals survive; distant chunks retain useful bounds.
+        let mut chunks = std::collections::BTreeMap::<(i32, i32), Vec<Piece>>::new();
+        for piece in stone {
+            let key = (
+                (piece.position.x / (TILE * 3.)).floor() as i32,
+                (piece.position.z / (TILE * 3.)).floor() as i32,
+            );
+            chunks.entry(key).or_default().push(piece);
+        }
+        let stone = chunks
+            .into_values()
+            .map(|pieces| Piece {
+                mesh: Mesh3d::combine(pieces.iter().map(|p| {
+                    (
+                        &p.mesh.mesh,
+                        Mat4::from_rotation_translation(p.rotation, p.position),
+                    )
+                }))
+                .expect("bounded static cave chunk"),
+                position: Vec3::ZERO,
+                rotation: Quat::IDENTITY,
+            })
+            .collect();
         let pulse = ShaderMaterial::new(
             ShaderSource::fragment(include_str!("../shaders/crystal.frag")),
             MaterialOptions {
@@ -753,7 +777,9 @@ async fn game() {
         } else {
             player_input.simulation_dt(demo.dt())
         };
-        if player_input.pressed("restart") || game.won && player_input.pressed("confirm") {
+        let restarted =
+            player_input.pressed("restart") || game.won && player_input.pressed("confirm");
+        if restarted {
             game = Game::new();
             clock.reset();
             pilot = Pilot::default();
@@ -765,12 +791,12 @@ async fn game() {
         }
         let movement = player_input.movement();
         let look = player_input.look(dt);
-        if !demo.autoplay {
+        if !demo.autoplay && !restarted {
             game.yaw += look.x;
             pitch = (pitch - look.y).clamp(-0.8, 0.8);
         }
         let mut input = Input {
-            movement,
+            movement: if restarted { Vec2::ZERO } else { movement },
             ..Default::default()
         };
         let frame = clock.advance(dt as f64);

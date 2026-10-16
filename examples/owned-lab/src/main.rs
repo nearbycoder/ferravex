@@ -26,6 +26,13 @@ mod native {
             .map(String::as_str)
             .unwrap_or(&temporary);
         let mut lab = Lab::new();
+        if let Ok(name) = std::env::var("FERRAVEX_LOOK") {
+            ferravex_engine::render::set_look(
+                ferravex_engine::graphics::Look::from_name(&name)
+                    .expect("FERRAVEX_LOOK must be authored, warm, cool or ink"),
+            );
+        }
+        let mut renderer = ferravex_engine::graphics::SoftwareRenderer::new(960, 540).unwrap();
         let start = std::time::Instant::now();
         for _ in 0..frames {
             let token = performance.as_ref().map(|_| FrameToken::begin());
@@ -33,7 +40,8 @@ mod native {
             if let (Some(session), Some(token)) = (&mut performance, token) {
                 let cpu_us = token.elapsed_us();
                 let render_start = std::time::Instant::now();
-                std::hint::black_box(lab.render(960, 540));
+                lab.render_into(&mut renderer);
+                std::hint::black_box(&renderer);
                 session.record(token.finish(FrameSample {
                     cpu_us,
                     software_render_us: Some(render_start.elapsed().as_secs_f64() * 1e6),
@@ -48,8 +56,8 @@ mod native {
         }
         let simulation = start.elapsed();
         let render_start = std::time::Instant::now();
-        let image = lab.render(960, 540);
-        image.framebuffer.save_png(output).unwrap();
+        lab.render_into(&mut renderer);
+        renderer.framebuffer.save_png(output).unwrap();
         let escaped: String = output
             .chars()
             .map(|c| match c {

@@ -4,6 +4,12 @@ static ALLOCATOR: ferravex_core::telemetry::TrackingAllocator =
     ferravex_core::telemetry::TrackingAllocator;
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
+    if let Ok(name) = std::env::var("FERRAVEX_LOOK") {
+        ferravex_engine::render::set_look(
+            ferravex_engine::graphics::Look::from_name(&name)
+                .expect("FERRAVEX_LOOK must be authored, warm, cool or ink"),
+        );
+    }
     use ferravex_core::telemetry::{FrameSample, FrameToken, Session};
     let mut performance = Session::from_env();
     let mut frames = 1800_u64;

@@ -413,14 +413,10 @@ fn draw_hud(race: &Race, touch_mode: bool) {
         WHITE,
     );
     let bottom = if touch_mode { h - 140.0 } else { h - 50.0 };
-    label(
-        &format!("{:03}", (race.speed() * 3.6) as u32),
-        margin,
-        bottom,
-        47.0,
-        WHITE,
-    );
-    label("KM/H", margin + 91.0, bottom, 14.0, PALE);
+    let speed = format!("{:03}", (race.speed() * 3.6) as u32);
+    let speed_width = measure_text(&speed, None, 47, 1.).width;
+    label(&speed, margin, bottom, 47.0, WHITE);
+    label("KM/H", margin + speed_width + 10., bottom, 14.0, PALE);
     let bar_w = 136.0;
     draw_rectangle(
         w - margin - bar_w,

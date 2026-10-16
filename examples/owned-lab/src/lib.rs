@@ -61,6 +61,7 @@ impl Default for Lab {
 }
 impl Lab {
     pub fn new() -> Self {
+        ferravex_engine::render::set_quality(ferravex_engine::render::lighting::Quality::Medium);
         let mut cache = MeshCache::new();
         let colors = [
             0xcbbfa6, 0xa29071, 0x586b67, 0x8c613c, 0x3d4547, 0xc58658, 0xe4d7bd, 0x6b7650,
@@ -514,6 +515,12 @@ impl Lab {
     }
     pub fn render(&self, width: u32, height: u32) -> SoftwareRenderer {
         let mut renderer = SoftwareRenderer::new(width, height).unwrap();
+        self.render_into(&mut renderer);
+        renderer
+    }
+    /// Reuse framebuffer/depth/scratch storage across frames.
+    pub fn render_into(&self, renderer: &mut SoftwareRenderer) {
+        renderer.settings.look = ferravex_engine::render::look();
         renderer.settings.clear_color = Color::from_hex(0xa9b8ba);
         renderer.settings.ambient = 0.5;
         renderer.settings.diffuse = 0.5;
@@ -525,7 +532,6 @@ impl Lab {
         renderer
             .render(&self.cache, &self.items, self.camera)
             .unwrap();
-        renderer
     }
     pub fn edit(&mut self, index: usize, x: f32, y: f32, z: f32) -> bool {
         if index == 0

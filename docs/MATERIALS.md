@@ -115,3 +115,6 @@ Native pixel tests verify recovery after a failed edit and continued shader
 reloads. An actual-Wasm contract verifies the source ABI, and the browser's
 `?graphics-tools&material-tools` panels exercise real context loss/recovery.
 See [platform status](PLATFORMS.md) for OS verification boundaries.
+
+Built-in palette presets apply after the material fragment hook without replacing it.
+See [visual presets](VISUALS.md) for selection, HUD boundaries and performance.

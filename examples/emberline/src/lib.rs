@@ -569,6 +569,7 @@ async fn game() {
             - WIDTH * 0.5;
         set_camera(&canvas.camera());
         world(&game, camera_x, demo.time(), &motion);
+        ferravex_render::set_world_colors(false);
         let collected = game.embers.iter().filter(|(_, found)| *found).count();
         label("EMBERLINE", 32.0, 48.0, 28.0, CREAM);
         let zone = if game.position().x < 900.0 {

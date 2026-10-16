@@ -4,7 +4,7 @@ const decoder=new TextDecoder(),encoder=new TextEncoder();
 export class RetainedRenderer {
  constructor(gl) {
   this.gl=gl;this.meshes=new Map();this.materials=new Map();this.instanceBuffer=gl.createBuffer();this.capacity=0;this.lastError='';
-  this.builtin=this.compile(defaultVertexHook,defaultFragmentHook);this.white=this.texture(1,false);this.shadow=null;this.shadowFailedSize=0;this.lightingError='';
+  this.builtin=this.compile(defaultVertexHook,defaultFragmentHook);this.white=this.texture(1,false);this.shadow=null;this.shadowFailedSize=0;this.lightingError='';this.shadowOptions=new Float32Array(4);this.shadowExtra=new Float32Array(4);this.materialsChanged=false;
  }
  compile(vertexHook,fragmentHook) {
   const color=this.compileStage(vertexHook,fragmentHook,false);
@@ -30,7 +30,7 @@ export class RetainedRenderer {
  source(id,stage) {const e=this.exports;return decoder.decode(new Uint8Array(e.memory.buffer,e.ferravex_material_source(id,stage),e.ferravex_material_source_len(id,stage)));}
  prepareMaterial(id) {
   const e=this.exports,gl=this.gl,revision=e.ferravex_material_revision(id);if(!revision)return;
-  let entry=this.materials.get(id);if(!entry){entry={revision:0,valid:null,error:''};this.materials.set(id,entry);}if(entry.revision===revision)return;entry.revision=revision;
+  let entry=this.materials.get(id);if(!entry){entry={revision:0,valid:null,error:''};this.materials.set(id,entry);}if(entry.revision===revision)return;entry.revision=revision;this.materialsChanged=true;
   try {
    const next=this.compile(this.source(id,0),this.source(id,1));if(entry.valid)this.deletePair(entry.valid);entry.valid=next;entry.error='';e.ferravex_material_feedback(id,revision,1,0);
   } catch(error) {
@@ -41,17 +41,17 @@ export class RetainedRenderer {
   }
  }
  begin(exports) {
-  this.exports=exports;this.uploadBytes=0;this.drawCalls=0;this.vertices=0;this.shadowDrawCalls=0;this.shadowVertices=0;this.skinnedDrawCalls=0;
+  this.materialsChanged=false;this.exports=exports;this.uploadBytes=0;this.drawCalls=0;this.vertices=0;this.shadowDrawCalls=0;this.shadowVertices=0;this.skinnedDrawCalls=0;
   const gl=this.gl;
   for(const [id,mesh] of this.meshes)if(!exports.ferravex_mesh_vertex_count(id)){gl.deleteBuffer(mesh.buffer);gl.deleteVertexArray(mesh.vao);this.meshes.delete(id);}
-  for(const [id,entry] of this.materials)if(!exports.ferravex_material_revision(id)){if(entry.valid)this.deletePair(entry.valid);this.materials.delete(id);}
+  for(const [id,entry] of this.materials)if(!exports.ferravex_material_revision(id)){if(entry.valid)this.deletePair(entry.valid);this.materials.delete(id);this.materialsChanged=true;}
   const count=exports.ferravex_retained_instance_count(),bytes=count*112;
   if(bytes){gl.bindBuffer(gl.ARRAY_BUFFER,this.instanceBuffer);if(bytes>this.capacity){this.capacity=Math.max(bytes,this.capacity*2,4096);gl.bufferData(gl.ARRAY_BUFFER,this.capacity,gl.DYNAMIC_DRAW);}gl.bufferSubData(gl.ARRAY_BUFFER,0,new Float32Array(exports.memory.buffer,exports.ferravex_retained_instances(),count*28));this.uploadBytes+=bytes;}
   // Prepare live revisions before rendering, including effects that are not currently visible.
   // Feedback may grow Wasm memory; later draw views are acquired after this phase.
   const materialCount=exports.ferravex_material_count();
   for(let i=0;i<materialCount;i++)this.prepareMaterial(exports.ferravex_material_id(i));
-  this.lastError=[...this.materials.entries()].filter(([,m])=>m.error).map(([id,m])=>'Material '+id+': '+m.error).join('\n');
+  if(this.materialsChanged)this.lastError=[...this.materials.entries()].filter(([,m])=>m.error).map(([id,m])=>'Material '+id+': '+m.error).join('\n');
   const at=exports.ferravex_light_environment(),meta=new DataView(exports.memory.buffer);
   this.environment={points:new Float32Array(exports.memory.buffer,at,64),matrix:new Float32Array(exports.memory.buffer,at+256,16),options:new Float32Array(exports.memory.buffer,at+320,4),extra:new Float32Array(exports.memory.buffer,at+336,4),direction:new Float32Array(exports.memory.buffer,at+352,4),count:meta.getUint32(at+368,true),size:meta.getUint32(at+372,true),quality:meta.getUint32(at+380,true)};
   this.configureShadow(this.environment.size);
@@ -77,7 +77,9 @@ export class RetainedRenderer {
  renderShadow(width,height) {
   const gl=this.gl;if(!this.shadow||!this.environment.size)return;
   gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,this.white);gl.bindFramebuffer(gl.FRAMEBUFFER,this.shadow.framebuffer);gl.viewport(0,0,this.shadow.size,this.shadow.size);gl.depthMask(true);gl.clear(gl.DEPTH_BUFFER_BIT);gl.disable(gl.BLEND);
+  gl.enable(gl.POLYGON_OFFSET_FILL);gl.polygonOffset(1.5,3);
   for(let i=0;i<this.exports.ferravex_retained_batch_count();i++)this.draw(i,true);
+  gl.disable(gl.POLYGON_OFFSET_FILL);
   gl.enable(gl.BLEND);gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.drawBuffers([gl.BACK]);gl.viewport(0,0,width,height);
  }
  draw(index,shadow=false) {
@@ -105,7 +107,7 @@ export class RetainedRenderer {
   if(p.paramsCount)gl.uniform4fv(p.params,new Float32Array(e.memory.buffer,at+144,p.paramsCount*4));
   if(!shadow){
    const lit=view.getFloat32(at+92,true)>0.5;gl.uniform1i(p.pointCount,lit?env.count:0);if(lit&&env.count&&p.pointsCount)gl.uniform4fv(p.points,env.points.subarray(0,p.pointsCount*4));
-   gl.uniformMatrix4fv(p.shadowMatrix,false,env.matrix);const options=Array.from(env.options),extra=Array.from(env.extra);
+   gl.uniformMatrix4fv(p.shadowMatrix,false,env.matrix);const options=this.shadowOptions,extra=this.shadowExtra;options.set(env.options);extra.set(env.extra);
    const match=view.getFloat32(at+80,true)*env.direction[0]+view.getFloat32(at+84,true)*env.direction[1]+view.getFloat32(at+88,true)*env.direction[2]>0.999;
    options[3]=this.shadow&&env.size&&(flags&16)===0&&match?1:0;if(this.shadow)extra[1]=1/this.shadow.size;
    gl.uniform4fv(p.shadowOptions,options);gl.uniform4fv(p.shadowExtra,extra);gl.uniform1i(p.shadowTexture,0);gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,this.shadow&&env.size?this.shadow.texture:this.white);

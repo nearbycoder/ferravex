@@ -103,7 +103,7 @@ impl PlayerInput {
         draw_text("CONTROLS", x + 18., y + 31., 20., WHITE);
         let per_page = (((height - 190.) / 43.).floor() as usize).clamp(1, 8);
         let count = if self.devices_tab {
-            15
+            16
         } else {
             self.actions.len()
         };
@@ -229,7 +229,7 @@ impl PlayerInput {
                             "On".into()
                         },
                     ),
-                    _ => (
+                    14 => (
                         "Graphics quality",
                         match preferences.quality {
                             None => "Game default",
@@ -238,6 +238,13 @@ impl PlayerInput {
                             _ => "High",
                         }
                         .into(),
+                    ),
+                    _ => (
+                        "Visual style",
+                        crate::Look::from_index(preferences.look as u32)
+                            .unwrap_or_default()
+                            .name()
+                            .into(),
                     ),
                 };
                 draw_text(&fit(label, width - 192., 14), x + 18., yy + 12., 14., WHITE);
@@ -294,7 +301,7 @@ impl PlayerInput {
                                 (preferences.buses[i - 9] + d * 0.05).clamp(0., 1.)
                         }
                         13 => preferences.muted = !preferences.muted,
-                        _ => {
+                        14 => {
                             let value = preferences.quality.map_or(0, |q| q + 1);
                             let next = if plus {
                                 (value + 1) % 4
@@ -303,6 +310,7 @@ impl PlayerInput {
                             };
                             preferences.quality = next.checked_sub(1);
                         }
+                        _ => preferences.look = (preferences.look + if plus { 1 } else { 3 }) % 4,
                     }
                 }
             }

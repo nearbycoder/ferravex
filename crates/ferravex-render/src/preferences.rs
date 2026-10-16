@@ -82,6 +82,7 @@ impl Session {
     }
 }
 fn apply(p: Preferences) {
+    crate::set_look(crate::Look::from_index(p.look as u32).expect("validated look"));
     audio::set_master_gain(p.master);
     audio::set_muted(p.muted);
     for (bus, gain) in [
@@ -115,6 +116,7 @@ mod tests {
             buses: [0.2, 0.3, 0.4, 0.5],
             muted: true,
             quality: Some(2),
+            look: 1,
         };
         session.set(p).unwrap();
         assert_eq!(audio::master_gain(), 0.25);

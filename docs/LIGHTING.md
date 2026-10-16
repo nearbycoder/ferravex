@@ -48,7 +48,7 @@ occlusion without a sun. Dune keeps its cheap blob shadows only on Low.
 
 ## Shadow costs and limits
 
-The sun uses a texel-snapped orthographic depth map, normal offset and depth bias.
+The sun uses a texel-snapped orthographic depth map, slope-scaled raster offset, normal offset and depth bias.
 Tune extent/depth to the playable area, center to the player/camera, bias to avoid
 acne and strength for the palette. A shadow is received only when the draw's
 normalized directional light matches the sun direction. Outside the volume is lit.
@@ -68,7 +68,7 @@ A failed depth-target allocation preserves a previous target where available or
 renders unshadowed; the browser exposes `canvas.dataset.lightingError`, and the
 native host logs the failure once per requested size. Low releases the target.
 The host releases depth textures, framebuffers, programs and mesh buffers with its
-context. Browser context recovery is part of the later platform-host iteration.
+context. Browser context restoration rebuilds these GPU caches; see [platforms](PLATFORMS.md).
 
 ## Bake ambient occlusion once
 
@@ -102,3 +102,5 @@ pending/displayed timings. Valid results expose `data-gpu-us` and their
 passes in draw calls and vertices; `data-shadow-draw-calls` isolates that pass.
 These are driver execution measurements, including a software driver where used.
 See [performance](PERFORMANCE.md) for baseline coverage and quality contracts.
+
+Palette presets and lower-cost resolution settings: [visual presets](VISUALS.md).

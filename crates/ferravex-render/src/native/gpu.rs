@@ -1176,9 +1176,12 @@ impl RetainedGpu {
             glDepthMask(1);
             glClear(GL_DEPTH_BUFFER_BIT);
             glDisable(GL_BLEND);
+            glEnable(0x8037);
+            glPolygonOffset(1.5, 3.);
             for index in 0..self.batches.len() {
                 self.draw(index, true);
             }
+            glDisable(0x8037);
             glEnable(GL_BLEND);
             glBindFramebuffer(0x8d40, super::host::default_framebuffer());
             glDrawBuffer(screen_buffer());
@@ -2512,5 +2515,47 @@ mod tests {
         let mut bytes = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
         flip_rows(&mut bytes, 4, 3);
         assert_eq!(bytes, [9, 10, 11, 12, 5, 6, 7, 8, 1, 2, 3, 4]);
+    }
+    #[test]
+    #[ignore = "requires a live X11 display and OpenGL context"]
+    fn world_palette_matches_cpu_reference() {
+        use crate::{
+            Color, Look, Mat4, Vec3,
+            mesh::Mesh3d,
+            retained::{DrawStyle, Frame},
+        };
+        let mut window = NativeWindow::new(&Conf {
+            window_width: 96,
+            window_height: 64,
+            high_dpi: false,
+            ..Default::default()
+        })
+        .unwrap();
+        window.set_swap_interval(0);
+        let color = Color::new(0.8, 0.5, 0.2, 1.);
+        let mesh = Mesh3d::cuboid(Vec3::ONE, color);
+        for index in 0..4 {
+            let look = Look::from_index(index).unwrap();
+            let mut frame = Frame::default();
+            frame.record_style(
+                mesh.resident(),
+                Mat4::IDENTITY,
+                Mat4::IDENTITY,
+                true,
+                DrawStyle {
+                    look,
+                    ..Default::default()
+                },
+            );
+            window.present_scene(&[], &[], crate::BLACK, Some(&frame));
+            let pixels = window.pixels();
+            let at = (32 * 96 + 48) * 4;
+            for (actual, expected) in pixels[at..at + 4].iter().zip(look.shade(color).to_rgba()) {
+                assert!(
+                    actual.abs_diff(expected) <= 1,
+                    "look {look:?}: {actual} != {expected}"
+                );
+            }
+        }
     }
 }
