@@ -27,7 +27,7 @@ platform checks are recorded only when actually performed.
 | 17 | Acoustic zones and adaptive music | [PR 40](https://github.com/nearbycoder/ferravex/pull/40), merged |
 | 18 | Editable touch and accessibility layouts | [PR 41](https://github.com/nearbycoder/ferravex/pull/41), merged |
 | 19 | Objective and puzzle graphs | [PR 42](https://github.com/nearbycoder/ferravex/pull/42), merged |
-| 20 | Adaptive performance and playtest diagnostics | Implemented; locally validated |
+| 20 | Adaptive performance and playtest diagnostics | [PR 43](https://github.com/nearbycoder/ferravex/pull/43), merged |
 
 ## 1. Gameplay tuning profiles
 
