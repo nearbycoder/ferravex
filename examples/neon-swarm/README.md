@@ -21,3 +21,5 @@ Engine gaps exercised: swept segment/circle and segment/AABB queries were promot
 Kills now build a 3.5-second score chain, increasing the multiplier every three kills up to x5. Taking a hit breaks the chain. The HUD and best-run record show points; old rules records remain separate.
 
 Each kill earns 10 XP. Levels 2–4 permanently improve the current run’s shot damage (24 → 28 → 32 → 36). The shared progression curve and capped upgrade bank own advancement; restart resets the build.
+
+Health drops attract within 130 pixels when unobstructed; cover blocks attraction. Full-health players leave drops available for later instead of consuming them.

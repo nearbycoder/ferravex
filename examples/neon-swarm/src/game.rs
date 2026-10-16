@@ -311,9 +311,25 @@ impl Game {
         }
         self.update_bullets(dt);
         let mut despawn = Vec::new();
-        for (id, p, mut pickup) in &mut self.world.query::<(Entity, &Position, &mut Pickup)>() {
+        for (id, mut p, mut pickup) in
+            &mut self.world.query::<(Entity, &mut Position, &mut Pickup)>()
+        {
             pickup.remaining -= dt;
-            if p.0.distance(self.player) < 28.0 {
+            let attraction = ferravex_play::gameplay::pickup::Magnet {
+                radius: 130.,
+                collect_radius: 28.,
+                speed: 220.,
+            }
+            .step(p.0, self.player, dt)
+            .unwrap();
+            // Cover remains authoritative for attraction and collection.
+            if !COVER
+                .iter()
+                .any(|wall| segment_rect(p.0, self.player, *wall).is_some())
+            {
+                p.0 = attraction.position;
+            }
+            if p.0.distance(self.player) <= 28.0 && self.health < 100 {
                 self.health = (self.health + 22).min(100);
                 despawn.push(id);
             } else if pickup.remaining <= 0.0 {
@@ -743,5 +759,38 @@ mod progression_loop_tests {
         assert_eq!(game.progression.level(), 4);
         assert_eq!(game.shot_damage(), 36.);
         assert_eq!(Game::new().progression.level(), 1);
+    }
+}
+
+#[cfg(test)]
+mod magnet_loop_tests {
+    use super::*;
+    #[test]
+    fn injured_players_attract_health_but_cover_blocks_the_magnet() {
+        let mut g = Game::new();
+        g.health = 50;
+        g.remaining = 0;
+        let pickup = g.world.spawn((
+            Position(g.player + Vec2::X * 100.),
+            Pickup { remaining: 5. },
+        ));
+        for _ in 0..120 {
+            g.update(Input::default(), 1. / 120.);
+        }
+        assert!(g.world.get::<&Pickup>(pickup).is_err());
+        assert_eq!(g.health, 72);
+        let mut g = Game::new();
+        g.health = 50;
+        g.remaining = 0;
+        g.player = vec2(330., 284.);
+        let position = vec2(460., 284.);
+        let pickup = g
+            .world
+            .spawn((Position(position), Pickup { remaining: 5. }));
+        for _ in 0..60 {
+            g.update(Input::default(), 1. / 120.);
+        }
+        assert_eq!(g.world.get::<&Position>(pickup).unwrap().0, position);
+        assert_eq!(g.health, 50);
     }
 }

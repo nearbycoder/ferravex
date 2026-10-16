@@ -20,7 +20,7 @@ const PAPER: Color = Color::from_rgba(221, 237, 227, 255);
 const CYAN: Color = Color::from_rgba(98, 236, 207, 255);
 const CORAL: Color = Color::from_rgba(255, 132, 93, 255);
 // Version 5 fixes staggered pursuit stalling just outside melee range.
-const RECORD_RULES: u64 = 7;
+const RECORD_RULES: u64 = 8;
 
 fn conf() -> Conf {
     ferravex_render::window_conf("Neon Swarm · Ferravex")
