@@ -53,5 +53,5 @@ impl Course {
 
 /// Records belong to both authored geometry and the movement rules used to run it.
 pub fn context(source: &str) -> u64 {
-    ferravex_engine::persistence::checksum(source.as_bytes()) ^ 0x46584d4152420002
+    ferravex_engine::persistence::checksum(source.as_bytes()) ^ 0x46584d4152420003
 }
