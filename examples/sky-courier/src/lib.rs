@@ -393,8 +393,8 @@ fn hud(game: &Flight, touch: bool) {
         );
     }
     let bottom = screen_height() - 25.;
-    draw_rectangle(28., bottom - 43., 90., 3., INK);
-    draw_rectangle(28., bottom - 43., 90. * game.boost_energy, 3., CREAM);
+    draw_rectangle(28., bottom - 56., 90., 3., INK);
+    draw_rectangle(28., bottom - 56., 90. * game.boost_energy, 3., CREAM);
     label(
         &format!("{} m", game.pos.y.max(0.) as u32),
         28.,
