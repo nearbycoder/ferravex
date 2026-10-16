@@ -176,7 +176,13 @@ impl Canvas {
         self.text("ORBIT BREAKER", 38, 33, 3, PAPER);
         self.text(&format!("SALVAGE / SECTOR 0{}", g.sector), 39, 68, 1, MUTED);
         self.text_right(&format!("{:05}", g.score), 600, 32, 3, GOLD);
-        self.text_right("SCORE", 599, 68, 1, MUTED);
+        self.text_right(
+            &format!("SCORE / X{}", g.chain.multiplier()),
+            599,
+            68,
+            1,
+            MUTED,
+        );
         for i in 0..3 {
             self.circle(
                 46.0 + i as f32 * 17.0,

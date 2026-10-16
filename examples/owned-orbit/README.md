@@ -29,3 +29,5 @@ The WebAssembly ABI exports `init()`, `step(dt: f64, axis: f32, buttons: u32)`, 
 Regression tests verify high-speed CCD (12,000 pixels/second), full two-sector victory through ordinary autoplay controls, loss/restart, pickup expiry, short input taps retained across frames without simulation ticks, and complete opaque RGBA output.
 
 Browser verification exercised Space launch, pointer steering, pause/resume, and Restart with no console errors. A host regression now latches very short launch/restart taps between animation frames; its Node test also checks held direction and blur-to-pause. The release Wasm measured 107,583 bytes (41,262 bytes with gzip) for this build. A deterministic full autoplay cleared all 70 panels in 177.36 simulated seconds with three lives remaining.
+
+Successive panel hits within four seconds build a volley multiplier every three hits, capped at x4. Paddle returns and misses break the chain. The input harness now supplies the performance clock required by the host’s existing diagnostics.

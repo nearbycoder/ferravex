@@ -56,6 +56,7 @@ pub struct Game {
     pub lives: u32,
     pub sector: u32,
     pub score: u32,
+    pub chain: ferravex_engine::gameplay::combo::ScoreChain,
     pub time: f32,
     pub wide_time: f32,
     pub hits: u32,
@@ -104,6 +105,7 @@ impl Game {
             lives: 3,
             sector: 1,
             score: 0,
+            chain: ferravex_engine::gameplay::combo::ScoreChain::new(4., 3, 4).unwrap(),
             time: 0.0,
             wide_time: 0.0,
             hits: 0,
@@ -166,6 +168,7 @@ impl Game {
             return;
         }
         self.time += dt;
+        self.chain.advance(dt).unwrap();
         if self.phase == Phase::Transition {
             self.transition -= dt;
             if self.transition <= 0.0 {
@@ -225,6 +228,7 @@ impl Game {
         }
         if self.ball[1] > 677.0 {
             self.lives -= 1;
+            self.chain.break_chain();
             self.trail.clear();
             self.velocity = [0.0; 2];
             self.drops.clear();
@@ -345,6 +349,7 @@ impl Game {
                     horizontal * next_speed,
                     -(1.0 - horizontal * horizontal).sqrt() * next_speed,
                 ];
+                self.chain.break_chain();
                 self.emit(self.ball, [0.35, 0.85, 0.79, 1.0], 5);
             } else {
                 let dot = self.velocity[0] * hit.normal[0] + self.velocity[1] * hit.normal[1];
@@ -376,7 +381,8 @@ impl Game {
         let position = block.center;
         let destroyed = block.health == 0;
         self.hits += 1;
-        self.score += if destroyed { 100 } else { 25 };
+        let award = self.chain.award(if destroyed { 100 } else { 25 });
+        self.score = self.score.saturating_add(award as u32);
         if destroyed {
             self.world.remove(block.body);
             self.clears += 1;
@@ -543,5 +549,23 @@ mod tests {
         g.wide_time = 0.001;
         g.tick(Input::default(), 1.0 / 120.0);
         assert_eq!(g.paddle_half, PADDLE_HALF);
+    }
+}
+
+#[cfg(test)]
+mod chain_loop_tests {
+    use super::*;
+    #[test]
+    fn successive_panels_in_a_volley_build_bonus_points() {
+        let mut g = Game::new();
+        for i in 0..4 {
+            g.hit_block(i);
+        }
+        assert_eq!(g.score, 500);
+        assert_eq!(g.chain.multiplier(), 2);
+        g.chain.advance(5.).unwrap();
+        g.hit_block(4);
+        assert_eq!(g.score, 600);
+        assert_eq!(Game::new().score, 0);
     }
 }
