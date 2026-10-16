@@ -89,3 +89,6 @@ pub mod smoothing;
 
 /// See [`spatial`] for the system contract and examples.
 pub mod spatial;
+
+/// See [`tags`] for the system contract and examples.
+pub mod tags;
