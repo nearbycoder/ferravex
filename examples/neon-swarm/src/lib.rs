@@ -1,3 +1,4 @@
+use ferravex_play::feedback::{FeedbackConfig, FeedbackController, FeedbackEvent, FeedbackKind};
 mod ai;
 mod game;
 
@@ -27,6 +28,9 @@ ferravex_render::game!(conf, game);
 async fn game() {
     let mut demo = Demo::new();
     let mut sound = GameAudio::new();
+    let mut feedback =
+        FeedbackController::<32>::new(FeedbackConfig::default(), 0x4e454f4e).unwrap();
+    let mut feedback_id = 0u64;
     let mut particles = ferravex_render::effects::ParticleRenderer::new(512).unwrap();
     let mut game = Game::new();
     let mut records = ferravex_render::storage::Records::new("neon-swarm").unwrap();
@@ -36,6 +40,7 @@ async fn game() {
     let mut player_input = PlayerInput::preset("neon-swarm", Preset::TopDown);
     let mut hud_ui = Ui::new();
     loop {
+        let feedback_frame = feedback.advance(demo.dt().clamp(0., 0.25)).unwrap();
         ferravex_render::ui::warm_up_font_sizes(&[14, 15, 18, 22, 30, 32, 56]);
         let canvas = Canvas2D::fit(
             vec2(1280.0, 800.0),
@@ -84,6 +89,7 @@ async fn game() {
         }
         if player_input.pressed("restart") {
             game = Game::new();
+            feedback.clear();
             clock.reset();
             started = true;
             paused = false;
@@ -129,17 +135,27 @@ async fn game() {
                     },
                     step.dt,
                 );
-                if game.shots > shots {
-                    sound.cue(Cue::Fire, 0.55);
-                }
-                if game.health < health {
-                    sound.cue(Cue::Impact(Surface::Metal), 0.4);
-                }
-                if game.health > health {
-                    sound.cue(Cue::Pickup, 0.5);
-                }
-                if game.dash_time > dashing {
-                    sound.cue(Cue::Jump, 0.3);
+                for (accepted, kind) in [
+                    (game.shots > shots, FeedbackKind::Fire),
+                    (game.health < health, FeedbackKind::Hurt),
+                    (game.health > health, FeedbackKind::Pickup),
+                    (game.dash_time > dashing, FeedbackKind::Dash),
+                ] {
+                    if accepted {
+                        feedback_id = feedback_id
+                            .checked_add(1)
+                            .expect("feedback session exhausted");
+                        if let Ok(Some(response)) = feedback.emit(
+                            feedback_id,
+                            FeedbackEvent {
+                                kind,
+                                intensity: 1.,
+                                position: game.player.extend(0.),
+                            },
+                        ) {
+                            sound.cue(response.cue, response.gain);
+                        }
+                    }
                 }
                 if game.phase != phase {
                     sound.cue(
@@ -164,6 +180,16 @@ async fn game() {
         set_camera(&canvas.camera());
         draw_arena();
         draw_entities(&game);
+        if feedback_frame.flash > 0.001 {
+            draw_rectangle_lines(
+                ARENA.x,
+                ARENA.y,
+                ARENA.w,
+                ARENA.h,
+                5.,
+                Color::new(1., 0.28, 0.16, feedback_frame.flash),
+            );
+        }
         particles
             .draw_2d(
                 &game.particles,
@@ -254,6 +280,7 @@ async fn game() {
         if hud_ui.activated(1) {
             if game.phase != Phase::Playing {
                 game = Game::new();
+                feedback.clear();
                 clock.reset();
             }
             started = true;

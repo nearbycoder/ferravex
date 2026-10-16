@@ -8,6 +8,7 @@ pub use ferravex_play as play;
 pub use ferravex_play::ability;
 pub use ferravex_play::attributes;
 pub use ferravex_play::authoring;
+pub use ferravex_play::feedback;
 pub use ferravex_play::persistence;
 pub use ferravex_play::tuning;
 pub mod ai;

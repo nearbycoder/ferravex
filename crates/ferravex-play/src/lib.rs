@@ -9,6 +9,7 @@ pub mod attributes;
 pub mod audio;
 pub mod authoring;
 pub mod camera;
+pub mod feedback;
 pub mod input;
 pub mod motion;
 pub mod navigation;

@@ -38,9 +38,22 @@ unsafe impl GlobalAlloc for Allocator {
 #[global_allocator]
 static ALLOCATOR: Allocator = Allocator;
 #[test]
-fn perception_decisions_queued_search_and_route_following_allocate_nothing_after_construction() {
+fn shared_gameplay_systems_allocate_nothing_after_construction() {
     use ferravex_math::Vec3;
     use ferravex_play::{ai::*, navigation::*};
+    let mut abilities = ferravex_play::ability::AbilityBank::<2>::new(
+        1,
+        &[ferravex_play::ability::AbilitySpec {
+            charges: 2,
+            recharge_seconds: 0.1,
+            cost: 0.,
+        }],
+    )
+    .unwrap();
+    let mut resource = ferravex_play::ability::ResourcePool::new(0., 0., 0.).unwrap();
+    let mut statuses = ferravex_play::attributes::EffectSet::<4>::new().unwrap();
+    let mut feedback =
+        ferravex_play::feedback::FeedbackController::<16>::new(Default::default(), 1).unwrap();
     let grid = Grid::new(16, 16).unwrap();
     let mut planner = PathPlanner::new(256, 8).unwrap();
     let graph = DecisionGraph::new(
@@ -82,6 +95,28 @@ fn perception_decisions_queued_search_and_route_following_allocate_nothing_after
     let mut points = [Vec3::ZERO; 64];
     RECORD.with(|v| v.set(true));
     for tick in 0..1000 {
+        abilities.advance(1. / 60.).unwrap();
+        let _ = abilities.activate(0, &mut resource, true);
+        statuses.advance(1. / 60.).unwrap();
+        statuses
+            .apply(
+                ferravex_play::attributes::EffectSpec::modifier(1, 0, 0.5, 1.),
+                0,
+            )
+            .unwrap();
+        assert_eq!(statuses.value(0, 100., 0., 1000.).unwrap(), 50.);
+        let _ = feedback.emit(
+            tick + 1,
+            ferravex_play::feedback::FeedbackEvent {
+                kind: ferravex_play::feedback::FeedbackKind::Hurt,
+                intensity: 1.,
+                position: Vec3::ZERO,
+            },
+        );
+        feedback.advance(1. / 60.).unwrap();
+        ferravex_play::tuning::TuningProfile::rally()
+            .fingerprint()
+            .unwrap();
         let mut budget = WorkBudget::new(64, 32, 64);
         memory.advance(1. / 60.).unwrap();
         sounds.advance(1. / 60.).unwrap();
