@@ -24,3 +24,5 @@ pub mod progression;
 pub mod loot;
 
 pub mod pity;
+
+pub mod pickup;
