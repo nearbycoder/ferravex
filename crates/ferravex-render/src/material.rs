@@ -134,6 +134,7 @@ pub(crate) struct Data {
     pub options: MaterialOptions,
     pub revision: Cell<u32>,
     pub source: RefCell<ShaderSource>,
+    pub last_valid_source: RefCell<Option<ShaderSource>>,
     status: RefCell<MaterialStatus>,
 }
 #[derive(Clone)]
@@ -163,6 +164,7 @@ impl ShaderMaterial {
                 options,
                 revision: Cell::new(1),
                 source: RefCell::new(source),
+                last_valid_source: RefCell::new(None),
                 status: RefCell::new(MaterialStatus {
                     requested_revision: 1,
                     last_valid_revision: None,
@@ -268,6 +270,7 @@ pub(crate) fn feedback(id: u32, revision: u32, result: Result<(), &str>) {
     status.status = match result {
         Ok(()) => {
             status.last_valid_revision = Some(revision);
+            *data.last_valid_source.borrow_mut() = Some(data.source.borrow().clone());
             CompileStatus::Ready
         }
         Err(message) => {
@@ -368,25 +371,54 @@ mod wasm {
     pub extern "C" fn ferravex_material_revision(id: u32) -> u32 {
         lookup(id).map_or(0, |m| m.revision.get())
     }
+    /// Stages 0/1 are the requested vertex/fragment hooks; 2/3 preserve the last
+    /// successfully compiled hooks for device restoration after a failed edit.
     #[unsafe(no_mangle)]
     pub extern "C" fn ferravex_material_source(id: u32, stage: u32) -> *const u8 {
         lookup(id).map_or(std::ptr::null(), |m| {
-            let s = m.source.borrow();
-            if stage == 0 {
-                s.vertex.as_ptr()
+            if stage < 2 {
+                let s = m.source.borrow();
+                if stage == 0 {
+                    s.vertex.as_ptr()
+                } else {
+                    s.fragment.as_ptr()
+                }
+            } else if stage < 4 {
+                m.last_valid_source
+                    .borrow()
+                    .as_ref()
+                    .map_or(std::ptr::null(), |s| {
+                        if stage == 2 {
+                            s.vertex.as_ptr()
+                        } else {
+                            s.fragment.as_ptr()
+                        }
+                    })
             } else {
-                s.fragment.as_ptr()
+                std::ptr::null()
             }
         })
     }
     #[unsafe(no_mangle)]
     pub extern "C" fn ferravex_material_source_len(id: u32, stage: u32) -> u32 {
         lookup(id).map_or(0, |m| {
-            let s = m.source.borrow();
-            if stage == 0 {
-                s.vertex.len() as u32
+            if stage < 2 {
+                let s = m.source.borrow();
+                if stage == 0 {
+                    s.vertex.len() as u32
+                } else {
+                    s.fragment.len() as u32
+                }
+            } else if stage < 4 {
+                m.last_valid_source.borrow().as_ref().map_or(0, |s| {
+                    if stage == 2 {
+                        s.vertex.len() as u32
+                    } else {
+                        s.fragment.len() as u32
+                    }
+                })
             } else {
-                s.fragment.len() as u32
+                0
             }
         })
     }

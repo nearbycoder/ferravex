@@ -122,6 +122,9 @@ def main():
             env={**os.environ,'FERRAVEX_PERF_OUTPUT':str(raw),'FERRAVEX_PERF_WARMUP':str(a.warmup)}
             # Do not inherit an unrecorded quality override from the invoking shell.
             env.pop('FERRAVEX_QUALITY',None)
+            # Preserve the historical 1:1 physical framebuffer workload after
+            # native DPI support; desktop scaling must not alter this baseline.
+            env['FERRAVEX_DPI_SCALE']='1'
             if a.quality != 'default': env['FERRAVEX_QUALITY']=a.quality
             count=str(a.frames+a.warmup)
             if game=='owned-lab': options=['--frames',count,'--output',str((a.output/'courtyard.png').resolve())]

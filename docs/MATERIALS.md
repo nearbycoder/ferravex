@@ -97,3 +97,21 @@ hooks, alpha/depth behavior, additive/HUD isolation, batching boundaries, bounde
 file reload, stale feedback and source limits. Browser editor failure/recovery is
 also exercised on the actual WebGL host. Texture binding, arbitrary named
 uniforms, compute shaders and an offline shader compiler are not part of this API.
+
+
+## Recovering GPU state
+
+Each live material retains its last successfully compiled vertex/fragment hooks
+on the CPU. A failed later edit leaves that copy intact. A reconstructed native
+context or restored WebGL context can rebuild the good program while preserving
+the rejected revision's error/status. Both programs still need to compile on the
+new device; otherwise the host reports the rebuild failure and uses its fallback.
+The extra source copy is bounded by the existing 64 KiB/material source limit
+and 128-material registry limit; it is released with the last material owner.
+The Wasm ABI exposes requested hooks in stages 0/1 and last-good hooks in stages
+2/3. Invalid stages return an empty result; stale compilation feedback is ignored.
+
+Native pixel tests verify recovery after a failed edit and continued shader
+reloads. An actual-Wasm contract verifies the source ABI, and the browser's
+`?graphics-tools&material-tools` panels exercise real context loss/recovery.
+See [platform status](PLATFORMS.md) for OS verification boundaries.

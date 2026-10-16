@@ -26,6 +26,7 @@ for game in games:
     wasm=ROOT/'target/wasm32-unknown-unknown'/folder/(package+'.wasm');shutil.copy2(wasm,out/wasm.name)
     report[package]={'profile':args.profile,'wasm_bytes':wasm.stat().st_size,'files':{p.name:p.stat().st_size for p in out.iterdir() if p.is_file()},'third_party_runtime_packages':0}
 shutil.copy2(ROOT/'web/runtime.js',output/'runtime.js')
+shutil.copy2(ROOT/'web/lifecycle.js',output/'lifecycle.js')
 for name in ('audio.js','audio-worklet.js','audio-ring.js'):shutil.copy2(ROOT/'web'/name,output/name)
 shutil.copy2(ROOT/'web/input.js',output/'input.js')
 shutil.copy2(ROOT/'web/storage.js',output/'storage.js')

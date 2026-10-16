@@ -2,7 +2,7 @@
 
 Ferravex owns action mapping, contexts, event buffering, touch capture, controller
 response and rebinding. Hosts provide physical events through browser standards
-or the Linux joystick interface; there are no third-party input packages.
+or the Linux joystick interface; there are no third-party input packages. Original Win32/AppKit hosts supply native keyboard/mouse input, and UIKit source supplies touch/hardware-key events. Their verification limits are in [Platforms](PLATFORMS.md). Embedders can feed bounded controller samples through `input::gamepad_sample`; automatic Windows/Apple controller discovery remains future work.
 
 `ferravex_play::input` is the platform-independent core. The engine's `input`
 module re-exports that API. `ferravex_render::input::PlayerInput` connects it to

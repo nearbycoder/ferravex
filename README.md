@@ -20,7 +20,7 @@ Open http://127.0.0.1:8000/ for the local catalog. Individual pages include `/em
 
 ## Native games and tools
 
-The restored games have an original Linux window and GPU host using system X11/GLX APIs. A working X display and compatible OpenGL driver are required:
+The restored games use first-party native/window/GPU bindings. Linux uses X11/GLX and needs a working display and OpenGL 3.3 driver; Windows and Apple host source and its verification status are described in [Platforms](docs/PLATFORMS.md):
 
 ```sh
 cargo run --release -p neon-swarm
@@ -65,7 +65,7 @@ python3 scripts/serve-site.py --port 8080
 
 The full native smoke run needs a Linux X display for the restored games. Use `--game owned-lab --game owned-orbit` for only the headless hosts. Generated web/site output lives in `dist`; these commands build and serve it locally.
 
-This is an engine foundation. Interactive Windows, macOS and iOS hosts, native audio output, production networking and physical-device validation still need work. The [implementation map](docs/FROM_SCRATCH.md), [architecture](docs/ARCHITECTURE.md), [validation guide](docs/GAME_TESTS.md) and [platform status](docs/PLATFORMS.md) describe the implemented systems and their limits.
+This is an engine foundation with original native/browser hosts, shared GPU rendering, audio and development/LAN multiplayer. Windows/macOS Rust cross-target checks pass; their runtime/SDK linking and the iOS source still need device validation. Internet services and a Metal backend remain future work. The [implementation map](docs/FROM_SCRATCH.md), [architecture](docs/ARCHITECTURE.md), [validation guide](docs/GAME_TESTS.md) and [platform status](docs/PLATFORMS.md) describe the implemented systems and their limits.
 
 ## License
 
