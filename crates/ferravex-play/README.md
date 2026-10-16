@@ -37,3 +37,7 @@ cargo clippy -p ferravex-play --all-targets -- -D warnings
 Unit regressions cover rule transitions/economy, timer partitioning, spatial and team checks, path correctness, weighted detours, corner blocking, animation boundaries and antipodal quaternions, particle bounds and integration, scene identity/cycles/copies/binary validation, bind-pose palettes, and UI focus/capture.
 
 `tests/tactical_scenario.rs` additionally integrates all six modules in one headless host: route an attacker around a blocked grid cell, sample that route as an animation track, update the scene hierarchy, plant the bomb, spawn a particle, activate a defuse button through UI hit testing, finish the match, and round-trip the scene data. This proves subsystem composition without claiming that an existing graphical FPS has been migrated to these systems.
+
+## Composable game loops
+
+The `gameplay` module provides score chains, progression, rewards, inventories, crafting, upgrades, weapons, wave/interaction rules, movement mechanisms, checkpoints and trials. See [gameplay recipes](../../docs/GAMEPLAY_RECIPES.md) for the API map, host contracts and a runnable survival/crafting recipe. Neon Swarm, Emberline and Orbit Breaker consume these rules in their actual game loops.

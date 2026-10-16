@@ -29,11 +29,12 @@ class SpriteRenderer {begin(){}draw(){}}
 class GpuTimer {begin(){}end(){}}
 const host={window,document,navigator:{},storage:()=>({getItem:()=>null}),atob,btoa};
 const engine={memory:{buffer:new ArrayBuffer(1024)},ferravex_init(){},ferravex_autoplay(v){calls.push(['autoplay',v]);},ferravex_frame(...args){calls.push(['frame',...args]);return 1;},ferravex_clear:()=>0,ferravex_vertices:()=>0,ferravex_vertex_count:()=>0,ferravex_batches:()=>0,ferravex_batch_count:()=>0,ferravex_key:(...a)=>calls.push(['key',...a]),ferravex_button:(...a)=>calls.push(['button',...a]),ferravex_pointer:(...a)=>calls.push(['pointer',...a]),ferravex_touch:(...a)=>calls.push(['touch',...a]),ferravex_touch_mouse:()=>1,ferravex_touch_pointer:(...a)=>calls.push(['pointer',...a,0,0]),ferravex_touch_button:(...a)=>calls.push(['button',...a]),ferravex_focus(){},ferravex_resolution:()=>0,ferravex_visual_look:()=>0,ferravex_command_count:()=>0,ferravex_commands:()=>0,ferravex_culled_count:()=>0,ferravex_visible_count:()=>0,ferravex_grab:()=>0,ferravex_blur:()=>calls.push(['blur']),ferravex_wheel:(v)=>calls.push(['wheel',v])};
+engine.ferravex_details_get=()=>0;
 await vm.runInNewContext(`(async()=>{${source}\n})()`,{document,window,RetainedRenderer,SpriteRenderer,GpuTimer,framebufferSize,configureVisuals,
  bindInput:(canvas,game,getExports,isPlaying)=>bindInput(canvas,game,getExports,isPlaying,host),
  bindDetails:()=>({ready(){},update(){}}),bindAudio:()=>({sync(){},suspend(){},resume(){}}),
  bindGraphicsLifecycle:(canvas,options)=>bindGraphicsLifecycle(canvas,{...options,request:fn=>{frame=fn;return 1;},cancel(){}}),
- devicePixelRatio:2,location:{search:'?autoplay'},URLSearchParams,Float32Array,DataView,console,fetch:async()=>({ok:true,arrayBuffer:async()=>new ArrayBuffer(0)}),WebAssembly:{instantiate:async(_bytes,imports)=>{engine.setPlaying=imports.env.ferravex_set_playing;return {instance:{exports:engine}};}},requestAnimationFrame:fn=>frame=fn});
+ performance:{now:()=>0},devicePixelRatio:2,location:{search:'?autoplay'},URLSearchParams,Float32Array,DataView,console,fetch:async()=>({ok:true,arrayBuffer:async()=>new ArrayBuffer(0)}),WebAssembly:{instantiate:async(_bytes,imports)=>{engine.setPlaying=imports.env.ferravex_set_playing;return {instance:{exports:engine}};}},requestAnimationFrame:fn=>frame=fn});
 assert.deepEqual(calls[0],['autoplay',1]);
 const key=code=>({code,preventDefault(){}});
 window.handlers.get('keydown')(key('KeyA'));window.handlers.get('keyup')(key('KeyA'));
