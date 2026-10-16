@@ -80,3 +80,6 @@ pub mod snapshots;
 
 /// See [`time`] for the system contract and examples.
 pub mod time;
+
+/// See [`work_budget`] for the system contract and examples.
+pub mod work_budget;
