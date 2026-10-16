@@ -1094,3 +1094,50 @@ runs now disable vsync so occluded compositor windows cannot stall automation.
 The entire workspace still has 28 first-party Cargo packages and zero external
 Cargo packages. Windows/macOS runtime checks were unavailable; iOS checks remain
 excluded. No deployment command was issued.
+
+## Iteration 20 — native platform hosts
+
+Measured source `b8fd9af868dbb95f34c28deeb61ae24054bbbae6`, compared with
+iteration 19. Evidence: ignored `target/perf/iteration-20-final/report.json`.
+All fifteen games, two runs of 120 measured frames after 30 warmup frames,
+release profile. Budgets remain 20%, 1,000 µs CPU floor, 20 µs GPU floor and
+5% artifact growth. The harness now explicitly sets `FERRAVEX_DPI_SCALE=1`
+to preserve the historical framebuffer workload; production still honors the
+system DPI. No builders, tests or game tabs ran alongside the measurements.
+
+**The final comparison passed with no flags.** An initial comparison at source
+`76bbf6fc2c0fdb1d2cdc2151e58db067365873cf` failed ten native gzip-size budgets.
+That report is preserved in `target/perf/iteration-20-before-dpi-parser`.
+Replacing general float parsing for Linux DPI configuration with a bounded
+first-party decimal reader removed about 17,752 raw / 14,800–15,000 compressed
+bytes from each windowed example. For example, Emberline decreased from
+825,224 / 406,469 to 807,472 / 391,668 raw/gzip bytes; Strike decreased from
+1,231,480 / 606,721 to 1,213,760 / 591,724. Required decimal, fractional,
+exponent, malformed and overflow inputs are covered. This is a real code
+reduction, not a changed size threshold or baseline.
+
+Strike CPU mean/p95/p99 is 53.216 / 71.817 / 102.557 µs. Physics-2D is
+656.428 / 1174.145 / 1914.374 µs, Physics-3D 718.552 / 1859.065 / 1894.424 µs,
+and Rally 691.400 / 894.833 / 1210.485 µs. Physics-3D GPU p95/p99 is
+29.976 / 116.661 µs with 100% coverage. A lower p95 in this run does not
+isolate or resolve the previously recorded GPU-tail issues. Earlier cumulative
+artifact and timing costs remain open.
+
+All available work distributions match iteration 19 except Neon Swarm allocation
+bytes: mean 219.575 → 218.817, maximum 4149 → 4058, with unchanged median,
+p95, p99 and allocation-call distribution. The small difference has not been
+isolated. Native hashes and raw/gzip sizes, Wasm sizes, and staged Wasm bytes
+were verified against the report. This is the same available Linux machine,
+not evidence of frame rates on low-end hardware or Apple/Windows devices.
+
+Local validation: 495 regular workspace tests; 13 available Linux GLX/ALSA
+checks, including repeated graphics ownership and audio suspension; strict
+native, Windows GNU, macOS ARM64 and Wasm Clippy; strict Rustdoc/site build;
+all fifteen release native/Wasm builds and 360-frame gameplay/PNG checks;
+Node contracts, actual-Wasm material fallback and multiplayer/replay checks;
+and 21 Python checks. Browser interaction exercised actual WebGL context loss
+and restoration, preserved game progress and failed-edit status. A native GPU
+pixel test proves the last valid custom shader survives recreation. Cross-checks
+for Windows/macOS do not prove linking or runtime behavior. iOS source and
+bundle manifests are included provisionally; iOS SDK/device testing is excluded.
+All 28 Cargo packages remain first-party. No deployment command was issued.
