@@ -222,7 +222,8 @@ async fn game() {
             draw_line(mouse.x - 11.0, mouse.y, mouse.x - 5.0, mouse.y, 1.0, CYAN);
             draw_line(mouse.x + 5.0, mouse.y, mouse.x + 11.0, mouse.y, 1.0, CYAN);
         }
-        if touch_mode && started && game.phase == Phase::Playing {
+        if touch_mode && !player_input.touch_customized() && started && game.phase == Phase::Playing
+        {
             draw_circle_lines(202.0, 600.0, 66.0, 1.4, Color::new(0.4, 0.8, 0.75, 0.22));
             draw_circle(
                 202.0 + input.movement.x * 34.0,

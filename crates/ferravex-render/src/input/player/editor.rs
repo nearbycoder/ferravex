@@ -79,6 +79,9 @@ impl PlayerInput {
             return;
         }
         if !self.open {
+            if self.touch_seen && self.enabled && !self.paused && self.touch_customized() {
+                self.draw_custom_touch();
+            }
             if self.paused {
                 crate::set_default_camera();
                 let label = "Paused / Pause action to resume / F2 controls";
@@ -106,7 +109,7 @@ impl PlayerInput {
         draw_text("CONTROLS", x + 18., y + 31., 20., WHITE);
         let per_page = (((height - 190.) / 43.).floor() as usize).clamp(1, 8);
         let count = if self.devices_tab {
-            16
+            19 + self.raw_touch.len() * 3
         } else {
             self.actions.len()
         };
@@ -180,6 +183,7 @@ impl PlayerInput {
             Color::from_rgba(161, 185, 189, 255),
         );
         let mut settings = self.settings;
+        let mut touch = self.touch_settings;
         let mut preferences = self.preferences();
         if self.devices_tab {
             for (row, i) in (start..end).enumerate() {
@@ -242,13 +246,40 @@ impl PlayerInput {
                         }
                         .into(),
                     ),
-                    _ => (
+                    15 => (
                         "Visual style",
                         crate::Look::from_index(preferences.look as u32)
                             .unwrap_or_default()
                             .name()
                             .into(),
                     ),
+                    16 => (
+                        "Touch handedness",
+                        if touch.mirrored {
+                            "Mirrored"
+                        } else {
+                            "Authored"
+                        }
+                        .into(),
+                    ),
+                    17 => ("Touch scale", format!("{:.0}%", touch.scale * 100.)),
+                    18 => ("Touch opacity", format!("{:.0}%", touch.opacity * 100.)),
+                    _ => {
+                        let slot = (i - 19) / 3;
+                        let axis = (i - 19) % 3;
+                        (
+                            ["Touch X", "Touch Y", "Touch size"][axis],
+                            format!(
+                                "{}: {:.0}%",
+                                slot + 1,
+                                match axis {
+                                    0 => touch.edits[slot].offset.x,
+                                    1 => touch.edits[slot].offset.y,
+                                    _ => touch.edits[slot].scale,
+                                } * 100.
+                            ),
+                        )
+                    }
                 };
                 draw_text(&fit(label, width - 192., 14), x + 18., yy + 12., 14., WHITE);
                 draw_text(
@@ -313,7 +344,27 @@ impl PlayerInput {
                             };
                             preferences.quality = next.checked_sub(1);
                         }
-                        _ => preferences.look = (preferences.look + if plus { 1 } else { 3 }) % 4,
+                        15 => preferences.look = (preferences.look + if plus { 1 } else { 3 }) % 4,
+                        16 => touch.mirrored = !touch.mirrored,
+                        17 => touch.scale = (touch.scale + d * 0.1).clamp(0.6, 1.8),
+                        18 => touch.opacity = (touch.opacity + d * 0.1).clamp(0.2, 1.),
+                        _ => {
+                            let slot = (i - 19) / 3;
+                            match (i - 19) % 3 {
+                                0 => {
+                                    touch.edits[slot].offset.x =
+                                        (touch.edits[slot].offset.x + d * 0.025).clamp(-0.4, 0.4)
+                                }
+                                1 => {
+                                    touch.edits[slot].offset.y =
+                                        (touch.edits[slot].offset.y + d * 0.025).clamp(-0.4, 0.4)
+                                }
+                                _ => {
+                                    touch.edits[slot].scale =
+                                        (touch.edits[slot].scale + d * 0.1).clamp(0.5, 2.)
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -393,6 +444,9 @@ impl PlayerInput {
                 }
             }
         }
+        if touch != self.touch_settings {
+            let _ = self.set_touch_settings(touch);
+        }
         if preferences != self.preferences() {
             let _ = self.set_preferences(preferences);
         }
@@ -428,11 +482,13 @@ impl PlayerInput {
             self.reset_defaults();
             if self.devices_tab {
                 let _ = self.reset_preferences();
+                let _ = self.set_touch_settings(touch::TouchLayoutSettings::default());
             }
             self.capture = None;
         }
         let message = if self.devices_tab {
-            if self.preferences_error().is_some()
+            if self.touch_save_failed
+                || self.preferences_error().is_some()
                 || matches!(
                     self.status,
                     ControlsStatus::Storage(_) | ControlsStatus::Invalid(_)
@@ -460,5 +516,65 @@ impl PlayerInput {
             14.,
             Color::from_rgba(161, 185, 189, 255),
         );
+    }
+}
+
+impl PlayerInput {
+    /// This draws the effective capture regions, so custom hit targets and labels
+    /// use exactly the same mirrored/scaled coordinates as input.
+    fn draw_custom_touch(&self) {
+        crate::set_default_camera();
+        let color = Color::new(0.9, 0.94, 0.86, self.touch_settings.opacity);
+        for c in self.surface.controls() {
+            if matches!(c.output, touch::Output::Look { .. }) {
+                continue;
+            }
+            let center = match c.region {
+                touch::Region::Circle { center, radius } => {
+                    draw_circle(
+                        center.x,
+                        center.y,
+                        radius,
+                        Color::new(0.04, 0.08, 0.09, self.touch_settings.opacity * 0.5),
+                    );
+                    draw_circle_lines(center.x, center.y, radius, 2., color);
+                    center
+                }
+                touch::Region::Rect(r) => {
+                    draw_rectangle(
+                        r.x,
+                        r.y,
+                        r.w,
+                        r.h,
+                        Color::new(0.04, 0.08, 0.09, self.touch_settings.opacity * 0.5),
+                    );
+                    draw_rectangle_lines(r.x, r.y, r.w, r.h, 2., color);
+                    r.center()
+                }
+            };
+            match c.output {
+                touch::Output::Stick { x, y, radius, .. } => {
+                    let (origin, delta) = self.surface.stick(x, y).unwrap_or((center, Vec2::ZERO));
+                    let p = origin + delta * radius * 0.6;
+                    draw_circle(p.x, p.y, 12., color);
+                }
+                touch::Output::Button(channel) => {
+                    let label = self
+                        .actions
+                        .iter()
+                        .find(|a| {
+                            self.map
+                                .bindings(a.id)
+                                .unwrap()
+                                .iter()
+                                .any(|b| b.code == InputCode::Touch(channel))
+                        })
+                        .map_or("Action", |a| a.label.as_str());
+                    let width = measure_text(label, None, 14, 1.).width;
+                    draw_text(label, center.x - width * 0.5, center.y + 5., 14., color);
+                }
+                _ => {}
+            }
+        }
     }
 }

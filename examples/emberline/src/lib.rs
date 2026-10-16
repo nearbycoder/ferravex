@@ -606,7 +606,7 @@ async fn game() {
                 CREAM,
             );
         }
-        if touch_mode {
+        if touch_mode && !player_input.touch_customized() {
             for (x, text) in [(68.0, "<"), (182.0, ">"), (1184.0, "^")] {
                 draw_circle(x, 651.0, 38.0, Color::new(0.09, 0.14, 0.12, 0.65));
                 label(text, x - 11.0, 663.0, 32.0, CREAM);

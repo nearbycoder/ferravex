@@ -24,8 +24,8 @@ platform checks are recorded only when actually performed.
 | 14 | Camera anticipation and authored zones | [PR 37](https://github.com/nearbycoder/ferravex/pull/37), merged |
 | 15 | Procedural contact animation | [PR 38](https://github.com/nearbycoder/ferravex/pull/38), merged |
 | 16 | Procedural environment builders | [PR 39](https://github.com/nearbycoder/ferravex/pull/39), merged |
-| 17 | Acoustic zones and adaptive music | Implemented; locally validated |
-| 18 | Editable touch and accessibility layouts | Pending |
+| 17 | Acoustic zones and adaptive music | [PR 40](https://github.com/nearbycoder/ferravex/pull/40), merged |
+| 18 | Editable touch and accessibility layouts | Implemented; locally validated |
 | 19 | Objective and puzzle graphs | Pending |
 | 20 | Adaptive performance and playtest diagnostics | Pending |
 
@@ -274,3 +274,19 @@ real room filtering for local cues/footsteps and adaptive exploration music.
 Local tests cover feathering, explicit occlusion, high-frequency energy reduction,
 bar timing, equal stem lengths, existing audio allocation/partition/suspension tests,
 complete cave playthrough, strict workspace Clippy and Wasm compilation.
+
+## 18. Saved touch layouts
+
+`input::touch::TouchLayoutSettings` supplies handedness, global size/opacity and
+16 individual normalized position/size edits, using the shared typed save format.
+The runtime Controls > Devices editor exposes these settings and saves per game.
+All `PlayerInput` hosts transform their real capture layouts, clear held fingers
+on edits, and draw customized controls from those exact effective regions. Original
+virtual-control drawings are suppressed when the shared custom overlay is active.
+Authored defaults stay unchanged; customized buttons are at least 44 logical
+pixels and stay within the logical viewport. Look regions retain drag semantics;
+pointer-native games keep their ordinary pointing controls. Layout slot order must
+stay stable across host revisions. There is no claimed OS safe-area or gyro adapter.
+Local save/invalid/mirror/resize/default tests and an actual transformed touch
+capture/release regression pass, along with existing input/allocation suites,
+strict workspace Clippy and all-game Wasm compilation.

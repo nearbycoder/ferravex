@@ -112,6 +112,9 @@ fn bounded(p: Vec2) -> bool {
 impl TouchSurface {
     /// Identical layouts preserve captures. A changed/resized layout releases
     /// all old output codes before installing the new one, without reallocating.
+    pub fn controls(&self) -> &[Control] {
+        &self.controls
+    }
     pub fn set_layout(
         &mut self,
         controls: &[Control],
@@ -390,3 +393,6 @@ mod tests {
         assert_eq!(map.physical_value(InputCode::Touch(0)), 0.);
     }
 }
+
+mod layout;
+pub use layout::{TouchEdit, TouchLayoutSettings};

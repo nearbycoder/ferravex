@@ -218,7 +218,7 @@ impl Controls {
         out
     }
     pub fn draw_touch(&self) {
-        if !self.touch_mode {
+        if !self.touch_mode || self.input.touch_customized() {
             return;
         }
         let w = screen_width();

@@ -505,7 +505,7 @@ async fn game() {
                 CREAM,
             );
         }
-        if touch_mode {
+        if touch_mode && !player_input.touch_customized() {
             for (x, label) in [
                 (46., "<"),
                 (144., ">"),

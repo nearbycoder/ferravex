@@ -734,7 +734,7 @@ async fn game() {
                 INK,
             );
         }
-        if touch_mode && !game.finished && !picker {
+        if touch_mode && !player_input.touch_customized() && !game.finished && !picker {
             let center = stick_center;
             draw_circle(
                 center.x,

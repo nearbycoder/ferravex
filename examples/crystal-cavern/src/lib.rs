@@ -944,7 +944,7 @@ async fn game() {
                 WHITE,
             );
         }
-        if player_input.touch_seen() && !game.won {
+        if player_input.touch_seen() && !player_input.touch_customized() && !game.won {
             let (origin, delta) = player_input
                 .touch_stick(0, 1)
                 .unwrap_or((vec2(90., h - 105.), Vec2::ZERO));

@@ -303,3 +303,48 @@ fn overflow_discards_entire_packet_and_touch_mouse_does_not_fire_real_mouse() {
     assert!(p.gameplay_active());
     assert!(!p.pressed("jump"));
 }
+#[test]
+fn edited_touch_capture_matches_visual_regions_and_edits_release_holds() {
+    let mut p = player();
+    crate::edit(|s| {
+        s.w = 320;
+        s.h = 200;
+    });
+    let control = touch::Control {
+        region: touch::Region::Circle {
+            center: vec2(40., 140.),
+            radius: 24.,
+        },
+        output: touch::Output::Button(3),
+    };
+    p.set_touch_settings(touch::TouchLayoutSettings {
+        mirrored: true,
+        ..Default::default()
+    })
+    .unwrap();
+    p.set_touch_layout(&[control]).unwrap();
+    let center = match p.surface.controls()[0].region {
+        touch::Region::Circle { center, .. } => center,
+        _ => unreachable!(),
+    };
+    assert_eq!(center, vec2(280., 140.));
+    super::super::touch_event(touch::Event {
+        id: 19,
+        position: center,
+        phase: touch::Phase::Start,
+    });
+    p.sample(true);
+    assert!(p.held("jump"));
+    p.set_touch_settings(touch::TouchLayoutSettings::default())
+        .unwrap();
+    assert!(!p.held("jump"));
+    let old = p.touch_settings();
+    assert!(
+        p.set_touch_settings(touch::TouchLayoutSettings {
+            scale: f32::NAN,
+            ..old
+        })
+        .is_err()
+    );
+    assert_eq!(p.touch_settings(), old);
+}
