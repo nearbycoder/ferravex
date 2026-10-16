@@ -25,3 +25,5 @@ pub mod ui;
 pub mod encounter;
 
 pub mod vehicle;
+
+pub mod racing;

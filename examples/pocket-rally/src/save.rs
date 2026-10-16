@@ -118,7 +118,8 @@ mod tests {
         let mut race = Race::new(&track);
         let ctx = context(&track);
         for _ in 0..18000 {
-            race.step(&track, race.autopilot(&track), 1. / 120.);
+            let controls = race.autopilot(&track);
+            race.step(&track, controls, 1. / 120.);
             if race.laps > 0 {
                 break;
             }
