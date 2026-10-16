@@ -20,7 +20,7 @@ const PAPER: Color = Color::from_rgba(221, 237, 227, 255);
 const CYAN: Color = Color::from_rgba(98, 236, 207, 255);
 const CORAL: Color = Color::from_rgba(255, 132, 93, 255);
 // Version 5 fixes staggered pursuit stalling just outside melee range.
-const RECORD_RULES: u64 = 5;
+const RECORD_RULES: u64 = 6;
 
 fn conf() -> Conf {
     ferravex_render::window_conf("Neon Swarm · Ferravex")
@@ -225,7 +225,7 @@ async fn game() {
             } else {
                 None
             };
-            let _ = records.attempt("sector-07", RECORD_RULES, game.kills as u64, time);
+            let _ = records.attempt("sector-07", RECORD_RULES, game.score.total(), time);
         }
         draw_hud(&mut hud_ui, &game, started, touch_mode);
         if started && !paused && game.phase == Phase::Playing && !touch_mode && !demo.autoplay {
@@ -265,8 +265,8 @@ async fn game() {
                 &mut hud_ui,
                 if won { "SECTOR SECURED" } else { "SIGNAL LOST" },
                 &format!(
-                    "{} cleared / {:.0}s / best {}",
-                    game.kills,
+                    "{} points / {:.0}s / best {}",
+                    game.score.total(),
                     game.time,
                     records
                         .get("sector-07", RECORD_RULES)
@@ -578,7 +578,11 @@ fn draw_hud(ui: &mut Ui, game: &Game, started: bool, touch: bool) {
         14.,
         MUTED,
         Align::Left,
-        format_args!("SECTOR 07 / CONTAINMENT"),
+        format_args!(
+            "{} POINTS / x{} CHAIN",
+            game.score.total(),
+            game.score.multiplier()
+        ),
     );
     for wave in 1..=3 {
         ui.panel(

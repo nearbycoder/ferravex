@@ -17,3 +17,5 @@ Ferravex `FixedClock` runs simulation at 120 Hz independently of rendering. Ferr
 The game needs no downloaded textures, fonts, audio, or models. Flat geometry, restrained cyan/coral silhouettes, sparse floor joints, and minimal combat indicators keep targets readable. No sound is included in this slice.
 
 Engine gaps exercised: swept segment/circle and segment/AABB queries were promoted to `ferravex_core::collision` and this game now uses them. Circle/rectangle character movement remains game-specific. This game now uses the shared `ferravex_render::canvas::Canvas2D` helper added during this game suite to unify aspect-preserving drawing and mouse/touch transforms. The helper maps drawing and pointer/touch coordinates through the same aspect-preserving canvas. Native Linux currently uses physical window pixels; automatic desktop DPI scaling is not implemented.
+
+Kills now build a 3.5-second score chain, increasing the multiplier every three kills up to x5. Taking a hit breaks the chain. The HUD and best-run record show points; old rules records remain separate.
