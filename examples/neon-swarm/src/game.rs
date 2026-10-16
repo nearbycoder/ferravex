@@ -76,6 +76,8 @@ pub struct Game {
     pub kills: u32,
     pub score: ferravex_play::gameplay::combo::ScoreChain,
     pub shots: u32,
+    pub progression: ferravex_play::gameplay::progression::Progression,
+    weapon_upgrades: ferravex_play::gameplay::upgrades::Upgrades<1>,
     pub dash_cooldown: f32,
     pub dash_time: f32,
     pub hurt_time: f32,
@@ -117,6 +119,8 @@ impl Game {
             kills: 0,
             score: ferravex_play::gameplay::combo::ScoreChain::new(3.5, 3, 5).unwrap(),
             shots: 0,
+            progression: ferravex_play::gameplay::progression::Progression::new(50, 30, 4).unwrap(),
+            weapon_upgrades: ferravex_play::gameplay::upgrades::Upgrades::new([3]).unwrap(),
             dash_cooldown: 0.0,
             dash_time: 0.0,
             hurt_time: 0.0,
@@ -172,6 +176,10 @@ impl Game {
             intermission: 1.6,
             dash_direction: Vec2::X,
         })
+    }
+
+    pub fn shot_damage(&self) -> f32 {
+        24. + 4. * f32::from(self.weapon_upgrades.rank(0).unwrap())
     }
 
     pub fn enemy_count(&self) -> usize {
@@ -402,13 +410,14 @@ impl Game {
             let _ = self.world.despawn(id);
         }
         let mut dead = Vec::new();
+        let damage = self.shot_damage();
         for (id, point) in impacts {
             let target_position = self.world.get::<&Position>(id).ok().map(|p| p.0);
             if let Ok(mut enemy) = self.world.get::<&mut Enemy>(id) {
                 if enemy.health <= 0.0 {
                     continue;
                 }
-                enemy.health -= 24.0;
+                enemy.health -= damage;
                 enemy.attack.cancel(false);
                 enemy.flash = 0.09;
                 if let Some(position) = target_position {
@@ -426,6 +435,9 @@ impl Game {
             let _ = self.world.despawn(id);
             self.kills += 1;
             self.score.award(100);
+            for _ in 0..self.progression.award(10) {
+                self.weapon_upgrades.apply(0).unwrap();
+            }
             if self.kills.is_multiple_of(5) {
                 self.world
                     .spawn((Position(point), Pickup { remaining: 16.0 }));
@@ -711,5 +723,25 @@ mod score_loop_tests {
         assert!(game.score.total() >= u64::from(game.kills) * 100);
         assert!(game.score.best() > 3);
         assert_eq!(Game::new().score.total(), 0);
+    }
+}
+
+#[cfg(test)]
+mod progression_loop_tests {
+    use super::*;
+    #[test]
+    fn ordinary_kills_earn_capped_damage_upgrades() {
+        let mut game = Game::new();
+        assert_eq!(game.shot_damage(), 24.);
+        for _ in 0..120 * 100 {
+            game.update(game.autoplay(), 1. / 120.);
+            if game.phase != Phase::Playing {
+                break;
+            }
+        }
+        assert_eq!(game.phase, Phase::Won);
+        assert_eq!(game.progression.level(), 4);
+        assert_eq!(game.shot_damage(), 36.);
+        assert_eq!(Game::new().progression.level(), 1);
     }
 }
