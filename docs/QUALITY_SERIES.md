@@ -25,8 +25,8 @@ platform checks are recorded only when actually performed.
 | 15 | Procedural contact animation | [PR 38](https://github.com/nearbycoder/ferravex/pull/38), merged |
 | 16 | Procedural environment builders | [PR 39](https://github.com/nearbycoder/ferravex/pull/39), merged |
 | 17 | Acoustic zones and adaptive music | [PR 40](https://github.com/nearbycoder/ferravex/pull/40), merged |
-| 18 | Editable touch and accessibility layouts | Implemented; locally validated |
-| 19 | Objective and puzzle graphs | Pending |
+| 18 | Editable touch and accessibility layouts | [PR 41](https://github.com/nearbycoder/ferravex/pull/41), merged |
+| 19 | Objective and puzzle graphs | Implemented; locally validated |
 | 20 | Adaptive performance and playtest diagnostics | Pending |
 
 ## 1. Gameplay tuning profiles
@@ -290,3 +290,17 @@ stay stable across host revisions. There is no claimed OS safe-area or gyro adap
 Local save/invalid/mirror/resize/default tests and an actual transformed touch
 capture/release regression pass, along with existing input/allocation suites,
 strict workspace Clippy and all-game Wasm compilation.
+
+## 19. Objective graphs
+
+`objective::ObjectiveGraph<N>` validates acyclic all/any dependencies across up to
+64 counted-event, timer and automatic-gate objectives. Exclusive groups select
+one branch; parallel timers select the earliest expiry. Newly unlocked timers
+start at the current step boundary. Ordered authoritative serials reject duplicates
+across saves. Fixed arrays and bitsets bound update work; the core does not inspect
+world distance or award inventory. Typed snapshots fingerprint the definition and
+validate progress, dependencies and branch consistency before replacement.
+Crystal Cavern's actual crystals, numbered altars and exit now derive their state
+from the graph while retaining real proximity/visibility checks. Local cycle,
+ordering, branch/timer, duplicate, save/incompatible-restore tests and an actual
+cave altar checkpoint/resume plus full playthrough pass, with strict Clippy/Wasm.
