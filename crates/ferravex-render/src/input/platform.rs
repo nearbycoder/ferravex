@@ -23,6 +23,7 @@ pub(crate) enum PlatformEvent {
     None,
     Value(InputCode, f32),
     MouseMotion(Vec2),
+    PointerPosition(Vec2),
     Touch(touch::Event),
     Pad {
         index: u8,

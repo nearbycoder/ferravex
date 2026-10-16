@@ -28,6 +28,7 @@ function runtime(id){
 }
 {
  const {e,frame,key,menu}=runtime('neon-swarm');frame();assert.ok(menu());
+ e.ferravex_pointer(900,600,0,0);e.ferravex_button(1,1);e.ferravex_pointer(640,490,-260,-110);e.ferravex_button(1,0);frame();frame();assert.ok(menu(),'same-frame outside press cannot become an inside click');
  // Button occupies design x470..810/y468..520 at this exact fit viewport.
  e.ferravex_pointer(640,490,0,0);e.ferravex_button(1,1);frame();assert.ok(menu(),'press alone cannot activate');
  e.ferravex_pointer(900,600,260,110);e.ferravex_button(1,0);frame();frame();assert.ok(menu(),'drag-out release cancels');

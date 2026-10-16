@@ -1084,10 +1084,11 @@ fn button_source(code: u32, down: bool, touch: bool) {
             return;
         }
         if !touch
-            && !s.input.push(input::PlatformEvent::Value(
-                input::InputCode::Mouse(code as u8),
-                f32::from(down),
-            ))
+            && (!s.input.push(input::PlatformEvent::PointerPosition(s.mouse))
+                || !s.input.push(input::PlatformEvent::Value(
+                    input::InputCode::Mouse(code as u8),
+                    f32::from(down),
+                )))
         {
             clear_held(s);
             return;

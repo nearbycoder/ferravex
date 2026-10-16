@@ -39,8 +39,9 @@ confirm action; the three adopting games use this adapter. Gameplay overlays can
 `set_auto_focus(false)` to require an explicit focus choice before accepting, so
 Orchard’s A button can still select a plot until its HUD receives focus. Navigation
 is edge based, without held-key repeat. Hotplugged held A is suppressed for the
-connection frame. Mouse and touch require press and release on the same enabled,
-visible widget. One touch owns capture; other fingers cannot release it. Removed,
+connection frame. Event-time mouse positions preserve fast same-frame drag cancellation.
+Mouse and touch require press and release on the same enabled,
+visible widget. One pointer owns capture; another mouse/finger cannot steal or release it. Removed,
 disabled, fully clipped, cancelled, unfocused or overflowed input cancels capture.
 Disabled widgets occlude clicks underneath. The F2 controls editor blocks menu
 input. Navigation and Enter have fixed host bindings in addition to a profile’s

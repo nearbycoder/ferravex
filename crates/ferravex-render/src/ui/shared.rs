@@ -87,6 +87,7 @@ pub struct Ui {
     shift: u8,
     pad_epoch: Option<(u8, u32)>,
     auto_focus: bool,
+    mouse_capture: bool,
 }
 impl Default for Ui {
     fn default() -> Self {
@@ -112,6 +113,7 @@ impl Ui {
             shift: 0,
             pad_epoch: None,
             auto_focus: true,
+            mouse_capture: false,
         }
     }
     /// Reserved CPU storage, including this value; excludes the renderer's shared stream.
@@ -157,6 +159,7 @@ impl Ui {
     pub fn cancel(&mut self) {
         self.state.cancel_pointer();
         self.touch = None;
+        self.mouse_capture = false;
     }
     pub fn push_clip(&mut self, rect: UiRect) -> Result<(), UiError> {
         if !rect.valid() {
@@ -343,17 +346,21 @@ impl Ui {
             .viewport
             .unproject(pointer)
             .and_then(|p| self.state.hit_test(p));
+        let mut event_pointer = pointer;
         for event in events {
             match event {
+                PlatformEvent::PointerPosition(p) => event_pointer = [p.x, p.y],
                 PlatformEvent::None => break,
                 PlatformEvent::Value(InputCode::Mouse(1), v) if self.touch.is_none() => {
                     let p = self
                         .viewport
-                        .unproject(pointer)
+                        .unproject(event_pointer)
                         .unwrap_or([f32::NEG_INFINITY; 2]);
                     if v >= 0.5 {
+                        self.mouse_capture = true;
                         self.state.pointer_down(p);
-                    } else {
+                    } else if self.mouse_capture {
+                        self.mouse_capture = false;
                         self.active = self.state.pointer_up(p).or(self.active);
                     }
                 }
@@ -363,7 +370,7 @@ impl Ui {
                         .unproject([e.position.x, e.position.y])
                         .unwrap_or([f32::NEG_INFINITY; 2]);
                     match e.phase {
-                        touch::Phase::Start if self.touch.is_none() => {
+                        touch::Phase::Start if self.touch.is_none() && !self.mouse_capture => {
                             self.touch = Some(e.id);
                             self.state.pointer_down(p);
                         }
@@ -749,6 +756,37 @@ mod tests {
         crate::touch(10, 2, 40., 40.);
         ui.finish(true);
         assert!(!ui.activated(1));
+    }
+    #[test]
+    fn event_time_mouse_positions_and_pointer_ownership_prevent_false_clicks() {
+        reset();
+        let mut ui = Ui::new();
+        begin(&mut ui);
+        button(&mut ui, 1, true);
+        crate::pointer(150., 150., 0., 0.);
+        crate::button(1, true);
+        crate::pointer(40., 40., -110., -110.);
+        crate::button(1, false);
+        ui.finish(true);
+        assert!(
+            !ui.activated(1),
+            "outside press then inside release in one frame"
+        );
+        next();
+        begin(&mut ui);
+        button(&mut ui, 1, true);
+        crate::pointer(40., 40., 0., 0.);
+        crate::button(1, true);
+        crate::touch(7, 0, 40., 40.);
+        crate::touch(7, 2, 40., 40.);
+        ui.finish(true);
+        assert!(!ui.activated(1), "touch cannot steal mouse capture");
+        next();
+        begin(&mut ui);
+        button(&mut ui, 1, true);
+        crate::button(1, false);
+        ui.finish(true);
+        assert!(ui.activated(1));
     }
     #[test]
     fn keyboard_pad_modal_and_disabled_focus() {
