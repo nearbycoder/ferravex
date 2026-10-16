@@ -28,6 +28,7 @@ pub struct Enemy {
     pub flash: f32,
     pub knockback: Vec2,
     pub attack: ActionTimeline,
+    pub stagger: ferravex_play::gameplay::stagger::Stagger,
 }
 pub fn attack_timeline(heavy: bool) -> ActionTimeline {
     let windup = if heavy { 0.38 } else { 0.16 };
@@ -295,16 +296,24 @@ impl Game {
         self.ai.update(&self.world, self.player, shot, dt);
         for (mut p, mut enemy) in &mut self.world.query::<(&mut Position, &mut Enemy)>() {
             enemy.flash = (enemy.flash - dt).max(0.0);
-            let planted = match enemy.attack.phase() {
-                ActionPhase::Windup => 0.2,
-                ActionPhase::Recovery => 0.6,
-                _ => 1.,
+            enemy.stagger.advance(dt).unwrap();
+            let planted = if enemy.stagger.active() {
+                0.
+            } else {
+                match enemy.attack.phase() {
+                    ActionPhase::Windup => 0.2,
+                    ActionPhase::Recovery => 0.6,
+                    _ => 1.,
+                }
             };
             let velocity = self.ai.velocity(enemy.ai_slot, p.0, enemy.speed * planted);
             enemy.knockback *= (-10. * dt).exp();
             p.0 = move_body(p.0, (velocity + enemy.knockback) * dt, enemy.radius);
             let within_range = p.0.distance(self.player) < enemy.radius + PLAYER_RADIUS;
-            let attack = enemy.attack.step(dt, within_range).unwrap();
+            let attack = enemy
+                .attack
+                .step(dt, within_range && !enemy.stagger.active())
+                .unwrap();
             if within_range && attack.activated() && self.hurt_time == 0.0 && self.dash_time == 0.0
             {
                 let damage =
@@ -407,6 +416,7 @@ impl Game {
                 },
                 heavy,
                 attack: attack_timeline(heavy),
+                stagger: ferravex_play::gameplay::stagger::Stagger::new(40., 10., 0.8).unwrap(),
                 flash: 0.16,
             },
         ));
@@ -456,7 +466,13 @@ impl Game {
                     continue;
                 }
                 enemy.health -= damage;
-                enemy.attack.cancel(false);
+                if enemy.heavy {
+                    if enemy.stagger.hit(24.).unwrap() {
+                        enemy.attack.cancel(true);
+                    }
+                } else {
+                    enemy.attack.cancel(false);
+                }
                 enemy.flash = 0.09;
                 if let Some(position) = target_position {
                     let direction = (position - self.player).normalize_or_zero();
@@ -540,6 +556,7 @@ mod tests {
                 speed: 0.,
                 heavy: true,
                 attack: attack_timeline(true),
+                stagger: ferravex_play::gameplay::stagger::Stagger::new(40., 10., 0.8).unwrap(),
                 flash: 0.,
                 knockback: Vec2::ZERO,
             },
@@ -596,6 +613,7 @@ mod tests {
                 speed: 0.0,
                 heavy: false,
                 attack: attack_timeline(false),
+                stagger: ferravex_play::gameplay::stagger::Stagger::new(40., 10., 0.8).unwrap(),
                 flash: 0.0,
             },
         ));
@@ -625,6 +643,7 @@ mod tests {
                 speed: 0.0,
                 heavy: false,
                 attack: attack_timeline(false),
+                stagger: ferravex_play::gameplay::stagger::Stagger::new(40., 10., 0.8).unwrap(),
                 flash: 0.0,
             },
         ));
@@ -716,6 +735,7 @@ mod telegraph_tests {
                 speed: 0.,
                 heavy: true,
                 attack: attack_timeline(true),
+                stagger: ferravex_play::gameplay::stagger::Stagger::new(40., 10., 0.8).unwrap(),
                 flash: 0.,
                 knockback: Vec2::ZERO,
             },
@@ -841,5 +861,39 @@ mod safe_spawn_tests {
             .0
             .0;
         assert!(p.distance(g.player) > 250.);
+    }
+}
+
+#[cfg(test)]
+mod stagger_loop_tests {
+    use super::*;
+    #[test]
+    fn concentrated_shots_stagger_heavy_enemies_and_recovery_reenables_them() {
+        let mut g = Game::new();
+        g.wave = 2;
+        g.remaining = 1;
+        g.spawn_index = 0;
+        let point = g.player + Vec2::X * 80.;
+        g.spawn_enemy(point);
+        for _ in 0..2 {
+            g.world.spawn((
+                Position(g.player),
+                Bullet {
+                    velocity: Vec2::X * 900.,
+                    remaining: 1.,
+                },
+            ));
+            g.update_bullets(0.1);
+        }
+        let id = g.world.query::<(Entity, &Enemy)>().iter().next().unwrap().0;
+        let e = g.world.get::<&Enemy>(id).unwrap();
+        assert!(e.stagger.active());
+        assert!(e.health > 0.);
+        drop(e);
+        {
+            let mut e = g.world.get::<&mut Enemy>(id).unwrap();
+            e.stagger.advance(1.).unwrap();
+            assert!(!e.stagger.active());
+        }
     }
 }
