@@ -23,7 +23,7 @@ input recordings and reloads GLSL after validation. Ground height is fixed by th
 FPS motor. Detailed props are decorative; only the authored collision solids
 block players. Browser context restoration rebuilds GPU resources.
 
-The restored examples have an original Linux X11/GLX window/GPU host. Run, for example, `cargo run --release -p neon-swarm` or `cargo run --release -p marble-run` with an X display and compatible OpenGL driver. Courtyard and Orbit retain their native headless PNG paths. Native Windows/macOS/iOS window and input bindings and native audio output are not implemented. Cross-target Rust compilation does not establish interactive device support.
+The restored examples have an original Linux X11/GLX window/GPU host. Run, for example, `cargo run --release -p neon-swarm` or `cargo run --release -p marble-run` with an X display and compatible OpenGL driver. Courtyard and Orbit retain their native headless PNG paths. Original Windows/macOS/iOS window/input/GPU hosts and native audio sinks are now in source. Linux/web runtime checks pass and Windows/macOS Rust cross-checks pass; iOS remains source-only with SDK/device checks excluded. See [Platforms](PLATFORMS.md) for exact status; cross-target compilation does not establish interactive device support.
 
 ## Twenty feature tracks
 
@@ -34,10 +34,10 @@ finished.
 | # | Feature | Working implementation | Remaining work |
 |---|---|---|---|
 | 1 | Profiling and budgets | Fixed-size CPU samples, budget flags, p99; browser CPU frame and asynchronous GPU timer measurements; binary size/audit scripts | Trace timelines and device budgets |
-| 2 | Retained rendering | Shared native/WebGL2 retained buffers, opaque-pass instancing, conservative frustum/distance tests and authored hysteretic LOD; Courtyard static buffers/instancing and transformed bounds/frustum culling; headless clipped depth rasterizer | Windows/macOS/iOS GPU hosts, GPU-driven submission |
+| 2 | Retained rendering | Shared native/WebGL2 retained buffers, opaque-pass instancing, conservative frustum/distance tests and authored hysteretic LOD; Courtyard static buffers/instancing and transformed bounds/frustum culling; headless clipped depth rasterizer | Windows/Apple runtime validation, Metal and GPU-driven submission |
 | 3 | Character movement | Shared upright capsule and planar box motors, continuous sweeps, slopes/steps, moving supports, jump grace/buffer, prediction snapshots; adopted by Strike, Crystal Cavern and Emberline | Dynamic-body pushing, mesh terrain and multiplayer platform pose history |
-| 4 | Input actions | Bounded remappable action map, deadzones, buffered edges; browser keyboard/mouse/gamepad/touch adapters; Linux host events for restored games | Interactive rebinding UI and physical-device testing |
-| 5 | Spatial audio | Strict PCM16 WAV decoder, bounded resampling stereo mixer, distance attenuation/panning; browser AudioWorklet output | Occlusion, streaming/compressed audio, native sinks and authored footsteps |
+| 4 | Input actions | Bounded remappable action map, deadzones, buffered edges; browser keyboard/mouse/gamepad/touch adapters; native host events, shared rebinding UI and persistent bindings | Windows/Apple controller discovery and physical-device testing |
+| 5 | Spatial audio | Strict PCM16 WAV decoder, bounded resampling stereo mixer, distance attenuation/panning; browser AudioWorklet and native ALSA/WinMM/AudioQueue sinks, procedural surface/weapon cues | Occlusion, streaming/compressed audio and Windows/Apple sink verification |
 | 6 | Reliable events | Actual v4 bidirectional session-bound events/commands, ACK/retry/order/dedup, bounded queues and slow-peer disconnect; typed gameplay/tactical state delivery | Congestion-aware scheduling and long-running Internet tests |
 | 7 | Lag compensation | Bounded authority history, correlated wire clock probes, rendered-tick shot stamps, historical-hit damage with current-wall/lifecycle validation and invalid-claim disarming | Sub-tick/dynamic-world rewind, stronger anti-cheat policy |
 | 8 | Compact replication | Sparse/full snapshot deltas with exact ACKed baselines and missing-base recovery; standalone centimeter quantizer | Quantized wire snapshots, adaptive interest/bandwidth scheduling |
@@ -47,11 +47,11 @@ finished.
 | 12 | Scenes and prefabs | Generational scene graph, cycle checks, hierarchical transforms, clone-subtree prefabs, strict binary scene codec | Asset references, scene streaming and game-specific schema evolution |
 | 13 | Editor | Courtyard browser scene inspector with live position editing, save/load and reset | Viewport picking/gizmos, undo/redo and full prefab/property editing |
 | 14 | Hot reload | Transactional live asset bundles; shared material revision/parameter API, native bounded file polling and browser last-valid vertex/fragment hook reload/editor; Courtyard last-valid GLSL replacement with visible errors | OS event-based filesystem watching and full content dependency invalidation |
-| 15 | Animation | Scalar/vector/quaternion tracks, sprite clips, skeleton world poses and inverse-bind skin palettes | GPU skinning, blend/state graphs, event tracks and importer integration |
+| 15 | Animation | Scalar/vector/quaternion tracks, sprite clips, skeleton world poses and inverse-bind skin palettes, GPU skinning, bounded blending/state transitions and timed events | Richer animation authoring and importer integration |
 | 16 | Low-poly lighting | Shared retained directional shadows, point lights, BVH vertex AO and Low/Medium/High tiers; Courtyard retains its separate renderer | Baked lightmaps/probes, cascades and point-light shadows |
-| 17 | Navigation and AI | Weighted deterministic A*, no corner cutting, arrival/separation steering | Navmesh baking, perception, behavior/state tooling and bot integration |
-| 18 | VFX | Bounded particle pool, constant-acceleration integration, lifetime/color/size curves; shot impacts in Courtyard | GPU simulation, trails and effect authoring |
-| 19 | Responsive UI | Anchor layout, clipping/hit tests, focus/capture, browser safe areas; original bitmap text glyphs in the immediate renderer | General text shaping/font loading, retained UI renderer and richer accessibility |
+| 17 | Navigation and AI | Weighted deterministic A*, no corner cutting, steering, bounded LOS/FOV perception and decisions adopted by bots | Navmesh baking and richer visual behavior authoring |
+| 18 | VFX | Bounded particles and curves, instanced billboards, ribbons/beams and shared combat effects | GPU simulation and richer effect authoring |
+| 19 | Responsive UI | Shared HUD/menu commands, anchors, clipping/hit tests, focus/capture and bitmap glyphs integrated in games/settings | General text shaping/font loading and richer accessibility |
 | 20 | Replay and regressions | Bounded authority checkpoints/events/hashes, practice replay viewer, seeking/import/export, shared 2D/3D ghosts, corruption and network loss/reorder regressions | Tactical/network match recordings, device farm and long soak tests |
 
 ## Browser multiplayer

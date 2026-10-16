@@ -14,7 +14,7 @@ Ferravex separates simulation, data and platform presentation. Every package dep
 | ferravex-graphics | Mesh generation/cooking, clipping, software rasterization and PNG export |
 | ferravex-render | Immediate drawing, procedural meshes, CPU vertex lighting, input, frame scheduling and native/browser presentation ABI |
 | ferravex-play | Scenes, camera rigs, animation, navigation, steering, particles and UI data |
-| ferravex-net | Packet codecs, reliable events, sequence/queue helpers and native UDP |
+| ferravex-net | Bounded packet/delta/clock/reliable protocols, native UDP and original WebSocket gateway |
 | ferravex-engine | Facade over engine modules plus input, audio, assets, replay and profiling |
 | ferravex-fps | Authoritative shooter simulation, prediction, interpolation and rewind |
 | ferravex | Public convenience facade |
@@ -22,7 +22,7 @@ Ferravex separates simulation, data and platform presentation. Every package dep
 
 ## Rendering and hosts
 
-The thirteen restored games/labs use `ferravex-render`. Game code records triangles from 2D primitives, text glyphs and cached 3D meshes. Rust applies model/camera transforms and optional directional vertex lighting with distance fog, then batches clip-space positions and colors into a GPU stream. The browser host in `web/runtime.js` submits that stream directly through WebGL2. The Linux host uses original system X11/GLX bindings, an OpenGL shader and a persistent vertex buffer. It provides keyboard/mouse events, relative pointer capture and GPU screenshot readback; native audio, touch/gamepad and automatic desktop DPI scaling are not implemented. This immediate renderer has no shadow-map pass; low-poly shading and hand-authored geometry establish the look. Its text uses built-in bitmap glyphs rather than downloaded fonts or an external shaping library.
+The thirteen restored games/labs use `ferravex-render`. Immediate primitives and bitmap text become CPU-transformed clip-space triangles; retained meshes keep geometry in GPU buffers and stream transforms, normal matrices and skin palettes. Ordered commands combine both paths, custom material hooks, directional shadows, point lights, vertex AO and instanced effects. The browser binds WebGL2 directly. Native GPU submission is shared by original X11/GLX, Win32/WGL, AppKit/NSOpenGL and UIKit/EAGL hosts. Logical input/UI coordinates are separate from physical framebuffer/readback dimensions. See [platform verification](PLATFORMS.md) for source versus runtime status.
 
 Courtyard retains a separate browser renderer using persistent meshes, instanced objects, Rust visibility tests and a directional shadow map. Browser input, audio and peer sessions use browser APIs. Its native host runs the same simulation and exports a software-rendered frame.
 
@@ -44,7 +44,7 @@ Protocol v4 integrates correlated clock probes, client view-tick shot claims, au
 
 ## Platform boundary
 
-Hosts own OS/browser events, GPU submission and the window lifecycle. Linux interactive and browser bindings are implemented. Native Windows, macOS and iOS window/GPU/input hosts and native audio sinks remain unimplemented. Portable simulation compilation is distinct from interactive device support; see [platform status](PLATFORMS.md).
+Hosts own OS/browser events, drawables and lifecycle; Rust owns game futures, simulation, input journals, asset descriptors and mixing. Desktop native hosts drive one shared runner; UIKit schedules it through its scene/display-link callbacks. Suspension releases input and output queues; reconstruction rebuilds GPU caches while preserving CPU ownership. Browser loss/restoration cancels/resumes one render loop without restarting Wasm. Linux/web runtime checks and Windows/macOS cross-checks are distinct from Apple/Windows device validation; see [platform status](PLATFORMS.md).
 
 ## Presentation cameras
 

@@ -1,7 +1,7 @@
 # Shared runtime audio
 
 The first-party audio core lives in `ferravex_play::audio`; the engine re-exports
-it. `ferravex_render::audio` supplies runtime playback and browser/Linux output.
+it. `ferravex_render::audio` supplies runtime playback and browser/native output.
 There are no external Cargo audio packages or copied sound assets. The original
 procedural cue bank contains footsteps and impacts for stone, metal, wood, sand,
 grass and water, plus weapon, reload, jump, pickup, outcome, click and motor cues.
@@ -85,8 +85,14 @@ thread reserves space before mixing and never waits for a device write.
 Nonblocking writes handle partial progress, bounded recovery attempts and
 shutdown checks. Missing devices leave gameplay running with silent advancement.
 The requested ALSA buffer latency is 10 ms; actual latency depends on the system
-and device. Device reconnection requires a new output session at present.
-Windows/Apple output hosts remain iteration 20; no iOS SDK/device checks ran.
+and device. Failed native sinks retry after a bounded two-second delay.
+Windows uses an original WinMM PCM16 sink and Apple platforms use AudioQueue
+float stereo, each with three device buffers and the same three-block application
+queue. Callbacks only return buffer credit; mixing stays in Rust. These platform
+sinks pass Rust cross-checks on Windows/macOS but await runtime verification;
+iOS SDK/device checks remain excluded. Native suspension releases device queues
+and resume opens a fresh sink while preserving capture/mixer ownership. A Linux
+null-device check verifies resumed capture appends rather than truncates.
 
 Native interactive games use the default ALSA PCM. `FERRAVEX_AUDIO_DEVICE`
 selects another system device and `FERRAVEX_AUDIO=off` disables device output.

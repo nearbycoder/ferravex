@@ -58,3 +58,20 @@ The catalog drives browser staging and site checks. Validate all fifteen expecte
 - The local site builds nineteen guides and fifteen playable examples. Its six server/catalog/link tests and five dependency-audit regressions passed.
 
 The captures and reports are local build artifacts. Gallery previews are refreshed from those original-host captures using only Python's standard-library PNG compression. No GitHub push, CI trigger or deployment was performed. Native Windows/macOS/iOS window hosts, physical mobile testing and unrestricted production physics/networking remain outside this verified result.
+
+
+## Platform iteration checks (2026-10-16)
+
+The native/browser host iteration adds Windows/macOS Rust cross-target checks,
+first-party platform audio sinks, logical/framebuffer DPI separation and context
+reconstruction. Available Linux checks exercise 2× DPI readback, recovered
+retained skins/shadows, recovered last-valid shaders after a failed edit, timer
+frame-tag continuity and audio suspension/resume without capture truncation.
+Real browser interaction exercised context loss/restoration in Strike and
+Crystal Cavern, including a rejected custom material revision; an actual-Wasm
+contract verifies preserved shader descriptors. All fifteen native/Wasm builds
+and native gameplay/PNG smoke checks remain in the local validation set.
+Windows/Apple runtime and SDK linking were unavailable. iOS SDK/simulator/device
+checks remain excluded. See [Platforms](PLATFORMS.md) and [Performance](PERFORMANCE.md)
+for exact scope and measured costs. CI stays enabled in the repository; this
+iteration uses `[skip ci]` commits and local checks.

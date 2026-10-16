@@ -1093,4 +1093,4 @@ practice replay verified in Wasm, and 21 Python checks. Fixed-step native smoke
 runs now disable vsync so occluded compositor windows cannot stall automation.
 The entire workspace still has 28 first-party Cargo packages and zero external
 Cargo packages. Windows/macOS runtime checks were unavailable; iOS checks remain
-excluded. No deployment was performed.
+excluded. No deployment command was issued.

@@ -41,7 +41,7 @@ keep their original instance order. Use `Mesh3d::draw_immediate` or
 where small independent draws cost more than CPU preparation. Text/HUDs and 2D
 primitives continue through their original immediate path.
 
-The native retained path requires OpenGL 3.3+; the browser path requires WebGL2.
+The desktop retained path requires OpenGL 3.3+ (Apple uses a 4.1 core profile); the browser path requires WebGL2. The iOS source uses OpenGL ES 3. Platform implementation and device verification are tracked separately in [Platforms](PLATFORMS.md).
 Custom vertex/fragment materials, blending and transactional reload are described
 in [materials](MATERIALS.md); [visibility/LOD](VISIBILITY.md) is also implemented.
 Directional shadows, local lights and vertex AO are described in [lighting](LIGHTING.md).
@@ -56,3 +56,10 @@ regrouping, the native catalog screenshot harness, and actual browser games.
 The local performance harness records static mesh uploads plus instance/immediate
 uploads, plus skin-palette uniform bytes for each actual color/shadow program. Browser canvas data attributes expose resident mesh, draw, vertex and
 upload counters for inspection.
+
+
+Native reconstruction and browser context restoration rebuild resident meshes,
+instance/skin buffers, shadows and custom materials from CPU ownership. Native
+reconstruction keeps swap policy and timer frame tags. Game code retains its
+handles and resubmits the next frame; mutable/transient draw data is not a saved
+GPU image. The shared native pixel tests cover skin/shadow and shader recovery.
