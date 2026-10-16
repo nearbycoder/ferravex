@@ -918,7 +918,7 @@ Raw Wasm exceeds the allowance for Courtyard, Orbit, Emberline, Neon, Rally,
 Pinball, Orchard, Dune, Cavern, Sky and the 2D physics lab. Gzip exceeds it for
 Orbit, Emberline, Neon, Rally, Orchard, Cavern, Sky and the 2D physics lab. No
 native-size flag remains, but native artifacts also grew. The 2D physics lab GPU
-p99 is 72.699 µs versus 27.371 µs (47.371 µs allowance); its draw/upload/geometry,
+p99 is 72.698 µs versus 27.372 µs (47.372 µs allowance); its draw/upload/geometry,
 allocation and simulation-work distributions are identical. That tail was not
 isolated or fixed in this iteration.
 
@@ -932,8 +932,8 @@ Artifact costs (raw / gzip-9 bytes):
 | Orchard Guard | 976992 / 476293 → 1018336 / 496506 | 444533 / 175802 → 478035 / 188607 |
 | Marble Run | 1148704 / 558911 → 1181360 / 574353 | 604109 / 232975 → 629960 / 242583 |
 
-Ordinary sampled gameplay has **identical allocation, draw, vertex, upload and
-simulation-work distributions across all fifteen games**. Real-Wasm transport
+In ordinary sampled gameplay, **available allocation, draw, vertex, upload and
+simulation-work distributions match the baseline across all fifteen games**. Real-Wasm transport
 counters separately confirm that 120 unchanged frames per game perform no
 storage reads/writes. These facts do not make saving free: load/encode/commit
 allocate and synchronous native sync/localStorage calls can stall a save frame.
