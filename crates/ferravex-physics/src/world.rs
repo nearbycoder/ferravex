@@ -483,8 +483,7 @@ impl<B: Access> World<B> {
                 let (a, b) = self.bodies.two_mut(c.a, c.b);
                 let a = a.core_mut();
                 let b = b.core_mut();
-                if a.sleeping && b.sleeping
-                    || a.sleeping && b.kind != Kind::Dynamic
+                if a.sleeping && (b.sleeping || b.kind != Kind::Dynamic)
                     || b.sleeping && a.kind != Kind::Dynamic
                 {
                     continue;

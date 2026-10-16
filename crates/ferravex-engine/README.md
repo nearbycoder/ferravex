@@ -47,3 +47,6 @@ status and platform limits, [Courtyard](../../examples/owned-lab) and
 [Orbit Breaker](../../examples/owned-orbit) for runnable examples. The original
 physics/math/graphics/ECS/gameplay crates each document numerical and feature
 limits separately.
+
+See the [thirty engine improvements](../../docs/ENGINE_30.md) for asset,
+profiling, replay, scheduling, storage and lifecycle APIs.
