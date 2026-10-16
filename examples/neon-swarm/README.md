@@ -25,3 +25,5 @@ Each kill earns 10 XP. Levels 2–4 permanently improve the current run’s shot
 Health drops attract within 130 pixels when unobstructed; cover blocks attraction. Full-health players leave drops available for later instead of consuming them.
 
 Spawns now select the farthest eligible perimeter location at least 260 pixels from the player and clear of live enemies. Unsafe locations defer admission before spending wave credits.
+
+Two concentrated hits stagger armored brutes for 0.8 seconds, canceling their attack and stopping pursuit. A cyan ring signals the opening. Hits cannot extend an active stagger indefinitely.

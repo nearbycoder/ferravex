@@ -344,6 +344,7 @@ mod tests {
                 speed: 100.,
                 heavy: false,
                 attack: crate::game::attack_timeline(false),
+                stagger: ferravex_play::gameplay::stagger::Stagger::new(40., 10., 0.8).unwrap(),
                 flash: 0.,
             },
         ));
