@@ -40,3 +40,5 @@ pub mod charge;
 pub mod homing;
 
 pub mod projectile;
+
+pub mod spawn;
