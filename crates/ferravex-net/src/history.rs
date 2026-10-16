@@ -44,6 +44,12 @@ impl<T> History<T> {
         }
         None
     }
+    pub fn iter(&self) -> impl Iterator<Item = (u64, &T)> {
+        self.samples.iter().map(|(t, v)| (*t, v))
+    }
+    pub fn first_tick(&self) -> Option<u64> {
+        self.samples.front().map(|s| s.0)
+    }
     pub fn len(&self) -> usize {
         self.samples.len()
     }

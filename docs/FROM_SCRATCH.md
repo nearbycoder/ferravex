@@ -38,11 +38,11 @@ finished.
 | 3 | Character movement | Shared upright capsule and planar box motors, continuous sweeps, slopes/steps, moving supports, jump grace/buffer, prediction snapshots; adopted by Strike, Crystal Cavern and Emberline | Dynamic-body pushing, mesh terrain and multiplayer platform pose history |
 | 4 | Input actions | Bounded remappable action map, deadzones, buffered edges; browser keyboard/mouse/gamepad/touch adapters; Linux host events for restored games | Interactive rebinding UI and physical-device testing |
 | 5 | Spatial audio | Strict PCM16 WAV decoder, bounded resampling stereo mixer, distance attenuation/panning; browser AudioWorklet output | Occlusion, streaming/compressed audio, native sinks and authored footsteps |
-| 6 | Reliable events | Actual UDP v3 session-bound event/ACK codec, retry/order/dedup, bounded queues and slow-peer disconnect; typed gameplay event delivery | Congestion-aware scheduling and long-running Internet tests |
-| 7 | Lag compensation | Bounded authority history, clock estimator, opt-in historical-hit damage with current-wall occlusion and lifecycle checks | Validated shot timestamps in the UDP wire format and automatic clock integration |
-| 8 | Compact replication | Bounded sparse/full snapshot byte deltas with exact baselines and centimeter quantization | Baseline ACK integration, quantized wire snapshots, adaptive interest/bandwidth scheduling |
+| 6 | Reliable events | Actual v4 bidirectional session-bound events/commands, ACK/retry/order/dedup, bounded queues and slow-peer disconnect; typed gameplay/tactical state delivery | Congestion-aware scheduling and long-running Internet tests |
+| 7 | Lag compensation | Bounded authority history, correlated wire clock probes, rendered-tick shot stamps, historical-hit damage with current-wall/lifecycle validation and invalid-claim disarming | Sub-tick/dynamic-world rewind, stronger anti-cheat policy |
+| 8 | Compact replication | Sparse/full snapshot deltas with exact ACKed baselines and missing-base recovery; standalone centimeter quantizer | Quantized wire snapshots, adaptive interest/bandwidth scheduling |
 | 9 | Secure multiplayer | Browser WebRTC DTLS/SCTP adapter; host authority, guest prediction/reconciliation and input redundancy | Native encrypted transport, service identity, accounts, NAT relay/discovery and session resumption |
-| 10 | Tactical rounds | Authoritative buy/live/plant/defuse/round/match state, teams, economy, armor, kits and interruption/range validation | Integrating these rules into the playable shooter, full spectator/buy UI |
+| 10 | Tactical rounds | Playable native/browser Strike buy/live/plant/defuse/round/match state, teams, economy, armor, kits, distinct weapon timings, interruption/range validation and disconnect forfeits | Spectators, larger content/weapon inventory, Internet services |
 | 11 | Asset cooking | Bounded OBJ importer, cooked binary mesh codec, PCM WAV validation, deterministic compressed bundles, `ferravex-cook` tool | glTF, image/font pipelines, richer compression and dependency tracking |
 | 12 | Scenes and prefabs | Generational scene graph, cycle checks, hierarchical transforms, clone-subtree prefabs, strict binary scene codec | Asset references, scene streaming and game-specific schema evolution |
 | 13 | Editor | Courtyard browser scene inspector with live position editing, save/load and reset | Viewport picking/gizmos, undo/redo and full prefab/property editing |
@@ -52,7 +52,7 @@ finished.
 | 17 | Navigation and AI | Weighted deterministic A*, no corner cutting, arrival/separation steering | Navmesh baking, perception, behavior/state tooling and bot integration |
 | 18 | VFX | Bounded particle pool, constant-acceleration integration, lifetime/color/size curves; shot impacts in Courtyard | GPU simulation, trails and effect authoring |
 | 19 | Responsive UI | Anchor layout, clipping/hit tests, focus/capture, browser safe areas; original bitmap text glyphs in the immediate renderer | General text shaping/font loading, retained UI renderer and richer accessibility |
-| 20 | Replay and regressions | Bounded checksummed input files; scene save/load; corruption, gameplay, dropped-input, event-loss, rewind regressions | Full server-event replay, replay viewer, device farm and long soak tests |
+| 20 | Replay and regressions | Bounded authority checkpoints/events/hashes, practice replay viewer, seeking/import/export, shared 2D/3D ghosts, corruption and network loss/reorder regressions | Tactical/network match recordings, device farm and long soak tests |
 
 ## Browser multiplayer
 

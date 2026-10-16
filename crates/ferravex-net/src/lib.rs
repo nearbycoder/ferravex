@@ -1,11 +1,18 @@
 //! Bounded, versioned network protocol shared by native and browser game clients.
 //!
 //! The protocol never accepts client positions or client-selected time steps.
-//! Native UDP is intentionally a thin primitive: authentication, encryption,
-//! browser transports, and NAT traversal are outside this prototype.
+//! Native UDP is intentionally a thin primitive:
+//! accounts/encryption and NAT traversal remain outside this prototype. The
+//! first-party WebSocket gateway carries browser datagrams to the same authority.
+pub mod clock;
 pub mod delta;
 pub mod history;
 pub mod reliable;
+pub mod time;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod websocket;
+mod wire_v4;
+pub use wire_v4::{Client as ClientExtension, Server as ServerExtension, TimedInput};
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -19,8 +26,8 @@ pub const BUTTON_FIRE: u8 = 2;
 pub const BUTTON_RELOAD: u8 = 4;
 pub const MAX_PITCH: f32 = 1.55;
 const MAGIC: &[u8; 4] = b"FVRX";
-/// Version 3 carries jump grace/buffer timers and held state for exact motor replay.
-pub const PROTOCOL_VERSION: u8 = 3;
+/// Version 4 adds timed inputs, clock exchanges, snapshot ACK/deltas and commands.
+pub const PROTOCOL_VERSION: u8 = 4;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct InputFrame {
@@ -60,6 +67,7 @@ impl InputFrame {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ClientPacket {
+    Extension(ClientExtension),
     EventAck {
         session: u64,
         sequence: u64,
@@ -74,6 +82,7 @@ pub enum ClientPacket {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub enum ServerPacket {
+    Extension(ServerExtension),
     ReliableEvent {
         session: u64,
         event: reliable::EventPacket,
@@ -93,6 +102,8 @@ pub struct Snapshot {
     pub tick: u32,
     pub ack_sequence: u32,
     pub ack_valid: bool,
+    /// Low 32 bits of the authority life generation for each player slot.
+    pub epochs: [u32; MAX_PLAYERS],
     pub players: Vec<PlayerSnapshot>,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -165,11 +176,18 @@ pub fn sequence_newer(candidate: u32, previous: u32) -> bool {
 /// Deduplicates input redundancy and bounds per-client simulation backlog.
 #[derive(Debug, Default)]
 pub struct InputQueue {
-    queue: VecDeque<InputFrame>,
+    queue: VecDeque<TimedInput>,
     newest: Option<u32>,
 }
 impl InputQueue {
     pub fn push(&mut self, input: InputFrame) -> bool {
+        self.push_timed(TimedInput {
+            input,
+            shot_tick: None,
+        })
+    }
+    pub fn push_timed(&mut self, timed: TimedInput) -> bool {
+        let input = timed.input;
         if !input.is_valid()
             || self.queue.len() >= MAX_QUEUED_INPUTS
             || self
@@ -179,20 +197,33 @@ impl InputQueue {
             return false;
         }
         self.newest = Some(input.sequence);
-        self.queue.push_back(input);
+        self.queue.push_back(timed);
         true
     }
+    /// Discard queued controls while retaining the sequence watermark.
+    pub fn clear_pending(&mut self) {
+        self.queue.clear();
+    }
     pub fn pop(&mut self) -> Option<InputFrame> {
-        self.queue.pop_front()
+        self.queue.pop_front().map(|v| v.input)
     }
     /// Coalesce a burst to its newest movement/look sample without losing a
     /// queued action press. The authority still simulates exactly one fixed step.
     /// This prevents redundant commands recovered after loss from adding permanent
     /// control latency. Previously consumed commands cannot re-enter the queue.
     pub fn pop_latest(&mut self) -> Option<InputFrame> {
+        self.pop_latest_timed().map(|v| v.input)
+    }
+    /// A recovered older quick-fire press retains its original aim and shot time.
+    pub fn pop_latest_timed(&mut self) -> Option<TimedInput> {
         let mut latest = self.queue.pop_back()?;
         for older in self.queue.drain(..) {
-            latest.buttons |= older.buttons;
+            if latest.input.buttons & BUTTON_FIRE == 0 && older.input.buttons & BUTTON_FIRE != 0 {
+                latest.input.yaw = older.input.yaw;
+                latest.input.pitch = older.input.pitch;
+                latest.shot_tick = older.shot_tick;
+            }
+            latest.input.buttons |= older.input.buttons;
         }
         Some(latest)
     }
@@ -232,11 +263,13 @@ fn put_input(out: &mut Vec<u8>, input: &InputFrame) {
 
 pub fn encode_client(packet: &ClientPacket) -> Result<Vec<u8>, ProtocolError> {
     let mut out = match packet {
+        ClientPacket::Extension(p) => return wire_v4::encode_client(p),
         ClientPacket::EventAck { .. } => header(6),
         ClientPacket::Hello { .. } => header(1),
         ClientPacket::Input { .. } => header(2),
     };
     match packet {
+        ClientPacket::Extension(_) => unreachable!("extension encoded above"),
         ClientPacket::EventAck { session, sequence } => {
             if *session == 0 {
                 return Err(ProtocolError::Invalid);
@@ -264,11 +297,13 @@ pub fn encode_client(packet: &ClientPacket) -> Result<Vec<u8>, ProtocolError> {
 }
 pub fn encode_server(packet: &ServerPacket) -> Result<Vec<u8>, ProtocolError> {
     let mut out = match packet {
+        ServerPacket::Extension(p) => return wire_v4::encode_server(p),
         ServerPacket::ReliableEvent { .. } => header(5),
         ServerPacket::Welcome { .. } => header(3),
         ServerPacket::Snapshot(_) => header(4),
     };
     match packet {
+        ServerPacket::Extension(_) => unreachable!("extension encoded above"),
         ServerPacket::ReliableEvent { session, event } => {
             if *session == 0 || event.payload.len() > reliable::EVENT_BYTES {
                 return Err(ProtocolError::Invalid);
@@ -305,8 +340,19 @@ pub fn encode_server(packet: &ServerPacket) -> Result<Vec<u8>, ProtocolError> {
             }
             put_u64(&mut out, snapshot.session);
             put_u32(&mut out, snapshot.tick);
+            if snapshot
+                .epochs
+                .iter()
+                .enumerate()
+                .any(|(i, e)| *e != 0 && ids & (1 << i) == 0)
+            {
+                return Err(ProtocolError::Invalid);
+            }
             put_u32(&mut out, snapshot.ack_sequence);
             out.push(snapshot.ack_valid as u8);
+            for epoch in snapshot.epochs {
+                put_u32(&mut out, epoch);
+            }
             out.push(snapshot.players.len() as u8);
             for p in &snapshot.players {
                 out.push(p.id);
@@ -409,6 +455,7 @@ impl<'a> Reader<'a> {
 pub fn decode_client(data: &[u8]) -> Result<ClientPacket, ProtocolError> {
     let (mut reader, kind) = Reader::new(data)?;
     let packet = match kind {
+        7..=10 => ClientPacket::Extension(wire_v4::decode_client(&mut reader, kind)?),
         6 => {
             let session = reader.u64()?;
             let sequence = reader.u64()?;
@@ -440,6 +487,7 @@ pub fn decode_client(data: &[u8]) -> Result<ClientPacket, ProtocolError> {
 pub fn decode_server(data: &[u8]) -> Result<ServerPacket, ProtocolError> {
     let (mut r, kind) = Reader::new(data)?;
     let packet = match kind {
+        11..=13 => ServerPacket::Extension(wire_v4::decode_server(&mut r, kind)?),
         5 => {
             let session = r.u64()?;
             let sequence = r.u64()?;
@@ -481,6 +529,10 @@ pub fn decode_server(data: &[u8]) -> Result<ServerPacket, ProtocolError> {
             let tick = r.u32()?;
             let ack_sequence = r.u32()?;
             let ack_valid = r.boolean()?;
+            let mut epochs = [0; MAX_PLAYERS];
+            for epoch in &mut epochs {
+                *epoch = r.u32()?;
+            }
             let count = r.u8()? as usize;
             if count > MAX_PLAYERS {
                 return Err(ProtocolError::Invalid);
@@ -510,11 +562,19 @@ pub fn decode_server(data: &[u8]) -> Result<ServerPacket, ProtocolError> {
                 ids |= 1u16 << p.id;
                 players.push(p);
             }
+            if epochs
+                .iter()
+                .enumerate()
+                .any(|(i, e)| *e != 0 && ids & (1 << i) == 0)
+            {
+                return Err(ProtocolError::Invalid);
+            }
             ServerPacket::Snapshot(Snapshot {
                 session,
                 tick,
                 ack_sequence,
                 ack_valid,
+                epochs,
                 players,
             })
         }
@@ -634,6 +694,7 @@ mod tests {
             })
             .collect();
         let packet = ServerPacket::Snapshot(Snapshot {
+            epochs: [0; MAX_PLAYERS],
             session: 99,
             tick: 44,
             ack_valid: true,
@@ -641,7 +702,7 @@ mod tests {
             players,
         });
         let bytes = encode_server(&packet).unwrap();
-        assert_eq!(bytes.len(), 840);
+        assert_eq!(bytes.len(), 904);
         assert!(bytes.len() < MAX_PACKET_BYTES);
         assert_eq!(decode_server(&bytes).unwrap(), packet);
         for length in 0..bytes.len() {
@@ -657,6 +718,7 @@ mod tests {
         };
         let make = |p| {
             ServerPacket::Snapshot(Snapshot {
+                epochs: [0; MAX_PLAYERS],
                 session: 1,
                 players: vec![p],
                 ..Default::default()
@@ -839,5 +901,64 @@ mod tests {
             thread::sleep(Duration::from_millis(1));
         }
         panic!("loopback UDP packet not received");
+    }
+}
+
+#[cfg(test)]
+mod timed_queue_tests {
+    use super::*;
+    #[test]
+    fn round_reset_rejects_delayed_controls_from_previous_round() {
+        let mut q = InputQueue::default();
+        assert!(q.push(InputFrame {
+            sequence: 42,
+            buttons: BUTTON_FIRE,
+            ..Default::default()
+        }));
+        q.clear_pending();
+        assert!(q.pop().is_none());
+        assert!(!q.push(InputFrame {
+            sequence: 42,
+            buttons: BUTTON_FIRE,
+            ..Default::default()
+        }));
+        assert!(!q.push(InputFrame {
+            sequence: 41,
+            ..Default::default()
+        }));
+        assert!(q.push(InputFrame {
+            sequence: 43,
+            ..Default::default()
+        }));
+        assert_eq!(q.pop_latest().unwrap().buttons, 0);
+    }
+    #[test]
+    fn recovered_fire_keeps_old_aim_and_time_but_latest_movement() {
+        let mut q = InputQueue::default();
+        q.push_timed(TimedInput {
+            input: InputFrame {
+                sequence: 1,
+                yaw: 1.,
+                buttons: BUTTON_FIRE,
+                ..Default::default()
+            },
+            shot_tick: Some(20),
+        });
+        q.push_timed(TimedInput {
+            input: InputFrame {
+                sequence: 2,
+                yaw: 2.,
+                move_x: 1.,
+                ..Default::default()
+            },
+            shot_tick: None,
+        });
+        let v = q.pop_latest_timed().unwrap();
+        assert_eq!(v.input.move_x, 1.);
+        assert_eq!(v.input.yaw, 1.);
+        assert_eq!(v.shot_tick, Some(20));
+        assert_eq!(v.input.sequence, 2);
+        assert_eq!(v.input.buttons, BUTTON_FIRE);
+        assert!(q.is_empty());
     }
 }

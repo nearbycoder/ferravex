@@ -369,3 +369,168 @@ pub fn roster(ui: &mut Ui, players: &[Player], local_id: u8) {
         );
     }
 }
+/// One compact objective strip; connection/tools stay in optional browser chrome.
+pub fn tactical(
+    ui: &mut Ui,
+    view: Option<&ferravex_fps::tactical::View>,
+    lobby: Option<(u8, u8)>,
+    id: u8,
+    active: bool,
+) {
+    use ferravex_play::rounds::{Phase, Team, Weapon};
+    let w = screen_width();
+    let Some(view) = view else {
+        if let Some((players, required)) = lobby {
+            formatted(
+                ui,
+                w * 0.5,
+                52.,
+                16.,
+                INK,
+                Align::Center,
+                format_args!("LOBBY  {players} / {required}  - WAITING FOR PLAYERS"),
+            );
+        }
+        return;
+    };
+    let phase = match view.phase {
+        Phase::Buy => "BUY",
+        Phase::Live => "LIVE",
+        Phase::Planted => "BOMB PLANTED",
+        Phase::PostRound => "ROUND OVER",
+        Phase::Finished => "MATCH OVER",
+    };
+    if w < 640. {
+        formatted(
+            ui,
+            w * 0.5,
+            52.,
+            15.,
+            INK,
+            Align::Center,
+            format_args!("A {} / {} D  {phase}", view.score[0], view.score[1]),
+        );
+        if let Some(player) = view.player(id) {
+            let role = if player.team == Team::Attack {
+                "ATTACK"
+            } else {
+                "DEFEND"
+            };
+            formatted(
+                ui,
+                w * 0.5,
+                75.,
+                13.,
+                MUTED,
+                Align::Center,
+                format_args!(
+                    "R{}  {}s  {role}  ${}",
+                    view.round,
+                    view.remaining_ticks.div_ceil(TICK_RATE),
+                    player.money
+                ),
+            );
+        }
+    } else {
+        formatted(
+            ui,
+            w * 0.5,
+            52.,
+            16.,
+            INK,
+            Align::Center,
+            format_args!(
+                "ATTACK {}  /  {} DEFEND    {phase}  {}s",
+                view.score[0],
+                view.score[1],
+                view.remaining_ticks.div_ceil(TICK_RATE)
+            ),
+        );
+        if let Some(player) = view.player(id) {
+            let role = if player.team == Team::Attack {
+                "ATTACK"
+            } else {
+                "DEFEND"
+            };
+            let weapon = match player.weapon {
+                Weapon::Pistol => "PISTOL",
+                Weapon::Rifle => "RIFLE",
+                Weapon::Sniper => "SNIPER",
+            };
+            formatted(
+                ui,
+                w * 0.5,
+                75.,
+                14.,
+                MUTED,
+                Align::Center,
+                format_args!("ROUND {}  {role}  ${}  {weapon}", view.round, player.money),
+            );
+        }
+    }
+    if active && view.phase == Phase::Buy {
+        center(
+            ui,
+            if w < 640. {
+                "B RIFLE / V ARMOR / K KIT"
+            } else {
+                "B RIFLE / N SNIPER / V ARMOR / K KIT"
+            },
+            w * 0.5,
+            screen_height() - 78.,
+            14.,
+            MUTED,
+        );
+    }
+    if active && matches!(view.phase, Phase::Live | Phase::Planted) {
+        center(
+            ui,
+            if w < 640. {
+                "HOLD E INTERACT / G DROP"
+            } else {
+                "HOLD E TO PLANT / DEFUSE / PICK UP   G DROP"
+            },
+            w * 0.5,
+            screen_height() - 78.,
+            14.,
+            MUTED,
+        );
+    }
+    if let Some((owner, progress)) = view.interaction
+        && owner == id
+    {
+        let width = (w - 64.).min(240.);
+        let x = (w - width) * 0.5;
+        let y = screen_height() * 0.6;
+        ui.panel(
+            UiRect {
+                min: [x, y],
+                size: [width, 6.],
+            },
+            Color::new(0.12, 0.17, 0.16, 0.95),
+        )
+        .unwrap();
+        ui.panel(
+            UiRect {
+                min: [x, y],
+                size: [width * f32::from(progress) / 65535., 6.],
+            },
+            rgb(0xd7b56d),
+        )
+        .unwrap();
+    }
+}
+pub fn rule_feedback(error: ferravex_play::rounds::RuleError) -> &'static str {
+    use ferravex_play::rounds::RuleError;
+    match error {
+        RuleError::InsufficientFunds => "NOT ENOUGH CREDITS",
+        RuleError::AlreadyOwned => "ALREADY EQUIPPED",
+        RuleError::WrongPhase => "ACTION UNAVAILABLE IN THIS PHASE",
+        RuleError::Dead => "WAIT FOR THE NEXT ROUND",
+        RuleError::WrongTeam => "THAT ACTION IS FOR THE OTHER TEAM",
+        RuleError::OutOfRange => "MOVE CLOSER TO THE OBJECTIVE",
+        RuleError::BombUnavailable => "BOMB UNAVAILABLE",
+        RuleError::Busy => "AN INTERACTION IS ALREADY IN PROGRESS",
+        _ => "ACTION UNAVAILABLE",
+    }
+}

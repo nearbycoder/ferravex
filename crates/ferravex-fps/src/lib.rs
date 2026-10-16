@@ -7,6 +7,9 @@ use ferravex_physics::character::{
     Obstacle as CharacterObstacle, ObstacleShape, QueryBounds, Terrain,
 };
 pub mod checkpoint;
+pub mod combat;
+pub mod tactical;
+pub use combat::{CombatRules, PracticeRules, WeaponSettings};
 mod event_wire;
 pub mod replay;
 pub use event_wire::NetworkEvent;
@@ -232,6 +235,28 @@ impl Match {
         self.rewind.new_life(id);
         true
     }
+    pub(crate) fn reset_round_players(&mut self, states: &[(u8, Vec3, u8)]) {
+        self.rewind.clear_frames();
+        for &(id, position, ammo) in states {
+            if let Some(player) = self.player_mut(id) {
+                *player = Player::new(id, position);
+                player.ammo = ammo.min(MAGAZINE_SIZE);
+                self.rewind.new_life(id);
+            }
+        }
+        self.rewind.capture(self.tick, &self.players);
+    }
+    /// Snapshot generations; absent slots are zero. Bounded interpolation never
+    /// spans enough lives to confuse a low-32-bit generation wrap.
+    pub fn life_epochs(&self) -> [u32; MAX_PLAYERS] {
+        std::array::from_fn(|id| {
+            if self.player(id as u8).is_some() {
+                self.rewind.life(id as u8) as u32
+            } else {
+                0
+            }
+        })
+    }
     pub fn remove_player(&mut self, id: u8) {
         self.players.retain(|p| p.id != id);
     }
@@ -255,6 +280,15 @@ impl Match {
         inputs: &[(u8, InputFrame)],
         shot_times: &[ShotTime],
     ) -> RewindStep {
+        self.step_with_rules(inputs, shot_times, &mut PracticeRules)
+    }
+    /// The same fixed-tick motor/rewind/shot path with host-owned combat policy.
+    pub fn step_with_rules<R: CombatRules>(
+        &mut self,
+        inputs: &[(u8, InputFrame)],
+        shot_times: &[ShotTime],
+        rules: &mut R,
+    ) -> RewindStep {
         self.rewind.capture(self.tick, &self.players);
         let mut rejected_shots = Vec::new();
         let mut events = Vec::new();
@@ -269,8 +303,18 @@ impl Match {
                     yaw: player.yaw,
                     pitch: player.pitch,
                     ..Default::default()
-                })
-                .sanitized();
+                });
+            input = rules.input(player, input).sanitized();
+            if rules.frozen(player.id) {
+                player.velocity = Vec3::ZERO;
+                player.yaw = input.yaw;
+                player.pitch = input.pitch;
+                continue;
+            }
+            if !player.is_alive() && !rules.auto_respawn() {
+                player.velocity = Vec3::ZERO;
+                continue;
+            }
             let shot_tick = shot_times
                 .iter()
                 .take(MAX_PLAYERS)
@@ -284,7 +328,7 @@ impl Match {
                 rejected_shots.push((player.id, error));
             }
             let was_alive = player.is_alive();
-            if step_player(player, input, &self.arena) {
+            if step_player_with_settings(player, input, &self.arena, rules.weapon(player.id)) {
                 shots[shot_count] = Some((
                     player.id,
                     player.eye_position(),
@@ -310,7 +354,9 @@ impl Match {
                 let target = self
                     .player_mut(victim)
                     .expect("trace returned current player");
-                let damage = if trace.headshot { 100 } else { 34 };
+                let Some(damage) = rules.damage(attacker, target, trace.headshot) else {
+                    continue;
+                };
                 target.health = target.health.saturating_sub(damage);
                 events.push(GameEvent::Hit {
                     attacker,
@@ -349,6 +395,18 @@ pub fn forward(yaw: f32, pitch: f32) -> Vec3 {
 /// Shared client/server step, including weapon timers but excluding damage to others.
 /// Returns whether a legal shot was fired. Prediction never applies remote damage.
 pub fn step_player(player: &mut Player, input: InputFrame, arena: &Arena) -> bool {
+    step_player_with_settings(player, input, arena, WeaponSettings::default())
+}
+/// Invalid weapon settings leave the complete player state untouched.
+pub fn step_player_with_settings(
+    player: &mut Player,
+    input: InputFrame,
+    arena: &Arena,
+    weapon: WeaponSettings,
+) -> bool {
+    if !weapon.valid() {
+        return false;
+    }
     let input = input.sanitized();
     if !player.is_alive() {
         player.respawn_ticks = player.respawn_ticks.saturating_sub(1);
@@ -366,12 +424,14 @@ pub fn step_player(player: &mut Player, input: InputFrame, arena: &Arena) -> boo
     if player.reload_ticks > 0 {
         player.reload_ticks -= 1;
         if player.reload_ticks == 0 {
-            player.ammo = MAGAZINE_SIZE;
+            player.ammo = weapon.magazine;
         }
     }
-    if input.buttons & BUTTON_RELOAD != 0 && player.ammo < MAGAZINE_SIZE && player.reload_ticks == 0
+    if input.buttons & BUTTON_RELOAD != 0
+        && player.ammo < weapon.magazine
+        && player.reload_ticks == 0
     {
-        player.reload_ticks = RELOAD_TICKS;
+        player.reload_ticks = weapon.reload_ticks;
     }
     if input.buttons & BUTTON_FIRE != 0
         && player.ammo > 0
@@ -379,7 +439,7 @@ pub fn step_player(player: &mut Player, input: InputFrame, arena: &Arena) -> boo
         && player.fire_cooldown == 0
     {
         player.ammo -= 1;
-        player.fire_cooldown = FIRE_INTERVAL_TICKS;
+        player.fire_cooldown = weapon.fire_ticks;
         return true;
     }
     false
@@ -493,10 +553,10 @@ pub fn ray_aabb(
     Some(near)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(target_arch = "wasm32")]
+pub mod browser;
 mod network;
-#[cfg(not(target_arch = "wasm32"))]
-pub use network::{GameClient, GameServer};
+pub use network::{GameClient, GameServer, TacticalOptions};
 
 #[cfg(test)]
 mod tests {

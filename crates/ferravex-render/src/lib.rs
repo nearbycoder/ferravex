@@ -1237,6 +1237,11 @@ pub fn run(conf: Conf, future: impl Future<Output = ()> + 'static) {
     let fixed = std::env::args().any(|s| s == "--smoke-frames");
     audio::boot_native(fixed);
     let mut performance = telemetry::Session::from_env();
+    // Automated fixed-step runs must not wait for an occluded desktop window
+    // to receive compositor frame callbacks. Interactive games retain vsync.
+    if fixed {
+        window.set_swap_interval(0);
+    }
     if let Some(session) = &mut performance {
         window.set_swap_interval(0);
         if window.enable_gpu_timing() {

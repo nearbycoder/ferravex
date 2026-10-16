@@ -1,18 +1,31 @@
+#[derive(Clone)]
+struct RenderFrame {
+    players: Vec<Player>,
+    epochs: [u32; MAX_PLAYERS],
+}
+mod replication;
+mod tactical;
 use super::{Arena, InputFrame, MAX_PLAYERS, Match, NetworkEvent, Player, step_player};
+#[cfg(target_arch = "wasm32")]
+use crate::browser::Socket;
+use crate::tactical::{Mode, SessionEvent, View};
 use ferravex_net::reliable::{EventReceiver, EventSender};
-#[cfg(not(test))]
+use ferravex_net::time::Instant;
+#[cfg(all(not(test), not(target_arch = "wasm32")))]
 use ferravex_net::udp::Socket;
+use ferravex_net::{ClientExtension, TimedInput};
 use ferravex_net::{
     ClientPacket, InputQueue, MAX_INPUTS_PER_PACKET, MAX_PACKET_BYTES, ServerPacket, Snapshot,
     decode_client, decode_server, encode_client, encode_server, sequence_newer,
 };
+use ferravex_play::rounds::RuleError;
 use std::{
-    collections::{VecDeque, hash_map::RandomState},
-    hash::{BuildHasher, Hasher},
+    collections::VecDeque,
     io,
     net::{SocketAddr, ToSocketAddrs},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
+pub use tactical::TacticalOptions;
 
 const POLL_BUDGET: usize = 128;
 const MAX_PENDING_INPUTS: usize = 128;
@@ -25,16 +38,16 @@ const MAX_DELIVERED_EVENTS: usize = 512;
 // Loopback delivery is asynchronous on macOS and Windows. The test harness
 // gives real UDP packets a bounded delivery window, including deliberately
 // dropped/reordered packets. Runtime sockets remain strictly nonblocking.
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 struct Socket(ferravex_net::udp::Socket);
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 impl std::ops::Deref for Socket {
     type Target = ferravex_net::udp::Socket;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 impl Socket {
     fn bind(addr: impl ToSocketAddrs) -> io::Result<Self> {
         ferravex_net::udp::Socket::bind(addr).map(Self)
@@ -60,14 +73,24 @@ impl Socket {
 // RandomState obtains per-instance random keys from the standard library. This
 // session cookie rejects accidental/spoofed input, but is not an auth protocol.
 fn nonce() -> u64 {
-    let mut h = RandomState::new().build_hasher();
-    h.write_u128(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos(),
-    );
-    h.finish().max(1)
+    #[cfg(target_arch = "wasm32")]
+    return crate::browser::nonce();
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::{
+            collections::hash_map::RandomState,
+            hash::{BuildHasher, Hasher},
+            time::{SystemTime, UNIX_EPOCH},
+        };
+        let mut h = RandomState::new().build_hasher();
+        h.write_u128(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos(),
+        );
+        h.finish().max(1)
+    }
 }
 fn send_ok(result: io::Result<usize>) -> io::Result<()> {
     match result {
@@ -87,6 +110,11 @@ struct Peer {
     id: u8,
     inputs: InputQueue,
     last_input: InputFrame,
+    last_shot: Option<u32>,
+    snapshots: VecDeque<(u32, Vec<u8>)>,
+    baseline: Option<(u32, Vec<u8>)>,
+    last_ping: Option<Instant>,
+    commands: EventReceiver,
     last_input_tick: u32,
     ack: Option<u32>,
     last_seen: Instant,
@@ -103,6 +131,10 @@ pub struct GameServer {
     pub game: Match,
     pub rejected_packets: u64,
     pub slow_event_disconnects: u64,
+    pub rejected_shots: u64,
+    tactical_options: Option<TacticalOptions>,
+    tactical: Option<Mode>,
+    round_dirty: bool,
     started: Instant,
 }
 impl GameServer {
@@ -116,6 +148,10 @@ impl GameServer {
             game: Match::new(arena),
             rejected_packets: 0,
             slow_event_disconnects: 0,
+            rejected_shots: 0,
+            tactical_options: None,
+            tactical: None,
+            round_dirty: false,
             started: Instant::now(),
         })
     }
@@ -146,6 +182,7 @@ impl GameServer {
                 continue;
             };
             match packet {
+                ClientPacket::Extension(packet) => self.extension(addr, packet)?,
                 ClientPacket::EventAck { session, sequence } => {
                     let Some(peer) = self
                         .peers
@@ -177,7 +214,13 @@ impl GameServer {
                             peer.session = nonce();
                             peer.inputs = InputQueue::default();
                             peer.events = EventSender::default();
+                            peer.commands = EventReceiver::default();
+                            self.round_dirty = true;
                             peer.last_input = InputFrame::default();
+                            peer.last_shot = None;
+                            peer.snapshots.clear();
+                            peer.baseline = None;
+                            peer.last_ping = None;
                             peer.ack = None;
                             peer.last_input_tick = self.game.tick;
                             if let Some(player) = self.game.player(peer.id) {
@@ -187,7 +230,7 @@ impl GameServer {
                         }
                         peer.last_seen = Instant::now();
                     } else {
-                        if self.peers.len() >= MAX_PLAYERS {
+                        if self.peers.len() >= MAX_PLAYERS || !self.may_join() {
                             self.rejected_packets += 1;
                             continue;
                         }
@@ -196,6 +239,13 @@ impl GameServer {
                         else {
                             continue;
                         };
+                        if self.tactical.as_ref().is_some_and(|m| {
+                            m.rules.phase() == ferravex_play::rounds::Phase::Finished
+                        }) {
+                            self.tactical = None;
+                            self.round_dirty = true;
+                        }
+                        self.round_dirty |= self.tactical_options.is_some();
                         self.game.spawn_player(id);
                         self.peers.push(Peer {
                             addr,
@@ -204,6 +254,11 @@ impl GameServer {
                             id,
                             inputs: InputQueue::default(),
                             last_input: InputFrame::default(),
+                            last_shot: None,
+                            snapshots: VecDeque::with_capacity(32),
+                            baseline: None,
+                            last_ping: None,
+                            commands: EventReceiver::default(),
                             last_input_tick: self.game.tick,
                             ack: None,
                             last_seen: now,
@@ -213,7 +268,7 @@ impl GameServer {
                     }
                     let peer = self
                         .peers
-                        .iter()
+                        .iter_mut()
                         .find(|p| p.addr == addr)
                         .expect("peer inserted");
                     let welcome = encode_server(&ServerPacket::Welcome {
@@ -224,7 +279,7 @@ impl GameServer {
                     })
                     .map_err(protocol_error)?;
                     send_ok(self.socket.send_to(&welcome, addr))?;
-                    self.send_snapshot(peer)?;
+                    Self::send_snapshot(&self.socket, &self.game, peer)?;
                 }
                 ClientPacket::Input { session, inputs } => {
                     let Some(peer) = self
@@ -244,18 +299,25 @@ impl GameServer {
         }
         Ok(())
     }
-    fn send_snapshot(&self, peer: &Peer) -> io::Result<()> {
-        let snapshot = Snapshot {
-            session: peer.session,
-            tick: self.game.tick,
-            ack_sequence: peer.ack.unwrap_or(0),
-            ack_valid: peer.ack.is_some(),
-            players: self.game.players.iter().map(Player::snapshot).collect(),
-        };
-        let bytes = encode_server(&ServerPacket::Snapshot(snapshot)).map_err(protocol_error)?;
-        send_ok(self.socket.send_to(&bytes, peer.addr))
-    }
     pub fn tick(&mut self) -> io::Result<Vec<super::GameEvent>> {
+        self.tick_with_local(&[])
+    }
+    pub fn tick_with_local(
+        &mut self,
+        local: &[(u8, InputFrame)],
+    ) -> io::Result<Vec<super::GameEvent>> {
+        if local.len() > MAX_PLAYERS
+            || local.iter().enumerate().any(|(i, (id, _))| {
+                self.game.player(*id).is_none()
+                    || local[..i].iter().any(|(old, _)| old == id)
+                    || self.peers.iter().any(|p| p.id == *id)
+            })
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid local authority inputs",
+            ));
+        }
         self.poll()?;
         let now = Instant::now();
         self.peers.retain(|p| {
@@ -266,11 +328,16 @@ impl GameServer {
                 true
             }
         });
+        self.prepare_tactical()?;
         let mut commands = [(0, InputFrame::default()); MAX_PLAYERS];
         let mut command_count = 0;
+        let mut shots = [super::ShotTime { player: 0, tick: 0 }; MAX_PLAYERS];
+        let mut shot_count = 0;
         for peer in &mut self.peers {
-            if let Some(input) = peer.inputs.pop_latest() {
+            if let Some(timed) = peer.inputs.pop_latest_timed() {
+                let input = timed.input;
                 peer.last_input = input;
+                peer.last_shot = timed.shot_tick;
                 peer.last_input_tick = self.game.tick;
                 peer.ack = Some(input.sequence);
             }
@@ -280,12 +347,53 @@ impl GameServer {
                 input.move_x = 0.;
                 input.move_z = 0.;
                 input.buttons = 0;
+                if let Some(mode) = &mut self.tactical
+                    && mode
+                        .rules
+                        .interaction_progress()
+                        .is_some_and(|(id, _)| id == u16::from(peer.id))
+                {
+                    let _ = mode
+                        .rules
+                        .act(u16::from(peer.id), ferravex_play::rounds::Action::Cancel);
+                    self.round_dirty = true;
+                }
+            }
+            if input.buttons & super::BUTTON_FIRE != 0
+                && let Some(tick) = peer.last_shot
+            {
+                shots[shot_count] = super::ShotTime {
+                    player: peer.id,
+                    tick,
+                };
+                shot_count += 1;
             }
             commands[command_count] = (peer.id, input);
             command_count += 1;
         }
-        let events = self.game.step(&commands[..command_count]);
-        let payloads: Vec<_> = events
+        for &(id, input) in local {
+            if command_count == MAX_PLAYERS {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "authority input capacity",
+                ));
+            }
+            commands[command_count] = (id, input);
+            command_count += 1;
+        }
+        let step = self.step_combat(&commands[..command_count], &shots[..shot_count]);
+        self.rejected_shots = self
+            .rejected_shots
+            .saturating_add(step.rejected_shots.len() as u64);
+        for (id, _) in &step.rejected_shots {
+            if let Some(peer) = self.peers.iter_mut().find(|p| p.id == *id) {
+                peer.last_input.buttons &= !super::BUTTON_FIRE;
+                peer.last_shot = None;
+            }
+        }
+
+        let events = step.events;
+        let mut payloads: Vec<_> = events
             .iter()
             .map(|event| {
                 NetworkEvent {
@@ -296,10 +404,16 @@ impl GameServer {
             })
             .collect::<Result<_, _>>()
             .map_err(protocol_error)?;
+        if let Some(payload) = self.round_payload()? {
+            payloads.push(payload);
+        }
         let mut slow = [false; MAX_PLAYERS];
         for peer in &mut self.peers {
             for payload in &payloads {
-                if peer.events.queue(payload).is_err() {
+                if peer.events.pending() + peer.commands.buffered()
+                    >= ferravex_net::reliable::EVENT_LIMIT
+                    || peer.events.queue(payload).is_err()
+                {
                     slow[peer.id as usize] = true;
                     break;
                 }
@@ -316,11 +430,12 @@ impl GameServer {
                 true
             }
         });
-        if self.game.tick.is_multiple_of(SNAPSHOT_INTERVAL) {
-            for peer in &self.peers {
-                self.send_snapshot(peer)?;
+        if self.round_dirty || self.game.tick.is_multiple_of(SNAPSHOT_INTERVAL) {
+            for peer in &mut self.peers {
+                Self::send_snapshot(&self.socket, &self.game, peer)?;
             }
         }
+        self.round_dirty = false;
         self.flush_events()?;
         Ok(events)
     }
@@ -351,10 +466,22 @@ pub struct GameClient {
     session: Option<u64>,
     id: Option<u8>,
     next_sequence: u32,
-    pending: VecDeque<InputFrame>,
+    pending: VecDeque<TimedInput>,
+    snapshots: VecDeque<(u32, Vec<u8>)>,
+    clock: ferravex_net::clock::ClientClock,
+    unwrapper: ferravex_net::clock::TickUnwrapper,
+    history: ferravex_net::history::History<RenderFrame>,
+    last_ping: Option<Instant>,
+    last_full_request: Option<Instant>,
     predicted: Option<Player>,
+    commands: EventSender,
+    round: Option<View>,
+    lobby: Option<(u8, u8)>,
+    action_result: Option<(u64, Result<(), RuleError>)>,
     players: Vec<Player>,
     previous_players: Vec<Player>,
+    epochs: [u32; MAX_PLAYERS],
+    previous_epochs: [u32; MAX_PLAYERS],
     latest_tick: Option<u32>,
     previous_tick: u32,
     last_snapshot: Option<Instant>,
@@ -377,9 +504,21 @@ impl GameClient {
             id: None,
             next_sequence: 0,
             pending: VecDeque::with_capacity(MAX_PENDING_INPUTS),
+            snapshots: VecDeque::with_capacity(32),
+            clock: Default::default(),
+            unwrapper: Default::default(),
+            history: ferravex_net::history::History::new(32),
+            last_ping: None,
+            last_full_request: None,
             predicted: None,
+            commands: EventSender::default(),
+            round: None,
+            lobby: None,
+            action_result: None,
             players: vec![],
             previous_players: vec![],
+            epochs: [0; MAX_PLAYERS],
+            previous_epochs: [0; MAX_PLAYERS],
             latest_tick: None,
             previous_tick: 0,
             last_snapshot: None,
@@ -448,9 +587,10 @@ impl GameClient {
         if self.pending.len() == MAX_PENDING_INPUTS {
             self.pending.pop_front();
         }
-        self.pending.push_back(input);
+        let shot_tick = (input.buttons & super::BUTTON_FIRE != 0).then(|| self.rendered_tick());
+        self.pending.push_back(TimedInput { input, shot_tick });
         if let Some(local) = &mut self.predicted {
-            step_player(local, input, &self.arena);
+            tactical::predict(self.round.as_ref(), &self.arena, local, input);
         }
         let count = self.pending.len().min(MAX_INPUTS_PER_PACKET);
         let inputs = self
@@ -459,8 +599,11 @@ impl GameClient {
             .skip(self.pending.len() - count)
             .copied()
             .collect();
-        let bytes =
-            encode_client(&ClientPacket::Input { session, inputs }).map_err(protocol_error)?;
+        let bytes = encode_client(&ClientPacket::Extension(ClientExtension::Inputs {
+            session,
+            inputs,
+        }))
+        .map_err(protocol_error)?;
         send_ok(self.socket.send(&bytes))
     }
     pub fn poll(&mut self) -> io::Result<()> {
@@ -481,9 +624,10 @@ impl GameClient {
                 continue;
             };
             match packet {
+                ServerPacket::Extension(packet) => self.extension(packet)?,
                 ServerPacket::ReliableEvent { session, event } => {
                     if Some(session) != self.session
-                        || NetworkEvent::decode(&event.payload).is_err()
+                        || SessionEvent::decode(&event.payload).is_err()
                     {
                         self.rejected_packets += 1;
                         continue;
@@ -505,8 +649,8 @@ impl GameClient {
                         }
                     };
                     for packet in delivered {
-                        self.delivered_events.push_back(
-                            NetworkEvent::decode(&packet.payload)
+                        self.consume_session_event(
+                            SessionEvent::decode(&packet.payload)
                                 .expect("payload validated before buffering"),
                         );
                     }
@@ -528,6 +672,7 @@ impl GameClient {
                         continue;
                     }
                     if self.session != Some(session) {
+                        self.clear_replication();
                         self.session = Some(session);
                         self.id = Some(player_id);
                         self.pending.clear();
@@ -540,37 +685,7 @@ impl GameClient {
                     }
                 }
                 ServerPacket::Snapshot(snapshot) => {
-                    if Some(snapshot.session) != self.session {
-                        self.rejected_packets += 1;
-                        continue;
-                    }
-                    if self.id.is_none()
-                        || self
-                            .latest_tick
-                            .is_some_and(|last| !sequence_newer(snapshot.tick, last))
-                    {
-                        continue;
-                    }
-                    let Some(state) = snapshot.players.iter().find(|p| Some(p.id) == self.id)
-                    else {
-                        self.rejected_packets += 1;
-                        continue;
-                    };
-                    self.previous_tick = self.latest_tick.unwrap_or(snapshot.tick);
-                    self.latest_tick = Some(snapshot.tick);
-                    self.last_snapshot = Some(Instant::now());
-                    self.previous_players = std::mem::take(&mut self.players);
-                    self.players = snapshot.players.iter().map(Player::from_snapshot).collect();
-                    if snapshot.ack_valid {
-                        self.ack = Some(snapshot.ack_sequence);
-                        self.pending
-                            .retain(|input| sequence_newer(input.sequence, snapshot.ack_sequence));
-                    }
-                    let mut corrected = Player::from_snapshot(state);
-                    for input in &self.pending {
-                        step_player(&mut corrected, *input, &self.arena);
-                    }
-                    self.predicted = Some(corrected);
+                    self.accept_snapshot(snapshot, buffer[..n].to_vec())?;
                 }
             }
         }
@@ -580,6 +695,7 @@ impl GameClient {
             .last_snapshot
             .is_some_and(|time| time.elapsed() > PEER_TIMEOUT)
         {
+            self.clear_replication();
             self.session = None;
             self.id = None;
             self.predicted = None;
@@ -592,6 +708,8 @@ impl GameClient {
             self.last_hello = None;
             self.hello()?;
         }
+        self.probe_clock()?;
+        self.flush_commands()?;
         Ok(())
     }
     /// Interpolate the last two authority frames, intentionally one snapshot late.
@@ -608,7 +726,8 @@ impl GameClient {
                 let mut p = current.clone();
                 if let Some(old) = self.previous_players.iter().find(|old| old.id == p.id) {
                     // Death/respawn and teleports should snap, not glide across the map.
-                    if old.health > 0
+                    if self.epochs[p.id as usize] == self.previous_epochs[p.id as usize]
+                        && old.health > 0
                         && p.health > 0
                         && old.position.distance_squared(p.position) < 25.
                     {
@@ -639,7 +758,7 @@ impl GameClient {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
     #[test]
@@ -749,6 +868,7 @@ mod tests {
         let position = client.local_player().unwrap().position;
         let peer = &server.peers[0];
         let mut snapshot = Snapshot {
+            epochs: server.game.life_epochs(),
             session: peer.session,
             tick: current.wrapping_sub(3),
             ack_valid: true,

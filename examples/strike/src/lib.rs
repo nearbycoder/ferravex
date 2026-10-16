@@ -1,10 +1,12 @@
-//! Original low-poly FPS vertical slice on Ferravex; native UDP or offline practice on the web.
+//! Original low-poly FPS with shared native UDP/browser byte-link authority.
 mod animation;
 mod bots;
 mod controls;
 mod effects;
 mod geometry;
 mod hud;
+#[cfg(target_arch = "wasm32")]
+mod multiplayer;
 mod replay;
 
 use controls::Controls;
@@ -28,6 +30,7 @@ fn window_conf() -> Conf {
 
 #[derive(Default)]
 struct Options {
+    #[cfg(not(target_arch = "wasm32"))]
     connect: Option<String>,
     smoke_frames: Option<u64>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -188,6 +191,7 @@ async fn game() {
     .expect("yard vertex AO");
     let operator = build_operator();
     let rifle = build_rifle();
+    let objectives = geometry::Objectives::new();
     let operator_rig = animation::OperatorRig::new();
     let mut operator_motion: Vec<_> = (0..ferravex_fps::MAX_PLAYERS)
         .map(|_| animation::OperatorMotion::new(&operator_rig))
@@ -209,7 +213,10 @@ async fn game() {
                 None
             }
         });
+    #[cfg(not(target_arch = "wasm32"))]
     let network = opts.connect.is_some();
+    #[cfg(target_arch = "wasm32")]
+    let mut webnet = multiplayer::Session::default();
     let mut active = opts.play;
     let mut has_played = active;
     let mut diagnostics = false;
@@ -239,6 +246,8 @@ async fn game() {
     let mut stats = FrameStats::<120>::default();
     let mut frames = 0u64;
     let mut pending_buttons = 0;
+    let mut last_command = None;
+    let mut command_notice: Option<(&'static str, f32)> = None;
     let mut shot_timer = 0f32;
     let mut hit_timer = 0f32;
     let mut damage_timer = 0f32;
@@ -269,6 +278,20 @@ async fn game() {
             get_frame_time().min(0.25)
         };
         stats.record(get_frame_time());
+        if let Some((_, time)) = &mut command_notice {
+            *time -= dt;
+            if *time <= 0. {
+                command_notice = None;
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            controls.show_interact = client.as_ref().and_then(|c| c.tactical_view()).is_some();
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            controls.show_interact = webnet.round().is_some();
+        }
         controls.prepare(active);
         if controls.input.pressed("pause") {
             active = !active;
@@ -279,17 +302,53 @@ async fn game() {
         if controls.input.pressed("diagnostics") {
             diagnostics = !diagnostics;
         }
+        #[cfg(target_arch = "wasm32")]
+        let net_changed = {
+            let changed = webnet.before_frame();
+            if changed && webnet.active() {
+                replays.stop_record();
+                if replays.playing() {
+                    replays.toggle_playback(&game);
+                }
+            }
+            if webnet.active() {
+                if let Some(p) = webnet.local() {
+                    local = p.clone();
+                }
+                remote = webnet.players();
+                server_tick = webnet.tick_number();
+                let local_id = local.id;
+                apply_game_events(
+                    webnet.drain_events(),
+                    local_id,
+                    &mut effects,
+                    &mut hit_timer,
+                    &mut damage_timer,
+                );
+            }
+            changed
+        };
+        #[cfg(target_arch = "wasm32")]
+        let network = webnet.active();
         let mut cut_replay = replays.controls(&mut controls.input, &game, network);
+        #[cfg(target_arch = "wasm32")]
+        {
+            cut_replay |= net_changed;
+        }
         cut_replay |= std::mem::take(&mut replay_initial_cut);
         cut_replay |= replays.browser_poll(&game, network);
         cut_replay |= replays.pump();
         if cut_replay {
-            let source = replays.world.as_ref().map_or(&game, |w| &w.game);
-            local = source
-                .player(0)
-                .cloned()
-                .unwrap_or_else(|| game.players[0].clone());
-            remote.clone_from(&source.players);
+            command_notice = None;
+            last_command = None;
+            if !network {
+                let source = replays.world.as_ref().map_or(&game, |w| &w.game);
+                local = source
+                    .player(0)
+                    .cloned()
+                    .unwrap_or_else(|| game.players[0].clone());
+                remote.clone_from(&source.players);
+            }
             controls.yaw = local.yaw;
             controls.pitch = local.pitch;
             previous_local_position = local.position;
@@ -349,6 +408,36 @@ async fn game() {
                 &mut damage_timer,
             );
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        let actions = controls.tactical_actions(
+            client.as_ref().and_then(|c| c.tactical_view()),
+            &local,
+            active,
+        );
+        #[cfg(target_arch = "wasm32")]
+        let actions = controls.tactical_actions(webnet.round(), &local, active);
+        for action in actions.into_iter().flatten() {
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(c) = &mut client
+                && let Err(e) = c.queue_action(action)
+            {
+                error = e.to_string();
+            }
+            #[cfg(target_arch = "wasm32")]
+            webnet.act(action);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let action_result = client.as_ref().and_then(|c| c.last_action_result());
+        #[cfg(target_arch = "wasm32")]
+        let action_result = webnet.action_result();
+        match action_result {
+            Some((sequence, result)) if last_command != Some(sequence) => {
+                last_command = Some(sequence);
+                command_notice = result.err().map(|e| (hud::rule_feedback(e), 2.5));
+            }
+            None => last_command = None,
+            _ => {}
+        }
         for _ in 0..frame.steps {
             previous_local_position = local.position;
             #[cfg(not(target_arch = "wasm32"))]
@@ -362,6 +451,23 @@ async fn game() {
                 remote.clear();
                 remote.extend_from_slice(c.players());
                 server_tick = c.server_tick();
+                continue;
+            }
+            #[cfg(target_arch = "wasm32")]
+            if webnet.active() {
+                let events = webnet.tick(input);
+                if let Some(p) = webnet.local() {
+                    local = p.clone();
+                }
+                remote = webnet.players();
+                server_tick = webnet.tick_number();
+                apply_game_events(
+                    events,
+                    local.id,
+                    &mut effects,
+                    &mut hit_timer,
+                    &mut damage_timer,
+                );
                 continue;
             }
             if replays.playing() {
@@ -399,14 +505,14 @@ async fn game() {
         }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(c) = client.as_ref() {
-            remote = c.interpolated_players(c.interpolation_alpha());
+            remote = c.rendered_players();
             if !c.is_connected() {
                 error = "Connecting to server...".into();
             } else if error == "Connecting to server..." {
                 error.clear();
             }
         }
-        let fired = !cut_replay && local.ammo < was_ammo;
+        let fired = !cut_replay && local.fire_cooldown > 0 && local.ammo < was_ammo;
         if fired {
             sound.cue(Cue::Fire, 0.75);
             shot_timer = 0.09;
@@ -577,6 +683,13 @@ async fn game() {
             );
         }
         arena.draw();
+        #[cfg(not(target_arch = "wasm32"))]
+        let round = client.as_ref().and_then(|c| c.tactical_view());
+        #[cfg(target_arch = "wasm32")]
+        let round = webnet.round();
+        if let Some(round) = round {
+            objectives.draw(round);
+        }
         for p in &remote {
             if (active && p.id == local.id) || p.health == 0 {
                 continue;
@@ -664,8 +777,26 @@ async fn game() {
                 tick: server_tick,
                 hit_timer,
                 shot_timer,
-                error: &error,
+                error: if error.is_empty() {
+                    command_notice.map_or("", |n| n.0)
+                } else {
+                    &error
+                },
             },
+        );
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let round = client.as_ref().and_then(|c| c.tactical_view());
+            let lobby = client.as_ref().and_then(|c| c.tactical_lobby());
+            hud::tactical(&mut hud_ui, round, lobby, local.id, active);
+        }
+        #[cfg(target_arch = "wasm32")]
+        hud::tactical(
+            &mut hud_ui,
+            webnet.round(),
+            webnet.lobby(),
+            local.id,
+            active,
         );
         if active {
             controls.draw_touch();
@@ -675,7 +806,9 @@ async fn game() {
         } else {
             hud::menu(&mut hud_ui, network, has_played);
         }
-        replays.overlay(&mut hud_ui, diagnostics);
+        if !network || diagnostics {
+            replays.overlay(&mut hud_ui, diagnostics);
+        }
         hud_ui.finish_player(&mut controls.input, !active);
         hud_ui.paint();
         if !active && hud_ui.activated(1) {
@@ -687,6 +820,8 @@ async fn game() {
             clock.reset();
         }
         replays.browser_sync();
+        #[cfg(target_arch = "wasm32")]
+        webnet.sync();
         controls.input.draw_settings();
         if browser_playing != active {
             sync_browser_ui(active);
