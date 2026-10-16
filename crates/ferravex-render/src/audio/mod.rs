@@ -5,6 +5,8 @@ use std::cell::{Cell, RefCell};
 #[cfg(not(target_arch = "wasm32"))]
 mod capture;
 mod game;
+mod score;
+pub use score::AdaptiveScore;
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
 pub use game::GameAudio;

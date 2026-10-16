@@ -23,8 +23,8 @@ platform checks are recorded only when actually performed.
 | 13 | Breakable mechanisms | [PR 36](https://github.com/nearbycoder/ferravex/pull/36), merged |
 | 14 | Camera anticipation and authored zones | [PR 37](https://github.com/nearbycoder/ferravex/pull/37), merged |
 | 15 | Procedural contact animation | [PR 38](https://github.com/nearbycoder/ferravex/pull/38), merged |
-| 16 | Procedural environment builders | Implemented; locally validated |
-| 17 | Acoustic zones and adaptive music | Pending |
+| 16 | Procedural environment builders | [PR 39](https://github.com/nearbycoder/ferravex/pull/39), merged |
+| 17 | Acoustic zones and adaptive music | Implemented; locally validated |
 | 18 | Editable touch and accessibility layouts | Pending |
 | 19 | Objective and puzzle graphs | Pending |
 | 20 | Adaptive performance and playtest diagnostics | Pending |
@@ -259,3 +259,18 @@ physics lab now has generated stairs and a sloped ramp, with real collision and
 matching low-poly meshes. Local endpoint/bounds/transactional-capacity tests and
 an actual stair ray hit, existing sandbox containment/reset/cap tests, strict
 Clippy and Wasm checks pass. This is parametric construction, not terrain meshing.
+
+## 17. Room acoustics and adaptive music
+
+`audio::AcousticScene<N>` evaluates up to 32 feathered room filters and applies
+optional host-confirmed occlusion attenuation. The shared PCM mixer now supports
+validated per-source one-pole low-pass filtering; bypass preserves legacy samples.
+These are filter acoustics, without simulated reverb tails. `MusicConductor`
+quantizes requested intensity to four-beat bar boundaries and smooths stem gains.
+Original procedural stems share a loop length; `render::audio::AdaptiveScore`
+starts both together and changes gains without restarting their cursors. Hosts
+must retain the score/bank and resume both after suspension. Crystal Cavern uses
+real room filtering for local cues/footsteps and adaptive exploration music.
+Local tests cover feathering, explicit occlusion, high-frequency energy reduction,
+bar timing, equal stem lengths, existing audio allocation/partition/suspension tests,
+complete cave playthrough, strict workspace Clippy and Wasm compilation.
