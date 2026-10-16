@@ -32,3 +32,5 @@ Collect three embers to unlock one extra jump per landing for the rest of the ru
 Green springboards on three raised side platforms launch the player into optional high routes. Their shared `LaunchPad` rule fires on real landing edges with a cooldown; ordinary jump release does not cut the spring arc.
 
 Two high bonus platforms carry additional embers. Real contact gives a 0.65-second warning before collision disappears; the platforms regrow after three seconds. The shared `CrumblePlatform` exposes solid/warning/absent phases to hosts.
+
+The mill and furnace lanterns now form an ordered checkpoint route through shared respawn anchors. Earlier lanterns cannot move progress backward. Death restores temporary platforms and movement state while preserving earned embers, score and trial time.

@@ -39,6 +39,7 @@ struct Game {
     hazards: Vec<Rect>,
     embers: Vec<(Vec2, bool)>,
     checkpoint: Vec2,
+    checkpoints: ferravex_play::gameplay::checkpoint::Checkpoints<Vec2, 3>,
     checkpoint_lit: bool,
     won: bool,
     deaths: u32,
@@ -95,6 +96,11 @@ impl Game {
             .map(|(x, y)| (vec2(x, y), false))
             .collect(),
             checkpoint: vec2(90.0, 520.0),
+            checkpoints: ferravex_play::gameplay::checkpoint::Checkpoints::new(
+                0x454d4232,
+                [vec2(90., 520.), vec2(1410., 520.), vec2(2050., 520.)],
+            )
+            .unwrap(),
             checkpoint_lit: false,
             won: false,
             deaths: 0,
@@ -131,7 +137,11 @@ impl Game {
     }
 
     fn respawn(&mut self) {
+        self.checkpoint = self.checkpoints.respawn();
         self.motor = Character::new(feet(self.checkpoint));
+        for platform in &mut self.crumbles {
+            platform.reset();
+        }
         self.air_jump_used = false;
         self.jump_down = false;
         self.spring_flight = false;
@@ -254,7 +264,16 @@ impl Game {
         }
         if self.position().x > 1380.0 && self.position().x < 1490.0 && self.motor.grounded {
             self.checkpoint_lit = true;
-            self.checkpoint = vec2(1410.0, 520.0);
+            self.checkpoints.activate(1).unwrap();
+            self.checkpoint = self.checkpoints.respawn();
+        }
+        if self.checkpoints.index() == 1
+            && self.position().x > 2020.
+            && self.position().x < 2140.
+            && self.motor.grounded
+        {
+            self.checkpoints.activate(2).unwrap();
+            self.checkpoint = self.checkpoints.respawn();
         }
         if self.position().x >= 900. && self.trial.splits()[0].is_none() {
             self.trial.split(0).unwrap();
@@ -480,6 +499,14 @@ fn world(game: &Game, camera: f32, time: f32, motion: &EmberAnimation) {
     draw_rectangle(cx - 3.0, 471.0, 6.0, 89.0, Color::from_hex(0x70715a));
     draw_rectangle(cx - 14.0, 459.0, 28.0, 30.0, checkpoint_color);
     draw_rectangle(cx - 8.0, 466.0, 16.0, 16.0, Color::from_hex(0x324237));
+    let cx = 2070. - camera;
+    let color = if game.checkpoints.index() >= 2 {
+        GREEN
+    } else {
+        CREAM
+    };
+    draw_rectangle(cx - 3., 471., 6., 89., Color::from_hex(0x70715a));
+    draw_rectangle(cx - 14., 459., 28., 30., color);
     let exit = 2590.0 - camera;
     draw_rectangle(exit - 35.0, 450.0, 70.0, 110.0, Color::from_hex(0x1a2925));
     draw_rectangle_lines(exit - 35.0, 450.0, 70.0, 110.0, 5.0, GREEN);
@@ -1101,5 +1128,29 @@ mod crumble_route_tests {
             g.update(Input::default(), 1. / 120.);
         }
         assert!(g.crumbles[0].solid());
+    }
+}
+
+#[cfg(test)]
+mod checkpoint_route_tests {
+    use super::*;
+    #[test]
+    fn later_lantern_updates_respawn_without_losing_earned_inventory() {
+        let mut g = Game::new();
+        g.motor = Character::new(feet(vec2(1410., 520.)));
+        g.update(Input::default(), 1. / 120.);
+        assert_eq!(g.checkpoints.index(), 1);
+        g.motor = Character::new(feet(vec2(2050., 520.)));
+        g.update(Input::default(), 1. / 120.);
+        assert_eq!(g.checkpoints.index(), 2);
+        let saved = g.checkpoints.snapshot();
+        g.crumbles[0].step(1., true).unwrap();
+        g.motor = Character::new(feet(vec2(2235., 520.)));
+        g.update(Input::default(), 1. / 120.);
+        assert_eq!(g.position(), vec2(2050., 520.));
+        assert!(g.crumbles[0].solid());
+        g.motor = Character::new(feet(vec2(1410., 520.)));
+        g.update(Input::default(), 1. / 120.);
+        assert_eq!(g.checkpoints.snapshot(), saved);
     }
 }
