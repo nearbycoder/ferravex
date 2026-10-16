@@ -38,6 +38,23 @@ impl Bundle {
         self.bytes = total;
         Ok(())
     }
+    /// Number of assets, including empty files.
+    pub fn len(&self) -> usize {
+        self.files.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.files.is_empty()
+    }
+    /// Total decoded payload bytes, excluding names and externally retained readers.
+    pub fn decoded_bytes(&self) -> usize {
+        self.bytes
+    }
+    /// Remove an asset. Existing Arc readers remain valid.
+    pub fn remove(&mut self, path: &str) -> Option<Arc<[u8]>> {
+        let bytes = self.files.remove(path)?;
+        self.bytes -= bytes.len();
+        Some(bytes)
+    }
     pub fn get(&self, path: &str) -> Option<Arc<[u8]>> {
         self.files.get(path).cloned()
     }
@@ -324,5 +341,28 @@ mod malformed_tests {
         }
         assert_eq!(bundle.insert("one-too-many", b""), Err(AssetError::Limit));
         assert!(bundle.insert("empty", b"replacement").is_ok());
+    }
+}
+
+#[cfg(test)]
+mod removal_tests {
+    use super::*;
+    #[test]
+    fn accounting_and_retained_readers_survive_remove_and_reinsert() {
+        let mut b = Bundle::default();
+        b.insert("a", b"old").unwrap();
+        b.insert("empty", b"").unwrap();
+        let reader = b.get("a").unwrap();
+        assert_eq!((b.len(), b.decoded_bytes()), (2, 3));
+        assert_eq!(&*b.remove("a").unwrap(), b"old");
+        assert_eq!(&*reader, b"old");
+        assert!(b.remove("missing").is_none());
+        assert_eq!(b.decoded_bytes(), 0);
+        b.insert("a", b"newer").unwrap();
+        assert_eq!(b.decoded_bytes(), 5);
+        b.remove("empty");
+        b.remove("a");
+        assert!(b.is_empty());
+        assert!(Bundle::decode(&b.encode()).unwrap().is_empty());
     }
 }
