@@ -26,3 +26,5 @@ The example supplies a lightweight character controller because the engine does 
 Optional embers now build a five-second score chain, with multipliers every two pickups up to x4. Each ember scores once. Falling breaks the chain while preserving collected embers and total score.
 
 A shared time trial records ordered splits at the mill, furnace and exit. Gold/silver/bronze targets are 12/18/30 seconds. Falls keep the clock running; finishing freezes the result.
+
+Collect three embers to unlock one extra jump per landing for the rest of the run. Tap jump again in the air for a slightly shorter recovery jump; the HUD shows readiness. Ember ownership uses the shared bounded inventory.

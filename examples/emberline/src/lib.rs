@@ -44,6 +44,9 @@ struct Game {
     deaths: u32,
     score: ferravex_play::gameplay::combo::ScoreChain,
     jumps: u32,
+    ember_inventory: ferravex_play::gameplay::inventory::Inventory<1>,
+    air_jump_used: bool,
+    jump_down: bool,
     elapsed: f32,
     trial: ferravex_play::gameplay::trial::Trial<3>,
     respawn_flash: f32,
@@ -90,6 +93,9 @@ impl Game {
             deaths: 0,
             score: ferravex_play::gameplay::combo::ScoreChain::new(5., 2, 4).unwrap(),
             jumps: 0,
+            ember_inventory: ferravex_play::gameplay::inventory::Inventory::new().unwrap(),
+            air_jump_used: false,
+            jump_down: false,
             elapsed: 0.0,
             trial: {
                 let mut t = ferravex_play::gameplay::trial::Trial::new([12., 18., 30.]).unwrap();
@@ -115,6 +121,8 @@ impl Game {
 
     fn respawn(&mut self) {
         self.motor = Character::new(feet(self.checkpoint));
+        self.air_jump_used = false;
+        self.jump_down = false;
         self.deaths += 1;
         self.score.break_chain();
         self.respawn_flash = 0.6;
@@ -130,6 +138,8 @@ impl Game {
         self.respawn_flash = (self.respawn_flash - dt).max(0.0);
         // A side platform moves before the motor, so standing passengers inherit its pose.
         self.platforms[5].x = 770.0 + (self.elapsed * 1.2).sin() * 28.0;
+        let jump_edge = input.jump && !self.jump_down;
+        self.jump_down = input.jump;
         let result = self
             .motor
             .step(
@@ -157,6 +167,21 @@ impl Game {
             )
             .expect("authored Emberline character terrain");
         self.jumps += u32::from(result.jumped);
+        if self.motor.grounded {
+            self.air_jump_used = false;
+        }
+        if jump_edge
+            && !result.jumped
+            && !self.motor.grounded
+            && self.motor.jump.coyote == 0.
+            && !self.air_jump_used
+            && self.ember_inventory.count(1) >= 3
+        {
+            self.motor.velocity.y = JUMP * 0.85;
+            self.motor.jump.buffer = 0.;
+            self.air_jump_used = true;
+            self.jumps += 1;
+        }
         // Release makes a short hop; holding keeps the full gap-clearing arc.
         // Cutting velocity once avoids applying a frame-rate-dependent force.
         if !result.jumped && !input.jump_held && !input.jump && self.motor.velocity.y > JUMP * 0.45
@@ -179,6 +204,13 @@ impl Game {
             {
                 *collected = true;
                 self.score.award(100);
+                self.ember_inventory
+                    .add(ferravex_play::gameplay::inventory::Stack {
+                        item: 1,
+                        amount: 1,
+                        limit: 10,
+                    })
+                    .unwrap();
             }
         }
         if self.position().x > 1380.0 && self.position().x < 1490.0 && self.motor.grounded {
@@ -640,6 +672,19 @@ async fn game() {
             23.0,
             CREAM,
         );
+        if game.ember_inventory.count(1) >= 3 {
+            label(
+                if game.air_jump_used {
+                    "AIR JUMP SPENT"
+                } else {
+                    "AIR JUMP READY"
+                },
+                34.,
+                105.,
+                15.,
+                GREEN,
+            );
+        }
         if game.elapsed < 7.0 && !touch_mode {
             label(
                 "A / D  move     SPACE  tap / hold jump     R  restart",
@@ -891,5 +936,66 @@ mod trial_loop_tests {
         g.update(Input::default(), 1.);
         assert_eq!(g.trial.elapsed(), time);
         assert!(!Game::new().trial.finished());
+    }
+}
+
+#[cfg(test)]
+mod earned_jump_tests {
+    use super::*;
+    #[test]
+    fn three_real_pickups_unlock_one_air_jump_per_landing() {
+        let mut g = Game::new();
+        g.embers = vec![(vec2(102., 540.), false); 3];
+        g.update(Input::default(), 1. / 120.);
+        assert_eq!(g.ember_inventory.count(1), 3);
+        g.update(
+            Input {
+                jump: true,
+                jump_held: true,
+                ..Input::default()
+            },
+            1. / 120.,
+        );
+        for _ in 0..20 {
+            g.update(
+                Input {
+                    jump_held: true,
+                    ..Input::default()
+                },
+                1. / 120.,
+            );
+        }
+        g.update(
+            Input {
+                jump: true,
+                jump_held: true,
+                ..Input::default()
+            },
+            1. / 120.,
+        );
+        assert!(g.air_jump_used);
+        assert!(g.motor.velocity.y > 500.);
+        assert_eq!(g.jumps, 2);
+        g.update(
+            Input {
+                jump_held: true,
+                ..Input::default()
+            },
+            1. / 120.,
+        );
+        g.update(
+            Input {
+                jump: true,
+                jump_held: true,
+                ..Input::default()
+            },
+            1. / 120.,
+        );
+        assert_eq!(g.jumps, 2);
+        for _ in 0..240 {
+            g.update(Input::default(), 1. / 120.);
+        }
+        assert!(g.motor.grounded);
+        assert!(!g.air_jump_used);
     }
 }
