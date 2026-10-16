@@ -11,6 +11,7 @@ pub mod input;
 pub mod navigation;
 pub mod particles;
 pub mod persistence;
+pub mod replay;
 pub mod rounds;
 pub mod scene;
 pub mod ui;

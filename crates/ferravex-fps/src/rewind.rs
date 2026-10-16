@@ -1,5 +1,6 @@
 //! Bounded server-authoritative pose rewind. The arena is always queried now.
 use super::*;
+mod checkpoint;
 use std::collections::VecDeque;
 
 /// 250 ms at 64 Hz. Client claims cannot extend the authority's rewind window.

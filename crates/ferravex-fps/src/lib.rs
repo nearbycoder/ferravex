@@ -6,7 +6,9 @@ use ferravex_physics::character::{
     Character, CharacterError, CharacterInput, CharacterSettings, CharacterShape, JumpState,
     Obstacle as CharacterObstacle, ObstacleShape, QueryBounds, Terrain,
 };
+pub mod checkpoint;
 mod event_wire;
+pub mod replay;
 pub use event_wire::NetworkEvent;
 mod rewind;
 use ferravex_net::PlayerSnapshot;

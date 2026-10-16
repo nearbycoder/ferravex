@@ -257,3 +257,16 @@ mod records;
 pub use records::{Record, RecordBook, Records, run_micros};
 #[cfg(test)]
 mod tests;
+/// Explicit native import/export paths; unlike slots these are chosen by the
+/// caller. Reads and atomic replacements are bounded to the save-file ceiling.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_file(path: &std::path::Path, limit: usize) -> Result<Option<Vec<u8>>, StorageError> {
+    if limit > MAX_SAVE_BYTES {
+        return Err(StorageError::TooLarge);
+    }
+    native::read(path, limit)
+}
+#[cfg(not(target_arch = "wasm32"))]
+pub fn write_file(path: &std::path::Path, bytes: &[u8]) -> Result<(), StorageError> {
+    native::atomic_write(path, bytes, MAX_SAVE_BYTES)
+}

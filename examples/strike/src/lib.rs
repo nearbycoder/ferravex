@@ -5,6 +5,7 @@ mod controls;
 mod effects;
 mod geometry;
 mod hud;
+mod replay;
 
 use controls::Controls;
 use effects::CombatEffects;
@@ -34,6 +35,10 @@ struct Options {
     #[cfg(not(target_arch = "wasm32"))]
     capture_dir: Option<String>,
     play: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    record: Option<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    replay: Option<String>,
 }
 #[cfg(target_arch = "wasm32")]
 fn options() -> Options {
@@ -53,15 +58,21 @@ fn options() -> Options {
                 "--screenshot" => out.screenshot = args.next(),
                 "--capture-dir" => out.capture_dir = args.next(),
                 "--play" => out.play = true,
+                "--record" => out.record = args.next(),
+                "--replay" => out.replay = args.next(),
                 "--help" => {
                     println!(
-                        "strike [--connect 127.0.0.1:4000] [--play] [--smoke-frames N] [--screenshot path.png] [--capture-dir directory]"
+                        "strike [--connect 127.0.0.1:4000] [--play] [--smoke-frames N] [--screenshot path.png] [--capture-dir directory] [--record clip.fxrt] [--replay clip.fxrt]"
                     );
                     std::process::exit(0);
                 }
                 _ => eprintln!("Unknown option: {arg}"),
             }
         }
+    }
+    if out.connect.is_some() && (out.record.is_some() || out.replay.is_some()) {
+        eprintln!("Replay tools require offline practice; omit --connect");
+        std::process::exit(2);
     }
     out
 }
@@ -206,6 +217,22 @@ async fn game() {
     sync_browser_ui(active);
     let mut controls = Controls::default();
     let mut hud_ui = ferravex_render::ui::Ui::new();
+    let mut replays = replay::Session::default();
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(path) = &opts.replay {
+        match ferravex_render::storage::read_file(std::path::Path::new(path), 8 * 1024 * 1024) {
+            Ok(Some(bytes)) => {
+                if let Err(e) = replays.import(&bytes, &game) {
+                    error = format!("Replay: {e}");
+                }
+            }
+            other => error = format!("Replay read failed: {other:?}"),
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if opts.record.is_some() {
+        replays.start_record(&game);
+    }
     let mut sound = GameAudio::new();
     let mut was_reload = 0;
     let mut clock = FixedClock::new(TICK_RATE as f64, 8);
@@ -251,7 +278,38 @@ async fn game() {
         if controls.input.pressed("diagnostics") {
             diagnostics = !diagnostics;
         }
+        let mut cut_replay = replays.controls(&mut controls.input, &game, network);
+        cut_replay |= replays.browser_poll(&game, network);
+        cut_replay |= replays.pump();
+        if cut_replay {
+            let source = replays.world.as_ref().map_or(&game, |w| &w.game);
+            local = source
+                .player(0)
+                .cloned()
+                .unwrap_or_else(|| game.players[0].clone());
+            remote.clone_from(&source.players);
+            controls.yaw = local.yaw;
+            controls.pitch = local.pitch;
+            previous_local_position = local.position;
+            was_ammo = local.ammo;
+            was_health = local.health;
+            was_reload = local.reload_ticks;
+            shot_timer = 0.;
+            hit_timer = 0.;
+            damage_timer = 0.;
+            effects = CombatEffects::new();
+            clock.reset();
+            view_rig.cut();
+            for motion in &mut operator_motion {
+                *motion = animation::OperatorMotion::new(&operator_rig);
+            }
+            weapon_motion = animation::WeaponMotion::new();
+        }
         let mut input = controls.sample(active);
+        if replays.playing() {
+            controls.yaw = local.yaw;
+            controls.pitch = local.pitch;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if opts.capture_dir.is_some() && active {
             let t = frames as f32 / 60.0;
@@ -304,9 +362,32 @@ async fn game() {
                 server_tick = c.server_tick();
                 continue;
             }
+            if replays.playing() {
+                if active && controls.input.gameplay_active() && !cut_replay && replays.advance() {
+                    let w = replays.world.as_ref().unwrap();
+                    apply_game_events(
+                        w.events.iter().copied(),
+                        0,
+                        &mut effects,
+                        &mut hit_timer,
+                        &mut damage_timer,
+                    );
+                    local = w
+                        .game
+                        .player(0)
+                        .cloned()
+                        .unwrap_or_else(|| game.players[0].clone());
+                    remote.clone_from(&w.game.players);
+                    server_tick = w.game.tick;
+                    controls.yaw = local.yaw;
+                    controls.pitch = local.pitch;
+                }
+                continue;
+            }
             if !network && active && controls.input.gameplay_active() {
                 bots.commands(&game, input, &mut commands);
                 let events = game.step(&commands);
+                replays.capture(&game, &commands, &events);
                 bots.events(&events);
                 apply_game_events(events, 0, &mut effects, &mut hit_timer, &mut damage_timer);
                 local = game.players[0].clone();
@@ -323,19 +404,19 @@ async fn game() {
                 error.clear();
             }
         }
-        let fired = local.ammo < was_ammo;
+        let fired = !cut_replay && local.ammo < was_ammo;
         if fired {
             sound.cue(Cue::Fire, 0.75);
             shot_timer = 0.09;
         }
 
-        if local.health < was_health {
+        if !cut_replay && local.health < was_health {
             damage_timer = 0.25;
         }
-        if local.reload_ticks > 0 && was_reload == 0 {
+        if !cut_replay && local.reload_ticks > 0 && was_reload == 0 {
             sound.cue(Cue::Reload, 0.6);
         }
-        if local.health == 0 && was_health > 0 {
+        if !cut_replay && local.health == 0 && was_health > 0 {
             sound.cue(Cue::Failure, 0.5);
         }
         was_reload = local.reload_ticks;
@@ -356,7 +437,9 @@ async fn game() {
         hit_timer = (hit_timer - dt).max(0.);
         damage_timer = (damage_timer - dt).max(0.);
         effects.update(dt);
-        let animation_dt = if active {
+        let animation_dt = if cut_replay || (replays.playing() && replays.paused) {
+            0.
+        } else if active {
             controls.input.simulation_dt(dt)
         } else {
             dt
@@ -478,6 +561,9 @@ async fn game() {
             }])
             .unwrap();
         }
+        if let Some(g) = replays.ghost_sample(frame.alpha) {
+            replay::draw_ghost(g);
+        }
         if active && local.health > 0 {
             ferravex_render::draw_skinned_shadow(
                 &operator,
@@ -587,6 +673,7 @@ async fn game() {
         } else {
             hud::menu(&mut hud_ui, network, has_played);
         }
+        replays.overlay(&mut hud_ui, diagnostics);
         hud_ui.finish_player(&mut controls.input, !active);
         hud_ui.paint();
         if !active && hud_ui.activated(1) {
@@ -597,6 +684,7 @@ async fn game() {
             show_mouse(controls.touch_mode);
             clock.reset();
         }
+        replays.browser_sync();
         controls.input.draw_settings();
         if browser_playing != active {
             sync_browser_ui(active);
@@ -625,6 +713,25 @@ async fn game() {
             break;
         }
         next_frame().await;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(path) = &opts.record
+        && let Some(bytes) = replays.export()
+    {
+        let path = std::path::Path::new(path);
+        let path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir().unwrap().join(path)
+        };
+        match ferravex_render::storage::write_file(&path, &bytes) {
+            Ok(()) => println!(
+                "REPLAY exported {} bytes to {}",
+                bytes.len(),
+                path.display()
+            ),
+            Err(e) => eprintln!("Replay export failed: {e:?}"),
+        }
     }
 }
 

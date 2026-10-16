@@ -85,6 +85,7 @@ dependencies = [
  "ferravex-math",
  "ferravex-net",
  "ferravex-physics",
+ "ferravex-play",
 ]
 
 [[package]]

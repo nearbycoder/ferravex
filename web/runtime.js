@@ -43,6 +43,7 @@ try {
  exports.ferravex_init();
  const requestedQuality=new URLSearchParams(location.search).get('quality');if(requestedQuality!==null){const quality=['low','medium','high'].indexOf(requestedQuality);if(quality<0)throw new Error('quality must be low, medium or high');exports.ferravex_quality_override(quality);}
  exports.ferravex_autoplay(new URLSearchParams(location.search).has('autoplay')?1:0);
+ let replayTools=null;if(new URLSearchParams(location.search).has('replay-tools')){replayTools=(await import('./replay-tools.js')).createReplayTools(exports,canvas);}
  let contentTools=null;if(new URLSearchParams(location.search).has('content-tools')){contentTools=(await import('./content-tools.js')).createContentTools(exports,canvas);}
  let materialTools=null;if(new URLSearchParams(location.search).has('material-tools')){materialTools=(await import('./material-tools.js')).createMaterialTools(exports);}
  status.textContent='';if(controlsButton)controlsButton.disabled=false;canvas.focus();
@@ -87,7 +88,7 @@ try {
   canvas.dataset.drawCalls=String(immediateDraws+retained.drawCalls+retained.shadowDrawCalls+spriteEffects.drawCalls);canvas.dataset.shadowDrawCalls=String(retained.shadowDrawCalls);canvas.dataset.quality=String(retained.environment.quality);canvas.dataset.lightingError=retained.lightingError;canvas.dataset.residentMeshes=String(retained.meshes.size);canvas.dataset.uploadBytes=String(count*32+retained.uploadBytes+spriteEffects.uploadBytes);
   canvas.dataset.effectVertices=String(exports.ferravex_effect_vertex_count?.()||0);
   canvas.dataset.skinnedDrawCalls=String(retained.skinnedDrawCalls);canvas.dataset.skinJoints=String(exports.ferravex_skin_joint_count?.()||0);
-  canvas.dataset.materialError=retained.lastError;materialTools?.update();contentTools?.update();
+  canvas.dataset.materialError=retained.lastError;materialTools?.update();contentTools?.update();replayTools?.update();
   if(running)requestAnimationFrame(loop);else audio.dispose();
  };
  requestAnimationFrame(loop);
