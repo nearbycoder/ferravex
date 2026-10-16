@@ -87,7 +87,8 @@ impl Host {
                 return Err("AppKit must run on the main thread".into());
             }
             let _pool = Pool::new();
-            let app = if NSApp.is_null() {
+            let first_launch = NSApp.is_null();
+            let app = if first_launch {
                 id(class(c"NSApplication"), c"sharedApplication")
             } else {
                 NSApp
@@ -95,8 +96,10 @@ impl Host {
             if app.is_null() {
                 return Err("AppKit application unavailable".into());
             }
-            void_u64(app, c"setActivationPolicy:", 0);
-            void(app, c"finishLaunching");
+            if first_launch {
+                void_u64(app, c"setActivationPolicy:", 0);
+                void(app, c"finishLaunching");
+            }
             let mut owner = Self {
                 app,
                 window: ptr::null_mut(),
