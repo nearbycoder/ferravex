@@ -92,6 +92,22 @@ impl Profiler {
         self.record(id, now().checked_sub(start).unwrap_or_default());
         result
     }
+    /// Clear one counter's history while preserving its name, budget and ID.
+    pub fn reset(&mut self, id: CounterId) -> bool {
+        let Some(counter) = self.counters.get_mut(id.0) else {
+            return false;
+        };
+        counter.values.fill(0);
+        counter.next = 0;
+        counter.len = 0;
+        true
+    }
+    /// Begin a fresh profiling capture without invalidating registered IDs.
+    pub fn reset_all(&mut self) {
+        for i in 0..self.counters.len() {
+            self.reset(CounterId(i));
+        }
+    }
     pub fn summary(&self, id: CounterId) -> Summary {
         self.try_summary(id)
             .expect("counter id does not belong to this profiler")
@@ -164,5 +180,30 @@ mod tests {
         p.record(id, Duration::MAX);
         assert_eq!(p.summary(id).max_us, u64::MAX);
         assert!(!p.try_record(CounterId(10), Duration::ZERO));
+    }
+}
+
+#[cfg(test)]
+mod reset_tests {
+    use super::*;
+    #[test]
+    fn reset_drops_stale_ring_samples_but_keeps_registration() {
+        let mut p = Profiler::default();
+        let a = p.register("a", Duration::ZERO);
+        let b = p.register("b", Duration::ZERO);
+        for _ in 0..130 {
+            p.record(a, Duration::from_micros(9));
+        }
+        p.record(b, Duration::from_micros(3));
+        assert!(p.reset(a));
+        assert_eq!(p.summary(a).samples, 0);
+        assert_eq!(p.summary(a).max_us, 0);
+        assert_eq!(p.register("a", Duration::MAX), a);
+        assert_eq!(p.summary(b).samples, 1);
+        p.record(a, Duration::from_micros(1));
+        assert_eq!(p.summary(a).mean_us, 1.);
+        p.reset_all();
+        assert_eq!(p.summary(a).samples + p.summary(b).samples, 0);
+        assert!(!p.reset(CounterId(999)));
     }
 }
