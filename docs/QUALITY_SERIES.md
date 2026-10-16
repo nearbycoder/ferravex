@@ -12,8 +12,8 @@ platform checks are recorded only when actually performed.
 | 2 | Ability system | [PR 25](https://github.com/nearbycoder/ferravex/pull/25), merged |
 | 3 | Attributes and status effects | [PR 26](https://github.com/nearbycoder/ferravex/pull/26), merged |
 | 4 | Combat feedback controller | [PR 27](https://github.com/nearbycoder/ferravex/pull/27), merged |
-| 5 | Attack timelines and telegraphs | Implemented; locally validated |
-| 6 | Squad tactics and cover selection | Pending |
+| 5 | Attack timelines and telegraphs | [PR 28](https://github.com/nearbycoder/ferravex/pull/28), merged |
+| 6 | Squad tactics and cover selection | Implemented; locally validated |
 | 7 | Encounter director | Pending |
 | 8 | Navigation meshes and traversal links | Pending |
 | 9 | Vehicle and flight controllers | Pending |
@@ -113,3 +113,19 @@ Damage still requires real proximity at activation and ordinary player invulnera
 dash rules. The new combat rules use record context 3. Local tests cover exact
 phase boundaries, event order/offsets, partitioning, interruption, buffering,
 resource commitment and hit-window deduplication, plus ordinary swarm autoplay.
+
+## 6. Squad coordination and cover
+
+`ai::SquadBoard<C>` shares expiring last-known contacts with revisions and reserves
+up to 64 authored cover points with exclusive, expiring leases. Stable roles offer
+opposing flank destinations. Cover checks spend the caller's candidate/query budget;
+cheap host eligibility checks precede authoritative occlusion. The host still must
+validate a complete route and faction membership. Reports must originate in real
+perception, never radio echoes. Radio contacts carry no permission to attack.
+FPS practice bots now share actual sightings as hearing tracks, choose flank goals,
+and seek cover when supporting, reloading or retreating. Cover planning is scheduled
+one bot per tick, under the existing combined sensing/path budget. Actual paths and
+ordinary authoritative inputs retain collision, ammo and hit rules. Death releases
+leases. Local tests cover exclusive leases/expiry, zero-budget deferral, opposing
+flanks, contact expiry, hidden silent players, radio without visibility, accepted
+normal bot shots and strict native/Wasm checks.

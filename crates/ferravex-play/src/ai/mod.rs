@@ -5,10 +5,12 @@ mod decision;
 mod enemy;
 mod perception;
 mod scheduler;
+mod squad;
 pub use decision::*;
 pub use enemy::*;
 pub use perception::*;
 pub use scheduler::*;
+pub use squad::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AiError {
