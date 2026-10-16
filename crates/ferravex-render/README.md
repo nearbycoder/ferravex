@@ -47,3 +47,5 @@ AudioWorklet output and an optional Linux ALSA worker. Original surface/weapon
 cues and managed engine loops are integrated across the examples; custom PCM16
 WAV sounds use the same voice controls. Browser worklet queues are bounded and
 reset on focus/mute changes. Windows/Apple device output remains iteration 20.
+
+Optional `content` enables bounded native file watching and a direct browser scene-editing ABI. The developer panel is loaded only with `?content-tools`; see [data-driven scenes](../../docs/SCENES.md).

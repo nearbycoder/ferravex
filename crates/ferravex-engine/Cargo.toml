@@ -3,6 +3,10 @@ name="ferravex-engine"
 version.workspace=true
 edition.workspace=true
 license.workspace=true
+[features]
+default = []
+content = ["ferravex-render/content"]
+
 [dependencies]
 ferravex-math.workspace=true
 ferravex-ecs.workspace=true

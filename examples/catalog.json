@@ -81,7 +81,8 @@
     "controls": "Click build/select \u00b7 Space next wave \u00b7 R restart",
     "host": "orchard-guard",
     "image": "orchard-guard.png",
-    "source": "examples/orchard-guard/README.md"
+    "source": "examples/orchard-guard/README.md",
+    "editable_scene": "examples/orchard-guard/content/orchard.fxscene"
   },
   {
     "id": "marble-run",
@@ -93,7 +94,8 @@
     "controls": "WASD / arrows roll \u00b7 Space brake \u00b7 R restart",
     "host": "marble-run",
     "image": "marble-run.png",
-    "source": "examples/marble-run/README.md"
+    "source": "examples/marble-run/README.md",
+    "editable_scene": "examples/marble-run/content/aqueduct.fxscene"
   },
   {
     "id": "dune-skimmer",

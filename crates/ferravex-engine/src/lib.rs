@@ -5,6 +5,7 @@ pub use ferravex_ecs as ecs;
 pub use ferravex_math as math;
 pub use ferravex_net as net;
 pub use ferravex_play as play;
+pub use ferravex_play::authoring;
 pub mod ai;
 pub mod animation;
 pub mod assets;

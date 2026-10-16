@@ -1,9 +1,11 @@
 mod game;
+mod level;
 use ferravex_core::FixedClock;
 use ferravex_render::audio::{Cue, GameAudio, Surface};
 use ferravex_render::input::{PlayerInput, Preset};
 use ferravex_render::{canvas::Canvas2D, demo::Demo, prelude::*};
 use game::*;
+use std::sync::Arc;
 
 const SIZE: Vec2 = vec2(1200., 760.);
 const INK: Color = Color::new(0.19, 0.25, 0.19, 1.);
@@ -88,7 +90,7 @@ fn field(g: &Game) {
         let y = 85. + ((i * 67 + 21) % 560) as f32;
         draw_line(x, y, x + 3., y - 5., 1., Color::new(0.35, 0.46, 0.25, 0.20));
     }
-    for pair in PATH.windows(2) {
+    for pair in g.level.path.windows(2) {
         draw_line(
             pair[0].x + 3.,
             pair[0].y + 6.,
@@ -98,7 +100,7 @@ fn field(g: &Game) {
             Color::new(0.38, 0.43, 0.24, 0.18),
         );
     }
-    for pair in PATH.windows(2) {
+    for pair in g.level.path.windows(2) {
         draw_line(
             pair[0].x,
             pair[0].y,
@@ -108,10 +110,10 @@ fn field(g: &Game) {
             Color::from_hex(0xd5bf8a),
         );
     }
-    for p in PATH {
+    for p in &g.level.path {
         draw_circle(p.x, p.y, 22.5, Color::from_hex(0xd5bf8a));
     }
-    for pair in PATH.windows(2) {
+    for pair in g.level.path.windows(2) {
         let len = pair[0].distance(pair[1]);
         let d = (pair[1] - pair[0]) / len;
         for i in 0..(len / 23.) as usize {
@@ -160,7 +162,7 @@ fn field(g: &Game) {
         draw_rectangle(1135., y + 7., 47., 4., CREAM);
     }
     label("ORCHARD", 1106., 452., 15., GREEN);
-    for (i, p) in PLOTS.iter().enumerate() {
+    for (i, p) in g.level.plots.iter().enumerate() {
         if g.selected == i && g.outcome == Outcome::Playing {
             let range = g.towers[i].map_or(158., Tower::range);
             draw_circle(p.x, p.y, range, Color::new(0.96, 0.95, 0.72, 0.10));
@@ -234,7 +236,8 @@ fn field(g: &Game) {
             0.,
             Color::new(0.2, 0.2, 0.15, 0.2),
         );
-        let dir = (PATH[(pest.segment + 1).min(PATH.len() - 1)] - p).normalize_or_zero();
+        let dir =
+            (g.level.path[(pest.segment + 1).min(g.level.path.len() - 1)] - p).normalize_or_zero();
         let side = vec2(-dir.y, dir.x);
         let wiggle = (g.time * 24. + pest.id as f32).sin() * 3.;
         for n in [-1., 1.] {
@@ -303,7 +306,7 @@ fn hud(g: &Game, pointer: Option<Vec2>, click: bool) -> Option<Action> {
         Color::from_hex(0x727b59),
     );
     center(
-        &format!("WAVE  {} / {}", g.wave, WAVES),
+        &format!("WAVE  {} / {}", g.wave, g.level.waves.len()),
         600.,
         33.,
         20.,
@@ -400,7 +403,7 @@ fn hud(g: &Game, pointer: Option<Vec2>, click: bool) -> Option<Action> {
         } else {
             "SEND NEXT WAVE"
         },
-        "[SPACE]  Protect 4 harvests",
+        &g.level.wave_hint,
         !g.active,
         pointer,
     ) && click
@@ -416,12 +419,22 @@ enum Action {
 }
 ferravex_render::game!(conf, game);
 async fn game() {
-    let mut g = Game::new();
+    let mut demo = Demo::with_content();
+    let mut content =
+        ferravex_render::content::ContentSource::new(level::SOURCE, demo.content.as_deref())
+            .unwrap();
+    let mut g = Game::with_level(Arc::new(level::Level::parse(content.current()).unwrap()));
     let mut clock = FixedClock::new(60., 8);
-    let mut demo = Demo::new();
     let mut sound = GameAudio::new();
     let mut player_input = PlayerInput::preset("orchard-guard", Preset::Strategy);
     loop {
+        if let Some(next) = content.poll(demo.dt(), |text| {
+            Ok(Game::with_level(Arc::new(level::Level::parse(text)?)))
+        }) {
+            g = next;
+            clock.reset();
+            sound = GameAudio::new();
+        }
         ferravex_render::ui::warm_up_font_sizes(&[14, 15, 16, 17, 18, 19, 20, 24, 28, 30]);
         let canvas = Canvas2D::fit(SIZE, vec2(screen_width().max(1.), screen_height().max(1.)));
         player_input.sample_play();
@@ -435,12 +448,12 @@ async fn game() {
         if player_input.pressed("restart")
             || g.outcome != Outcome::Playing && player_input.pressed("confirm")
         {
-            g = Game::new();
+            g = Game::with_level(g.level.clone());
             clock.reset();
         }
         if g.outcome == Outcome::Playing {
             if click && let Some(p) = pointer {
-                for (i, plot) in PLOTS.iter().enumerate() {
+                for (i, plot) in g.level.plots.iter().enumerate() {
                     if p.distance(*plot) < 30. {
                         g.selected = i;
                     }
@@ -541,7 +554,7 @@ async fn game() {
                 pointer,
             ) && click
             {
-                g = Game::new();
+                g = Game::with_level(g.level.clone());
                 clock.reset();
             }
         }

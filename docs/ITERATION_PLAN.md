@@ -22,7 +22,7 @@ unsupported platforms or features are complete.
 | 12 | Animation playback and blending | Merged: [PR 13](https://github.com/nearbycoder/ferravex/pull/13); 12 performance flags recorded in PERFORMANCE.md |
 | 13 | Reusable effects | Merged: [PR 14](https://github.com/nearbycoder/ferravex/pull/14); 19 performance flags recorded in PERFORMANCE.md |
 | 14 | AI perception and decisions | Merged: [PR 15](https://github.com/nearbycoder/ferravex/pull/15); 4 Wasm-size flags recorded in PERFORMANCE.md |
-| 15 | Data-driven scenes and prefabs | Pending |
+| 15 | Data-driven scenes and prefabs | Merged: [PR 16](https://github.com/nearbycoder/ferravex/pull/16); 8 artifact-size flags recorded in PERFORMANCE.md |
 | 16 | Shared HUD and menus | Pending |
 | 17 | Persistent saves and settings | Pending |
 | 18 | Replay, ghosts and debugging | Pending |

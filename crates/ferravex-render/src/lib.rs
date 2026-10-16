@@ -11,6 +11,8 @@ use std::{
 pub mod ao;
 pub mod audio;
 pub mod canvas;
+#[cfg(feature = "content")]
+pub mod content;
 pub mod demo;
 pub mod effects;
 mod font;

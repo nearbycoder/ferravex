@@ -8,7 +8,7 @@ license.workspace = true
 ferravex-engine.workspace = true
 ferravex-core.workspace = true
 ferravex-physics = { workspace = true, features = ["dim3"] }
-ferravex-render.workspace = true
+ferravex-render = { workspace = true, features = ["content"] }
 
 [lib]
 crate-type = ["rlib", "cdylib"]

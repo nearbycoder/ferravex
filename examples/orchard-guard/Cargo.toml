@@ -7,7 +7,7 @@ license.workspace = true
 [dependencies]
 ferravex-core.workspace = true
 ferravex-play.workspace = true
-ferravex-render.workspace = true
+ferravex-render = { workspace = true, features = ["content"] }
 
 [lib]
 crate-type = ["rlib", "cdylib"]

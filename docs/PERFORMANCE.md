@@ -716,3 +716,108 @@ Earlier size/work/timing flags, including iteration 13's Neon draw/cold-allocati
 costs and physics-lab GPU tails, remain evidence for the final audit. A later
 baseline or an unflagged sample does not resolve them. Reports and thresholds
 were not overwritten to hide failed comparisons.
+
+
+## Iteration 15: typed scenes, prefabs and content reload
+
+The new first-party authoring system validates typed components against explicit
+schemas, expands hierarchical prefabs with child overrides/scoped references,
+builds exact world matrices and supports checksummed cooked data. Native explicit
+file watching and a browser/Wasm editor stage complete replacements before adoption.
+Invalid edits preserve the current game and generation. Orchard Guard now consumes
+an authored route/plots/campaign/economy; Marble Run consumes authored course shapes,
+checkpoints, route references, pickups and physics tuning. Identical prop/obstacle
+geometry is shared; rendered platform orientation/dimensions match its collider.
+
+Validation passed 444 regular workspace tests, including a fresh full rerun after
+the HUD cache fix below; strict native/Wasm Clippy and Rustdoc; all
+15 native release smoke checks; all 15 Wasm builds; existing real-Wasm input/audio/
+animation/effects contracts; site/search checks; and the 28-package zero-external-
+Cargo-package audit. Nine GLX pixel/timer checks and the ALSA null-device check also
+ran successfully on this Linux host. Authoring tests cover schema/type/range errors,
+integer precision, namespace isolation, references, unused/nested prefab cycles,
+world overflow, expansion/depth budgets, deterministic cooking and corrupt binary
+semantics after a valid checksum. Native tests cover same-length file edits,
+transactional rejection and shared mesh/collider transforms.
+
+Real release Wasm for both editable games rejected invalid edits, adopted twelve
+valid generations, kept finite frame data and released retired mesh ownership.
+The supplied web builder separates editing-enabled Cargo feature cohorts; the same
+test confirms the editing ABI is absent from the other thirteen Wasm games. Live
+browser checks showed rejected edits preserving Marble's old scene, then a wider
+platform/larger marble at generation 1; Orchard's accepted data changed its visible
+lives/currency. No console/shader errors appeared. No iOS or unavailable Apple/
+Windows device checks were run.
+
+`target/perf/iteration-15-final/report.json` records source commit
+`763b0b6814bf2d69922c77452dc5cb7dfd04ca7c` against iteration 14. Configuration remains
+release/default quality, two 120-frame runs after 30 warmup frames, 20% timing
+allowance, 1000 µs CPU/submission floor, 20 µs GPU floor and 5% size/work tolerance.
+All native SHA-256 hashes and raw/deterministic-gzip Wasm lengths match current
+artifacts. These are warmed gameplay samples: initial parsing/construction and
+interactive reload latency are not timed by this comparison. Native file watching
+is disabled unless explicitly requested; browser editor JS loads only with
+`?content-tools`.
+
+**Eight artifact-size flags remain; the overall performance gate did not pass.**
+They are raw/gzip native and Wasm for Orchard and Marble. All timing and work gates
+passed with unchanged thresholds. Those examples deliberately retain their text
+parser, schemas, embedded authoring text, diagnostics and reload support. A shipping
+host can load only cooked data and omit the editing feature; that smaller variant
+is an available API choice, not claimed as the artifact measured here.
+
+Orchard's whole-game allocation distributions match iteration 14: **6 calls and
+92 bytes per frame** for mean/p95/p99. Draws remain **1**, with identical vertex/
+upload distributions. CPU mean was **299.39 → 203.40 µs**, p95 **554.00 →
+222.02 µs**; GPU mean **25.77 → 25.45 µs**. These are complete workload observations,
+not proof that parsing or scene traversal became faster.
+
+Marble allocation mean/p95/p99 remains **3 calls / 56 bytes**, with unchanged
+vertex/upload distributions. Sharing the checkpoint pole/flag meshes reduces
+whole-game mean draws **116.53 → 114.53**, p95/p99 **117 → 115**. CPU mean was
+**123.24 → 119.86 µs**, p95 **139.79 → 129.00 µs**; GPU mean
+**27.22 → 26.02 µs**. No isolated GPU timing improvement is inferred from these
+small differences.
+
+A supplemental longer two-game workload in
+`target/perf/iteration-15-active/report.json` records two 900-frame runs plus
+30 warmup frames. It supplements rather than replaces the failed comparison:
+
+| Game | CPU p95 µs | GPU p95 µs | Draw p95 | Allocation calls/bytes p95 |
+|---|---:|---:|---:|---:|
+| orchard-guard | 313.79 | 27.25 | 1 | 6 / 92 |
+| marble-run | 130.70 | 32.50 | 115 | 3 / 56 |
+
+Native Orchard measures **950200 / 462806 gzip-9 bytes**, growth of
+**195272 / 99073** versus 14. Native Marble measures **1148416 / 558670 bytes**.
+The embedded source files are **3126 bytes** (Orchard) and **5256 bytes** (Marble).
+No new normal-gameplay asset downloads were introduced. The optional scene-editor
+JS is **4211 raw / 1758 deterministic-gzip bytes**, fetched only when requested.
+
+| Game | Wasm bytes | Gzip-9 bytes | Raw change vs 14 | Gzip change vs 14 |
+|---|---:|---:|---:|---:|
+| owned-lab | 358,292 | 134,131 | +0 | +4 |
+| owned-orbit | 251,373 | 95,062 | +0 | -67 |
+| emberline | 263,923 | 100,704 | +77 | -35 |
+| neon-swarm | 323,917 | 120,735 | +62 | -46 |
+| pocket-rally | 261,950 | 98,748 | +83 | -54 |
+| salvage-pinball | 367,465 | 139,089 | +82 | -44 |
+| orchard-guard | 422,156 | 167,827 | +181,125 | +76,708 |
+| marble-run | 603,552 | 232,867 | +212,935 | +83,581 |
+| dune-skimmer | 344,479 | 132,133 | +83 | -51 |
+| crystal-cavern | 341,381 | 130,650 | +93 | +38 |
+| siege-foundry | 372,604 | 142,891 | +85 | -33 |
+| sky-courier | 340,714 | 129,285 | +78 | -53 |
+| strike | 467,231 | 177,768 | +0 | +4 |
+| physics-2d | 362,440 | 137,789 | +81 | -27 |
+| physics-3d | 415,757 | 158,434 | +72 | -59 |
+
+The earlier `target/perf/iteration-15-before-hud-cache/report.json`, source
+`bc4584d`, retained twelve flags: eight sizes, three Orchard allocation-byte
+metrics (**144 versus 92 baseline**), and a 2D lab GPU p99 tail (**72.78 µs >
+49.30 µs allowed**). A dynamically formatted wave hint caused the reproducible
+52-byte frame increase; caching it in the accepted level restored the baseline
+allocation distributions. The final physics-lab sample is within its allowance,
+but its GPU code was not optimized and the earlier tail remains evidence. Earlier
+iteration size/work/timing costs also remain for the final audit. Neither reports
+nor thresholds were overwritten to hide failed comparisons.

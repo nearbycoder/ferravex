@@ -4,6 +4,7 @@ use ferravex_render::input::{
     ActionKind, Binding, InputCode, PlayerInput, Preset,
     touch::{Control, Output, Region},
 };
+mod level;
 mod sim;
 use ferravex_core::FixedClock;
 use ferravex_engine::camera::{
@@ -16,7 +17,8 @@ use ferravex_render::{
     shaders::{LitMaterial, LitSettings},
     visibility::{LodChain, LodState},
 };
-use sim::{CHECKPOINTS, Controls, FINISH, GEMS, OBSTACLES, PLATFORMS, RADIUS, Run};
+use sim::{Controls, Run};
+use std::{collections::BTreeMap, rc::Rc, sync::Arc};
 
 const SKY: Color = Color::from_rgba(172, 194, 189, 255);
 const CREAM: Color = Color::from_rgba(255, 241, 205, 255);
@@ -30,7 +32,7 @@ fn rgb(r: u8, g: u8, b: u8) -> Color {
     Color::from_rgba(r, g, b, 255)
 }
 struct Prop {
-    mesh: Mesh3d,
+    mesh: Rc<Mesh3d>,
     position: Vec3,
     rotation: Quat,
     lod: Option<LodChain>,
@@ -39,12 +41,16 @@ struct Prop {
 impl Prop {
     fn new(mesh: Mesh3d, position: Vec3) -> Self {
         Self {
-            mesh,
+            mesh: Rc::new(mesh),
             position,
             rotation: Quat::IDENTITY,
             lod: None,
             lod_state: Default::default(),
         }
+    }
+    fn oriented(mut self, rotation: Quat) -> Self {
+        self.rotation = rotation;
+        self
     }
     fn with_lod(mut self, low: Mesh3d) -> Self {
         self.lod = Some(
@@ -71,21 +77,48 @@ impl Prop {
         }
     }
 }
+type GeometryKey = (level::Shape, [u32; 3], [u8; 4], u16);
+fn cached_prop(bank: &mut BTreeMap<GeometryKey, Rc<Mesh3d>>, d: level::Decoration) -> Prop {
+    let key = (
+        d.shape,
+        d.size.to_array().map(f32::to_bits),
+        d.color.to_rgba(),
+        d.segments,
+    );
+    let mesh = bank
+        .entry(key)
+        .or_insert_with(|| {
+            Rc::new(match d.shape {
+                level::Shape::Box => Mesh3d::cuboid(d.size, d.color),
+                level::Shape::Cylinder => {
+                    Mesh3d::cylinder(d.size.x * 0.5, d.size.y, d.color, d.segments)
+                }
+            })
+        })
+        .clone();
+    Prop {
+        mesh,
+        position: d.position,
+        rotation: d.rotation,
+        lod: None,
+        lod_state: Default::default(),
+    }
+}
 struct Scene {
     platforms: Vec<Prop>,
     decoration: Vec<Prop>,
     marble: Mesh3d,
     gem: Mesh3d,
     gem_base: Mesh3d,
-    pillar: Mesh3d,
-    cap: Mesh3d,
+    obstacles: Vec<Prop>,
     checkpoint: Mesh3d,
     checkpoint_lit: Mesh3d,
     shadow: Mesh3d,
 }
 impl Scene {
-    fn new() -> Self {
-        let platforms = PLATFORMS
+    fn new(level: &level::Level) -> Self {
+        let platforms = level
+            .platforms
             .iter()
             .enumerate()
             .map(|(i, p)| {
@@ -100,84 +133,124 @@ impl Scene {
                     ),
                     p.center,
                 )
+                .oriented(p.rotation)
             })
             .collect();
         let mut decoration = Vec::new();
         // Hanging stone buttresses and terracotta trim make the course feel built.
-        for (i, p) in PLATFORMS.iter().enumerate() {
-            decoration.push(Prop::new(
-                Mesh3d::cuboid(
-                    vec3(p.size.x + 0.08, 0.12, p.size.z + 0.08),
-                    rgb(129, 102, 85),
-                ),
-                p.center - vec3(0., 0.26, 0.),
-            ));
+        for (i, p) in level.platforms.iter().enumerate() {
+            decoration.push(
+                Prop::new(
+                    Mesh3d::cuboid(
+                        vec3(p.size.x + 0.08, 0.12, p.size.z + 0.08),
+                        rgb(129, 102, 85),
+                    ),
+                    p.at(vec3(0., -p.size.y * 0.5 + 0.04, 0.)),
+                )
+                .oriented(p.rotation),
+            );
             if i % 2 == 0 {
-                decoration.push(Prop::new(
-                    Mesh3d::frustum(0.65, 2.0, 6.0, rgb(101, 121, 112), 5),
-                    p.center - vec3(0., 3.3, 0.),
-                ));
-                decoration.push(Prop::new(
-                    Mesh3d::cuboid(vec3(1.15, 1.6, 1.15), rgb(161, 132, 104)),
-                    p.center - vec3(0., 1.1, 0.),
-                ));
+                decoration.push(
+                    Prop::new(
+                        Mesh3d::frustum(0.65, 2.0, 6.0, rgb(101, 121, 112), 5),
+                        p.at(vec3(0., -p.size.y * 0.5 - 3., 0.)),
+                    )
+                    .oriented(p.rotation),
+                );
+                decoration.push(
+                    Prop::new(
+                        Mesh3d::cuboid(vec3(1.15, 1.6, 1.15), rgb(161, 132, 104)),
+                        p.at(vec3(0., -p.size.y * 0.5 - 0.8, 0.)),
+                    )
+                    .oriented(p.rotation),
+                );
             }
             // Inset colored edges are visual guides, not invisible collision rails.
             for side in [-1., 1.] {
                 let (size, offset) = if p.size.z > p.size.x {
                     (
                         vec3(0.11, 0.018, p.size.z),
-                        vec3(side * (p.size.x * 0.5 - 0.15), 0.311, 0.),
+                        vec3(side * (p.size.x * 0.5 - 0.15), p.size.y * 0.5 + 0.011, 0.),
                     )
                 } else {
                     (
                         vec3(p.size.x, 0.018, 0.11),
-                        vec3(0., 0.311, side * (p.size.z * 0.5 - 0.15)),
+                        vec3(0., p.size.y * 0.5 + 0.011, side * (p.size.z * 0.5 - 0.15)),
                     )
                 };
-                decoration.push(Prop::new(Mesh3d::cuboid(size, TEAL), p.center + offset));
+                decoration
+                    .push(Prop::new(Mesh3d::cuboid(size, TEAL), p.at(offset)).oriented(p.rotation));
             }
         }
         // Thin expansion joints across each lane, using geometry rather than textures.
-        for p in PLATFORMS.iter().filter(|p| p.size.x.max(p.size.z) > 7.) {
+        for p in level
+            .platforms
+            .iter()
+            .filter(|p| p.size.x.max(p.size.z) > 7.)
+        {
             let length = p.size.x.max(p.size.z);
             for i in 1..length as usize {
                 let d = i as f32 - length * 0.5;
                 let (size, offset) = if p.size.z > p.size.x {
-                    (vec3(p.size.x - 0.4, 0.013, 0.025), vec3(0., 0.308, d))
+                    (
+                        vec3((p.size.x - 0.4).max(0.05), 0.013, 0.025),
+                        vec3(0., p.size.y * 0.5 + 0.008, d),
+                    )
                 } else {
-                    (vec3(0.025, 0.013, p.size.z - 0.4), vec3(d, 0.308, 0.))
+                    (
+                        vec3(0.025, 0.013, (p.size.z - 0.4).max(0.05)),
+                        vec3(d, p.size.y * 0.5 + 0.008, 0.),
+                    )
                 };
-                decoration.push(Prop::new(
-                    Mesh3d::cuboid(size, rgb(160, 128, 99)),
-                    p.center + offset,
-                ));
+                decoration.push(
+                    Prop::new(Mesh3d::cuboid(size, rgb(160, 128, 99)), p.at(offset))
+                        .oriented(p.rotation),
+                );
             }
         }
-        for p in CHECKPOINTS {
-            decoration.push(Prop::new(
-                Mesh3d::cylinder(0.07, 2.8, INK, 6),
-                p + vec3(-2., 0.6, -1.8),
+        let mut bank = BTreeMap::new();
+        for d in &level.decorations {
+            decoration.push(cached_prop(&mut bank, *d));
+        }
+        let mut obstacles = Vec::new();
+        for p in &level.obstacles {
+            obstacles.push(cached_prop(
+                &mut bank,
+                level::Decoration {
+                    shape: level::Shape::Cylinder,
+                    position: p.position,
+                    size: vec3(p.radius * 2., p.height, p.radius * 2.),
+                    rotation: p.rotation,
+                    color: rgb(146, 80, 61),
+                    segments: 8,
+                },
             ));
-            decoration.push(Prop::new(
-                Mesh3d::cuboid(vec3(0.95, 0.5, 0.04), TEAL),
-                p + vec3(-1.6, 1.65, -1.8),
+            obstacles.push(cached_prop(
+                &mut bank,
+                level::Decoration {
+                    shape: level::Shape::Cylinder,
+                    position: p.position + p.rotation * vec3(0., p.height * 0.5 - 0.1, 0.),
+                    size: vec3(p.radius * 2. + 0.02, 0.13, p.radius * 2. + 0.02),
+                    rotation: p.rotation,
+                    color: CREAM,
+                    segments: 8,
+                },
             ));
         }
         for x in [-2.1, 2.1] {
             decoration.push(Prop::new(
                 Mesh3d::cuboid(vec3(0.3, 3.2, 0.3), TEAL),
-                FINISH + vec3(x, 1., -0.8),
+                level.finish + vec3(x, 1., -0.8),
             ));
         }
         decoration.push(Prop::new(
             Mesh3d::cuboid(vec3(4.6, 0.5, 0.4), TEAL),
-            FINISH + vec3(0., 2.75, -0.8),
+            level.finish + vec3(0., 2.75, -0.8),
         ));
         for x in -4..=4 {
             decoration.push(Prop::new(
                 Mesh3d::cuboid(vec3(0.45, 0.02, 1.4), if x % 2 == 0 { CREAM } else { INK }),
-                FINISH + vec3(x as f32 * 0.45, -0.58, 0.),
+                level.finish + vec3(x as f32 * 0.45, -0.58, 0.),
             ));
         }
         // A distant archipelago is intentionally coarse and bounded (25 meshes).
@@ -197,7 +270,7 @@ impl Scene {
                     .with_lod(Mesh3d::cone(radius, height, color, 3)),
             );
         }
-        let mut marble = Mesh3d::sphere(RADIUS, CREAM, 12, 8);
+        let mut marble = Mesh3d::sphere(level.tuning.radius, CREAM, 12, 8);
         for v in &mut marble.mesh.vertices {
             if v.position.y.abs() < 0.18 {
                 v.color = GOLD.to_rgba();
@@ -211,8 +284,7 @@ impl Scene {
             marble,
             gem: Mesh3d::sphere(0.36, GOLD, 4, 2),
             gem_base: Mesh3d::cylinder(0.48, 0.022, rgb(185, 134, 61), 12),
-            pillar: Mesh3d::cylinder(0.38, 1.3, rgb(146, 80, 61), 8),
-            cap: Mesh3d::cylinder(0.39, 0.13, CREAM, 8),
+            obstacles,
             checkpoint: Mesh3d::cylinder(1.25, 0.02, rgb(105, 142, 128), 16),
             checkpoint_lit: Mesh3d::cylinder(1.25, 0.025, TEAL, 16),
             shadow: Mesh3d::cylinder(0.62, 0.015, rgb(131, 113, 90), 12),
@@ -225,37 +297,47 @@ impl Scene {
         for prop in &self.decoration {
             prop.draw();
         }
-        for p in OBSTACLES {
-            self.pillar.draw(p, Quat::IDENTITY);
-            self.cap.draw(p + vec3(0., 0.55, 0.), Quat::IDENTITY);
+        for prop in &self.obstacles {
+            prop.draw();
         }
-        for (i, p) in CHECKPOINTS.iter().enumerate() {
+        for (i, p) in game.level.checkpoints.iter().enumerate() {
             (if game.checkpoint > i {
                 &self.checkpoint_lit
             } else {
                 &self.checkpoint
             })
-            .draw(vec3(p.x, 0.323, p.z), Quat::IDENTITY);
+            .draw(p.marker, Quat::IDENTITY);
         }
-        for (i, p) in GEMS.iter().enumerate() {
+        for (i, p) in game.level.gems.iter().enumerate() {
             if !game.collected[i] {
-                self.gem_base.draw(vec3(p.x, 0.325, p.z), Quat::IDENTITY);
+                self.gem_base
+                    .draw(vec3(p.x, p.y - 0.675, p.z), Quat::IDENTITY);
                 self.gem.draw(
                     *p + vec3(0., 0.15 + (time * 2. + i as f32).sin() * 0.1, 0.),
                     Quat::from_rotation_y(time * 1.3),
                 );
             }
         }
-        if position.y > 0.3
-            && PLATFORMS.iter().any(|p| {
-                (position.x - p.center.x).abs() < p.size.x * 0.5
-                    && (position.z - p.center.z).abs() < p.size.z * 0.5
-            })
-        {
-            self.shadow.draw(
-                vec3(position.x + 0.12, 0.322, position.z + 0.18),
-                Quat::IDENTITY,
-            );
+        let mut surface: Option<(f32, Vec3, Vec3)> = None;
+        for p in &game.level.platforms {
+            let normal = p.rotation * Vec3::Y;
+            if normal.y <= 0.001 {
+                continue;
+            }
+            let distance = (position - p.at(vec3(0., p.size.y * 0.5, 0.))).dot(normal) / normal.y;
+            if distance < 0. || surface.is_some_and(|(old, _, _)| distance >= old) {
+                continue;
+            }
+            let point = position - Vec3::Y * distance;
+            let local = p.rotation.inverse() * (point - p.center);
+            if local.x.abs() <= p.size.x * 0.5 && local.z.abs() <= p.size.z * 0.5 {
+                surface = Some((distance, point, normal));
+            }
+        }
+        if let Some((_, point, normal)) = surface {
+            let rotation = Quat::from_rotation_arc(Vec3::Y, normal);
+            self.shadow
+                .draw(point + rotation * vec3(0.12, 0.022, 0.18), rotation);
         }
         self.marble.draw(position, rotation);
     }
@@ -270,11 +352,14 @@ fn centered(s: &str, y: f32, size: u16, color: Color) {
 }
 ferravex_render::game!(conf, game);
 async fn game() {
-    let mut game = Run::new();
-    let scene = Scene::new();
+    let mut demo = Demo::with_content();
+    let mut content =
+        ferravex_render::content::ContentSource::new(level::SOURCE, demo.content.as_deref())
+            .unwrap();
+    let mut game = Run::with_level(Arc::new(level::Level::parse(content.current()).unwrap()));
+    let mut scene = Scene::new(&game.level);
     let material = LitMaterial::new().expect("Ferravex's portable lit material must compile");
     let mut clock = FixedClock::new(120., 12);
-    let mut demo = Demo::new();
     let mut sound = GameAudio::new();
     let mut impact_cooldown = 0_f32;
     let mut player_input = PlayerInput::preset("marble-run", Preset::Racer);
@@ -304,6 +389,19 @@ async fn game() {
     let forward = vec3(-8., 0., -19.).normalize();
     let right = vec3(-forward.z, 0., forward.x);
     loop {
+        if let Some((next, next_scene)) = content.poll(demo.dt(), |text| {
+            let level = Arc::new(level::Level::parse(text)?);
+            let next_scene = Scene::new(&level);
+            Ok((Run::with_level(level), next_scene))
+        }) {
+            game = next;
+            scene = next_scene;
+            clock.reset();
+            camera.cut();
+            previous_falls = 0;
+            impact_cooldown = 0.;
+            sound = GameAudio::new();
+        }
         ferravex_render::ui::warm_up_font_sizes(&[12, 17, 18, 20, 23, 26, 30]);
         player_input
             .set_touch_layout(&[
@@ -337,7 +435,7 @@ async fn game() {
             || game.finished
                 && (player_input.pressed("confirm") || is_mouse_button_pressed(MouseButton::Left))
         {
-            game = Run::new();
+            game = Run::with_level(game.level.clone());
             clock.reset();
             camera.cut();
         }
@@ -447,8 +545,9 @@ async fn game() {
             text("THE HANGING AQUEDUCT", 28., 60., 12., INK);
         }
         let status = format!(
-            "{} / 6     {:02}:{:04.1}",
+            "{} / {}     {:02}:{:04.1}",
             game.gems(),
+            game.level.gems.len(),
             (game.elapsed / 60.) as u32,
             game.elapsed % 60.
         );
@@ -529,5 +628,53 @@ async fn game() {
             break;
         }
         next_frame().await;
+    }
+}
+
+#[cfg(test)]
+mod content_scene_tests {
+    use super::*;
+    #[test]
+    fn authored_platform_mesh_and_collision_share_dimensions_and_rotation() {
+        let source = level::SOURCE
+            .replace(
+                "transform 0. 0. 2. 0 0 0 1 1 1 1;",
+                "transform 0 0 2 0 0.14943813 0 0.98877108 1 1 1;",
+            )
+            .replace("size vec3 6. 0.6 6.;", "size vec3 8 0.6 6;");
+        assert_ne!(source, level::SOURCE);
+        let level = Arc::new(level::Level::parse(&source).unwrap());
+        let scene = Scene::new(&level);
+        let run = Run::with_level(level.clone());
+        let p = level.platforms[0];
+        assert_eq!(scene.platforms[0].rotation, p.rotation);
+        assert!(
+            scene.platforms[0]
+                .mesh
+                .mesh
+                .vertices
+                .iter()
+                .any(|v| (v.position.x - 4.).abs() < 0.001)
+        );
+        let origin = p.at(vec3(3.5, 4., 0.));
+        let hit = run
+            .physics
+            .raycast(origin.to_array(), (-Vec3::Y).to_array(), 5.)
+            .unwrap();
+        assert!((hit.point[1] - 0.3).abs() < 0.001);
+    }
+    #[test]
+    fn minimum_authorable_platforms_build_without_invalid_trim_meshes() {
+        let source = level::SOURCE.replace("size vec3 3.4 0.6 8.5;", "size vec3 0.05 0.05 10;");
+        let level = level::Level::parse(&source).unwrap();
+        let scene = Scene::new(&level);
+        assert!(
+            scene.platforms.iter().all(|p| p
+                .mesh
+                .mesh
+                .vertices
+                .iter()
+                .all(|v| v.position.is_finite()))
+        );
     }
 }

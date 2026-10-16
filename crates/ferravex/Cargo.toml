@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+content = ["ferravex-engine/content"]
+
 [dependencies]
 ferravex-engine.workspace = true
 ferravex-core.workspace = true

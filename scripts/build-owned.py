@@ -5,9 +5,14 @@ ROOT=pathlib.Path(__file__).resolve().parent.parent
 parser=argparse.ArgumentParser();parser.add_argument('--profile',choices=['release','small','dev'],default='release');args=parser.parse_args()
 subprocess.run(['python3','scripts/audit-owned.py'],cwd=ROOT,check=True)
 games=json.loads((ROOT/'examples/catalog.json').read_text())
-command=['cargo','build','--offline','--locked','--lib','--target','wasm32-unknown-unknown','--profile',args.profile]
-for game in games:command.extend(['-p',game['id']])
-subprocess.run(command,cwd=ROOT,check=True)
+# Build optional authoring hosts separately: Cargo otherwise unifies their
+# exported editing ABI into every Wasm game in a workspace-wide invocation.
+for editing in (False,True):
+    group=[game for game in games if bool(game.get('editable_scene'))==editing]
+    if not group:continue
+    command=['cargo','build','--offline','--locked','--lib','--target','wasm32-unknown-unknown','--profile',args.profile]
+    for game in group:command.extend(['-p',game['id']])
+    subprocess.run(command,cwd=ROOT,check=True)
 folder='debug' if args.profile=='dev' else args.profile
 report={}
 output=ROOT/'dist/web'
@@ -42,6 +47,7 @@ for name,export in [('SPRITE_VERTEX_BODY','spriteVertexBody'),('SPRITE_FRAGMENT_
     parts.append('export const '+export+' = '+json.dumps(match.group(1))+';')
 (output/'effects-shader.js').write_text('\n'.join(parts)+'\n')
 shutil.copy2(ROOT/'web/material-tools.js',output/'material-tools.js')
+shutil.copy2(ROOT/'web/content-tools.js',output/'content-tools.js')
 shutil.copy2(ROOT/'web/index.html',output/'index.html')
 shutil.copy2(ROOT/'examples/catalog.json',output/'games.json')
 manifest={str(p.relative_to(output)):{'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in output.rglob('*') if p.is_file()}
