@@ -1,6 +1,5 @@
 //! Versioned, bounded first-party save data. Checksums detect corruption, not tampering.
 //! No filesystem, browser or game-specific dependencies.
-use std::collections::BTreeMap;
 const MAGIC: &[u8; 8] = b"FXSV0001";
 pub const MAX_SAVE_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_FIELDS: usize = 128;
@@ -45,7 +44,7 @@ pub struct Document {
     schema: u64,
     version: u32,
     generation: u64,
-    fields: BTreeMap<String, Value>,
+    fields: Vec<(String, Value)>,
     payload_len: usize,
 }
 impl Document {
@@ -57,7 +56,7 @@ impl Document {
             schema,
             version,
             generation,
-            fields: BTreeMap::new(),
+            fields: Vec::new(),
             payload_len: 0,
         })
     }
@@ -74,17 +73,23 @@ impl Document {
         self.fields.iter().map(|(k, v)| (k.as_str(), v))
     }
     pub fn get(&self, key: &str) -> Option<&Value> {
-        self.fields.get(key)
+        self.fields
+            .binary_search_by(|(name, _)| name.as_str().cmp(key))
+            .ok()
+            .map(|i| &self.fields[i].1)
     }
     /// Replacements validate before mutation. Keys sort canonically on disk.
     pub fn set(&mut self, key: &str, value: Value) -> Result<(), SaveError> {
         if !key_valid(key) || !value.valid() {
             return Err(SaveError::InvalidData);
         }
-        let old = self.fields.get(key);
-        if old.is_none() && self.fields.len() == MAX_FIELDS {
+        let found = self
+            .fields
+            .binary_search_by(|(name, _)| name.as_str().cmp(key));
+        if found.is_err() && self.fields.len() == MAX_FIELDS {
             return Err(SaveError::Capacity);
         }
+        let old = found.as_ref().ok().map(|&index| &self.fields[index].1);
         let length = self.payload_len - old.map_or(0, |v| 6 + key.len() + v.len())
             + 6
             + key.len()
@@ -92,7 +97,10 @@ impl Document {
         if length > MAX_SAVE_BYTES - HEADER - 8 {
             return Err(SaveError::Capacity);
         }
-        self.fields.insert(key.into(), value);
+        match found {
+            Ok(index) => self.fields[index].1 = value,
+            Err(index) => self.fields.insert(index, (key.into(), value)),
+        }
         self.payload_len = length;
         Ok(())
     }
@@ -192,6 +200,7 @@ impl Document {
         }
         validate_fields(&data[HEADER..end], count)?;
         let mut doc = Self::new(schema, version, generation)?;
+        doc.fields.reserve_exact(count);
         let mut reader = Reader(&data[HEADER..end]);
         for _ in 0..count {
             let (key, tag, bytes) = reader.field()?;
