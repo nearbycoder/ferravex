@@ -92,6 +92,7 @@ pub struct Game {
     director: ferravex_play::encounter::EncounterDirector,
     remaining: u32,
     spawn_index: u32,
+    spawns: ferravex_play::gameplay::spawn::SpawnSelector,
     intermission: f32,
     dash_direction: Vec2,
 }
@@ -173,6 +174,7 @@ impl Game {
             director: encounter(8, 1, 0.8),
             remaining: 8,
             spawn_index: 0,
+            spawns: ferravex_play::gameplay::spawn::SpawnSelector::new(260.).unwrap(),
             intermission: 1.6,
             dash_direction: Vec2::X,
         })
@@ -283,8 +285,12 @@ impl Game {
         let pressure =
             ((1. - self.health as f32 / 100.) * 0.55 + alive as f32 / 12. * 0.55).clamp(0., 1.);
         self.director.advance(dt, pressure).unwrap();
-        if self.remaining > 0 && self.director.admit(1, alive) {
-            self.spawn_enemy();
+        if self.remaining > 0
+            && let Some(position) = self
+                .spawn_location()
+                .filter(|_| self.director.admit(1, alive))
+        {
+            self.spawn_enemy(position);
         }
         self.ai.update(&self.world, self.player, shot, dt);
         for (mut p, mut enemy) in &mut self.world.query::<(&mut Position, &mut Enemy)>() {
@@ -357,17 +363,33 @@ impl Game {
         }
     }
 
-    fn spawn_enemy(&mut self) {
+    fn spawn_location(&mut self) -> Option<Vec2> {
+        let candidates = [
+            vec2(100., 150.),
+            vec2(640., 150.),
+            vec2(1180., 150.),
+            vec2(100., 414.),
+            vec2(1180., 414.),
+            vec2(100., 678.),
+            vec2(640., 678.),
+            vec2(1180., 678.),
+        ];
+        let selected = self
+            .spawns
+            .choose(&candidates, self.player, |i| {
+                self.world
+                    .query::<(&Position, &Enemy)>()
+                    .iter()
+                    .all(|(p, e)| p.0.distance(candidates[i]) > e.radius + 30.)
+            })
+            .unwrap();
+        selected.map(|i| candidates[i])
+    }
+
+    fn spawn_enemy(&mut self, p: Vec2) {
         let index = self.spawn_index;
         self.spawn_index += 1;
         self.remaining -= 1;
-        let along = 0.15 + ((index * 37 % 70) as f32) / 100.0;
-        let p = match index % 4 {
-            0 => vec2(ARENA.x + 26.0, ARENA.y + along * ARENA.h),
-            1 => vec2(ARENA.x + along * ARENA.w, ARENA.y + 26.0),
-            2 => vec2(ARENA.right() - 26.0, ARENA.y + along * ARENA.h),
-            _ => vec2(ARENA.x + along * ARENA.w, ARENA.bottom() - 26.0),
-        };
         let heavy = self.wave > 1 && index.is_multiple_of(4);
         let ai_slot = index as usize % 64;
         self.ai.reset_agent(ai_slot);
@@ -792,5 +814,32 @@ mod magnet_loop_tests {
         }
         assert_eq!(g.world.get::<&Position>(pickup).unwrap().0, position);
         assert_eq!(g.health, 50);
+    }
+}
+
+#[cfg(test)]
+mod safe_spawn_tests {
+    use super::*;
+    #[test]
+    fn actual_admitted_enemies_spawn_at_a_safe_distance_without_losing_credits() {
+        let mut g = Game::new();
+        g.player = vec2(100., 150.);
+        for _ in 0..120 {
+            g.update(Input::default(), 1. / 120.);
+            if g.enemy_count() > 0 {
+                break;
+            }
+        }
+        assert_eq!(g.enemy_count(), 1);
+        assert_eq!(g.remaining, 7);
+        let p = g
+            .world
+            .query::<(&Position, &Enemy)>()
+            .iter()
+            .next()
+            .unwrap()
+            .0
+            .0;
+        assert!(p.distance(g.player) > 250.);
     }
 }
