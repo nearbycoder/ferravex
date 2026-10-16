@@ -92,6 +92,7 @@ pub struct Car {
     pub offroad: bool,
     pub sliding: bool,
     steering: f32,
+    tuning: ferravex_play::tuning::TuningProfile,
 }
 impl Car {
     fn new(track: &Track) -> Self {
@@ -105,7 +106,14 @@ impl Car {
             offroad: false,
             sliding: false,
             steering: 0.,
+            tuning: ferravex_play::tuning::TuningProfile::rally(),
         }
+    }
+    pub fn set_tuning(
+        &mut self,
+        profile: ferravex_play::tuning::TuningProfile,
+    ) -> Result<(), ferravex_play::persistence::SaveError> {
+        self.tuning.replace(profile)
     }
     fn step(&mut self, track: &Track, control: Controls, dt: f32) {
         self.offroad = track.nearest(self.pose.position).1 > ROAD_HALF;
@@ -115,9 +123,9 @@ impl Car {
         let lateral = self.velocity.dot(right);
         let throttle = control.throttle.clamp(-1., 1.);
         let force = if throttle < 0. && longitudinal > 5. {
-            260.
+            self.tuning.motion.braking
         } else {
-            155.
+            self.tuning.motion.acceleration
         };
         longitudinal += throttle * force * dt;
         let drag = if self.offroad {
@@ -129,18 +137,26 @@ impl Car {
         if control.handbrake {
             longitudinal *= (-1.5 * dt).exp();
         }
-        longitudinal = longitudinal.clamp(-65., 265.);
+        longitudinal = longitudinal.clamp(-65., self.tuning.motion.max_speed);
         let grip = if control.handbrake {
             1.5
         } else if self.offroad {
             5.
         } else {
-            9.
+            self.tuning.motion.traction
         };
         self.sliding = lateral.abs() > 30. || control.handbrake && longitudinal > 30.;
         self.velocity = forward * longitudinal + right * lateral * (-grip * dt).exp();
-        self.steering += (control.steer.clamp(-1., 1.) - self.steering)
-            * ferravex_play::motion::response(14., dt);
+        let steer = if self.tuning.assists.steering > 0. {
+            let nearest = track.nearest(self.pose.position).0;
+            let desired_heading = track.tangent(nearest);
+            control.steer
+                + forward.perp_dot(desired_heading).clamp(-1., 1.) * self.tuning.assists.steering
+        } else {
+            control.steer
+        };
+        self.steering += (steer.clamp(-1., 1.) - self.steering)
+            * ferravex_play::motion::response(self.tuning.motion.response, dt);
         let steering = self.steering
             * (if control.handbrake { 3.6 } else { 2.9 })
             * (longitudinal / 90.).clamp(-0.8, 1.0);
@@ -197,10 +213,12 @@ impl Race {
         self.laps >= LAPS
     }
     pub fn reset(&mut self, track: &Track) {
+        let tuning = self.car.tuning;
         let ghost = std::mem::take(&mut self.best_ghost);
         let best = self.best_time;
         let ghost_track = self.ghost_track.take();
         *self = Self::new(track);
+        self.car.set_tuning(tuning).unwrap();
         self.best_ghost = ghost;
         self.best_time = best;
         self.ghost_track = ghost_track;
@@ -420,5 +438,34 @@ mod tests {
         }
         assert!(car.pose.position.is_finite());
         assert!(car.velocity.length() < 300.);
+    }
+}
+
+#[cfg(test)]
+mod tuning_tests {
+    use super::*;
+    #[test]
+    fn shared_profile_changes_real_car_acceleration_without_partial_edits() {
+        let track = Track::new();
+        let mut normal = Car::new(&track);
+        let mut slow = Car::new(&track);
+        let mut profile = ferravex_play::tuning::TuningProfile::rally();
+        profile.motion.acceleration *= 0.5;
+        slow.set_tuning(profile).unwrap();
+        for _ in 0..60 {
+            let input = Controls {
+                throttle: 1.,
+                ..Default::default()
+            };
+            normal.step(&track, input, 1. / 120.);
+            slow.step(&track, input, 1. / 120.);
+        }
+        assert!(slow.velocity.length() < normal.velocity.length() * 0.7);
+        let before = slow.tuning;
+        assert!(
+            slow.set_tuning(ferravex_play::tuning::TuningProfile::arena())
+                .is_err()
+        );
+        assert_eq!(slow.tuning, before);
     }
 }

@@ -53,6 +53,7 @@ pub struct Game {
     pub world: World,
     pub player: Vec2,
     pub facing: Vec2,
+    tuning: ferravex_play::tuning::TuningProfile,
     velocity: Vec2,
     recoil: Vec2,
     pub health: i32,
@@ -79,11 +80,19 @@ pub struct Game {
 
 impl Game {
     pub fn new() -> Self {
-        Self {
+        Self::with_tuning(ferravex_play::tuning::TuningProfile::arena()).unwrap()
+    }
+    pub fn with_tuning(
+        profile: ferravex_play::tuning::TuningProfile,
+    ) -> Result<Self, ferravex_play::persistence::SaveError> {
+        let mut tuning = ferravex_play::tuning::TuningProfile::arena();
+        tuning.replace(profile)?;
+        Ok(Self {
             world: World::new(),
             ai: crate::ai::SwarmAi::new(),
             player: vec2(640.0, 414.0),
             facing: vec2(1.0, 0.0),
+            tuning,
             velocity: Vec2::ZERO,
             recoil: Vec2::ZERO,
             health: 100,
@@ -129,7 +138,7 @@ impl Game {
             spawn_index: 0,
             intermission: 1.6,
             dash_direction: Vec2::X,
-        }
+        })
     }
 
     pub fn enemy_count(&self) -> usize {
@@ -201,18 +210,19 @@ impl Game {
         let velocity = if self.dash_time > 0.0 {
             self.dash_direction * 700.0
         } else {
-            let desired = input.movement.clamp_length_max(1.0) * 230.0;
-            self.velocity = self
-                .velocity
-                .lerp(desired, ferravex_play::motion::response(24., dt));
+            let desired = input.movement.clamp_length_max(1.0) * self.tuning.motion.max_speed;
+            self.velocity = self.velocity.lerp(
+                desired,
+                ferravex_play::motion::response(self.tuning.motion.response, dt),
+            );
             self.velocity
         };
         self.recoil *= (-15. * dt).exp();
         let previous_player = self.player;
         self.player = move_body(self.player, (velocity + self.recoil) * dt, PLAYER_RADIUS);
         if self.dash_time == 0. && dt > 0. {
-            self.velocity =
-                ((self.player - previous_player) / dt - self.recoil).clamp_length_max(230.);
+            self.velocity = ((self.player - previous_player) / dt - self.recoil)
+                .clamp_length_max(self.tuning.motion.max_speed);
         }
         let shot = input.fire && self.fire_cooldown == 0.0;
         if shot {
@@ -242,7 +252,9 @@ impl Game {
                 && self.hurt_time == 0.0
                 && self.dash_time == 0.0
             {
-                self.health = (self.health - if enemy.heavy { 24 } else { 14 }).max(0);
+                let damage =
+                    ((if enemy.heavy { 24. } else { 14. }) * self.tuning.difficulty).round() as i32;
+                self.health = (self.health - damage.max(1)).max(0);
                 self.hurt_time = 0.75;
                 self.recoil = (self.player - p.0).try_normalize().unwrap_or(-self.facing) * 150.;
             }
