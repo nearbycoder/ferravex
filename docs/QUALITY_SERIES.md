@@ -20,8 +20,8 @@ platform checks are recorded only when actually performed.
 | 10 | Racing AI | [PR 33](https://github.com/nearbycoder/ferravex/pull/33), merged |
 | 11 | Richer physics materials | [PR 34](https://github.com/nearbycoder/ferravex/pull/34), merged |
 | 12 | Fast-body collision robustness | [PR 35](https://github.com/nearbycoder/ferravex/pull/35), merged |
-| 13 | Breakable mechanisms | Implemented; locally validated |
-| 14 | Camera anticipation and authored zones | Pending |
+| 13 | Breakable mechanisms | [PR 36](https://github.com/nearbycoder/ferravex/pull/36), merged |
+| 14 | Camera anticipation and authored zones | Implemented; locally validated |
 | 15 | Procedural contact animation | Pending |
 | 16 | Procedural environment builders | Pending |
 | 17 | Acoustic zones and adaptive music | Pending |
@@ -219,3 +219,16 @@ projectile contacts release them. This is authored chunk destruction, not arbitr
 mesh fracture. Local tests cover real impulse breakage, once-only events, stale
 handle replacement, stable unshot towers, complete ordinary-fire victory, the
 physics allocation/contact suites, strict Clippy and Wasm compilation.
+
+## 14. Camera composition
+
+`camera::CameraComposer<N>` adds bounded velocity/acceleration anticipation and
+priority-selected authored zones with feathered boundaries and half-life blending.
+Zones control focus offset, boom scale and FOV scale for world cameras; first-person
+input passes through unchanged. Cuts clear composition history. Marble Run adopts
+light bounded anticipation and finish-area framing, explicitly keeping boom/FOV
+scales at one so poles do not zoom the camera. Validation also caught and fixed a
+slow-ball regression from item 12: balls retain their original minimum sweep
+motion threshold, preventing tiny floor sweeps from stopping ordinary rolling.
+Local zone/priority/first-person/constant-distance tests, all marble courses and
+the physics suite pass, with strict Clippy and Wasm checks.
