@@ -49,7 +49,7 @@ series; validation is local. The APIs are available under
 | 37 | Orbit Breaker paddle pickup attraction | [PR 80](https://github.com/nearbycoder/ferravex/pull/80), merged |
 | 38 | Orbit Breaker opening ball-save window | [PR 81](https://github.com/nearbycoder/ferravex/pull/81), merged |
 | 39 | Orbit Breaker charged serves | [PR 82](https://github.com/nearbycoder/ferravex/pull/82), merged |
-| 40 | Orbit Breaker precision return rewards | Final feature PR |
+| 40 | Orbit Breaker precision return rewards | [PR 83](https://github.com/nearbycoder/ferravex/pull/83) (this change) |
 
 Each new module contains behavioral tests and its authoring contract. Game changes
 include real-input regressions and retain ordinary victory/loss tests. The delivery links above and validation record below track the completed work.
