@@ -74,6 +74,7 @@ pub struct Game {
     pub phase: Phase,
     pub wave: u32,
     pub kills: u32,
+    pub score: ferravex_play::gameplay::combo::ScoreChain,
     pub shots: u32,
     pub dash_cooldown: f32,
     pub dash_time: f32,
@@ -114,6 +115,7 @@ impl Game {
             phase: Phase::Playing,
             wave: 1,
             kills: 0,
+            score: ferravex_play::gameplay::combo::ScoreChain::new(3.5, 3, 5).unwrap(),
             shots: 0,
             dash_cooldown: 0.0,
             dash_time: 0.0,
@@ -219,6 +221,7 @@ impl Game {
             return;
         }
         self.time += dt;
+        self.score.advance(dt).unwrap();
         self.abilities.advance(dt).unwrap();
         self.resource.advance(dt).unwrap();
         self.dash_cooldown = self.abilities.remaining(1).unwrap();
@@ -294,6 +297,7 @@ impl Game {
                     ((if enemy.heavy { 24. } else { 14. }) * self.tuning.difficulty).round() as i32;
                 self.health = (self.health - damage.max(1)).max(0);
                 self.hurt_time = 0.75;
+                self.score.break_chain();
                 self.recoil = (self.player - p.0).try_normalize().unwrap_or(-self.facing) * 150.;
             }
         }
@@ -421,6 +425,7 @@ impl Game {
         for (id, point) in dead {
             let _ = self.world.despawn(id);
             self.kills += 1;
+            self.score.award(100);
             if self.kills.is_multiple_of(5) {
                 self.world
                     .spawn((Position(point), Pickup { remaining: 16.0 }));
@@ -688,4 +693,23 @@ fn encounter(credits: u32, wave: u32, delay: f32) -> ferravex_play::encounter::E
         recovery_seconds: 2.,
     })
     .unwrap()
+}
+
+#[cfg(test)]
+mod score_loop_tests {
+    use super::*;
+    #[test]
+    fn confirmed_kills_build_score_and_restart_clears_the_run() {
+        let mut game = Game::new();
+        for _ in 0..120 * 100 {
+            game.update(game.autoplay(), 1. / 120.);
+            if game.phase != Phase::Playing {
+                break;
+            }
+        }
+        assert_eq!(game.phase, Phase::Won);
+        assert!(game.score.total() >= u64::from(game.kills) * 100);
+        assert!(game.score.best() > 3);
+        assert_eq!(Game::new().score.total(), 0);
+    }
 }
