@@ -16,7 +16,7 @@ The APIs live in `ferravex_engine` and are also available through `ferravex`. Ea
 - [x] 8. Read chronological profiler samples after ring wrap.
 - [x] 9. Seek legacy input replays by exact or preceding tick.
 - [x] 10. Export bounded tick ranges and truncate replay branches.
-- [ ] 11. Locate the first mismatched or missing replay state.
+- [x] 11. Locate the first mismatched or missing replay state.
 - [ ] 12. Bound engine event queues with explicit overflow policies.
 - [ ] 13. Publish double-buffered events at explicit frame boundaries.
 - [ ] 14. Schedule and cancel deterministic tick-delayed work.
