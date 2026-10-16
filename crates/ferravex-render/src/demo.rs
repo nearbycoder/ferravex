@@ -8,6 +8,8 @@ use crate::prelude::*;
 pub struct Demo {
     pub autoplay: bool,
     pub frame: u64,
+    /// Optional local authoring file, watched by games with ContentSource support.
+    pub content: Option<String>,
     limit: Option<u64>,
     #[cfg(not(target_arch = "wasm32"))]
     screenshot: Option<String>,
@@ -15,6 +17,15 @@ pub struct Demo {
 
 impl Demo {
     pub fn new() -> Self {
+        Self::from_args(false)
+    }
+    /// Enables --content for a game that installs a ContentSource.
+    pub fn with_content() -> Self {
+        Self::from_args(true)
+    }
+    fn from_args(supports_content: bool) -> Self {
+        #[cfg(target_arch = "wasm32")]
+        let _ = supports_content;
         #[cfg(not(target_arch = "wasm32"))]
         {
             let mut demo = Self::default();
@@ -22,6 +33,10 @@ impl Demo {
             while let Some(arg) = args.next() {
                 match arg.as_str() {
                     "--autoplay" => demo.autoplay = true,
+                    "--content" => {
+                        assert!(supports_content, "This game does not support --content");
+                        demo.content = Some(args.next().expect("--content requires a path"))
+                    }
                     "--smoke-frames" => {
                         demo.limit = Some(
                             args.next()
@@ -34,7 +49,9 @@ impl Demo {
                         demo.screenshot = Some(args.next().expect("--screenshot requires a path"))
                     }
                     "--help" => {
-                        println!("Options: --autoplay --smoke-frames N --screenshot path.png");
+                        println!(
+                            "Options: --autoplay --smoke-frames N --screenshot path.png --content path.fxscene (supported games only)"
+                        );
                         std::process::exit(0);
                     }
                     _ => panic!("Unknown option: {arg}"),

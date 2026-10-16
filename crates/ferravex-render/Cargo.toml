@@ -3,6 +3,10 @@ name = "ferravex-render"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+[features]
+default = []
+content = []
+
 [dependencies]
 ferravex-play.workspace = true
 ferravex-core.workspace = true

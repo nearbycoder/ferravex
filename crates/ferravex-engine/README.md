@@ -8,7 +8,8 @@ owned modules provide buffered input actions, profiling, bundles/hot reload,
 PCM WAV audio/mixing, animation playback/state graphs/GPU skinning, reusable effects, AI perception/decisions/navigation, and input replay files.
 See [animation](../../docs/ANIMATION.md) for clip banks, pose layers and retained skins,
 [effects](../../docs/EFFECTS.md) for bounded particles, trails/ribbons and GPU billboards,
-and [AI](../../docs/AI.md) for sensing, work budgets and current-pose rigid occlusion.
+[AI](../../docs/AI.md) for sensing, work budgets and current-pose rigid occlusion,
+and [scenes](../../docs/SCENES.md) for typed content, prefabs and transactional reload.
 
 ```rust
 use ferravex_engine::{dynamics::{PhysicsWorld,BodyDesc,Shape},input::{ActionMap,Binding,InputCode}};

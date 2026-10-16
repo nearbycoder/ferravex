@@ -4,31 +4,10 @@ use ferravex_play::{
 };
 use ferravex_render::prelude::*;
 
-pub const WAVES: u8 = 4;
+use crate::level::Level;
+use std::sync::Arc;
 pub const MAX_PESTS: usize = 32;
 pub const MAX_SHOTS: usize = 96;
-pub const PATH: [Vec2; 10] = [
-    vec2(-30., 180.),
-    vec2(260., 180.),
-    vec2(260., 390.),
-    vec2(500., 390.),
-    vec2(500., 210.),
-    vec2(770., 210.),
-    vec2(770., 490.),
-    vec2(1070., 490.),
-    vec2(1070., 330.),
-    vec2(1240., 330.),
-];
-pub const PLOTS: [Vec2; 8] = [
-    vec2(160., 280.),
-    vec2(360., 280.),
-    vec2(400., 490.),
-    vec2(600., 310.),
-    vec2(670., 420.),
-    vec2(880., 330.),
-    vec2(975., 410.),
-    vec2(970., 580.),
-];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Seed,
@@ -92,7 +71,8 @@ pub enum Outcome {
     Lost,
 }
 pub struct Game {
-    pub towers: [Option<Tower>; 8],
+    pub level: Arc<Level>,
+    pub towers: Vec<Option<Tower>>,
     pub pests: Vec<Pest>,
     pub shots: Vec<Shot>,
     pub money: u32,
@@ -111,15 +91,22 @@ pub struct Game {
     route: Route3,
 }
 impl Game {
+    #[cfg(test)]
     pub fn new() -> Self {
-        let mut route = Route3::new(PATH.len()).unwrap();
-        route.set(&PATH.map(|p| p.extend(0.))).unwrap();
+        Self::with_level(Arc::new(Level::parse(crate::level::SOURCE).unwrap()))
+    }
+    pub fn with_level(level: Arc<Level>) -> Self {
+        let mut route = Route3::new(level.path.len()).unwrap();
+        route
+            .set(&level.path.iter().map(|p| p.extend(0.)).collect::<Vec<_>>())
+            .unwrap();
         Self {
-            towers: [None; 8],
+            towers: vec![None; level.plots.len()],
             pests: Vec::with_capacity(MAX_PESTS),
             shots: Vec::with_capacity(MAX_SHOTS),
-            money: 200,
-            lives: 12,
+            money: level.money,
+            lives: level.lives,
+            level,
             wave: 0,
             active: false,
             remaining: 0,
@@ -136,7 +123,7 @@ impl Game {
     }
     pub fn build(&mut self, plot: usize, kind: Kind) -> bool {
         if self.outcome != Outcome::Playing
-            || plot >= PLOTS.len()
+            || plot >= self.level.plots.len()
             || self.towers[plot].is_some()
             || self.money < kind.price()
         {
@@ -164,39 +151,38 @@ impl Game {
         true
     }
     pub fn launch(&mut self) -> bool {
-        if self.active || self.wave == WAVES || self.outcome != Outcome::Playing {
+        if self.active
+            || usize::from(self.wave) == self.level.waves.len()
+            || self.outcome != Outcome::Playing
+        {
             return false;
         }
         self.wave += 1;
-        self.remaining = 6 + self.wave * 4;
+        self.remaining = self.level.waves[usize::from(self.wave) - 1].count;
         self.active = true;
         self.spawn_timer = 0.;
         true
     }
     /// Uses the same economy/actions as human input. No currency, health or combat cheats.
     pub fn autoplay(&mut self) {
-        for (plot, kind) in [
-            (1, Kind::Seed),
-            (3, Kind::Frost),
-            (0, Kind::Seed),
-            (4, Kind::Seed),
-            (5, Kind::Seed),
-            (6, Kind::Frost),
-            (2, Kind::Seed),
-            (7, Kind::Seed),
-        ] {
-            if self.towers[plot].is_none() {
-                self.build(plot, kind);
-                break;
-            }
+        if let Some((plot, kind)) = self
+            .level
+            .autoplay
+            .iter()
+            .copied()
+            .find(|(plot, _)| self.towers[*plot].is_none())
+        {
+            self.build(plot, kind);
         }
-        if self.towers.iter().flatten().count() >= 4 {
-            for plot in [1, 3, 4, 0, 5, 6, 2, 7] {
-                if self.towers[plot].is_some_and(|t| t.level < 2) {
-                    self.upgrade(plot);
-                    break;
-                }
-            }
+        if self.towers.iter().flatten().count() >= 4.min(self.towers.len())
+            && let Some(plot) = self
+                .level
+                .upgrade_order
+                .iter()
+                .copied()
+                .find(|plot| self.towers[*plot].is_some_and(|t| t.level < 2))
+        {
+            self.upgrade(plot);
         }
         if !self.active {
             self.launch();
@@ -207,15 +193,16 @@ impl Game {
             return;
         }
         self.time += dt;
+        let wave = self.level.waves[usize::from(self.wave.saturating_sub(1))];
         if self.active && self.remaining > 0 {
             self.spawn_timer -= dt;
             if self.spawn_timer <= 0. && self.pests.len() < MAX_PESTS {
                 self.next_id += 1;
-                let fast = self.next_id.is_multiple_of(4);
-                let hp = (30. + self.wave as f32 * 16.) * if fast { 0.7 } else { 1. };
+                let fast = self.next_id.is_multiple_of(wave.fast_every);
+                let hp = wave.hp * if fast { wave.fast_factor } else { 1. };
                 self.pests.push(Pest {
                     id: self.next_id,
-                    pos: PATH[0],
+                    pos: self.level.path[0],
                     segment: 0,
                     distance: 0.,
                     hp,
@@ -225,13 +212,16 @@ impl Game {
                     cursor: PathCursor::default(),
                 });
                 self.remaining -= 1;
-                self.spawn_timer += 0.95 - self.wave as f32 * 0.08;
+                self.spawn_timer += wave.interval;
             }
         }
         for pest in &mut self.pests {
             pest.slow = (pest.slow - dt).max(0.);
-            let speed =
-                (if pest.fast { 105. } else { 66. }) * if pest.slow > 0. { 0.45 } else { 1. };
+            let speed = (if pest.fast {
+                wave.fast_speed
+            } else {
+                wave.speed
+            }) * if pest.slow > 0. { 0.45 } else { 1. };
             let sample = pest
                 .cursor
                 .advance(&self.route, speed, dt)
@@ -242,7 +232,7 @@ impl Game {
             pest.distance = sample.distance as f32;
         }
         self.pests.retain(|p| {
-            if p.segment == PATH.len() - 1 {
+            if p.segment == self.level.path.len() - 1 {
                 self.lives = self.lives.saturating_sub(1);
                 self.escaped += 1;
                 false
@@ -274,7 +264,7 @@ impl Game {
                         groups: 1,
                     }),
                 Observer {
-                    position: PLOTS[plot].extend(0.),
+                    position: self.level.plots[plot].extend(0.),
                     forward: Vec3::Y,
                 },
                 Sight::new(tower.range(), std::f32::consts::TAU, 1).unwrap(),
@@ -284,10 +274,10 @@ impl Game {
             )
             .unwrap();
             if let Some(pest) = selected.target.map(|c| &self.pests[c.id as usize]) {
-                tower.aim = (pest.pos - PLOTS[plot]).normalize_or_zero();
+                tower.aim = (pest.pos - self.level.plots[plot]).normalize_or_zero();
                 self.fired = self.fired.saturating_add(1);
                 self.shots.push(Shot {
-                    pos: PLOTS[plot] + tower.aim * 18.,
+                    pos: self.level.plots[plot] + tower.aim * 18.,
                     target: pest.id,
                     damage: match tower.kind {
                         Kind::Seed => 22. + tower.level as f32 * 14.,
@@ -324,7 +314,7 @@ impl Game {
         });
         self.pests.retain(|p| {
             if p.hp <= 0. {
-                self.money += 13;
+                self.money += self.level.kill_reward;
                 self.kills += 1;
                 false
             } else {
@@ -334,8 +324,8 @@ impl Game {
         if self.active && self.remaining == 0 && self.pests.is_empty() {
             self.active = false;
             self.shots.clear();
-            self.money += 45;
-            if self.wave == WAVES {
+            self.money += wave.reward;
+            if usize::from(self.wave) == self.level.waves.len() {
                 self.outcome = Outcome::Won;
             }
         }
@@ -387,7 +377,7 @@ mod tests {
             }
         }
         assert_eq!(game.outcome, Outcome::Won);
-        assert_eq!(game.wave, WAVES);
+        assert_eq!(usize::from(game.wave), game.level.waves.len());
         assert_eq!(game.kills + game.escaped, 64);
         assert!(game.lives > 0);
         assert!(game.towers.iter().flatten().any(|t| t.kind == Kind::Frost));

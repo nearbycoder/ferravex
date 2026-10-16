@@ -1,0 +1,29 @@
+ferravex_scene 1;
+# Original Orchard Guard campaign. Positions, wave balance and autoplay order
+# are shared by collision-free path movement, rendering and combat.
+prefab planting_plot {
+ node root {component plot {kind text seed;}}
+}
+node rules {component economy {money int 200; lives int 12; kill_reward int 13;}}
+node path0 {transform -30 180 0 0 0 0 1 1 1 1; component waypoint {order int 0;}}
+node path1 {transform 260 180 0 0 0 0 1 1 1 1; component waypoint {order int 1;}}
+node path2 {transform 260 390 0 0 0 0 1 1 1 1; component waypoint {order int 2;}}
+node path3 {transform 500 390 0 0 0 0 1 1 1 1; component waypoint {order int 3;}}
+node path4 {transform 500 210 0 0 0 0 1 1 1 1; component waypoint {order int 4;}}
+node path5 {transform 770 210 0 0 0 0 1 1 1 1; component waypoint {order int 5;}}
+node path6 {transform 770 490 0 0 0 0 1 1 1 1; component waypoint {order int 6;}}
+node path7 {transform 1070 490 0 0 0 0 1 1 1 1; component waypoint {order int 7;}}
+node path8 {transform 1070 330 0 0 0 0 1 1 1 1; component waypoint {order int 8;}}
+node path9 {transform 1240 330 0 0 0 0 1 1 1 1; component waypoint {order int 9;}}
+node plot0 {use planting_plot; transform 160 280 0 0 0 0 1 1 1 1; component plot {index int 0; priority int 2; upgrade_priority int 3; kind text seed;}}
+node plot1 {use planting_plot; transform 360 280 0 0 0 0 1 1 1 1; component plot {index int 1; priority int 0; upgrade_priority int 0; kind text seed;}}
+node plot2 {use planting_plot; transform 400 490 0 0 0 0 1 1 1 1; component plot {index int 2; priority int 6; upgrade_priority int 6; kind text seed;}}
+node plot3 {use planting_plot; transform 600 310 0 0 0 0 1 1 1 1; component plot {index int 3; priority int 1; upgrade_priority int 1; kind text frost;}}
+node plot4 {use planting_plot; transform 670 420 0 0 0 0 1 1 1 1; component plot {index int 4; priority int 3; upgrade_priority int 2; kind text seed;}}
+node plot5 {use planting_plot; transform 880 330 0 0 0 0 1 1 1 1; component plot {index int 5; priority int 4; upgrade_priority int 4; kind text seed;}}
+node plot6 {use planting_plot; transform 975 410 0 0 0 0 1 1 1 1; component plot {index int 6; priority int 5; upgrade_priority int 5; kind text frost;}}
+node plot7 {use planting_plot; transform 970 580 0 0 0 0 1 1 1 1; component plot {index int 7; priority int 7; upgrade_priority int 7; kind text seed;}}
+node wave1 {component wave {order int 0; count int 10; hp number 46; fast_factor number 0.7; speed number 66; fast_speed number 105; interval number 0.87; fast_every int 4; reward int 45;}}
+node wave2 {component wave {order int 1; count int 14; hp number 62; fast_factor number 0.7; speed number 66; fast_speed number 105; interval number 0.79; fast_every int 4; reward int 45;}}
+node wave3 {component wave {order int 2; count int 18; hp number 78; fast_factor number 0.7; speed number 66; fast_speed number 105; interval number 0.71; fast_every int 4; reward int 45;}}
+node wave4 {component wave {order int 3; count int 22; hp number 94; fast_factor number 0.7; speed number 66; fast_speed number 105; interval number 0.63; fast_every int 4; reward int 45;}}
