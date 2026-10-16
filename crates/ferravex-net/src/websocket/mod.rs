@@ -1,7 +1,7 @@
 //! Bounded binary WebSocket transport for native/browser development sessions.
 //! First-party RFC 6455 handshake/framing; no extensions, text messages or TLS.
 //! The handshake SHA-1 is required by the protocol, never used for authentication.
-//! References: https://www.rfc-editor.org/rfc/rfc6455 and RFC 3174.
+//! References: <https://www.rfc-editor.org/rfc/rfc6455> and <https://www.rfc-editor.org/rfc/rfc3174>.
 #[cfg(not(target_arch = "wasm32"))]
 mod gateway;
 use crate::MAX_PACKET_BYTES;

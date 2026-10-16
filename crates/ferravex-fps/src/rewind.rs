@@ -55,6 +55,12 @@ impl Default for RewindHistory {
     }
 }
 impl RewindHistory {
+    pub(crate) fn clear_frames(&mut self) {
+        self.frames.clear();
+    }
+    pub(crate) fn life(&self, id: u8) -> u64 {
+        self.lives.get(id as usize).copied().unwrap_or(0)
+    }
     pub(crate) fn new_life(&mut self, id: u8) {
         if let Some(life) = self.lives.get_mut(id as usize) {
             // Exhaustion is unreachable at game timescales; clear history rather

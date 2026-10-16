@@ -1,8 +1,9 @@
 //! Bounded, versioned network protocol shared by native and browser game clients.
 //!
 //! The protocol never accepts client positions or client-selected time steps.
-//! Native UDP is intentionally a thin primitive: authentication, encryption,
-//! browser transports, and NAT traversal are outside this prototype.
+//! Native UDP is intentionally a thin primitive:
+//! accounts/encryption and NAT traversal remain outside this prototype. The
+//! first-party WebSocket gateway carries browser datagrams to the same authority.
 pub mod clock;
 pub mod delta;
 pub mod history;
@@ -101,6 +102,8 @@ pub struct Snapshot {
     pub tick: u32,
     pub ack_sequence: u32,
     pub ack_valid: bool,
+    /// Low 32 bits of the authority life generation for each player slot.
+    pub epochs: [u32; MAX_PLAYERS],
     pub players: Vec<PlayerSnapshot>,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -337,8 +340,19 @@ pub fn encode_server(packet: &ServerPacket) -> Result<Vec<u8>, ProtocolError> {
             }
             put_u64(&mut out, snapshot.session);
             put_u32(&mut out, snapshot.tick);
+            if snapshot
+                .epochs
+                .iter()
+                .enumerate()
+                .any(|(i, e)| *e != 0 && ids & (1 << i) == 0)
+            {
+                return Err(ProtocolError::Invalid);
+            }
             put_u32(&mut out, snapshot.ack_sequence);
             out.push(snapshot.ack_valid as u8);
+            for epoch in snapshot.epochs {
+                put_u32(&mut out, epoch);
+            }
             out.push(snapshot.players.len() as u8);
             for p in &snapshot.players {
                 out.push(p.id);
@@ -515,6 +529,10 @@ pub fn decode_server(data: &[u8]) -> Result<ServerPacket, ProtocolError> {
             let tick = r.u32()?;
             let ack_sequence = r.u32()?;
             let ack_valid = r.boolean()?;
+            let mut epochs = [0; MAX_PLAYERS];
+            for epoch in &mut epochs {
+                *epoch = r.u32()?;
+            }
             let count = r.u8()? as usize;
             if count > MAX_PLAYERS {
                 return Err(ProtocolError::Invalid);
@@ -544,11 +562,19 @@ pub fn decode_server(data: &[u8]) -> Result<ServerPacket, ProtocolError> {
                 ids |= 1u16 << p.id;
                 players.push(p);
             }
+            if epochs
+                .iter()
+                .enumerate()
+                .any(|(i, e)| *e != 0 && ids & (1 << i) == 0)
+            {
+                return Err(ProtocolError::Invalid);
+            }
             ServerPacket::Snapshot(Snapshot {
                 session,
                 tick,
                 ack_sequence,
                 ack_valid,
+                epochs,
                 players,
             })
         }
@@ -668,6 +694,7 @@ mod tests {
             })
             .collect();
         let packet = ServerPacket::Snapshot(Snapshot {
+            epochs: [0; MAX_PLAYERS],
             session: 99,
             tick: 44,
             ack_valid: true,
@@ -675,7 +702,7 @@ mod tests {
             players,
         });
         let bytes = encode_server(&packet).unwrap();
-        assert_eq!(bytes.len(), 840);
+        assert_eq!(bytes.len(), 904);
         assert!(bytes.len() < MAX_PACKET_BYTES);
         assert_eq!(decode_server(&bytes).unwrap(), packet);
         for length in 0..bytes.len() {
@@ -691,6 +718,7 @@ mod tests {
         };
         let make = |p| {
             ServerPacket::Snapshot(Snapshot {
+                epochs: [0; MAX_PLAYERS],
                 session: 1,
                 players: vec![p],
                 ..Default::default()
@@ -879,6 +907,31 @@ mod tests {
 #[cfg(test)]
 mod timed_queue_tests {
     use super::*;
+    #[test]
+    fn round_reset_rejects_delayed_controls_from_previous_round() {
+        let mut q = InputQueue::default();
+        assert!(q.push(InputFrame {
+            sequence: 42,
+            buttons: BUTTON_FIRE,
+            ..Default::default()
+        }));
+        q.clear_pending();
+        assert!(q.pop().is_none());
+        assert!(!q.push(InputFrame {
+            sequence: 42,
+            buttons: BUTTON_FIRE,
+            ..Default::default()
+        }));
+        assert!(!q.push(InputFrame {
+            sequence: 41,
+            ..Default::default()
+        }));
+        assert!(q.push(InputFrame {
+            sequence: 43,
+            ..Default::default()
+        }));
+        assert_eq!(q.pop_latest().unwrap().buttons, 0);
+    }
     #[test]
     fn recovered_fire_keeps_old_aim_and_time_but_latest_movement() {
         let mut q = InputQueue::default();

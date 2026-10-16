@@ -3,6 +3,11 @@ use crate::checkpoint::{Reader, Writer};
 use ferravex_net::ProtocolError;
 #[derive(Clone, Debug, PartialEq)]
 pub enum SessionEvent {
+    Lobby {
+        tick: u32,
+        players: u8,
+        required: u8,
+    },
     Gameplay(NetworkEvent),
     Round(View),
     ActionResult {
@@ -120,6 +125,20 @@ impl SessionEvent {
         let mut out = Vec::with_capacity(192);
         let mut w = Writer(&mut |b| out.extend_from_slice(b));
         match self {
+            Self::Lobby {
+                tick,
+                players,
+                required,
+            } => {
+                if !(2..=MAX_PLAYERS as u8).contains(required) || players > required {
+                    return Err(ProtocolError::Invalid);
+                }
+                w.u32(*tick);
+                w.u8(0x82);
+                w.u8(1);
+                w.u8(*players);
+                w.u8(*required);
+            }
             Self::Gameplay(_) => unreachable!(),
             Self::ActionResult {
                 tick,
@@ -193,6 +212,18 @@ impl SessionEvent {
         let tick = r.u32().map_err(|_| invalid)?;
         r.i = 6;
         let result = match b[4] {
+            0x82 => {
+                let players = r.u8().map_err(|_| invalid)?;
+                let required = r.u8().map_err(|_| invalid)?;
+                if !(2..=MAX_PLAYERS as u8).contains(&required) || players > required {
+                    return Err(invalid);
+                }
+                Self::Lobby {
+                    tick,
+                    players,
+                    required,
+                }
+            }
             0x81 => {
                 let sequence = r.u64().map_err(|_| invalid)?;
                 let result = read_error(r.u8().map_err(|_| invalid)?)?;

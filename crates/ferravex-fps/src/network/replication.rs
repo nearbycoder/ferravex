@@ -77,6 +77,7 @@ impl GameServer {
     }
     pub(super) fn send_snapshot(socket: &Socket, game: &Match, peer: &mut Peer) -> io::Result<()> {
         let snapshot = Snapshot {
+            epochs: game.life_epochs(),
             session: peer.session,
             tick: game.tick,
             ack_sequence: peer.ack.unwrap_or(0),
@@ -208,10 +209,18 @@ impl GameClient {
         self.previous_tick = self.latest_tick.unwrap_or(snapshot.tick);
         self.latest_tick = Some(snapshot.tick);
         self.last_snapshot = Some(Instant::now());
+        self.previous_epochs = self.epochs;
+        self.epochs = snapshot.epochs;
         self.previous_players = std::mem::take(&mut self.players);
         self.players = snapshot.players.iter().map(Player::from_snapshot).collect();
         if let Some(extended) = self.unwrapper.observe(snapshot.tick) {
-            self.history.push(extended, self.players.clone());
+            self.history.push(
+                extended,
+                RenderFrame {
+                    players: self.players.clone(),
+                    epochs: self.epochs,
+                },
+            );
         }
         if snapshot.ack_valid {
             self.ack = Some(snapshot.ack_sequence);
@@ -265,6 +274,7 @@ impl GameClient {
     pub(super) fn clear_replication(&mut self) {
         self.commands = EventSender::default();
         self.round = None;
+        self.lobby = None;
         self.action_result = None;
         self.clock = ClientClock::default();
         self.last_ping = None;
@@ -273,6 +283,9 @@ impl GameClient {
         self.unwrapper = ferravex_net::clock::TickUnwrapper::default();
         self.history = ferravex_net::history::History::new(32);
         self.previous_players.clear();
+        self.players.clear();
+        self.epochs = [0; MAX_PLAYERS];
+        self.previous_epochs = [0; MAX_PLAYERS];
         self.previous_tick = 0;
     }
     fn render_target(&self) -> Option<f64> {
@@ -311,21 +324,47 @@ impl GameClient {
         let Some((left, right, alpha)) = self.history.bracket(t) else {
             return self.interpolated_players(self.interpolation_alpha());
         };
-        right
+        self.players
             .iter()
-            .map(|p| {
-                let mut p = p.clone();
-                if let Some(old) = left.iter().find(|old| old.id == p.id)
+            .map(|current| {
+                let mut p = current.clone();
+                let id = p.id as usize;
+                if p.health == 0 {
+                    return p;
+                }
+                if left.epochs[id] == self.epochs[id]
+                    && right.epochs[id] == self.epochs[id]
+                    && let (Some(old), Some(new)) = (
+                        left.players.iter().find(|v| v.id == p.id),
+                        right.players.iter().find(|v| v.id == p.id),
+                    )
                     && old.health > 0
-                    && p.health > 0
-                    && old.position.distance_squared(p.position) < 25.
+                    && new.health > 0
+                    && old.position.distance_squared(new.position) < 25.
+                    && current.position.distance_squared(new.position) < 25.
                 {
-                    p.position = old.position.lerp(p.position, alpha);
-                    let delta = (p.yaw - old.yaw + std::f32::consts::PI)
+                    p.position = old.position.lerp(new.position, alpha);
+                    let delta = (new.yaw - old.yaw + std::f32::consts::PI)
                         .rem_euclid(std::f32::consts::TAU)
                         - std::f32::consts::PI;
                     p.yaw = old.yaw + delta * alpha;
-                    p.pitch = old.pitch + (p.pitch - old.pitch) * alpha;
+                    p.pitch = old.pitch + (new.pitch - old.pitch) * alpha;
+                    return p;
+                }
+                // Hold the first pose of a new life until the delayed view catches
+                // up; never glide through the old life or snap back after respawn.
+                if let Some(first) = self.history.iter().find_map(|(_, f)| {
+                    if f.epochs[id] == self.epochs[id] {
+                        f.players.iter().find(|v| v.id == p.id)
+                    } else {
+                        None
+                    }
+                }) && first.health > 0
+                    && current.position.distance_squared(first.position) < 25.
+                {
+                    p.position = first.position;
+                    p.yaw = first.yaw;
+                    p.pitch = first.pitch;
                 }
                 p
             })
@@ -467,5 +506,57 @@ mod tests {
             ammo,
             "a previously invalid future claim must stay disarmed without a fresh input"
         );
+    }
+}
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod life_tests {
+    use super::*;
+    use ferravex_math::Vec3;
+    #[test]
+    fn interpolation_uses_latest_roster_and_never_blends_different_lives() {
+        let mut server = GameServer::bind("127.0.0.1:0").unwrap();
+        let mut client = GameClient::connect(server.local_addr().unwrap()).unwrap();
+        server.poll().unwrap();
+        client.poll().unwrap();
+        let session = client.session.unwrap();
+        let mut apply = |tick, epoch, x: Option<f32>| {
+            let mut players = vec![Player::new(0, Vec3::ZERO).snapshot()];
+            let mut epochs = [0; MAX_PLAYERS];
+            epochs[0] = 1;
+            if let Some(x) = x {
+                players.push(Player::new(1, Vec3::X * x).snapshot());
+                epochs[1] = epoch;
+            }
+            let snapshot = Snapshot {
+                session,
+                tick,
+                ack_sequence: 0,
+                ack_valid: false,
+                epochs,
+                players,
+            };
+            let bytes = encode_server(&ServerPacket::Snapshot(snapshot.clone())).unwrap();
+            client.accept_snapshot(snapshot, bytes).unwrap();
+            client.rendered_players()
+        };
+        apply(3, 1, Some(2.));
+        let current = apply(6, 2, Some(1.));
+        assert_eq!(
+            current.iter().find(|p| p.id == 1).unwrap().position.x,
+            1.,
+            "same-point respawn must not interpolate an old life"
+        );
+        let current = apply(9, 2, Some(1.5));
+        assert!(
+            (current.iter().find(|p| p.id == 1).unwrap().position.x - 1.).abs() < 0.01,
+            "new life holds its first pose while delayed view catches up"
+        );
+        let current = apply(12, 0, None);
+        assert!(
+            !current.iter().any(|p| p.id == 1),
+            "removed actors disappear from the current roster immediately"
+        );
+        let current = apply(15, 3, Some(1.));
+        assert_eq!(current.iter().find(|p| p.id == 1).unwrap().position.x, 1.);
     }
 }

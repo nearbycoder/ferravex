@@ -236,7 +236,7 @@ impl Match {
         true
     }
     pub(crate) fn reset_round_players(&mut self, states: &[(u8, Vec3, u8)]) {
-        self.rewind = rewind::RewindHistory::default();
+        self.rewind.clear_frames();
         for &(id, position, ammo) in states {
             if let Some(player) = self.player_mut(id) {
                 *player = Player::new(id, position);
@@ -245,6 +245,17 @@ impl Match {
             }
         }
         self.rewind.capture(self.tick, &self.players);
+    }
+    /// Snapshot generations; absent slots are zero. Bounded interpolation never
+    /// spans enough lives to confuse a low-32-bit generation wrap.
+    pub fn life_epochs(&self) -> [u32; MAX_PLAYERS] {
+        std::array::from_fn(|id| {
+            if self.player(id as u8).is_some() {
+                self.rewind.life(id as u8) as u32
+            } else {
+                0
+            }
+        })
     }
     pub fn remove_player(&mut self, id: u8) {
         self.players.retain(|p| p.id != id);

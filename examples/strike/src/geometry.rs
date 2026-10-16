@@ -361,3 +361,78 @@ pub fn build_rifle() -> ferravex_render::skinning::SkinnedMesh {
     );
     m.into_skin(4)
 }
+
+/// Dockyard's default objective paint and dropped/planted device. Retained once;
+/// these visuals do not participate in collision or reveal a carried device.
+pub struct Objectives {
+    sites: Model,
+    device: Model,
+}
+impl Objectives {
+    pub fn new() -> Self {
+        let mut sites = Model::new();
+        for site in ferravex_play::rounds::Config::default().sites {
+            let c = Vec3::from_array(site.center);
+            let r = site.radius;
+            let paint = rgb(0xc7ad69);
+            // A square perimeter stays within the circular authority radius.
+            let h = r * 0.70;
+            for side in [-1., 1.] {
+                sites.cube(
+                    c + vec3(side * h, 0.025, 0.),
+                    vec3(0.10, 0.015, h * 2.),
+                    paint,
+                );
+                sites.cube(
+                    c + vec3(0., 0.025, side * h),
+                    vec3(h * 2., 0.015, 0.10),
+                    paint,
+                );
+            }
+            // Ground stencil: A on the positive-X site, B on the negative-X site.
+            let lines: &[(f32, f32, f32, f32)] = if c.x > 0. {
+                &[
+                    (-0.6, 0.8, 0., -0.8),
+                    (0., -0.8, 0.6, 0.8),
+                    (-0.3, 0.1, 0.3, 0.1),
+                ]
+            } else {
+                &[
+                    (-0.5, -0.8, -0.5, 0.8),
+                    (-0.5, -0.8, 0.4, -0.8),
+                    (-0.5, 0., 0.4, 0.),
+                    (-0.5, 0.8, 0.4, 0.8),
+                    (0.4, -0.8, 0.6, -0.4),
+                    (0.6, -0.4, 0.4, 0.),
+                    (0.4, 0., 0.6, 0.4),
+                    (0.6, 0.4, 0.4, 0.8),
+                ]
+            };
+            for &(ax, az, bx, bz) in lines {
+                let a = vec3(ax, 0.038, az) + c;
+                let b = vec3(bx, 0.038, bz) + c;
+                let side = (b - a).cross(Vec3::Y).normalize_or_zero() * 0.065;
+                sites.quad([a - side, a + side, b + side, b - side], paint);
+            }
+        }
+        let mut device = Model::new();
+        device.cube(vec3(0., 0.10, 0.), vec3(0.48, 0.20, 0.32), rgb(0x3d493e));
+        device.cube(vec3(0., 0.205, 0.), vec3(0.22, 0.015, 0.12), rgb(0xcc7349));
+        device.cube(
+            vec3(0.16, 0.22, 0.),
+            vec3(0.035, 0.035, 0.035),
+            rgb(0xf5c771),
+        );
+        Self { sites, device }
+    }
+    pub fn draw(&self, view: &ferravex_fps::tactical::View) {
+        use ferravex_play::rounds::Bomb;
+        self.sites.draw();
+        if let Bomb::Dropped(p) | Bomb::Planted { position: p, .. } = view.bomb {
+            ferravex_render::draw_resident(
+                self.device.resident(),
+                Mat4::from_translation(Vec3::from_array(p)),
+            );
+        }
+    }
+}

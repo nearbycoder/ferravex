@@ -1,3 +1,8 @@
+#[derive(Clone)]
+struct RenderFrame {
+    players: Vec<Player>,
+    epochs: [u32; MAX_PLAYERS],
+}
 mod replication;
 mod tactical;
 use super::{Arena, InputFrame, MAX_PLAYERS, Match, NetworkEvent, Player, step_player};
@@ -240,6 +245,7 @@ impl GameServer {
                             self.tactical = None;
                             self.round_dirty = true;
                         }
+                        self.round_dirty |= self.tactical_options.is_some();
                         self.game.spawn_player(id);
                         self.peers.push(Peer {
                             addr,
@@ -341,6 +347,17 @@ impl GameServer {
                 input.move_x = 0.;
                 input.move_z = 0.;
                 input.buttons = 0;
+                if let Some(mode) = &mut self.tactical
+                    && mode
+                        .rules
+                        .interaction_progress()
+                        .is_some_and(|(id, _)| id == u16::from(peer.id))
+                {
+                    let _ = mode
+                        .rules
+                        .act(u16::from(peer.id), ferravex_play::rounds::Action::Cancel);
+                    self.round_dirty = true;
+                }
             }
             if input.buttons & super::BUTTON_FIRE != 0
                 && let Some(tick) = peer.last_shot
@@ -453,15 +470,18 @@ pub struct GameClient {
     snapshots: VecDeque<(u32, Vec<u8>)>,
     clock: ferravex_net::clock::ClientClock,
     unwrapper: ferravex_net::clock::TickUnwrapper,
-    history: ferravex_net::history::History<Vec<Player>>,
+    history: ferravex_net::history::History<RenderFrame>,
     last_ping: Option<Instant>,
     last_full_request: Option<Instant>,
     predicted: Option<Player>,
     commands: EventSender,
     round: Option<View>,
+    lobby: Option<(u8, u8)>,
     action_result: Option<(u64, Result<(), RuleError>)>,
     players: Vec<Player>,
     previous_players: Vec<Player>,
+    epochs: [u32; MAX_PLAYERS],
+    previous_epochs: [u32; MAX_PLAYERS],
     latest_tick: Option<u32>,
     previous_tick: u32,
     last_snapshot: Option<Instant>,
@@ -493,9 +513,12 @@ impl GameClient {
             predicted: None,
             commands: EventSender::default(),
             round: None,
+            lobby: None,
             action_result: None,
             players: vec![],
             previous_players: vec![],
+            epochs: [0; MAX_PLAYERS],
+            previous_epochs: [0; MAX_PLAYERS],
             latest_tick: None,
             previous_tick: 0,
             last_snapshot: None,
@@ -703,7 +726,8 @@ impl GameClient {
                 let mut p = current.clone();
                 if let Some(old) = self.previous_players.iter().find(|old| old.id == p.id) {
                     // Death/respawn and teleports should snap, not glide across the map.
-                    if old.health > 0
+                    if self.epochs[p.id as usize] == self.previous_epochs[p.id as usize]
+                        && old.health > 0
                         && p.health > 0
                         && old.position.distance_squared(p.position) < 25.
                     {
@@ -844,6 +868,7 @@ mod tests {
         let position = client.local_player().unwrap().position;
         let peer = &server.peers[0];
         let mut snapshot = Snapshot {
+            epochs: server.game.life_epochs(),
             session: peer.session,
             tick: current.wrapping_sub(3),
             ack_valid: true,

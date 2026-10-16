@@ -297,9 +297,10 @@ impl TacticalMatch {
         }
         if let Bomb::Carried(id) = self.bomb
             && let Some(player) = self.player(id)
-                && !player.alive() {
-                    self.bomb = Bomb::Dropped(player.position);
-                }
+            && !player.alive()
+        {
+            self.bomb = Bomb::Dropped(player.position);
+        }
         let winner = team.other();
         self.channel = None;
         self.score[winner.index()] = self.config.rounds_to_win;

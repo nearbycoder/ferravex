@@ -29,7 +29,16 @@ pub fn reset(seed: u64) {
 pub fn deliver(bytes: &[u8]) -> bool {
     BRIDGE.with(|b| {
         let mut b = b.borrow_mut();
-        if bytes.is_empty() || bytes.len() > MAX_PACKET_BYTES || b.incoming.len() == QUEUE {
+        if bytes.is_empty() || bytes.len() > MAX_PACKET_BYTES {
+            b.rejected = b.rejected.saturating_add(1);
+            return false;
+        }
+        // Background tabs may render at 1 Hz. Reliable retries must not fill
+        // the mailbox with identical datagrams before the game can ACK them.
+        if b.incoming.iter().any(|p| p == bytes) {
+            return true;
+        }
+        if b.incoming.len() == QUEUE {
             b.rejected = b.rejected.saturating_add(1);
             return false;
         }
@@ -104,6 +113,11 @@ impl Socket {
         }
         BRIDGE.with(|b| {
             let mut b = b.borrow_mut();
+            // Repeated ACKs can share their queued datagram; keeping a single
+            // copy leaves room for new commands under a throttled host drain.
+            if b.outgoing.iter().any(|p| p == bytes) {
+                return Ok(bytes.len());
+            }
             if b.outgoing.len() == QUEUE {
                 return Err(io::Error::from(io::ErrorKind::WouldBlock));
             }

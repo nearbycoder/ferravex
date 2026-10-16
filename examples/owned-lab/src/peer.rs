@@ -82,6 +82,7 @@ impl Peer {
     pub fn packet(&self, game: &Match) -> Vec<u8> {
         if self.mode == 1 {
             net::encode_server(&ServerPacket::Snapshot(Snapshot {
+                epochs: game.life_epochs(),
                 session: 1,
                 tick: game.tick,
                 ack_sequence: self.last.sequence,

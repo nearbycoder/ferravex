@@ -180,6 +180,19 @@ impl GameServer {
                 .map(Some)
                 .map_err(protocol_error);
         }
+        if let Some(options) = &self.tactical_options
+            && self.tactical.is_none()
+            && (self.round_dirty || self.game.tick.is_multiple_of(16))
+        {
+            return SessionEvent::Lobby {
+                tick: self.game.tick,
+                players: self.game.players.len() as u8,
+                required: options.players as u8,
+            }
+            .encode()
+            .map(Some)
+            .map_err(protocol_error);
+        }
         Ok(None)
     }
     pub(super) fn receive_command(
@@ -234,6 +247,9 @@ impl GameServer {
     }
 }
 impl GameClient {
+    pub fn tactical_lobby(&self) -> Option<(u8, u8)> {
+        self.lobby
+    }
     pub fn tactical_view(&self) -> Option<&View> {
         self.round.as_ref()
     }
@@ -269,8 +285,15 @@ impl GameClient {
     }
     pub(super) fn consume_session_event(&mut self, event: SessionEvent) {
         match event {
+            SessionEvent::Lobby {
+                players, required, ..
+            } => {
+                self.lobby = Some((players, required));
+                self.round = None;
+            }
             SessionEvent::Gameplay(e) => self.delivered_events.push_back(e),
             SessionEvent::Round(v) => {
+                self.lobby = None;
                 self.round = Some(v);
                 if let Some(state) = self.players.iter().find(|p| Some(p.id) == self.id) {
                     let mut corrected = state.clone();
