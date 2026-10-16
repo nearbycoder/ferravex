@@ -255,6 +255,7 @@ impl<B: Access> World<B> {
         if desc.reference_rotation.is_none() {
             desc.reference_rotation = Some(aa.rotation.conjugate() * bb.rotation);
         }
+        self.broken_joints.reserve(self.joints.len() + 1);
         self.joint_solver = Some(Self::dispatch_joints);
         let id = self.joints.insert(Joint {
             a,
@@ -264,6 +265,8 @@ impl<B: Access> World<B> {
             revisions: [aa.revision, bb.revision],
             dt: 0.,
             cache: [CachedRow::default(); 8],
+            load: crate::JointLoad::default(),
+            peak: crate::JointLoad::default(),
         });
         self.refresh_joints();
         Ok(id)
@@ -423,12 +426,45 @@ impl<B: Access> World<B> {
         for (_, j) in self.joints.iter_mut() {
             j.cache.fill(CachedRow::default());
             j.dt = dt;
+            j.load = crate::JointLoad::default();
         }
         for row in &self.joint_rows {
+            let load = &mut self.joints[row.id].load;
+            load.force += row.impulse.abs() * row.linear.length() / dt;
+            load.torque +=
+                row.impulse.abs() * row.angular_a.length().max(row.angular_b.length()) / dt;
             self.joints[row.id].cache[row.slot] = CachedRow {
                 impulse: row.impulse,
                 axis: row.axis(),
             };
+        }
+        let first = self.broken_joints.len();
+        for (id, j) in self.joints.iter_mut() {
+            j.peak.force = j.peak.force.max(j.load.force);
+            j.peak.torque = j.peak.torque.max(j.load.torque);
+            if j.desc.enabled
+                && j.desc
+                    .break_limits
+                    .is_some_and(|l| j.load.force > l.force || j.load.torque > l.torque)
+            {
+                self.broken_joints.push(crate::JointBreakEvent {
+                    joint: id,
+                    bodies: [j.a, j.b],
+                    load: j.load,
+                });
+            }
+        }
+        for event in &self.broken_joints[first..] {
+            self.joints.remove(event.joint);
+            for id in event.bodies {
+                if let Some(b) = self.bodies.get_mut(id) {
+                    b.core_mut().invalidate_contacts();
+                    b.core_mut().wake();
+                }
+            }
+        }
+        if self.broken_joints.len() > first {
+            self.rebuild_joint_filters();
         }
     }
 }

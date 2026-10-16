@@ -458,6 +458,7 @@ impl JointBuilder {
         self.desc.motor = Some(motor);
         self
     }
+    pub fn break_limits(mut self,force:f32,torque:f32)->Self {self.desc.break_limits=Some(crate::BreakLimits {force,torque});self}
     pub fn contacts_enabled(mut self, enabled: bool) -> Self {
         self.desc.contacts_enabled = enabled;
         self

@@ -11,7 +11,10 @@ mod geometry;
 mod joints;
 mod mass;
 mod material;
-pub use joints::{Joint, JointDesc, JointHandle, JointKind, JointMotor, JointSet, MAX_JOINTS};
+pub use joints::{
+    BreakLimits, Joint, JointBreakEvent, JointDesc, JointHandle, JointKind, JointLoad, JointMotor,
+    JointSet, MAX_JOINTS,
+};
 pub use material::{CombineRule, PhysicsMaterial};
 mod world;
 pub use body::{BodySet, Collider, ColliderHandle, ColliderSet, RigidBodyHandle};

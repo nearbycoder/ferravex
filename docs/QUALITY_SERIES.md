@@ -19,8 +19,8 @@ platform checks are recorded only when actually performed.
 | 9 | Vehicle and flight controllers | [PR 32](https://github.com/nearbycoder/ferravex/pull/32), merged |
 | 10 | Racing AI | [PR 33](https://github.com/nearbycoder/ferravex/pull/33), merged |
 | 11 | Richer physics materials | [PR 34](https://github.com/nearbycoder/ferravex/pull/34), merged |
-| 12 | Fast-body collision robustness | Implemented; locally validated |
-| 13 | Breakable mechanisms | Pending |
+| 12 | Fast-body collision robustness | [PR 35](https://github.com/nearbycoder/ferravex/pull/35), merged |
+| 13 | Breakable mechanisms | Implemented; locally validated |
 | 14 | Camera anticipation and authored zones | Pending |
 | 15 | Procedural contact animation | Pending |
 | 16 | Procedural environment builders | Pending |
@@ -205,3 +205,17 @@ within each of at most eight substeps; this is not universal rotational CCD and
 adds no unsupported capsule/cylinder contact pairs. Local 3000-unit/s thin rotated
 wall, moving kinematic wall and sensor tests pass, alongside the full existing
 physics/cache/allocation and demolition suites, strict Clippy and Wasm checks.
+
+## 13. Load-driven breakable mechanisms
+
+Fixed, hinge, distance and spring joint descriptions accept optional force/torque
+break limits. The solver measures conservative absolute constraint-row load sums
+in newtons/newton-meters, retains outer-tick peak loads, and removes an overloaded
+joint once with a generational break event. Breaking wakes released bodies and
+restores collision filtering for subsequent substeps. Event storage is reserved
+when joints are authored, bounded by the existing joint capacity. Siege Foundry
+now bonds adjacent authored tower chunks with breakable fixed joints; real
+projectile contacts release them. This is authored chunk destruction, not arbitrary
+mesh fracture. Local tests cover real impulse breakage, once-only events, stale
+handle replacement, stable unshot towers, complete ordinary-fire victory, the
+physics allocation/contact suites, strict Clippy and Wasm compilation.

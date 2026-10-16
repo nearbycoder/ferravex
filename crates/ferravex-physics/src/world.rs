@@ -84,6 +84,7 @@ pub struct World<B> {
     pub gravity: Vec3,
     pub joints: crate::JointSet,
     joint_rows: Vec<JointRow>,
+    broken_joints: Vec<crate::JointBreakEvent>,
     joint_solver: Option<fn(&mut Self, JointPhase, f32, &mut StepStats)>,
     disabled_joint_pairs: Vec<(RigidBodyHandle, RigidBodyHandle)>,
     planar: bool,
@@ -112,6 +113,7 @@ impl<B: Access> World<B> {
             gravity,
             joints: Default::default(),
             joint_rows: Vec::new(),
+            broken_joints: Vec::new(),
             joint_solver: None,
             disabled_joint_pairs: Vec::new(),
             planar,
@@ -131,6 +133,9 @@ impl<B: Access> World<B> {
             points: Vec::with_capacity(8),
             last_step: StepStats::default(),
         }
+    }
+    pub fn joint_break_events(&self) -> &[crate::JointBreakEvent] {
+        &self.broken_joints
     }
     pub fn insert(
         &mut self,
@@ -262,6 +267,10 @@ impl<B: Access> World<B> {
         self.wake_previous_islands(gravity_changed);
         if gravity_changed {
             self.manifolds.clear();
+        }
+        self.broken_joints.clear();
+        for (_, j) in self.joints.iter_mut() {
+            j.peak = crate::JointLoad::default();
         }
         for _ in 0..substeps {
             self.old_positions.clear();

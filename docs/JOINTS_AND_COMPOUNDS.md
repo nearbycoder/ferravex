@@ -120,3 +120,13 @@ and resource bounds. The allocation test checks zero steady-step heap allocation
 for both contact stacks and moving compound/hinge mechanisms. Available Linux
 native and browser/Wasm paths are checked locally; no iOS SDK/device test is
 claimed.
+
+## Breakable connections
+
+`JointBuilder::break_limits(force, torque)` opts a connection into load-driven
+release. Loads conservatively sum absolute row contributions; they are not net
+force vectors or material stress/area calculations. `Joint::peak_load()` reports
+the current outer tick's peak and `world.joint_break_events()` reports released
+handles/bodies/loads until the next step. The same generational joint cannot break
+twice. Removed bodies remain independently simulated chunks. Author intact pieces
+and their bonds at setup; the solver does not cut meshes or generate debris.

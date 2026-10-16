@@ -71,6 +71,7 @@ impl Range {
         physics.add_box([0.0, -0.4, 4.0], [14.0, 0.4, 20.0], false);
         let mut blocks = Vec::new();
         for x in [-4.0, 0.0, 4.0] {
+            let mut previous = None;
             for layer in 0..4 {
                 let home = vec3(x, 0.6 + layer as f32 * 1.202, -4.0);
                 let (handle, _) = physics.insert(
@@ -84,6 +85,19 @@ impl Range {
                         .friction(0.55)
                         .restitution(0.025),
                 );
+                if let Some(a) = previous {
+                    physics
+                        .insert_joint(
+                            a,
+                            handle,
+                            ferravex_physics::d3::JointBuilder::fixed()
+                                .local_anchor1(Vec3::Y * 0.601)
+                                .local_anchor2(-Vec3::Y * 0.601)
+                                .break_limits(500., 80.),
+                        )
+                        .unwrap();
+                }
+                previous = Some(handle);
                 blocks.push(Block {
                     handle,
                     home,
