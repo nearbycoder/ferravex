@@ -1,4 +1,6 @@
 //! Deterministic weighted-grid A* and small 2D steering helpers.
+mod mesh;
+pub use mesh::*;
 mod route;
 mod search;
 pub use route::*;
