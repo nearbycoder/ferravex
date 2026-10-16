@@ -13,7 +13,7 @@ The APIs live in `ferravex_engine` and are also available through `ferravex`. Ea
 - [x] 5. Reset profiler history while retaining registered counters.
 - [x] 6. Adjust profiler budgets without replacing counter IDs.
 - [x] 7. Query arbitrary nearest-rank profiler percentiles.
-- [ ] 8. Read chronological profiler samples after ring wrap.
+- [x] 8. Read chronological profiler samples after ring wrap.
 - [ ] 9. Seek legacy input replays by exact or preceding tick.
 - [ ] 10. Export bounded tick ranges and truncate replay branches.
 - [ ] 11. Locate the first mismatched or missing replay state.

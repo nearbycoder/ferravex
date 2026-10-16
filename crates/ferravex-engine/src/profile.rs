@@ -133,6 +133,12 @@ impl Profiler {
         let rank = (counter.len * usize::from(percent)).div_ceil(100).max(1);
         Some(values[rank - 1])
     }
+    /// Visit the retained window oldest-first without allocating a capture Vec.
+    pub fn samples_us(&self, id: CounterId) -> Option<impl Iterator<Item = u64> + '_> {
+        let counter = self.counters.get(id.0)?;
+        let start = (counter.next + HISTORY - counter.len) % HISTORY;
+        Some((0..counter.len).map(move |i| counter.values[(start + i) % HISTORY]))
+    }
     pub fn summary(&self, id: CounterId) -> Summary {
         self.try_summary(id)
             .expect("counter id does not belong to this profiler")
@@ -268,5 +274,31 @@ mod percentile_tests {
         }
         assert_eq!(p.percentile_us(id, 101), None);
         assert_eq!(p.percentile_us(CounterId(999), 50), None);
+    }
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+    #[test]
+    fn history_is_chronological_before_and_after_wrap_and_reset() {
+        let mut p = Profiler::default();
+        let id = p.register("timeline", Duration::MAX);
+        assert_eq!(p.samples_us(id).unwrap().count(), 0);
+        for i in 0..3 {
+            p.record(id, Duration::from_micros(i));
+        }
+        assert_eq!(p.samples_us(id).unwrap().collect::<Vec<_>>(), [0, 1, 2]);
+        for i in 3..125 {
+            p.record(id, Duration::from_micros(i));
+        }
+        assert_eq!(
+            p.samples_us(id).unwrap().collect::<Vec<_>>(),
+            (5..125).collect::<Vec<_>>()
+        );
+        p.reset(id);
+        p.record(id, Duration::from_micros(42));
+        assert_eq!(p.samples_us(id).unwrap().collect::<Vec<_>>(), [42]);
+        assert!(p.samples_us(CounterId(999)).is_none());
     }
 }
