@@ -980,3 +980,64 @@ Orchard progress and volume/mute/quality reload, plus compatibility with a save
 written before the field-vector change, with no captured warnings/errors. Apple
 and Windows runtime/device checks were unavailable; iOS SDK/device checks remain
 excluded. No external Cargo packages were added.
+
+## Iteration 18: replay timelines, ghosts and deterministic shooter aim
+
+Practice recording now stores full authority checkpoints, all player commands,
+accepted events and per-tick hashes. Playback uses a separate match, bounded
+checkpoint seeking and visible desync errors. Rally and Strike share sparse
+2D/3D ghost interpolation. The optional browser replay panel supports import and
+export; native bounded runs can export `.fxrt`. See [replays](REPLAYS.md).
+
+`target/perf/iteration-18-final/report.json` measures source
+`01f62a0d3ce524a03bb76de411a0ab3fd3e0927f` against iteration-17-final: fifteen
+workloads, two runs, 30 warmup and 120 measured frames/run. The existing 20% /
+1000 µs CPU/submit/software floors, 20 µs GPU floor and 5% size allowance are
+unchanged. Native binary hashes, native/Wasm raw and deterministic gzip-9 sizes,
+and staged Wasm were checked against the report. No builds, tests or
+agent-created game tabs ran alongside the measurements.
+
+**The gate failed with four Strike artifact-size flags.** No timing or work
+metric triggered a new flag. Other games stayed inside their comparison budgets;
+several artifacts still grew. Artifact costs (raw / gzip-9 bytes):
+
+| Game | Native before → after | Wasm before → after |
+|---|---|---|
+| Strike | 1077688 / 524274 → 1151512 / 559679 | 504414 / 191265 → 567722 / 214999 |
+| Pocket Rally | 804408 / 387562 → 808784 / 389690 | 286906 / 108283 → 291387 / 109881 |
+| Courtyard | 571048 / 281131 → 571368 / 281399 | 377580 / 140958 → 378218 / 141318 |
+
+All available allocation, draw, vertex, upload and simulation-work distributions
+match the baseline across all fifteen games. This does not establish unchanged
+CPU cost. Strike CPU mean / p95 / p99 changed from 41.654 / 56.548 / 101.587 to
+46.601 / 65.728 / 100.767 µs; Rally changed from 513.440 / 533.413 / 548.542 to
+545.197 / 697.081 / 761.519 µs. The timing floors remain permissive. Earlier
+artifact/work/timing regressions, including the iteration-17 2D physics GPU p99
+flag and iteration-16 3D physics GPU p95 flag, remain open. This new baseline does
+not fix or erase them.
+
+Recorder pushes and shared ghost sampling allocate nothing after explicit
+reservation (1,000-tick allocator test). Recording reserves several MiB up front;
+checkpoint restoration, encoding, import/export and synchronous saves allocate
+and can stall. The normal warmed workload has recording disabled, no complete
+best lap, and transient saves. It does not measure recording CPU cost, full-track
+memory, startup restoration, durable I/O latency or replay-seek spikes.
+
+An extra cross-runtime experiment exposed a native → Wasm desync at tick 19.
+Replacing shooter movement/aim libm trig with shared fixed-polynomial arithmetic
+fixed that experiment: a new 640-tick native clip completes actual Wasm playback
+with every hash verified. The authority context identifies the changed rules.
+The failed experiment is retained here; arbitrary CPU/compiler/rules equivalence
+is not claimed. Future incompatibility still halts playback visibly.
+
+Local validation: 479 regular workspace tests; 11 available GLX/ALSA checks;
+strict native and Wasm library Clippy and Rustdoc; all fifteen release native/Wasm
+builds and 360-frame native gameplay/PNG checks; all existing Node input, audio,
+animation, effects, content, UI and persistence contracts; actual-Wasm recording,
+durable reload, seeking, pause, bounded import/export, and bad-import preservation;
+640-tick native export → Wasm playback; native CLI record and full playback;
+real combat checkpoint/rewind/seek continuation including tick wrap; 1,000-tick
+allocation checks; and 21 Python site/search/audit/performance tests. Browser
+interaction confirmed record/save/replay/pause/one-second seek and panel layout.
+No external Cargo packages were added. Windows/Apple runtime/device checks were
+unavailable; iOS SDK/device checks remain excluded.
