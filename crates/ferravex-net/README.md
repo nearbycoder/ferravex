@@ -8,8 +8,8 @@ and an optional native WebSocket gateway. No registry dependencies.
 Packets begin with `FVRX`, version byte `4`, and a kind byte. Integers and float
 bits are little-endian; the maximum packet is 1200 bytes. Truncation, unsupported
 versions/kinds, invalid numeric/boolean values and trailing bytes are rejected.
-Version 3 peers must upgrade together. The original input frame remains 21 bytes; full snapshots now include life
-epochs. Extensions add timed inputs, clock exchange, snapshot ACKs, deltas and
+Version 3 peers must upgrade together. The original input frame remains 21
+bytes; full snapshots now include life epochs. Extensions add timed inputs, clock exchange, snapshot ACKs, deltas and
 reliable client commands.
 
 | Kind | Direction | Payload |
@@ -36,8 +36,8 @@ probes; duplicate/reordered/expired replies cannot replace accepted estimates.
 `clock::TickUnwrapper` maps serial `u32` ticks into ordered history across wrap.
 Browser hosts supply monotonic time through `time::set_browser_time`.
 
-The sixteen-player full snapshot is 904 bytes, including per-slot life epochs. Player jump grace/buffer timers
-and held state are included for exact motor prediction. Position remains `f32`;
+The sixteen-player full snapshot is 904 bytes, including per-slot life epochs.
+Player jump grace/buffer timers and held state are included for exact motor prediction. Position remains `f32`;
 standalone centimeter quantization is available but not used by this session.
 `InputQueue` bounds and deduplicates movement, coalesces to the newest sample,
 and retains recovered quick-fire aim/time. `clear_pending` keeps the sequence

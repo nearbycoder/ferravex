@@ -1041,3 +1041,56 @@ allocation checks; and 21 Python site/search/audit/performance tests. Browser
 interaction confirmed record/save/replay/pause/one-second seek and panel layout.
 No external Cargo packages were added. Windows/Apple runtime/device checks were
 unavailable; iOS SDK/device checks remain excluded.
+
+
+## Iteration 19 — multiplayer integration
+
+Measured source `0bdd2afe2da96cd02a7ede903fb00a5620b3d412`, compared with
+iteration 18's final report. Raw evidence: ignored
+`target/perf/iteration-19-final/report.json` and per-game frame records.
+All fifteen games, two runs of 120 measured frames after 30 warmup frames,
+release profile, default quality. Existing budgets stayed at 20% with a 1,000 µs
+CPU floor, 20 µs GPU floor, and 5% artifact growth. No test/build/game-tab activity
+ran alongside the benchmark.
+
+**Comparison failed with three flags.** Strike's Wasm increased from 567,722 to
+704,609 raw bytes, and from 214,999 to 269,994 gzip-9 bytes. It now includes the
+same client/authority session, clock/delta/reliable protocols, tactical rules,
+byte-link exports and objective presentation. Native Strike increased from
+1,151,512 / 559,679 to 1,198,056 / 583,364 raw/gzip bytes (within this step's 5%
+budget). The optional browser tools are separate host files. Feature availability
+has a distribution cost; it is not a size improvement.
+
+Physics-3D GPU p95 rose from 37.63 to 116.381 µs against a 57.63 µs allowed
+value. GPU coverage was 100% (240 samples); p99 was 117.342 µs. The cause has not
+been isolated. This remains open alongside the earlier physics GPU-tail flags;
+no baseline or threshold was changed to hide it.
+
+Strike CPU mean/p95/p99 changed from 46.601 / 65.728 / 100.767 to
+53.442 / 71.227 / 98.387 µs. Physics-2D changed from 622.985 / 1162.848 /
+1723.123 to 728.704 / 1916.486 / 1937.495 µs, and Physics-3D from 649.656 /
+1848.959 / 1889.638 to 733.893 / 1885.216 / 2391.392 µs; these stayed within the
+unchanged time budgets. All available allocation, draw, vertex, upload and
+simulation-work distributions were identical to iteration 18 for every game.
+Unavailable metrics remain unavailable. Native hashes/raw/gzip sizes and staged
+Wasm bytes were checked against the report.
+
+The catalog benchmark uses offline practice. It does **not** measure active
+multiplayer bandwidth, authority cost at sixteen players, adverse Internet
+conditions, gateway load or lower-end hardware frame rates. Separate functional
+checks ran two actual Wasm endpoints with loss/duplication/reordering, a one-Hz
+background client, two Wasm clients through the native WebSocket/UDP authority,
+and native UDP timed shots/clock/delta recovery, reliable commands and complete
+plant/defuse/round-reset/forfeit transitions. Browser interaction verified two
+identities, late-purchase rejection and accepted bomb drop. Background browser
+throttling still caused roughly 1–2 second RTT in this UI environment; the
+compacted queues recovered without the previous unbounded latency buildup.
+
+Local validation: 494 regular workspace tests, 11 available GLX/ALSA checks,
+strict native/Wasm Clippy and Rustdoc, all fifteen release native/Wasm builds and
+360-frame native gameplay/PNG checks, all Node game contracts, a 640-tick native
+practice replay verified in Wasm, and 21 Python checks. Fixed-step native smoke
+runs now disable vsync so occluded compositor windows cannot stall automation.
+The entire workspace still has 28 first-party Cargo packages and zero external
+Cargo packages. Windows/macOS runtime checks were unavailable; iOS checks remain
+excluded. No deployment was performed.
