@@ -98,6 +98,8 @@ pub struct Game {
     spawns: ferravex_play::gameplay::spawn::SpawnSelector,
     intermission: f32,
     dash_direction: Vec2,
+    dash_buffer: ferravex_play::gameplay::buffer::CommandBuffer<()>,
+    dash_held: bool,
 }
 
 impl Game {
@@ -182,6 +184,8 @@ impl Game {
             spawns: ferravex_play::gameplay::spawn::SpawnSelector::new(260.).unwrap(),
             intermission: 1.6,
             dash_direction: Vec2::X,
+            dash_buffer: ferravex_play::gameplay::buffer::CommandBuffer::new(0.15).unwrap(),
+            dash_held: false,
         })
     }
 
@@ -257,7 +261,15 @@ impl Game {
         if direction.length_squared() > 0.0 {
             self.facing = direction;
         }
-        if input.dash && self.abilities.activate(1, &mut self.resource, true).is_ok() {
+        self.dash_buffer.advance(dt).unwrap();
+        if input.dash && !self.dash_held {
+            self.dash_buffer.push(());
+        }
+        self.dash_held = input.dash;
+        let dash_ready = self.abilities.charges(1) == Some(1);
+        if self.dash_buffer.take_if(dash_ready).is_some()
+            && self.abilities.activate(1, &mut self.resource, true).is_ok()
+        {
             self.dash_direction = if input.movement.length_squared() > 0.01 {
                 input.movement.normalize()
             } else {
@@ -963,5 +975,35 @@ mod magazine_loop_tests {
         assert!(observed_reload);
         assert!(g.shots > 24);
         assert!(g.magazine.loaded() <= 12);
+    }
+}
+
+#[cfg(test)]
+mod dash_buffer_tests {
+    use super::*;
+    #[test]
+    fn early_dash_taps_execute_at_readiness_and_holds_do_not_repeat() {
+        let mut g = Game::new();
+        g.remaining = 0;
+        g.intermission = 100.;
+        let dash = Input {
+            dash: true,
+            aim: g.player + Vec2::X,
+            ..Input::default()
+        };
+        g.update(dash, 1. / 120.);
+        for _ in 0..190 {
+            g.update(Input::default(), 1. / 120.);
+        }
+        g.update(dash, 1. / 120.); // Tap just before the 1.7-second charge returns.
+        g.update(Input::default(), 1. / 120.);
+        for _ in 0..20 {
+            g.update(Input::default(), 1. / 120.);
+        }
+        assert!(g.dash_cooldown > 1.5);
+        for _ in 0..500 {
+            g.update(dash, 1. / 120.);
+        }
+        assert_eq!(g.dash_cooldown, 0., "a held button cannot repeatedly dash");
     }
 }

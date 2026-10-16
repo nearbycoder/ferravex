@@ -31,3 +31,5 @@ Two concentrated hits stagger armored brutes for 0.8 seconds, canceling their at
 A 20-point shield absorbs confirmed damage before health. Four seconds without a hit starts 8 points/second of recovery, rewarding a successful escape. Shield hits still break score chains and preserve ordinary invulnerability timing.
 
 The pulse weapon fires twelve-shot energy cells, then automatically reloads for 0.65 seconds. The HUD shows cell count and reload countdown. Energy is unlimited; timing shots and using cover during recharge create the combat rhythm.
+
+Dash taps made up to 150 ms before readiness are buffered and execute once when the charge returns. Holding a dash input does not queue repeated activations.
