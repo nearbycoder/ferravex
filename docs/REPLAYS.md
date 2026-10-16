@@ -6,7 +6,7 @@ input-log format remain available; new sessions use FXRT0001.
 
 ## Watch a Strike practice run
 
-Open `/web/?game=strike&replay-tools` for an optional accessible DOM panel with
+Open `/play/strike/?replay-tools` for an optional accessible DOM panel with
 record/stop, replay/live, pause, one-second seek, ghost, import and export controls.
 Start practice using its normal Play button. The tools do not start or resume the
 live match automatically. Keyboard shortcuts are rebindable through F2:
