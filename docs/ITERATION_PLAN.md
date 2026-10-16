@@ -24,7 +24,7 @@ unsupported platforms or features are complete.
 | 14 | AI perception and decisions | Merged: [PR 15](https://github.com/nearbycoder/ferravex/pull/15); 4 Wasm-size flags recorded in PERFORMANCE.md |
 | 15 | Data-driven scenes and prefabs | Merged: [PR 16](https://github.com/nearbycoder/ferravex/pull/16); 8 artifact-size flags recorded in PERFORMANCE.md |
 | 16 | Shared HUD and menus | Merged: [PR 17](https://github.com/nearbycoder/ferravex/pull/17); 4 performance flags recorded in PERFORMANCE.md |
-| 17 | Persistent saves and settings | Pending |
+| 17 | Persistent saves and settings | Merged: [PR 18](https://github.com/nearbycoder/ferravex/pull/18); 20 performance flags recorded in PERFORMANCE.md |
 | 18 | Replay, ghosts and debugging | Pending |
 | 19 | Multiplayer integration | Pending |
 | 20 | Native platform hosts | Pending |
