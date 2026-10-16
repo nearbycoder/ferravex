@@ -71,3 +71,6 @@ pub mod random;
 
 /// See [`weighted`] for the system contract and examples.
 pub mod weighted;
+
+/// See [`shuffle`] for the system contract and examples.
+pub mod shuffle;
