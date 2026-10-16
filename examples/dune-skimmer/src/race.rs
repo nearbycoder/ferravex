@@ -187,26 +187,44 @@ impl Race {
         self.boost = (self.boost + dt * if self.boosting { -0.26 } else { 0.11 }).clamp(0.0, 1.0);
         // Turn rate stays useful at a standstill. Lateral damping gives the craft
         // controlled slip, while sand outside the racing line costs momentum.
-        let desired_turn = steer * (1.15 + self.speed().min(32.0) * 0.018);
-        self.turn_rate +=
-            (desired_turn - self.turn_rate) * ferravex_play::motion::response(12., dt);
-        self.yaw = (self.yaw + self.turn_rate * dt).rem_euclid(TAU);
-        let forward = self.forward();
-        let lateral = right(forward);
-        let side_speed = self.velocity.dot(lateral);
-        self.velocity -= lateral * side_speed * (1.0 - (-5.0 * dt).exp());
-        let acceleration = if self.boosting { 33.0 } else { 19.0 };
-        self.velocity += forward * throttle * acceleration * dt;
-        self.velocity *= (-dt * if self.off_track { 2.4 } else { 0.62 }).exp();
-        let cap = if self.boosting {
-            44.0
-        } else if self.off_track {
-            12.0
-        } else {
-            30.0
+        use ferravex_play::vehicle::*;
+        let mut motor = PlanarState {
+            position: self.position,
+            velocity: self.velocity,
+            yaw: self.yaw,
+            turn_rate: self.turn_rate,
         };
-        self.velocity = self.velocity.clamp_length_max(cap);
-        self.position += self.velocity * dt;
+        motor
+            .step(
+                PlanarHandling {
+                    acceleration: if self.boosting { 33. } else { 19. },
+                    braking: 30.,
+                    drag: if self.off_track { 2.4 } else { 0.62 },
+                    grip: 5.,
+                    max_speed: if self.boosting {
+                        44.
+                    } else if self.off_track {
+                        12.
+                    } else {
+                        30.
+                    },
+                    base_turn: 1.15,
+                    speed_turn: 0.018,
+                    turn_speed_cap: 32.,
+                    response: 12.,
+                },
+                DriveInput {
+                    throttle,
+                    steer,
+                    brake: 0.,
+                },
+                dt,
+            )
+            .unwrap();
+        self.position = motor.position;
+        self.velocity = motor.velocity;
+        self.yaw = motor.yaw;
+        self.turn_rate = motor.turn_rate;
         self.bank +=
             (-steer * 0.30 * (self.speed() / 25.0).min(1.0) - self.bank) * (dt * 7.0).min(1.0);
         for &(center, radius) in &course.rocks {
