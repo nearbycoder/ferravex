@@ -55,6 +55,27 @@ impl Bundle {
         self.bytes -= bytes.len();
         Some(bytes)
     }
+    /// Apply puts (`Some(bytes)`) and removals (`None`) in order, committing only
+    /// if every path and intermediate capacity is valid. Payloads are Arc-shared.
+    pub fn apply_edits<'a>(
+        &mut self,
+        edits: impl IntoIterator<Item = (&'a str, Option<&'a [u8]>)>,
+    ) -> Result<(), AssetError> {
+        let mut next = self.clone();
+        for (path, value) in edits {
+            if !valid_path(path) {
+                return Err(AssetError::Path);
+            }
+            match value {
+                Some(bytes) => next.insert(path, bytes)?,
+                None => {
+                    next.remove(path);
+                }
+            }
+        }
+        *self = next;
+        Ok(())
+    }
     pub fn get(&self, path: &str) -> Option<Arc<[u8]>> {
         self.files.get(path).cloned()
     }
@@ -364,5 +385,26 @@ mod removal_tests {
         b.remove("a");
         assert!(b.is_empty());
         assert!(Bundle::decode(&b.encode()).unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod transactions_tests {
+    use super::*;
+    #[test]
+    fn bad_later_edit_rolls_back_earlier_mutations() {
+        let mut b = Bundle::default();
+        b.insert("a", b"old").unwrap();
+        let original = b.encode();
+        assert_eq!(
+            b.apply_edits([("a", Some(&b"new"[..])), ("../bad", None)]),
+            Err(AssetError::Path)
+        );
+        assert_eq!(b.encode(), original);
+        b.apply_edits([("a", None), ("b", Some(&b"ok"[..]))])
+            .unwrap();
+        assert!(b.get("a").is_none());
+        assert_eq!(b.decoded_bytes(), 2);
+        assert_eq!(&*b.get("b").unwrap(), b"ok");
     }
 }

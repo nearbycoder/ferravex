@@ -7,7 +7,7 @@ The APIs live in `ferravex_engine` and are also available through `ferravex`. Ea
 ## Planned implementation sequence
 
 - [x] 1. Remove bundle assets with accurate decoded-byte accounting.
-- [ ] 2. Apply multi-asset edits atomically.
+- [x] 2. Apply multi-asset edits atomically.
 - [ ] 3. Extract asset directory subtrees with segment-safe matching.
 - [ ] 4. Report deterministic added, removed, and changed bundle paths.
 - [ ] 5. Reset profiler history while retaining registered counters.
