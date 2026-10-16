@@ -293,8 +293,9 @@ impl<B: Access> World<B> {
                 if sensor {
                     continue;
                 }
-                let friction = (ca.friction * cb.friction).sqrt();
-                let restitution = (ca.restitution + cb.restitution) * 0.5;
+                let material = ca.material.pair(cb.material);
+                let friction = material.sliding_friction;
+                let restitution = material.restitution;
                 let cache_index = if self.next_manifolds.len() < self.settings.max_cached_manifolds
                 {
                     Some(self.next_manifolds.len())
@@ -351,8 +352,8 @@ impl<B: Access> World<B> {
                             tangent_impulse = (previous.tangent_impulse
                                 - p.normal * previous.tangent_impulse.dot(p.normal))
                                 * ratio;
-                            tangent_impulse =
-                                tangent_impulse.clamp_length_max(friction * normal_impulse);
+                            tangent_impulse = tangent_impulse
+                                .clamp_length_max(material.static_friction * normal_impulse);
                         }
                         previous.id
                     } else {
@@ -389,6 +390,9 @@ impl<B: Access> World<B> {
                             0.
                         },
                         friction,
+                        static_friction: material.static_friction,
+                        rolling_resistance: material.rolling_resistance,
+                        rolling_impulse: Vec3::ZERO,
                         key,
                         feature,
                         cache: cache_index

@@ -41,7 +41,12 @@ impl Run {
                 RigidBodyBuilder::fixed().translation(Vector::from_array(p.center.to_array())),
                 ColliderBuilder::cuboid(p.size.x * 0.5, p.size.y * 0.5, p.size.z * 0.5)
                     .rotation(p.rotation)
-                    .friction(p.friction),
+                    .material(ferravex_physics::PhysicsMaterial {
+                        static_friction: p.friction * 1.1,
+                        sliding_friction: p.friction,
+                        rolling_resistance: 0.002,
+                        ..Default::default()
+                    }),
             );
         }
         let sweepers = level

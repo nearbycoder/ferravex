@@ -63,6 +63,9 @@ struct Constraint {
     tangent_impulse: Vec3,
     bounce: f32,
     friction: f32,
+    static_friction: f32,
+    rolling_resistance: f32,
+    rolling_impulse: Vec3,
     key: (ColliderHandle, ColliderHandle),
     feature: u64,
     cache: Option<(usize, usize)>,
@@ -482,11 +485,31 @@ impl<B: Access> World<B> {
                 }
                 // Re-clamp even at zero slip: a reduced normal load also reduces
                 // the friction cone of an already accumulated tangent impulse.
-                let new = candidate.clamp_length_max(c.friction * c.normal_impulse);
+                let new = if candidate.length() <= c.static_friction * c.normal_impulse {
+                    candidate
+                } else {
+                    candidate.clamp_length_max(c.friction * c.normal_impulse)
+                };
                 let j = new - c.tangent_impulse;
                 c.tangent_impulse = new;
                 a.impulse(-j, c.point);
                 b.impulse(j, c.point);
+                if c.rolling_resistance > 0. {
+                    let relative = b.angular_velocity - a.angular_velocity;
+                    if let Some(axis) = relative.try_normalize() {
+                        let denominator = axis
+                            .dot(a.contact_inverse_inertia(axis) + b.contact_inverse_inertia(axis));
+                        if denominator > 1e-10 {
+                            let new = (c.rolling_impulse
+                                - axis * (relative.dot(axis) / denominator))
+                                .clamp_length_max(c.rolling_resistance * c.normal_impulse);
+                            let j = new - c.rolling_impulse;
+                            c.rolling_impulse = new;
+                            a.angular_velocity -= a.contact_inverse_inertia(j);
+                            b.angular_velocity += b.contact_inverse_inertia(j);
+                        }
+                    }
+                }
             }
             self.run_joints(JointPhase::Velocity, 0., stats);
         }

@@ -246,9 +246,10 @@ impl ColliderBuilder {
     }
     pub fn friction(mut self, v: f32) -> Self {
         assert!(v.is_finite() && v >= 0.);
-        self.collider.friction = v;
+        self.collider.set_friction(v);
         self
     }
+    pub fn material(mut self, v: crate::PhysicsMaterial) -> Self {self.collider.set_material(v).expect("valid material");self}
     pub fn restitution(mut self, v: f32) -> Self {
         self.collider.set_restitution(v);
         self

@@ -17,8 +17,8 @@ platform checks are recorded only when actually performed.
 | 7 | Encounter director | [PR 30](https://github.com/nearbycoder/ferravex/pull/30), merged |
 | 8 | Navigation meshes and traversal links | [PR 31](https://github.com/nearbycoder/ferravex/pull/31), merged |
 | 9 | Vehicle and flight controllers | [PR 32](https://github.com/nearbycoder/ferravex/pull/32), merged |
-| 10 | Racing AI | Implemented; locally validated |
-| 11 | Richer physics materials | Pending |
+| 10 | Racing AI | [PR 33](https://github.com/nearbycoder/ferravex/pull/33), merged |
+| 11 | Richer physics materials | Implemented; locally validated |
 | 12 | Fast-body collision robustness | Pending |
 | 13 | Breakable mechanisms | Pending |
 | 14 | Camera anticipation and authored zones | Pending |
@@ -180,3 +180,16 @@ three laps and a save/ghost roundtrip. Traffic and recovery are shared API featu
 the current single-car example supplies no rivals. Midpoint validation: 555 local
 workspace tests passed, strict workspace Clippy and all-feature Wasm compilation
 passed, and the dependency audit confirms zero external Cargo packages.
+
+## 11. Contact materials
+
+`physics::PhysicsMaterial` adds distinct static/sliding friction, symmetric explicit
+combination rules and load-limited rolling/spin resistance in the rotating rigid
+solver. Angular resistance is a contact torque limit, measured as normal impulse
+times a material length; it cannot act on airborne bodies. Existing defaults keep
+geometric friction and average restitution with zero rolling resistance. Material
+edits invalidate cached impulses. Marble Run's platforms use slightly stronger
+static grip and light rolling resistance; course record rules advance to 3.
+Local real-body tests verify static holding versus sliding, rolling energy loss,
+invalid edit rollback, existing contact/cache/allocation suites and all four marble
+course completions. Strict Clippy and Wasm checks pass.

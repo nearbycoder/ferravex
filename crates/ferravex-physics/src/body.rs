@@ -94,8 +94,7 @@ pub struct Collider {
     pub(crate) mass_dirty: bool,
     pub(crate) parent: Option<RigidBodyHandle>,
     pub(crate) density: f32,
-    pub(crate) restitution: f32,
-    pub(crate) friction: f32,
+    pub(crate) material: crate::PhysicsMaterial,
     pub(crate) sensor: bool,
     pub(crate) membership: u32,
     pub(crate) filter: u32,
@@ -111,8 +110,7 @@ impl Collider {
             mass_dirty: false,
             parent: None,
             density: 1.,
-            restitution: 0.,
-            friction: 0.6,
+            material: crate::PhysicsMaterial::default(),
             sensor: false,
             membership: u32::MAX,
             filter: u32::MAX,
@@ -121,7 +119,8 @@ impl Collider {
         }
     }
     pub(crate) fn valid(&self, planar: bool) -> bool {
-        self.local_translation.is_finite()
+        self.material.valid()
+            && self.local_translation.is_finite()
             && self.local_translation.abs().max_element() <= 1e6
             && self.local_rotation.is_finite()
             && (self.local_rotation.length_squared() - 1.).abs() < 0.001
@@ -189,27 +188,40 @@ impl Collider {
     pub fn is_sensor(&self) -> bool {
         self.sensor
     }
-    pub fn set_restitution(&mut self, v: f32) {
-        assert!(v.is_finite() && (0.0..=1.0).contains(&v));
-        if self.restitution != v {
+    pub fn material(&self) -> crate::PhysicsMaterial {
+        self.material
+    }
+    pub fn set_material(
+        &mut self,
+        material: crate::PhysicsMaterial,
+    ) -> Result<(), crate::PhysicsError> {
+        if !material.valid() {
+            return Err(crate::PhysicsError::InvalidCollider);
+        }
+        if self.material != material {
             self.revision = self
                 .revision
                 .checked_add(1)
                 .expect("collider revision exhausted");
             self.dirty = true;
+            self.material = material;
         }
-        self.restitution = v;
+        Ok(())
+    }
+    pub fn set_restitution(&mut self, v: f32) {
+        self.set_material(crate::PhysicsMaterial {
+            restitution: v,
+            ..self.material
+        })
+        .expect("valid restitution");
     }
     pub fn set_friction(&mut self, v: f32) {
-        assert!(v.is_finite() && v >= 0.);
-        if self.friction != v {
-            self.revision = self
-                .revision
-                .checked_add(1)
-                .expect("collider revision exhausted");
-            self.dirty = true;
-        }
-        self.friction = v;
+        self.set_material(crate::PhysicsMaterial {
+            static_friction: v,
+            sliding_friction: v,
+            ..self.material
+        })
+        .expect("valid friction");
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
