@@ -103,7 +103,7 @@ impl PlayerInput {
         draw_text("CONTROLS", x + 18., y + 31., 20., WHITE);
         let per_page = (((height - 190.) / 43.).floor() as usize).clamp(1, 8);
         let count = if self.devices_tab {
-            8
+            15
         } else {
             self.actions.len()
         };
@@ -177,6 +177,7 @@ impl PlayerInput {
             Color::from_rgba(161, 185, 189, 255),
         );
         let mut settings = self.settings;
+        let mut preferences = self.preferences();
         if self.devices_tab {
             for (row, i) in (start..end).enumerate() {
                 let yy = y + 116. + row as f32 * 43.;
@@ -195,7 +196,7 @@ impl PlayerInput {
                             "Off".into()
                         },
                     ),
-                    _ => (
+                    7 => (
                         "Controller",
                         format!(
                             "{} {}",
@@ -206,6 +207,37 @@ impl PlayerInput {
                                 "offline"
                             }
                         ),
+                    ),
+                    8 => (
+                        "Master volume",
+                        format!("{}%", (preferences.master * 100.).round() as u32),
+                    ),
+                    9..=12 => (
+                        [
+                            "Effects volume",
+                            "Ambience volume",
+                            "Music volume",
+                            "UI volume",
+                        ][i - 9],
+                        format!("{}%", (preferences.buses[i - 9] * 100.).round() as u32),
+                    ),
+                    13 => (
+                        "Sound",
+                        if preferences.muted {
+                            "Muted".into()
+                        } else {
+                            "On".into()
+                        },
+                    ),
+                    _ => (
+                        "Graphics quality",
+                        match preferences.quality {
+                            None => "Game default",
+                            Some(0) => "Low",
+                            Some(1) => "Medium",
+                            _ => "High",
+                        }
+                        .into(),
                     ),
                 };
                 draw_text(&fit(label, width - 192., 14), x + 18., yy + 12., 14., WHITE);
@@ -249,12 +281,27 @@ impl PlayerInput {
                         }
                         5 => settings.pad_curve = (settings.pad_curve + d * 0.25).clamp(0.25, 4.),
                         6 => settings.invert_y = !settings.invert_y,
-                        _ => {
+                        7 => {
                             settings.gamepad = if plus {
                                 (settings.gamepad + 1) % 4
                             } else {
                                 (settings.gamepad + 3) % 4
                             }
+                        }
+                        8 => preferences.master = (preferences.master + d * 0.05).clamp(0., 1.),
+                        9..=12 => {
+                            preferences.buses[i - 9] =
+                                (preferences.buses[i - 9] + d * 0.05).clamp(0., 1.)
+                        }
+                        13 => preferences.muted = !preferences.muted,
+                        _ => {
+                            let value = preferences.quality.map_or(0, |q| q + 1);
+                            let next = if plus {
+                                (value + 1) % 4
+                            } else {
+                                (value + 3) % 4
+                            };
+                            preferences.quality = next.checked_sub(1);
                         }
                     }
                 }
@@ -335,6 +382,9 @@ impl PlayerInput {
                 }
             }
         }
+        if preferences != self.preferences() {
+            let _ = self.set_preferences(preferences);
+        }
         if settings != self.settings {
             self.set_settings(settings)
                 .expect("bounded editor settings");
@@ -365,16 +415,32 @@ impl PlayerInput {
             footer + 2,
         ) {
             self.reset_defaults();
+            if self.devices_tab {
+                let _ = self.reset_preferences();
+            }
             self.capture = None;
         }
-        let message = match self.status {
-            ControlsStatus::Defaults => "Default bindings",
-            ControlsStatus::Transient => "Session controls; persistence disabled",
-            ControlsStatus::Saved => "Saved on this device",
-            ControlsStatus::Loaded { unknown: 0 } => "Loaded saved controls",
-            ControlsStatus::Loaded { .. } => "Loaded controls; retired actions ignored",
-            ControlsStatus::Invalid(_) => "Invalid file; defaults remain available",
-            ControlsStatus::Storage(_) => "Storage unavailable; session changes only",
+        let message = if self.devices_tab {
+            if self.preferences_error().is_some()
+                || matches!(
+                    self.status,
+                    ControlsStatus::Storage(_) | ControlsStatus::Invalid(_)
+                )
+            {
+                "Settings not saved; changes work for this session"
+            } else {
+                "Device, audio and graphics settings apply immediately"
+            }
+        } else {
+            match self.status {
+                ControlsStatus::Defaults => "Default bindings",
+                ControlsStatus::Transient => "Session controls; persistence disabled",
+                ControlsStatus::Saved => "Saved on this device",
+                ControlsStatus::Loaded { unknown: 0 } => "Loaded saved controls",
+                ControlsStatus::Loaded { .. } => "Loaded controls; retired actions ignored",
+                ControlsStatus::Invalid(_) => "Invalid file; defaults remain available",
+                ControlsStatus::Storage(_) => "Storage unavailable; session changes only",
+            }
         };
         draw_text(
             &fit(message, width - 36., 14),

@@ -6,7 +6,7 @@ const catalog=JSON.parse(fs.readFileSync(new URL('../../examples/catalog.json',i
 function runtime(id){
  const game=catalog.find(g=>g.id===id);let playing=false;
  const module=new WebAssembly.Module(fs.readFileSync(new URL(`../../dist/web/${game.host}/${id.replaceAll('-','_')}.wasm`,import.meta.url)));
- const e=new WebAssembly.Instance(module,{env:{ferravex_controls_len:()=>0,ferravex_controls_load:()=>-1,ferravex_controls_store:()=>-1,ferravex_set_playing:v=>playing=!!v}}).exports;
+ const e=new WebAssembly.Instance(module,{env:{ferravex_save_len:()=>0,ferravex_save_load:()=>-1,ferravex_save_store:()=>-1,ferravex_controls_len:()=>0,ferravex_controls_load:()=>-1,ferravex_controls_store:()=>-1,ferravex_set_playing:v=>playing=!!v}}).exports;
  e.ferravex_init();
  const frame=()=>{e.ferravex_frame(1/60,1280,800);assert.ok(new Float32Array(e.memory.buffer,e.ferravex_vertices(),e.ferravex_vertex_count()*8).every(Number.isFinite));};
  const key=code=>{e.ferravex_key(code,1);e.ferravex_key(code,0);};

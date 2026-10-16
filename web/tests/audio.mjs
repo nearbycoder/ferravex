@@ -26,3 +26,10 @@ console.log('Audio ring, epoch, PCM pull, mute, focus and host contracts passed.
 const large=new FerravexPcmProcessor(),largeOutput=[new Float32Array(2048),new Float32Array(2048)];
 large.port.onmessage({data:{type:'reset',epoch:9,active:true}});large.process([],[largeOutput]);assert.equal(posted.at(-1).frames,4096,'queue demand adapts to larger output quanta');
 large.port.onmessage({data:{type:'pcm',epoch:9,data:new Float32Array(8192).fill(.2)}});large.process([],[largeOutput]);assert.equal(large.ring.underruns,0);assert.ok(largeOutput[0].every(v=>Math.abs(v-.2)<1e-6));
+
+// Restored mute must survive implicit gestures/focus. Explicit enable still works.
+const mutedWin=new Target(),mutedDoc=new Target(),mutedCanvas=new Target();let restoredMute=1,created=0;
+const mutedWasm={...wasm,ferravex_audio_muted:()=>restoredMute,ferravex_audio_mute:v=>restoredMute=v};
+const restoredAudio=bindAudio(mutedCanvas,()=>mutedWasm,{host:{window:mutedWin,document:mutedDoc,createContext:()=>{created++;return new Context();},createNode:()=>({port:{postMessage(){}},connect(){},disconnect(){},addEventListener(){}})}});
+mutedCanvas.emit('pointerdown');mutedWin.emit('keydown');mutedWin.emit('focus');assert.equal(created,0);assert.equal(restoredMute,1);
+assert.equal(await restoredAudio.enable(),true);assert.equal(created,1);assert.equal(restoredMute,0);restoredAudio.dispose();

@@ -41,6 +41,7 @@ pub struct PlayerInput {
     settings: ControlSettings,
     loaded: bool,
     persistent: bool,
+    preferences: Option<crate::preferences::Session>,
     surface: TouchSurface,
     last_frame: Option<u64>,
     focus_epoch: u64,
@@ -77,14 +78,7 @@ impl PlayerInput {
     /// Build a named profile, register actions, then sample once per render frame.
     /// Configuration is loaded lazily after registration on the first sample.
     pub fn new(owner: &str) -> Self {
-        assert!(
-            !owner.is_empty()
-                && owner.len() <= 64
-                && owner
-                    .bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"-_".contains(&b)),
-            "valid controls owner"
-        );
+        assert!(crate::storage::valid_name(owner), "valid controls owner");
         let mut map = ActionMap::default();
         let gameplay = map.create_context("gameplay").unwrap();
         map.set_context(Some(gameplay)).unwrap();
@@ -97,6 +91,7 @@ impl PlayerInput {
             settings: ControlSettings::default(),
             loaded: false,
             persistent: true,
+            preferences: None,
             surface: TouchSurface::default(),
             last_frame: None,
             focus_epoch: 0,
@@ -230,6 +225,32 @@ impl PlayerInput {
         self.rebind(name, bindings.clone())?;
         self.actions[index].defaults = bindings.into_boxed_slice();
         Ok(())
+    }
+    pub fn preferences(&self) -> crate::preferences::Preferences {
+        self.preferences
+            .as_ref()
+            .map_or_else(Default::default, |p| p.current())
+    }
+    pub fn preferences_error(&self) -> Option<crate::storage::StorageError> {
+        self.preferences.as_ref().and_then(|p| p.error())
+    }
+    pub fn set_preferences(
+        &mut self,
+        next: crate::preferences::Preferences,
+    ) -> Result<(), crate::storage::StorageError> {
+        self.preferences
+            .get_or_insert_with(|| crate::preferences::Session::new(&self.owner, !self.persistent))
+            .set(next)
+    }
+    pub fn save_preferences(&mut self) -> Result<(), crate::storage::StorageError> {
+        self.preferences
+            .get_or_insert_with(|| crate::preferences::Session::new(&self.owner, !self.persistent))
+            .save()
+    }
+    pub fn reset_preferences(&mut self) -> Result<(), crate::storage::StorageError> {
+        self.preferences
+            .get_or_insert_with(|| crate::preferences::Session::new(&self.owner, !self.persistent))
+            .reset()
     }
     pub fn settings(&self) -> ControlSettings {
         self.settings
@@ -591,6 +612,15 @@ impl PlayerInput {
             return;
         }
         self.last_frame = Some(frame);
+        if self.preferences.is_none() {
+            self.preferences = Some(crate::preferences::Session::new(
+                &self.owner,
+                !self.persistent,
+            ));
+        }
+        if self.persistent {
+            self.preferences.as_mut().unwrap().sync_audio();
+        }
         self.ui_click = false;
         self.ui_tap_len = 0;
         self.ui_block = false;

@@ -59,7 +59,8 @@ with one rectangle per lit pixel. Text supports alignment, shrinking to fit,
 explicit newlines, character wrapping, clipping and an optional shadow. UTF-8
 boundaries are preserved; unsupported characters render `?`. It does not provide
 complex-script shaping, rich text, editable fields, localization or a screen-reader
-bridge. The DOM F2 editor remains the browser's accessible controls interface.
+bridge. The browser's DOM Controls/Sound buttons expose their state, but the canvas F2
+editor does not yet expose its internal fields to screen readers.
 
 Each Ui preallocates 1024 commands/widgets and a 32 KiB text arena. A frame admits
 at most 196608 estimated vertices and 16 clip levels; oversized or invalid commands

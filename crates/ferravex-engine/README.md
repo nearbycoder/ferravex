@@ -9,7 +9,8 @@ PCM WAV audio/mixing, animation playback/state graphs/GPU skinning, reusable eff
 See [animation](../../docs/ANIMATION.md) for clip banks, pose layers and retained skins,
 [effects](../../docs/EFFECTS.md) for bounded particles, trails/ribbons and GPU billboards,
 [AI](../../docs/AI.md) for sensing, work budgets and current-pose rigid occlusion,
-and [scenes](../../docs/SCENES.md) for typed content, prefabs and transactional reload.
+[scenes](../../docs/SCENES.md) for typed content, prefabs and transactional reload,
+and [saves](../../docs/SAVES.md) for typed persistence, settings, records and platform storage.
 
 ```rust
 use ferravex_engine::{dynamics::{PhysicsWorld,BodyDesc,Shape},input::{ActionMap,Binding,InputCode}};

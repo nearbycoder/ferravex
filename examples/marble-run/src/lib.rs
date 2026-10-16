@@ -358,6 +358,8 @@ async fn game() {
             .unwrap();
     let mut game = Run::with_level(Arc::new(level::Level::parse(content.current()).unwrap()));
     let mut scene = Scene::new(&game.level);
+    let mut records = ferravex_render::storage::Records::new("marble-run").unwrap();
+    let mut record_context = ferravex_engine::persistence::checksum(content.current().as_bytes());
     let material = LitMaterial::new().expect("Ferravex's portable lit material must compile");
     let mut clock = FixedClock::new(120., 12);
     let mut sound = GameAudio::new();
@@ -396,6 +398,7 @@ async fn game() {
         }) {
             game = next;
             scene = next_scene;
+            record_context = ferravex_engine::persistence::checksum(content.current().as_bytes());
             clock.reset();
             camera.cut();
             previous_falls = 0;
@@ -480,6 +483,12 @@ async fn game() {
                 impact_cooldown = 0.055;
             }
             if game.finished && !finished {
+                let _ = records.attempt(
+                    "aqueduct",
+                    record_context,
+                    game.gems() as u64,
+                    ferravex_render::storage::run_micros(game.elapsed),
+                );
                 sound.cue(Cue::Success, 0.65);
             }
         }
@@ -615,12 +624,30 @@ async fn game() {
             );
             centered("COURSE CLEAR", y - 20., 30, CREAM);
             centered(
-                &format!("6 crystals   /   {:.1} seconds", game.elapsed),
+                &format!("{} crystals / {:.1} seconds", game.gems(), game.elapsed),
                 y + 17.,
                 20,
                 CREAM,
             );
-            centered(&format!("{} falls", game.falls), y + 48., 18, CREAM);
+            let best = records
+                .get("aqueduct", record_context)
+                .and_then(|r| r.fastest_us)
+                .map_or(game.elapsed, |us| us as f32 / 1_000_000.);
+            centered(
+                &format!(
+                    "{} falls / {} {:.1}s",
+                    game.falls,
+                    if records.error().is_some() {
+                        "session best"
+                    } else {
+                        "best"
+                    },
+                    best
+                ),
+                y + 48.,
+                18,
+                CREAM,
+            );
             centered("R or tap to roll again", y + 90., 17, CREAM);
         }
         player_input.draw_settings();

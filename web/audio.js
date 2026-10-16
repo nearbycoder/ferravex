@@ -49,10 +49,10 @@ export function bindAudio(canvas,getExports,{button=null,host={window,document,c
   }catch(cause){loading=null;error=cause.message;getExports()?.ferravex_audio_state?.(0);reset(false);update();return false;}
  }
  function mute(){wanted=false;getExports()?.ferravex_audio_mute?.(1);reset(false);sync();}
- const gesture=e=>{if(e.type==='keydown'&&(e.repeat||e.target?.closest?.('input,textarea,select,button,[contenteditable]')))return;if(wanted&&!active&&!loading&&!error&&!getExports()?.ferravex_controls_open())void enable();};
+ const gesture=e=>{if(e.type==='keydown'&&(e.repeat||e.target?.closest?.('input,textarea,select,button,[contenteditable]')))return;if(wanted&&!active&&!loading&&!error&&!getExports()?.ferravex_controls_open()&&!getExports()?.ferravex_audio_muted())void enable();};
  canvas.addEventListener('pointerdown',gesture);win.addEventListener('keydown',gesture);
- win.addEventListener('blur',()=>{focused=false;sync();});win.addEventListener('focus',()=>{focused=true;if(wanted&&context&&!loading)void enable();else sync();});
- doc.addEventListener('visibilitychange',()=>{if(doc.hidden)sync();else if(wanted&&context&&!loading)void enable();});
+ win.addEventListener('blur',()=>{focused=false;sync();});win.addEventListener('focus',()=>{focused=true;if(wanted&&context&&!loading&&!getExports()?.ferravex_audio_muted())void enable();else sync();});
+ doc.addEventListener('visibilitychange',()=>{if(doc.hidden)sync();else if(wanted&&context&&!loading&&!getExports()?.ferravex_audio_muted())void enable();});
  button?.addEventListener('click',()=>{if(active)mute();else void enable();canvas.focus();});
  function dispose(){if(disposed)return;disposed=true;reset(false);getExports()?.ferravex_audio_state?.(0);node?.disconnect();void context?.close();update();}
  win.addEventListener('pagehide',dispose);

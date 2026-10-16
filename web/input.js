@@ -1,4 +1,5 @@
 // First-party browser input/storage bridge. Rust owns actions, contexts and profiles.
+import {bindStorage} from './storage.js';
 export const MAX_CONTROLS_BYTES=256*1024;
 export function bindInput(canvas,game,getExports,isPlaying=()=>false,host={window,document,navigator,storage:()=>localStorage,atob:text=>atob(text),btoa:text=>btoa(text)}) {
  const {window:win,document:doc}=host;
@@ -47,6 +48,7 @@ export function bindInput(canvas,game,getExports,isPlaying=()=>false,host={windo
  }
  function memory(ptr,len){const buffer=getExports()?.memory?.buffer;if(!buffer||!Number.isInteger(ptr)||!Number.isInteger(len)||ptr<0||len<0||ptr+len>buffer.byteLength)return null;return new Uint8Array(buffer,ptr,len);}
  const imports={
+  ...bindStorage(getExports,game,host).imports,
   ferravex_controls_len(){const data=readStored();return data===-1?-1:data?.length??0;},
   ferravex_controls_load(ptr,len){const data=readStored(),out=memory(ptr,len);if(!(data instanceof Uint8Array)||!out||len!==data.length)return -1;out.set(data);return 0;},
   ferravex_controls_store(ptr,len){const input=memory(ptr,len);if(!input||len>MAX_CONTROLS_BYTES)return -1;

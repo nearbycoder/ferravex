@@ -6,6 +6,7 @@ Original gameplay systems using Rust std and the workspace's first-party scalar 
 
 | Module | Working behavior | Current scope |
 | --- | --- | --- |
+| `persistence` | Bounded versioned typed saves, explicit migrations, presentation preferences and exact personal records | Pure data/validation; native/browser storage and settings integration in ferravex-render. See [saves](../../docs/SAVES.md). |
 | `authoring` | Bounded typed scene text, hierarchical prefab instances/overrides, scoped references, component schemas and deterministic cooked data | Load-time validation builds the existing scene graph; optional host reload reconstructs game resources transactionally. See [data-driven scenes](../../docs/SCENES.md). |
 | `ai` | Bounded cone/occlusion sight, hearing, expiring memory, priority target selection, shared decision graphs, round-robin sensing and work budgets | Host supplies authoritative candidates/queries; fixed-capacity updates allocate nothing after construction. See [AI](../../docs/AI.md). |
 | `audio` | PCM16 WAV decoding/encoding, validated reusable sounds, generational voice handles, pitch/resampling, volume buses, positional panning/falloff, priority stealing, fade/gain control and procedural surface/game cues | Original sample bank generated once. Allocation-free validated playback/mixing; platform output is in ferravex-render. See [audio](../../docs/AUDIO.md). |

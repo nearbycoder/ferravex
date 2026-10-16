@@ -181,6 +181,9 @@ impl Mixer {
         self.master = gain;
         true
     }
+    pub fn bus_gain(&self, bus: Bus) -> f32 {
+        self.buses[bus as usize]
+    }
     pub fn set_bus_gain(&mut self, bus: Bus, gain: f32) -> bool {
         if !gain.is_finite() || !(0. ..=1.).contains(&gain) {
             return false;

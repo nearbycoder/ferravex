@@ -7,7 +7,7 @@ for(const game of catalog){
  const names=new Set(WebAssembly.Module.exports(module).map(x=>x.name));
  assert.equal(names.has('ferravex_content_source'),!!game.editable_scene,game.id+' optional editor ABI must be isolated');
  if(!game.editable_scene)continue;
- const env={ferravex_controls_len:()=>0,ferravex_controls_load:()=>-1,ferravex_controls_store:()=>-1,ferravex_set_playing(){}};
+ const env={ferravex_save_len:()=>0,ferravex_save_load:()=>-1,ferravex_save_store:()=>-1,ferravex_controls_len:()=>0,ferravex_controls_load:()=>-1,ferravex_controls_store:()=>-1,ferravex_set_playing(){}};
  const e=new WebAssembly.Instance(module,{env}).exports;e.ferravex_init();e.ferravex_autoplay(1);
  const frame=()=>{e.ferravex_frame(1/60,1280,720);assert.ok(e.ferravex_vertex_count()>0);assert.ok(new Float32Array(e.memory.buffer,e.ferravex_vertices(),e.ferravex_vertex_count()*8).every(Number.isFinite));};frame();
  const source=()=>decoder.decode(new Uint8Array(e.memory.buffer,e.ferravex_content_source(),e.ferravex_content_source_len()));

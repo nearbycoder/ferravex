@@ -6,15 +6,7 @@ pub enum StorageError {
     InvalidOwner,
 }
 fn owner_valid(owner: &str) -> bool {
-    !owner.is_empty()
-        && owner.len() <= 64
-        && owner
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"-_".contains(&b))
-        && !matches!(owner, "con" | "prn" | "aux" | "nul")
-        && !(owner.len() == 4
-            && (owner.starts_with("com") || owner.starts_with("lpt"))
-            && matches!(owner.as_bytes()[3], b'1'..=b'9'))
+    crate::storage::valid_name(owner)
 }
 #[cfg(target_arch = "wasm32")]
 #[link(wasm_import_module = "env")]
@@ -93,55 +85,23 @@ fn path(owner: &str) -> Result<std::path::PathBuf, StorageError> {
 }
 #[cfg(not(target_arch = "wasm32"))]
 fn load_path(path: &std::path::Path) -> Result<Option<Vec<u8>>, StorageError> {
-    use std::io::Read;
-    let file = match std::fs::File::open(path) {
-        Ok(file) => file,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(_) => return Err(StorageError::Unavailable),
-    };
-    let metadata = file.metadata().map_err(|_| StorageError::Unavailable)?;
-    if !metadata.is_file() {
-        return Err(StorageError::Unavailable);
-    }
-    if metadata.len() > MAX_CONFIG_BYTES as u64 {
-        return Err(StorageError::TooLarge);
-    }
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    file.take(MAX_CONFIG_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| StorageError::Unavailable)?;
-    if bytes.len() > MAX_CONFIG_BYTES {
-        Err(StorageError::TooLarge)
-    } else {
-        Ok(Some(bytes))
-    }
+    crate::storage::native::read(path, MAX_CONFIG_BYTES).map_err(|e| {
+        if e == crate::storage::StorageError::TooLarge {
+            StorageError::TooLarge
+        } else {
+            StorageError::Unavailable
+        }
+    })
 }
 #[cfg(not(target_arch = "wasm32"))]
 fn save_path(path: &std::path::Path, bytes: &[u8]) -> Result<(), StorageError> {
-    use std::io::Write;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    let dir = path.parent().ok_or(StorageError::Unavailable)?;
-    std::fs::create_dir_all(dir).map_err(|_| StorageError::Unavailable)?;
-    let temp = dir.join(format!(
-        ".controls-{}-{}.tmp",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    ));
-    let result = (|| {
-        let mut file = std::fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temp)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        drop(file);
-        std::fs::rename(&temp, path)
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temp);
-    }
-    result.map_err(|_: std::io::Error| StorageError::Unavailable)
+    crate::storage::native::atomic_write(path, bytes, MAX_CONFIG_BYTES).map_err(|e| {
+        if e == crate::storage::StorageError::TooLarge {
+            StorageError::TooLarge
+        } else {
+            StorageError::Unavailable
+        }
+    })
 }
 #[cfg(test)]
 mod tests {
