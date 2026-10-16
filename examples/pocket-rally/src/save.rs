@@ -22,6 +22,7 @@ impl BestLap {
         if self.context == context && self.time_us > 0 {
             race.best_time = Some(self.time_us as f32 / 1_000_000.);
             race.best_ghost.clone_from(&self.poses);
+            race.rebuild_ghost();
         }
     }
 }

@@ -12,6 +12,12 @@ pub struct NetworkEvent {
 impl NetworkEvent {
     pub fn encode(self) -> Result<Vec<u8>, ProtocolError> {
         let mut out = Vec::with_capacity(32);
+        self.encode_into(&mut out)?;
+        Ok(out)
+    }
+    /// Reuses a caller-owned buffer. Valid bytes are returned only on success.
+    pub fn encode_into(self, out: &mut Vec<u8>) -> Result<(), ProtocolError> {
+        out.clear();
         out.extend_from_slice(&self.tick.to_le_bytes());
         match self.event {
             GameEvent::Shot {
@@ -53,7 +59,44 @@ impl NetworkEvent {
                 out.extend_from_slice(&[4, player]);
             }
         }
-        Ok(out)
+        Ok(())
+    }
+    fn validate(self) -> Result<(), ProtocolError> {
+        match self.event {
+            GameEvent::Shot {
+                player,
+                origin,
+                end,
+            } => {
+                validate_id(player)?;
+                validate_position(origin)?;
+                validate_position(end)
+            }
+            GameEvent::Hit {
+                attacker,
+                victim,
+                damage,
+                ..
+            } => {
+                validate_id(attacker)?;
+                validate_id(victim)?;
+                if attacker == victim || damage > 100 {
+                    Err(ProtocolError::Invalid)
+                } else {
+                    Ok(())
+                }
+            }
+            GameEvent::Killed { attacker, victim } => {
+                validate_id(attacker)?;
+                validate_id(victim)?;
+                if attacker == victim {
+                    Err(ProtocolError::Invalid)
+                } else {
+                    Ok(())
+                }
+            }
+            GameEvent::Respawned { player } => validate_id(player),
+        }
     }
     pub fn decode(bytes: &[u8]) -> Result<Self, ProtocolError> {
         if bytes.len() < 6 {
@@ -85,8 +128,7 @@ impl NetworkEvent {
             _ => return Err(ProtocolError::Invalid),
         };
         let result = Self { tick, event };
-        // Centralize the semantic checks so all accepted payloads are canonical.
-        result.encode()?;
+        result.validate()?;
         Ok(result)
     }
 }

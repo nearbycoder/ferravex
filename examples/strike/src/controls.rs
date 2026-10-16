@@ -20,6 +20,12 @@ impl Default for Controls {
         for (name, label, key) in [
             ("roster", "Players", KeyCode::Tab),
             ("diagnostics", "Diagnostics", KeyCode::F3),
+            ("record", "Record practice", KeyCode::F4),
+            ("replay", "Watch last replay", KeyCode::F5),
+            ("ghost", "Show last-run ghost", KeyCode::F6),
+            ("replay_pause", "Pause replay", KeyCode::P),
+            ("replay_back", "Seek back one second", KeyCode::Left),
+            ("replay_forward", "Seek forward one second", KeyCode::Right),
         ] {
             input
                 .global_action(

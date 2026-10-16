@@ -49,6 +49,7 @@ for name,export in [('SPRITE_VERTEX_BODY','spriteVertexBody'),('SPRITE_FRAGMENT_
 (output/'effects-shader.js').write_text('\n'.join(parts)+'\n')
 shutil.copy2(ROOT/'web/material-tools.js',output/'material-tools.js')
 shutil.copy2(ROOT/'web/content-tools.js',output/'content-tools.js')
+shutil.copy2(ROOT/'web/replay-tools.js',output/'replay-tools.js')
 shutil.copy2(ROOT/'web/index.html',output/'index.html')
 shutil.copy2(ROOT/'examples/catalog.json',output/'games.json')
 manifest={str(p.relative_to(output)):{'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in output.rglob('*') if p.is_file()}

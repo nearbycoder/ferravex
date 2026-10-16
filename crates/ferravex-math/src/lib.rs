@@ -19,3 +19,5 @@ pub use vector::*;
 pub mod prelude {
     pub use crate::{Color, EulerRot, Mat4, Quat, Rect, Vec2, Vec3, Vec4, vec2, vec3, vec4};
 }
+
+pub mod deterministic;

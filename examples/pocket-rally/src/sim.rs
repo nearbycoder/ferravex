@@ -154,6 +154,8 @@ pub struct Race {
     pub last_lap: Option<f32>,
     pub best_ghost: Vec<Pose>,
     recording: Vec<Pose>,
+    ghost_track: Option<ferravex_play::replay::ghost::GhostTrack>,
+    lap_ticks: u64,
     pub ticks: u64,
 }
 impl Race {
@@ -167,7 +169,9 @@ impl Race {
             best_time: None,
             last_lap: None,
             best_ghost: Vec::new(),
-            recording: Vec::new(),
+            recording: vec![Car::new(track).pose],
+            ghost_track: None,
+            lap_ticks: 0,
             ticks: 0,
         }
     }
@@ -177,9 +181,11 @@ impl Race {
     pub fn reset(&mut self, track: &Track) {
         let ghost = std::mem::take(&mut self.best_ghost);
         let best = self.best_time;
+        let ghost_track = self.ghost_track.take();
         *self = Self::new(track);
         self.best_ghost = ghost;
         self.best_time = best;
+        self.ghost_track = ghost_track;
     }
     pub fn step(&mut self, track: &Track, controls: Controls, dt: f32) {
         if self.finished() || !dt.is_finite() || dt <= 0. {
@@ -191,7 +197,8 @@ impl Race {
         self.total_time += dt;
         self.lap_time += dt;
         self.ticks += 1;
-        if self.ticks.is_multiple_of(6) && self.recording.len() < 6000 {
+        self.lap_ticks += 1;
+        if self.lap_ticks.is_multiple_of(6) && self.recording.len() < 6000 {
             self.recording.push(self.car.pose);
         }
         if track.crossed(self.next_gate, previous, self.car.pose.position) {
@@ -201,8 +208,11 @@ impl Race {
                 if self.best_time.is_none_or(|best| self.lap_time < best) {
                     self.best_time = Some(self.lap_time);
                     self.best_ghost.clone_from(&self.recording);
+                    self.rebuild_ghost();
                 }
                 self.recording.clear();
+                self.recording.push(self.car.pose);
+                self.lap_ticks = 0;
                 self.lap_time = 0.;
             }
             self.next_gate = (self.next_gate + 1) % GATES;
@@ -212,7 +222,35 @@ impl Race {
         if self.best_ghost.is_empty() || self.finished() {
             return None;
         }
-        self.best_ghost.get((self.lap_time * 20.) as usize).copied()
+        let time = self.lap_time * 20.;
+        let sample = self
+            .ghost_track
+            .as_ref()?
+            .sample(time.floor() as u64, time.fract())?;
+        let heading = sample.rotation * Vec3::X;
+        Some(Pose {
+            position: vec2(sample.position.x, sample.position.y),
+            angle: heading.y.atan2(heading.x),
+        })
+    }
+    pub fn rebuild_ghost(&mut self) {
+        use ferravex_play::replay::ghost::{GhostTrack, Sample};
+        let mut track = GhostTrack::new(0, 20, self.best_ghost.len()).expect("bounded rally ghost");
+        for (tick, p) in self.best_ghost.iter().enumerate() {
+            if track
+                .push(Sample {
+                    tick: tick as u64,
+                    position: vec3(p.position.x, p.position.y, 0.),
+                    rotation: Quat::from_rotation_z(p.angle),
+                    teleport: false,
+                })
+                .is_err()
+            {
+                self.ghost_track = None;
+                return;
+            }
+        }
+        self.ghost_track = Some(track);
     }
     /// Pure pursuit driver feeds the exact same controls and vehicle model as a human.
     pub fn autopilot(&self, track: &Track) -> Controls {

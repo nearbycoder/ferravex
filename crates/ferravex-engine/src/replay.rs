@@ -1,5 +1,9 @@
-//! Original bounded binary input replay. Checksums detect corruption, not malicious tampering.
-//! Replay stores inputs and hashes; it does not capture arbitrary game state or restore sessions.
+pub use ferravex_play::replay::{
+    EventInput, EventIter, Header, Limits, Playback, PlaybackError, Recorder, Recording,
+    ReplayError, ReplayWorld, derive_seed, ghost,
+};
+// Original bounded binary input replay. Checksums detect corruption, not malicious tampering.
+// Replay stores inputs and hashes; it does not capture arbitrary game state or restore sessions.
 use ferravex_net::InputFrame;
 const MAGIC: &[u8; 8] = b"FXRP0001";
 pub const MAX_REPLAY_FRAMES: usize = 1_000_000;
