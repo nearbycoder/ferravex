@@ -19,7 +19,7 @@ use ferravex_play::camera::{Input3, Mode3, NoObstructions, Rig3, Settings3, Targ
 use ferravex_render::audio::{self, Cue, GameAudio, Spatial, Surface, VoiceParams};
 use ferravex_render::prelude::*;
 use ferravex_render::shaders::{LitMaterial, LitSettings};
-use geometry::{build_operator, build_rifle, build_yard, rgb};
+use geometry::{build_operator, build_yard, rgb};
 
 fn window_conf() -> Conf {
     let mut conf = ferravex_render::window_conf("Ferravex / Strike — Dockyard");
@@ -190,7 +190,7 @@ async fn game() {
     )
     .expect("yard vertex AO");
     let operator = build_operator();
-    let rifle = build_rifle();
+    let weapons = geometry::Weapons::new();
     let objectives = geometry::Objectives::new();
     let operator_rig = animation::OperatorRig::new();
     let mut operator_motion: Vec<_> = (0..ferravex_fps::MAX_PLAYERS)
@@ -583,6 +583,10 @@ async fn game() {
         if let Some(motion) = operator_motion.get_mut(local.id as usize) {
             motion.update(&operator_rig, &local, animation_dt);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        let round = client.as_ref().and_then(|c| c.tactical_view());
+        #[cfg(target_arch = "wasm32")]
+        let round = webnet.round();
         let magazine_events =
             weapon_motion.update(&local, if active { animation_dt } else { 0. }, fired);
         if active {
@@ -683,10 +687,6 @@ async fn game() {
             );
         }
         arena.draw();
-        #[cfg(not(target_arch = "wasm32"))]
-        let round = client.as_ref().and_then(|c| c.tactical_view());
-        #[cfg(target_arch = "wasm32")]
-        let round = webnet.round();
         if let Some(round) = round {
             objectives.draw(round);
         }
@@ -703,13 +703,17 @@ async fn game() {
                 operator_motion[p.id as usize].palette(),
             );
         }
+        let kind = round
+            .and_then(|r| r.player(local.id))
+            .map_or(ferravex_play::rounds::Weapon::Rifle, |p| p.weapon);
+        let (weapon, muzzle_local) = weapons.select(kind);
         if active && local.health > 0 {
             let side = direction.cross(Vec3::Y).normalize_or_zero();
             let up = side.cross(direction).normalize_or_zero();
             let offset = eye + side * 0.27 - up * 0.25 + direction * 0.47;
             let rot = Quat::from_rotation_y(-controls.yaw) * Quat::from_rotation_x(controls.pitch);
-            ferravex_render::draw_skinned(
-                &rifle,
+            ferravex_render::draw_skinned_viewmodel(
+                weapon,
                 Mat4::from_rotation_translation(rot, offset),
                 weapon_motion.palette(),
             );
@@ -719,7 +723,7 @@ async fn game() {
                         * weapon_motion
                             .palette()
                             .transform_point(
-                                vec3(0., 0.05, -0.80),
+                                muzzle_local,
                                 ferravex_render::skinning::SkinWeights::rigid(0),
                             )
                             .expect("valid muzzle bone");
@@ -753,7 +757,7 @@ async fn game() {
                 .count()
                 * (operator.resident().vertex_count() / 3)
             + if active && local.health > 0 {
-                rifle.resident().vertex_count() / 3
+                weapon.resident().vertex_count() / 3
             } else {
                 0
             };

@@ -38,3 +38,12 @@ profile and improve lower-end quality/performance; and give Strike additional
 work on map presentation, controls, combat feedback and multiplayer usability.
 Validate locally and continue skipping GitHub CI. Hardware-specific claims must
 state what was actually measured; iOS SDK/device testing remains excluded.
+
+
+Post-20 polish merged: [PR 22](https://github.com/nearbycoder/ferravex/pull/22).
+All fifteen demos received shared visual presets, explicit HUD boundaries,
+refreshed gallery previews and local validation. Added static mesh combination,
+reduced cave submissions/hidden faces, reused software framebuffer storage,
+and refined Strike shadows and separate weapon silhouettes/viewmodels.
+Default performance comparison passed; separate Low results and earlier open
+costs are preserved in PERFORMANCE.md. Visual/quality controls: [VISUALS.md](VISUALS.md).

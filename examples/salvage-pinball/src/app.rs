@@ -36,6 +36,7 @@ fn table_render(table: &Table, touch_mode: bool) -> Rect {
     let origin = vec2(w * 0.5 - 5.15 * scale, 84.0);
     let p = |xy: [f32; 2]| origin + Vec2::from_array(xy) * scale;
     clear_background(INK);
+    ferravex_render::set_world_colors(true);
     // A sparse workshop backdrop leaves the actual table as the focal point.
     for i in 0..8 {
         let y = i as f32 * 113.0;
@@ -186,6 +187,7 @@ fn table_render(table: &Table, touch_mode: bool) -> Rect {
         draw_circle(v.x - 1.0, v.y - 1.5, BALL_RADIUS * scale * 0.7, CREAM);
         draw_circle(v.x - 2.0, v.y - 2.5, BALL_RADIUS * scale * 0.25, WHITE);
     }
+    ferravex_render::set_world_colors(false);
     // Score and remaining balls are the only persistent HUD data.
     draw_text("SALVAGE PINBALL", board.x, 31.0, 16.0, BRASS);
     draw_text(&format!("{:06}", table.score), board.x, 65.0, 32.0, CREAM);

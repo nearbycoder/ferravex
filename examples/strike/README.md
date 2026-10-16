@@ -34,3 +34,9 @@ cargo check -p strike --target wasm32-unknown-unknown
 ```
 
 Rerun these against the recovered code and test menu/input, pointer capture, shooting/reload, death/respawn and network behavior separately from a short screenshot smoke run. Native `--capture-dir directory` writes frame images for local recording workflows; encoding a video is a separate step.
+
+Visual polish: pistol/rifle/sniper use distinct original meshes and matching muzzle offsets.
+The animated foreground weapon does not cast or receive world shadows and stays visible
+near walls. Dockyard uses the shared sun shadow instead of overlapping baked shadow quads.
+Use Controls → Devices → Visual style to compare palettes, and Graphics quality for Low
+(no dynamic shadows), Medium or High. See [visual presets](../../docs/VISUALS.md).

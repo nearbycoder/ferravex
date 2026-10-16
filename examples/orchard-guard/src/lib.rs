@@ -513,6 +513,7 @@ async fn game() {
         clear_background(Color::from_hex(0x27372a));
         set_camera(&canvas.camera());
         field(&g);
+        ferravex_render::set_world_colors(false);
         hud_ui.begin(
             Viewport::fit([screen_width(), screen_height()], [1200., 760.], [0.; 4]).unwrap(),
         );

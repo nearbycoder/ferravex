@@ -30,6 +30,7 @@ pub mod storage;
 pub mod ui;
 pub mod visibility;
 pub use ferravex_core::telemetry;
+pub use ferravex_graphics::Look;
 
 pub mod prelude {
     pub use crate::{
@@ -287,6 +288,9 @@ struct State {
     lighting: Option<shaders::LitSettings>,
     shader: Option<material::ShaderMaterial>,
     shader_params: [f32; 16],
+    look: Look,
+    look_override: Option<Look>,
+    world_colors: bool,
     quality: lighting::Quality,
     authored_quality: lighting::Quality,
     preferred_quality: Option<lighting::Quality>,
@@ -339,6 +343,9 @@ impl Default for State {
             lighting: None,
             shader: None,
             shader_params: [0.; 16],
+            look: Look::Authored,
+            look_override: None,
+            world_colors: false,
             quality: Default::default(),
             authored_quality: Default::default(),
             preferred_quality: None,
@@ -406,6 +413,11 @@ impl State {
             self.depth,
             retained::DrawStyle {
                 light: self.lighting,
+                look: if self.world_colors {
+                    self.look_override.unwrap_or(self.look)
+                } else {
+                    Look::Authored
+                },
                 material: self.shader.as_ref(),
                 params: self.shader_params,
                 shadow_only: !visible,
@@ -437,6 +449,7 @@ impl State {
     fn default_camera(&mut self) {
         self.matrix = Mat4::orthographic_rh_gl(0., self.w as f32, self.h as f32, 0., -1., 1.);
         self.depth = false;
+        self.world_colors = false;
         self.frustum = None;
         self.eye = None;
     }
@@ -454,6 +467,9 @@ impl State {
             let p = model.transform_point3(p);
             if let Some(l) = self.lighting {
                 c = l.shade_vertex(p, normal_matrix.transform_vector3(n), c);
+            }
+            if self.world_colors {
+                c = self.look_override.unwrap_or(self.look).shade(c);
             }
             let v = self.matrix * p.extend(1.);
             self.vertices.push([v.x, v.y, v.z, v.w, c.r, c.g, c.b, c.a]);
@@ -493,6 +509,7 @@ pub fn set_camera(camera: &impl Camera) {
     edit(|s| {
         s.matrix = camera.matrix(s.w as f32, s.h as f32);
         s.depth = camera.depth();
+        s.world_colors = true;
         s.eye = camera.position();
         if s.eye.is_some() {
             s.refresh_environment();
@@ -506,6 +523,17 @@ pub fn set_camera(camera: &impl Camera) {
             None
         };
     });
+}
+/// Select a palette for world draws. Default-camera HUD drawing stays authored.
+pub fn set_look(look: Look) {
+    edit(|s| s.look = look);
+}
+pub fn look() -> Look {
+    read(|s| s.look_override.unwrap_or(s.look))
+}
+/// Explicit world/HUD boundary for games drawing in screen coordinates.
+pub fn set_world_colors(enabled: bool) {
+    edit(|s| s.world_colors = enabled);
 }
 pub fn set_default_camera() {
     edit(State::default_camera)
@@ -566,6 +594,39 @@ pub fn draw_skinned(
         s.submit(mesh.resident(), model, bounds, Some(palette))
     })
 }
+/// Draw an animated first-person prop over world geometry, without casting or
+/// receiving world shadows. Uses the current perspective and lighting; call
+/// after world draws. It never changes the camera or following draw state.
+pub fn draw_skinned_viewmodel(
+    mesh: &skinning::SkinnedMesh,
+    model: Mat4,
+    palette: &skinning::SkinPalette,
+) -> bool {
+    if mesh.bounds(palette).is_err() {
+        return false;
+    }
+    edit(|s| {
+        s.retained.record_style(
+            mesh.resident(),
+            model,
+            s.matrix,
+            false,
+            retained::DrawStyle {
+                light: s.lighting,
+                look: if s.world_colors {
+                    s.look_override.unwrap_or(s.look)
+                } else {
+                    Look::Authored
+                },
+                material: s.shader.as_ref(),
+                params: s.shader_params,
+                skip_shadow: true,
+                skin: Some(palette),
+                ..Default::default()
+            },
+        )
+    })
+}
 pub fn draw_skinned_shadow(
     mesh: &skinning::SkinnedMesh,
     model: Mat4,
@@ -604,6 +665,7 @@ fn draw_shadow_pose(
             s.depth,
             retained::DrawStyle {
                 light: s.lighting,
+                look: Look::Authored,
                 material: s.shader.as_ref(),
                 params: s.shader_params,
                 shadow_only: true,
@@ -1293,6 +1355,22 @@ mod wasm {
         read(|s| &s.retained.environment as *const lighting::Environment)
     }
     #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_visual_look() -> u32 {
+        look() as u32
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_visual_quality() -> u32 {
+        quality() as u32
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_look_override(value: u32) -> u32 {
+        let Some(look) = Look::from_index(value) else {
+            return 0;
+        };
+        edit(|s| s.look_override = Some(look));
+        1
+    }
+    #[unsafe(no_mangle)]
     pub extern "C" fn ferravex_quality_override(value: u32) -> u32 {
         let q = match value {
             0 => lighting::Quality::Low,
@@ -1501,6 +1579,39 @@ mod tests {
     use super::*;
     fn reset() {
         edit(|s| *s = State::default());
+    }
+    #[test]
+    fn world_palette_leaves_hud_and_viewmodel_shadow_state_unchanged() {
+        reset();
+        set_look(Look::Ink);
+        let color = Color::new(0.8, 0.5, 0.2, 1.);
+        set_world_colors(true);
+        draw_rectangle(0., 0., 8., 8., color);
+        set_default_camera();
+        draw_rectangle(16., 0., 8., 8., color);
+        read(|s| {
+            let first = &s.vertices[0];
+            let hud = &s.vertices[6];
+            let expected = Look::Ink.shade(color).to_array();
+            assert_eq!(first[4..], expected);
+            assert_eq!(hud[4..], color.to_array());
+        });
+        let source = mesh::Mesh3d::cuboid(Vec3::ONE, color);
+        let skin = skinning::SkinnedMesh::new(
+            &source.mesh,
+            &vec![skinning::SkinWeights::rigid(0); source.mesh.vertices.len()],
+            1,
+        )
+        .unwrap();
+        let palette = skinning::SkinPalette::new(&[Mat4::IDENTITY.to_cols_array()]).unwrap();
+        set_camera(&Camera3D::default());
+        assert!(draw_skinned_viewmodel(&skin, Mat4::IDENTITY, &palette));
+        read(|s| {
+            let b = s.retained.batches.last().unwrap();
+            assert_eq!(b.depth & 1, 0);
+            assert_eq!(b.depth & 24, 24);
+            assert!(s.depth);
+        });
     }
     #[test]
     fn camera_culled_meshes_remain_available_to_the_shadow_pass() {

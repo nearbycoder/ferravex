@@ -1,6 +1,7 @@
 // Original Ferravex browser platform: WebGL2, DOM input, direct Rust/Wasm ABI.
 import {RetainedRenderer,GpuTimer} from './retained.js';
 import {SpriteRenderer} from './effects.js';
+import {configureVisuals} from './visuals.js';
 import {bindInput} from './input.js';
 import {bindAudio} from './audio.js';
 import {bindGraphicsLifecycle} from './lifecycle.js';
@@ -63,7 +64,7 @@ try {
  const response=await fetch(`${game.replaceAll('-','_')}.wasm`);if(!response.ok)throw new Error(`Game download failed (${response.status})`);
  const {instance}=await WebAssembly.instantiate(await response.arrayBuffer(),imports);exports=instance.exports;
  exports.ferravex_init();
- const requestedQuality=new URLSearchParams(location.search).get('quality');if(requestedQuality!==null){const quality=['low','medium','high'].indexOf(requestedQuality);if(quality<0)throw new Error('quality must be low, medium or high');exports.ferravex_quality_override(quality);}
+ configureVisuals(exports,location.search);
  exports.ferravex_autoplay(new URLSearchParams(location.search).has('autoplay')?1:0);
  let multiplayerTools=null,multiplayerPromise=null;
  const ensureMultiplayer=async()=>{if(!multiplayerPromise)multiplayerPromise=import('./multiplayer-tools.js').then(m=>multiplayerTools=m.createMultiplayerTools(exports,canvas,{address:new URLSearchParams(location.search).get('connect')||undefined}));return multiplayerPromise;};
@@ -75,7 +76,7 @@ try {
  status.textContent='';if(controlsButton)controlsButton.disabled=false;const mpButton=document.querySelector('[data-multiplayer]');if(mpButton)mpButton.disabled=false;canvas.focus();
  const loop=time=>{
   if(!graphics.active())return;
-  const r=canvas.getBoundingClientRect(),dpr=Math.min(devicePixelRatio||1,2);
+  const r=canvas.getBoundingClientRect(),dpr=Math.min(devicePixelRatio||1,exports.ferravex_visual_quality()===0?1:2);
   const w=Math.max(1,Math.round(r.width*dpr)),h=Math.max(1,Math.round(r.height*dpr));
   if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;gl.viewport(0,0,w,h);}
   const dt=last?Math.min((time-last)/1000,0.1):1/60;last=time;
@@ -113,7 +114,7 @@ try {
   gpuTimer.end();
   canvas.dataset.frames=String(++frames);canvas.dataset.vertices=String(count+retained.vertices+retained.shadowVertices+spriteEffects.vertices);
   canvas.dataset.culled=String(exports.ferravex_culled_count());canvas.dataset.visible=String(exports.ferravex_visible_count());
-  canvas.dataset.drawCalls=String(immediateDraws+retained.drawCalls+retained.shadowDrawCalls+spriteEffects.drawCalls);canvas.dataset.shadowDrawCalls=String(retained.shadowDrawCalls);canvas.dataset.quality=String(retained.environment.quality);canvas.dataset.lightingError=retained.lightingError;canvas.dataset.residentMeshes=String(retained.meshes.size);canvas.dataset.uploadBytes=String(count*32+retained.uploadBytes+spriteEffects.uploadBytes);
+  canvas.dataset.drawCalls=String(immediateDraws+retained.drawCalls+retained.shadowDrawCalls+spriteEffects.drawCalls);canvas.dataset.shadowDrawCalls=String(retained.shadowDrawCalls);canvas.dataset.quality=String(retained.environment.quality);canvas.dataset.look=String(exports.ferravex_visual_look());canvas.dataset.renderScale=String(dpr);canvas.dataset.lightingError=retained.lightingError;canvas.dataset.residentMeshes=String(retained.meshes.size);canvas.dataset.uploadBytes=String(count*32+retained.uploadBytes+spriteEffects.uploadBytes);
   canvas.dataset.effectVertices=String(exports.ferravex_effect_vertex_count?.()||0);
   canvas.dataset.skinnedDrawCalls=String(retained.skinnedDrawCalls);canvas.dataset.skinJoints=String(exports.ferravex_skin_joint_count?.()||0);
   canvas.dataset.materialError=retained.lastError;materialTools?.update();contentTools?.update();replayTools?.update();multiplayerTools?.update();

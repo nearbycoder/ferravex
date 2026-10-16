@@ -430,6 +430,7 @@ struct Piece {
     mesh: Mesh3d,
     position: Vec3,
     rotation: Quat,
+    wall_sides: Option<[bool; 4]>,
 }
 struct Scene {
     pulse: ShaderMaterial,
@@ -451,19 +452,19 @@ impl Scene {
                 let p = center(x, z);
                 let hash = (x * 17 + z * 31) % 7;
                 if tile == b'#' {
-                    let adjacent = [
-                        (x as i32 - 1, z as i32),
+                    // Same order as faceted_wall: +X, -X, +Z, -Z.
+                    let sides = [
                         (x as i32 + 1, z as i32),
-                        (x as i32, z as i32 - 1),
+                        (x as i32 - 1, z as i32),
                         (x as i32, z as i32 + 1),
+                        (x as i32, z as i32 - 1),
                     ]
-                    .iter()
-                    .any(|&(a, b)| {
+                    .map(|(a, b)| {
                         (0..13).contains(&a)
                             && (0..15).contains(&b)
                             && MAP[b as usize].as_bytes()[a as usize] != b'#'
                     });
-                    if !adjacent {
+                    if !sides.iter().any(|&open| open) {
                         continue;
                     }
                     let c = Color::from_rgba(
@@ -473,6 +474,7 @@ impl Scene {
                         255,
                     );
                     stone.push(Piece {
+                        wall_sides: Some(sides),
                         mesh: faceted_wall(c, hash),
                         position: world(p, 2.1),
                         rotation: Quat::IDENTITY,
@@ -480,6 +482,7 @@ impl Scene {
                 } else {
                     let shade = 45 + hash as u8 * 2;
                     stone.push(Piece {
+                        wall_sides: None,
                         mesh: Mesh3d::cuboid(
                             vec3(TILE, 0.22, TILE),
                             Color::from_rgba(shade, shade - 5, shade - 8, 255),
@@ -488,6 +491,7 @@ impl Scene {
                         rotation: Quat::IDENTITY,
                     });
                     stone.push(Piece {
+                        wall_sides: None,
                         mesh: Mesh3d::cuboid(
                             vec3(TILE, 0.4, TILE),
                             Color::from_rgba(61, 48, 41, 255),
@@ -498,6 +502,7 @@ impl Scene {
                     // Ceiling formations frame the view without blocking the walking plane.
                     if hash < 3 && tile == b'.' {
                         stone.push(Piece {
+                            wall_sides: None,
                             mesh: Mesh3d::cone(
                                 0.55,
                                 0.8 + hash as f32 * 0.25,
@@ -530,8 +535,43 @@ impl Scene {
                     },
                 )
                 .expect("cave vertex AO");
+            if let Some(sides) = p.wall_sides {
+                // Bake against complete occluders first. Only the faces touching
+                // walkable cells can be seen from the collision-bounded camera.
+                // Three height bands × four triangles × three vertices per side.
+                const SIDE_VERTICES: usize = 3 * 4 * 3;
+                p.mesh
+                    .mesh
+                    .indices
+                    .retain(|&i| sides[i as usize / SIDE_VERTICES]);
+            }
             p.mesh.invalidate_gpu();
         }
+        // Bake once, then merge nearby opaque pieces into 3x3-tile chunks.
+        // Authored AO and normals survive; distant chunks retain useful bounds.
+        let mut chunks = std::collections::BTreeMap::<(i32, i32), Vec<Piece>>::new();
+        for piece in stone {
+            let key = (
+                (piece.position.x / (TILE * 3.)).floor() as i32,
+                (piece.position.z / (TILE * 3.)).floor() as i32,
+            );
+            chunks.entry(key).or_default().push(piece);
+        }
+        let stone = chunks
+            .into_values()
+            .map(|pieces| Piece {
+                mesh: Mesh3d::combine(pieces.iter().map(|p| {
+                    (
+                        &p.mesh.mesh,
+                        Mat4::from_rotation_translation(p.rotation, p.position),
+                    )
+                }))
+                .expect("bounded static cave chunk"),
+                position: Vec3::ZERO,
+                rotation: Quat::IDENTITY,
+                wall_sides: None,
+            })
+            .collect();
         let pulse = ShaderMaterial::new(
             ShaderSource::fragment(include_str!("../shaders/crystal.frag")),
             MaterialOptions {
@@ -753,7 +793,9 @@ async fn game() {
         } else {
             player_input.simulation_dt(demo.dt())
         };
-        if player_input.pressed("restart") || game.won && player_input.pressed("confirm") {
+        let restarted =
+            player_input.pressed("restart") || game.won && player_input.pressed("confirm");
+        if restarted {
             game = Game::new();
             clock.reset();
             pilot = Pilot::default();
@@ -765,12 +807,12 @@ async fn game() {
         }
         let movement = player_input.movement();
         let look = player_input.look(dt);
-        if !demo.autoplay {
+        if !demo.autoplay && !restarted {
             game.yaw += look.x;
             pitch = (pitch - look.y).clamp(-0.8, 0.8);
         }
         let mut input = Input {
-            movement,
+            movement: if restarted { Vec2::ZERO } else { movement },
             ..Default::default()
         };
         let frame = clock.advance(dt as f64);

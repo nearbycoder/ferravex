@@ -167,35 +167,6 @@ pub fn build_yard(arena: &Arena) -> Model {
         } else {
             [rgb(0x63766e), rgb(0x9b654b), rgb(0x566971), rgb(0xb4a386)][i % 4]
         };
-        if !boundary {
-            // Baked directional shadow for the fixed sun. Collision geometry remains authoritative.
-            let x0 = c.x - s.x * 0.5;
-            let x1 = c.x + s.x * 0.5;
-            let z0 = c.z - s.z * 0.5;
-            let z1 = c.z + s.z * 0.5;
-            let dx = s.y * 0.59;
-            let dz = -s.y * 0.35;
-            let y = 0.022;
-            let shadow = rgb(0x596357);
-            m.quad(
-                [
-                    vec3(x0, y, z0),
-                    vec3(x0 + dx, y, z0 + dz),
-                    vec3(x1 + dx, y, z0 + dz),
-                    vec3(x1, y, z0),
-                ],
-                shadow,
-            );
-            m.quad(
-                [
-                    vec3(x1, y, z0),
-                    vec3(x1 + dx, y, z0 + dz),
-                    vec3(x1 + dx, y, z1 + dz),
-                    vec3(x1, y, z1),
-                ],
-                shadow,
-            );
-        }
         m.cube(c, s, paint);
         // Narrow coping caps and dark foundation make the industrial walls legible.
         m.cube(
@@ -217,7 +188,7 @@ pub fn build_yard(arena: &Arena) -> Model {
             let n = (s.x / 0.6).floor() as i32;
             for j in 1..n {
                 let x = c.x - s.x * 0.5 + j as f32 * 0.6;
-                for z in [c.z - s.z * 0.5 - 0.012, c.z + s.z * 0.5 + 0.012] {
+                for z in [c.z - s.z * 0.5 - 0.028, c.z + s.z * 0.5 + 0.028] {
                     m.cube(
                         vec3(x, c.y, z),
                         vec3(0.045, (s.y - 0.22).max(0.1), 0.035),
@@ -226,7 +197,7 @@ pub fn build_yard(arena: &Arena) -> Model {
                 }
             }
             // Stenciled shipping label, rendered as a few geometric bars.
-            let z = c.z + s.z * 0.5 + 0.035;
+            let z = c.z + s.z * 0.5 + 0.065;
             m.cube(
                 vec3(c.x + s.x * 0.22, c.y + 0.1, z),
                 vec3((s.x * 0.22).min(0.9), 0.3, 0.018),
@@ -360,6 +331,103 @@ pub fn build_rifle() -> ferravex_render::skinning::SkinnedMesh {
         rgb(0x92947a),
     );
     m.into_skin(4)
+}
+
+/// Three small first-party silhouettes sharing the animation palette.
+pub struct Weapons {
+    pistol: ferravex_render::skinning::SkinnedMesh,
+    rifle: ferravex_render::skinning::SkinnedMesh,
+    sniper: ferravex_render::skinning::SkinnedMesh,
+}
+impl Weapons {
+    pub fn new() -> Self {
+        let mut p = Model::skinned();
+        p.cube(
+            vec3(0., 0.025, -0.12),
+            vec3(0.09, 0.10, 0.32),
+            rgb(0x52605a),
+        );
+        p.cube(
+            vec3(0., 0.075, -0.29),
+            vec3(0.05, 0.025, 0.025),
+            rgb(0xe1d4a3),
+        );
+        p.bone(1);
+        p.box_rotated(
+            vec3(0., -0.105, 0.015),
+            vec3(0.075, 0.20, 0.10),
+            Quat::from_rotation_x(-0.25),
+            rgb(0x29322f),
+        );
+        p.bone(3);
+        p.cube(
+            vec3(0.045, -0.13, 0.055),
+            vec3(0.11, 0.10, 0.15),
+            rgb(0x656b53),
+        );
+        p.bone(2);
+        p.cube(
+            vec3(-0.045, -0.16, 0.025),
+            vec3(0.10, 0.09, 0.13),
+            rgb(0x656b53),
+        );
+        let mut s = Model::skinned();
+        s.cube(vec3(0., 0., -0.09), vec3(0.10, 0.12, 0.55), rgb(0x3f5144));
+        s.cube(
+            vec3(0., -0.015, 0.29),
+            vec3(0.095, 0.14, 0.30),
+            rgb(0x879071),
+        );
+        s.cube(
+            vec3(0., 0.035, -0.69),
+            vec3(0.035, 0.035, 0.64),
+            rgb(0x25322f),
+        );
+        s.cube(
+            vec3(0., 0.135, -0.13),
+            vec3(0.075, 0.075, 0.38),
+            rgb(0x293733),
+        );
+        s.cube(
+            vec3(0., 0.135, -0.34),
+            vec3(0.09, 0.09, 0.065),
+            rgb(0x93b6aa),
+        );
+        s.bone(1);
+        s.cube(
+            vec3(0., -0.13, -0.015),
+            vec3(0.075, 0.15, 0.12),
+            rgb(0x293733),
+        );
+        s.bone(3);
+        s.cube(
+            vec3(0.045, -0.14, 0.12),
+            vec3(0.11, 0.11, 0.17),
+            rgb(0x656b53),
+        );
+        s.bone(2);
+        s.cube(
+            vec3(-0.05, -0.09, -0.37),
+            vec3(0.12, 0.12, 0.19),
+            rgb(0x656b53),
+        );
+        Self {
+            pistol: p.into_skin(4),
+            rifle: build_rifle(),
+            sniper: s.into_skin(4),
+        }
+    }
+    pub fn select(
+        &self,
+        weapon: ferravex_play::rounds::Weapon,
+    ) -> (&ferravex_render::skinning::SkinnedMesh, Vec3) {
+        use ferravex_play::rounds::Weapon;
+        match weapon {
+            Weapon::Pistol => (&self.pistol, vec3(0., 0.05, -0.31)),
+            Weapon::Rifle => (&self.rifle, vec3(0., 0.05, -0.80)),
+            Weapon::Sniper => (&self.sniper, vec3(0., 0.035, -1.02)),
+        }
+    }
 }
 
 /// Dockyard's default objective paint and dropped/planted device. Retained once;

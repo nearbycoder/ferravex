@@ -179,6 +179,7 @@ pub(crate) struct Frame {
 }
 #[derive(Default, Clone, Copy)]
 pub(crate) struct DrawStyle<'a> {
+    pub look: crate::Look,
     pub light: Option<LitSettings>,
     pub material: Option<&'a crate::material::ShaderMaterial>,
     pub params: [f32; 16],
@@ -292,7 +293,7 @@ impl Frame {
             l.fog_color.a,
             l.fog_start,
             l.fog_end,
-            0.,
+            style.look as u32 as f32,
             if mesh.0.opaque
                 && style
                     .material
@@ -304,6 +305,9 @@ impl Frame {
             },
         ];
         let mut depth_flags = depth as u32;
+        if !depth {
+            depth_flags |= 16;
+        }
         if let Some(m) = style.material {
             if m.0.options.blend != crate::material::BlendMode::Opaque {
                 depth_flags |= 2;

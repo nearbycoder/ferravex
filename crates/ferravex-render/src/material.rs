@@ -57,7 +57,12 @@ void main(){
   float fog=clamp((distance(v_world,u_light[1].xyz)-u_light[3].x)/max(u_light[3].y-u_light[3].x,0.001),0.0,1.0);
   color.rgb=mix(color.rgb,u_light[2].rgb,fog);
  }
- gl_FragColor=ferravex_fragment(color,v_world,normal);
+ color=ferravex_fragment(color,v_world,normal);
+ float look=u_light[3].z;
+ if(look>2.5){float y=dot(color.rgb,vec3(0.2126,0.7152,0.0722));color.rgb=y*vec3(0.82,0.94,1.0);}
+ else if(look>1.5)color.rgb=min(vec3(1.0),vec3(color.r*0.87,color.g*1.02,color.b*1.08+color.r*0.015));
+ else if(look>0.5)color.rgb=min(vec3(1.0),vec3(color.r*1.06+color.g*0.02,color.g*0.98,color.b*0.88));
+ gl_FragColor=color;
 }
 "#;
 

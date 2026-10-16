@@ -6,6 +6,7 @@ pub struct Preferences {
     pub buses: [f32; 4],
     pub muted: bool,
     pub quality: Option<u8>,
+    pub look: u8,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -14,6 +15,7 @@ impl Default for Preferences {
             buses: [1.; 4],
             muted: false,
             quality: None,
+            look: 0,
         }
     }
 }
@@ -23,11 +25,12 @@ impl Preferences {
             .chain(self.buses)
             .all(|v| v.is_finite() && (0. ..=1.).contains(&v))
             && self.quality.is_none_or(|q| q <= 2)
+            && self.look <= 3
     }
 }
 impl SaveData for Preferences {
     const SCHEMA: u64 = 0x4658505245465331;
-    const VERSION: u32 = 2;
+    const VERSION: u32 = 3;
     const MAX_BYTES: usize = 1024;
     fn write(&self, d: &mut Document) -> Result<(), SaveError> {
         if !self.valid() {
@@ -39,6 +42,7 @@ impl SaveData for Preferences {
             "quality",
             Value::U64(self.quality.map_or(0, |v| v as u64 + 1)),
         )?;
+        d.set("look", Value::U64(self.look as u64))?;
         for (key, v) in ["effects", "ambience", "music", "ui"]
             .into_iter()
             .zip(self.buses)
@@ -67,6 +71,13 @@ impl SaveData for Preferences {
                 *gain = read_gain(d, key)?;
             }
         }
+        if d.version() >= 3 {
+            let look = d.u64("look")?;
+            if look > 3 {
+                return Err(SaveError::InvalidData);
+            }
+            p.look = look as u8;
+        }
         if !p.valid() {
             return Err(SaveError::InvalidData);
         }
@@ -94,6 +105,13 @@ mod tests {
         assert_eq!(generation, 7);
         assert_eq!(p.buses, [1.; 4]);
         assert_eq!(p.quality, Some(1));
+        assert_eq!(p.look, 0);
+        let styled = Preferences { look: 3, ..p };
+        assert_eq!(
+            Preferences::decode(&styled.encode(9).unwrap()).unwrap(),
+            (styled, 9)
+        );
+        assert!(Preferences { look: 4, ..p }.encode(0).is_err());
         assert!(p.muted);
         let bytes = p.encode(8).unwrap();
         assert_eq!(Preferences::decode(&bytes).unwrap(), (p, 8));

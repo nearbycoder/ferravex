@@ -14,6 +14,7 @@ const GOLD: [u8; 4] = [216, 173, 109, 255];
 pub struct Canvas {
     pub frame: Framebuffer,
     pulse: SpriteClip,
+    look: ferravex_engine::graphics::Look,
 }
 impl Default for Canvas {
     fn default() -> Self {
@@ -23,6 +24,7 @@ impl Default for Canvas {
 impl Canvas {
     pub fn new() -> Self {
         Self {
+            look: Default::default(),
             frame: Framebuffer::new(WIDTH, HEIGHT).expect("fixed canvas"),
             pulse: SpriteClip::new(
                 (0..4)
@@ -36,7 +38,8 @@ impl Canvas {
         }
     }
     pub fn render(&mut self, g: &Game) {
-        self.frame.clear(Color::from_hex(0x091219));
+        self.look = ferravex_engine::render::look();
+        self.frame.clear(self.look.shade(Color::from_hex(0x091219)));
         for y in TOP as i32..654 {
             let tint = ((y - TOP as i32) as f32 / 550.0 * 5.0) as u8;
             self.rect(
@@ -169,6 +172,7 @@ impl Canvas {
             self.circle(g.ball[0], g.ball[1], 5.8, PAPER);
             self.circle(g.ball[0] - 1.0, g.ball[1] - 1.0, 2.5, [255, 255, 241, 255]);
         }
+        self.look = Default::default();
         self.text("ORBIT BREAKER", 38, 33, 3, PAPER);
         self.text(&format!("SALVAGE / SECTOR 0{}", g.sector), 39, 68, 1, MUTED);
         self.text_right(&format!("{:05}", g.score), 600, 32, 3, GOLD);
@@ -227,6 +231,8 @@ impl Canvas {
         self.text(t, x - text_width(t, s), y, s, c);
     }
     fn text(&mut self, text: &str, mut x: i32, y: i32, scale: i32, color: [u8; 4]) {
+        let look = self.look;
+        self.look = Default::default();
         for letter in text.chars() {
             let rows = glyph(letter);
             for (row, bits) in rows.into_iter().enumerate() {
@@ -238,8 +244,25 @@ impl Canvas {
             }
             x += 6 * scale;
         }
+        self.look = look;
+    }
+    fn tint(&self, color: [u8; 4]) -> [u8; 4] {
+        self.look
+            .shade(Color::from_rgba(color[0], color[1], color[2], color[3]))
+            .to_rgba()
     }
     fn rect(&mut self, x: i32, y: i32, w: i32, h: i32, color: [u8; 4]) {
+        let color = self.tint(color);
+        if color[3] == 255 {
+            let left = x.clamp(0, WIDTH as i32) as usize;
+            let right = x.saturating_add(w).clamp(left as i32, WIDTH as i32) as usize;
+            for py in y.max(0)..y.saturating_add(h).min(HEIGHT as i32) {
+                self.frame.pixels_mut()
+                    [py as usize * WIDTH as usize + left..py as usize * WIDTH as usize + right]
+                    .fill(color);
+            }
+            return;
+        }
         for py in y.max(0)..(y + h).min(HEIGHT as i32) {
             for px in x.max(0)..(x + w).min(WIDTH as i32) {
                 self.pixel(px, py, color);
@@ -259,6 +282,7 @@ impl Canvas {
         dst[3] = 255;
     }
     fn circle(&mut self, x: f32, y: f32, r: f32, color: [u8; 4]) {
+        let color = self.tint(color);
         for py in (y - r - 1.0) as i32..=(y + r + 1.0) as i32 {
             for px in (x - r - 1.0) as i32..=(x + r + 1.0) as i32 {
                 let d = (px as f32 + 0.5 - x).hypot(py as f32 + 0.5 - y);
@@ -279,6 +303,7 @@ impl Canvas {
         }
     }
     fn line(&mut self, x: f32, y: f32, end_x: f32, end_y: f32, color: [u8; 4]) {
+        let color = self.tint(color);
         let steps = (end_x - x).abs().max((end_y - y).abs()).ceil() as i32;
         if steps == 0 {
             self.pixel(x as i32, y as i32, color);

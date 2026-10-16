@@ -30,6 +30,11 @@ impl Runner {
                     .ok_or("FERRAVEX_QUALITY must be low, medium or high")?,
             );
         }
+        if let Ok(value) = std::env::var("FERRAVEX_LOOK") {
+            let look = Look::from_name(&value)
+                .ok_or("FERRAVEX_LOOK must be authored, warm, cool or ink")?;
+            edit(|s| s.look_override = Some(look));
+        }
         let fixed = std::env::args().any(|s| s == "--smoke-frames");
         let mut performance = telemetry::Session::from_env();
         if fixed || performance.is_some() {

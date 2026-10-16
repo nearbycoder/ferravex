@@ -178,6 +178,7 @@ async fn game() {
                 },
             )
             .unwrap();
+        ferravex_render::set_world_colors(false);
         hud_ui.begin(
             Viewport::fit([screen_width(), screen_height()], [1280., 800.], [0.; 4]).unwrap(),
         );

@@ -52,6 +52,7 @@ functions! {
     glEnable(capability: c_uint);
     glDisable(capability: c_uint);
     glDepthFunc(function: c_uint);
+    glPolygonOffset(factor: f32, units: f32);
     glDepthMask(enabled: u8);
     glBlendFuncSeparate(
         source_rgb: c_uint,

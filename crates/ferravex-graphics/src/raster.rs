@@ -79,6 +79,7 @@ pub struct Fog {
 }
 #[derive(Clone, Copy, Debug)]
 pub struct RenderSettings {
+    pub look: crate::Look,
     pub clear_color: Color,
     /// Direction from the surface toward the light; normalized once each frame.
     pub light_direction: Vec3,
@@ -90,6 +91,7 @@ pub struct RenderSettings {
 impl Default for RenderSettings {
     fn default() -> Self {
         Self {
+            look: crate::Look::Authored,
             clear_color: Color::from_hex(0x293945),
             light_direction: Vec3::new(-0.4, 0.8, 0.3),
             ambient: 0.35,
@@ -171,9 +173,15 @@ impl SoftwareRenderer {
             return Err(RenderError::InvalidCamera);
         }
         let frustum = camera.frustum().ok_or(RenderError::InvalidCamera)?;
-        self.framebuffer.clear(self.settings.clear_color);
+        self.framebuffer
+            .clear(self.settings.look.shade(self.settings.clear_color));
         let mut stats = RenderStats::default();
         let light = self.settings.light_direction.normalize_or_zero();
+        let mut raster_settings = self.settings;
+        raster_settings.fog = raster_settings.fog.map(|mut fog| {
+            fog.color = self.settings.look.shade(fog.color);
+            fog
+        });
         for item in items {
             stats.submitted_instances += 1;
             let Some(mesh) = cache.get(item.mesh) else {
@@ -210,6 +218,7 @@ impl SoftwareRenderer {
                     vertex.color.b * lighting,
                     vertex.color.a,
                 );
+                let color = self.settings.look.shade(Color::from(color)).to_vec();
                 self.scratch.push(ClipVertex {
                     clip: camera.view_projection * world.extend(1.0),
                     world,
@@ -236,7 +245,7 @@ impl SoftwareRenderer {
                     raster_triangle(
                         &mut self.framebuffer,
                         [polygon[0], polygon[i], polygon[i + 1]],
-                        self.settings,
+                        raster_settings,
                         camera,
                         &mut stats,
                     );

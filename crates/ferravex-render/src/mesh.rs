@@ -15,6 +15,70 @@ impl Mesh3d {
             cached: Default::default(),
         }
     }
+    /// Bake opaque, untextured static parts into one bounded resident mesh.
+    /// Group nearby parts so the combined bounds remain useful for culling.
+    /// Transforms must be finite, invertible and affine; reflections reverse
+    /// triangle winding and use inverse-transpose normals. Source meshes survive
+    /// any error. Build once at load time, never per frame.
+    pub fn combine<'a>(
+        parts: impl IntoIterator<Item = (&'a Mesh, Mat4)>,
+    ) -> Result<Self, &'static str> {
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        for (mesh, model) in parts {
+            if mesh.texture.is_some()
+                || !mesh.indices.len().is_multiple_of(3)
+                || mesh
+                    .indices
+                    .iter()
+                    .any(|&i| i as usize >= mesh.vertices.len())
+                || mesh
+                    .vertices
+                    .iter()
+                    .any(|v| !v.position.is_finite() || !v.normal.is_finite() || v.color[3] != 255)
+                || !model.is_finite()
+                || model.row(3) != Vec4::W
+            {
+                return Err("static batches require valid opaque untextured affine meshes");
+            }
+            if vertices.len() + mesh.vertices.len() > u16::MAX as usize {
+                return Err("static batch exceeds 65535 vertices");
+            }
+            let normal = model
+                .try_inverse()
+                .ok_or("singular static transform")?
+                .transpose();
+            let base = vertices.len() as u16;
+            for source in &mesh.vertices {
+                let mut v = *source;
+                v.position = model.transform_point3(v.position);
+                v.normal = normal
+                    .transform_vector3(v.normal.truncate())
+                    .normalize_or_zero()
+                    .extend(0.);
+                if !v.position.is_finite() || !v.normal.is_finite() {
+                    return Err("static transform overflow");
+                }
+                vertices.push(v);
+            }
+            let mirrored = model.determinant() < 0.;
+            for &[a, b, c] in mesh.indices.as_chunks::<3>().0 {
+                indices.extend(if mirrored {
+                    [base + a, base + c, base + b]
+                } else {
+                    [base + a, base + b, base + c]
+                });
+            }
+        }
+        if indices.is_empty() {
+            return Err("empty static batch");
+        }
+        Ok(Self::from_mesh(Mesh {
+            vertices,
+            indices,
+            texture: None,
+        }))
+    }
     /// Invalidate the GPU snapshot after editing the public source mesh.
     pub fn invalidate_gpu(&mut self) {
         self.cached.take();
@@ -394,5 +458,32 @@ mod tests {
             assert!((b - a).cross(c - a).y > 0.0);
         }
         assert!(Mesh3d::plane(Vec2::ONE, WHITE, u16::MAX).mesh.indices.len() < 5000);
+    }
+}
+
+#[cfg(test)]
+mod static_batch_tests {
+    use super::*;
+    #[test]
+    fn reflected_static_parts_keep_outward_normals_and_source_geometry() {
+        let a = Mesh3d::cuboid(Vec3::ONE, WHITE);
+        let transform = Mat4::from_scale_rotation_translation(
+            vec3(-2., 1., 0.5),
+            Quat::from_rotation_y(0.3),
+            Vec3::X * 3.,
+        );
+        let combined = Mesh3d::combine([(&a.mesh, Mat4::IDENTITY), (&a.mesh, transform)]).unwrap();
+        assert_eq!(combined.mesh.vertices.len(), a.mesh.vertices.len() * 2);
+        assert_eq!(combined.mesh.indices.len(), a.mesh.indices.len() * 2);
+        for triangle in combined.mesh.indices.as_chunks::<3>().0 {
+            let [a, b, c] = triangle.map(|i| combined.mesh.vertices[i as usize]);
+            let normal = (b.position - a.position)
+                .cross(c.position - a.position)
+                .normalize();
+            assert!(normal.dot(a.normal.truncate()) > 0.999);
+        }
+        assert!(Mesh3d::combine([(&a.mesh, Mat4::from_scale(Vec3::ZERO))]).is_err());
+        assert!(Mesh3d::combine(std::iter::empty()).is_err());
+        assert!(Mesh3d::combine(std::iter::repeat_n((&a.mesh, Mat4::IDENTITY), 3000)).is_err());
     }
 }

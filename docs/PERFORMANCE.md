@@ -1141,3 +1141,79 @@ pixel test proves the last valid custom shader survives recreation. Cross-checks
 for Windows/macOS do not prove linking or runtime behavior. iOS source and
 bundle manifests are included provisionally; iOS SDK/device testing is excluded.
 All 28 Cargo packages remain first-party. No deployment command was issued.
+
+## Post-20 — demo polish and cheaper presentation
+
+Measured source `865c3ee7c47a7b5782829b065d496dbb19d1f195`, compared with the
+iteration-20 final report. Evidence: ignored `target/perf/polish-final/report.json`
+and `target/perf/polish-low/report.json`. Each covers all fifteen games, two runs
+of 120 measured frames after 30 warmup frames. The default comparison retains
+the same release profile, framebuffer sizes and budgets: 20%, 1,000 µs CPU floor,
+20 µs GPU floor, 5% artifact/work growth. No builds, tests or agent game tabs ran
+alongside either benchmark. The available Linux GPU is an AMD Radeon 8060S using
+Mesa; it is not a substitute for testing lower-end physical devices.
+
+**The final default comparison passed with no flags.** The first polish report,
+source `c4f051f3ca31633dda01c2a047b96a50d671106f`, remains in
+`target/perf/polish-default`. It failed three cave-vertex budgets after spatial
+batching, plus Neon Swarm GPU p99 (83.238 µs versus 21.480 µs previously).
+Removing cave faces fully hidden by neighboring solid cells, after the original
+AO bake, eliminated the extra vertex work. Neon's later p99 was 21.400 µs;
+no Neon GPU code changed between those reports, so the earlier intermittent
+spike remains unexplained. Previously recorded physics GPU tails, cumulative
+artifact growth and other open regressions have not been erased or declared fixed.
+
+| Example / metric | Iteration 20 | Polished default |
+|---|---:|---:|
+| Courtyard allocation bytes/frame, mean | 4,157,068.533 | 364.533 |
+| Courtyard software raster time, mean | 14,742.387 µs | 13,988.427 µs |
+| Orbit Breaker software raster time, mean | 629.309 µs | 527.894 µs |
+| Crystal Cavern draw calls/frame, mean | 118.158 | 16.142 |
+| Crystal Cavern submitted vertices/frame, mean | 26,025.350 | 25,123.600 |
+| Crystal Cavern CPU / submission, mean | 126.098 / 195.626 µs | 105.491 / 72.594 µs |
+| Crystal Cavern GPU, mean | 63.248 µs | 51.148 µs |
+| Strike draw calls/frame, mean | 12.592 | 11.592 |
+| Strike submitted vertices/frame, mean | 23,880.600 | 23,316.600 |
+
+Courtyard now reuses framebuffer/depth/scratch storage; its reference rasterizer
+still costs about 14 ms at 960×540 on this machine. Orbit uses opaque row fills.
+Cave chunks trade individual-piece culling for fewer submissions, with hidden
+faces removed before upload. Strike removes duplicate baked shadow quads and
+excludes its foreground weapon from world shadow/depth work. Its default GPU
+mean increased 48.712 → 53.845 µs while CPU/submission means are 53.405 / 61.984 µs.
+Extra presets and original weapon silhouettes are features with costs, not a
+claim that every metric improved. Strike ships 1,219,576 / 593,881 native
+raw/gzip bytes and 710,084 / 271,908 Wasm raw/gzip bytes; all fifteen games stayed
+within this step's existing artifact budgets.
+
+The separate Low-quality experiment uses the same binaries and workloads but a
+**different quality configuration**, so it is not gated against default quality.
+Strike default → Low mean draws are 11.592 → 6, vertices 23,316.6 → 11,865,
+submission 61.984 → 46.341 µs and GPU 53.845 → 38.579 µs. Dune mean draws are
+60 → 23, vertices 38,366.5 → 29,036.5, submission 122.760 → 85.369 µs and GPU
+54.482 → 43.509 µs. Crystal keeps the same geometry and has GPU mean
+51.148 → 44.470 µs, but submission increased 72.594 → 80.957 µs. Low limits
+lights/shadows rather than changing simulation. Browser Low additionally caps
+framebuffer density at 1×; that resolution saving is not part of these 1× native
+measurements. Headless software examples do not change quality workload.
+
+All simulation step/pair/contact/CCD distributions match iteration 20 for all
+fifteen examples. Native hashes/raw/gzip sizes, Wasm sizes/staged bytes and the
+Low-run binaries were checked. The largest measured simulation/draw-recording
+CPU p95 was 1,883.375 µs (Physics-3D); this excludes polling, submission, GPU
+execution and presentation and is not an end-to-end frame-rate guarantee.
+
+Local validation: 498 regular workspace tests, 14 Linux GLX/ALSA checks, strict
+native/Windows GNU/macOS ARM64/Wasm Clippy and Rustdoc, fifteen native/Wasm release
+builds and 360-frame native gameplay/PNG checks, all Node contracts, real-Wasm
+style selection/persistence/quality overrides in every game, shader fallback,
+multiplayer loss/reorder/background-client/native-gateway checks, a 640-tick
+native recording verified in Wasm, and 21 Python checks. Final cave trimming
+also passed its game tests, captures and actual-Wasm style/material checks.
+Browser interaction reviewed Strike's Warm viewmodel/map and Crystal's Cool
+spawn/reset, with no reported shader or lighting errors. All fifteen gallery
+previews were refreshed; cave/Strike previews use early live frames rather than
+a wall-facing route segment or the practice death overlay. Presets preserve HUD
+colors and use the existing rendering paths. Details: [visual presets](VISUALS.md).
+Windows/macOS remain cross-checks, not runtime verification. iOS SDK/device
+checks remain excluded. No deployment command was issued.
