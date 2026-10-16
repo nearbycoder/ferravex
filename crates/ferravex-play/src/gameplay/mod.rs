@@ -42,3 +42,5 @@ pub mod homing;
 pub mod projectile;
 
 pub mod spawn;
+
+pub mod waves;
