@@ -361,6 +361,11 @@ async fn game() {
                 sound.cue(Cue::Pickup, 0.5);
             }
             if race.finished() && !finished {
+                ferravex_render::performance::context(Some(race.ticks), None);
+                ferravex_render::performance::event(
+                    ferravex_play::performance::DiagnosticKind::Completed,
+                    race.total_time,
+                );
                 sound.cue(Cue::Success, 0.65);
             }
             for (side, trail) in [-1., 1.].into_iter().zip(&mut marks) {
@@ -575,6 +580,7 @@ async fn game() {
                 CREAM,
             );
         }
+        ferravex_render::performance::context(Some(race.ticks), None);
         player_input.draw_settings();
         if demo.finish_frame() {
             break;

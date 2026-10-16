@@ -31,3 +31,5 @@ pub mod racing;
 pub mod environment;
 
 pub mod objective;
+
+pub mod performance;

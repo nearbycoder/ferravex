@@ -24,7 +24,8 @@ for(let frame=0;frame<200;frame++){
   assert.ok(count<=32&&first+count<=joints);assert.ok(e.ferravex_mesh_skin(mesh)>0,'skinned draw has immutable GPU influences');
   const points=e.ferravex_mesh_vertex_count(mesh),weights=new Float32Array(e.memory.buffer,e.ferravex_mesh_skin(mesh),points*8);
   for(let v=0;v<points;v++){let sum=0;for(let j=0;j<4;j++){assert.ok(weights[v*8+j]>=0&&weights[v*8+j]<count);sum+=weights[v*8+4+j];}assert.ok(Math.abs(sum-1)<1e-5);}
-  if(count===8){operator=true;poses.add(Array.from(matrices.subarray(first*16,(first+count)*16)).map(x=>x.toFixed(4)).join(','));}
+  // Operators include two articulated knee joints.
+  if(count===10){operator=true;poses.add(Array.from(matrices.subarray(first*16,(first+count)*16)).map(x=>x.toFixed(4)).join(','));}
   if(count===4){weapon=true;recoil ||= matrices[first*16+14]>.01;reload ||= matrices[(first+1)*16+13]<-.2;}
  }
 }

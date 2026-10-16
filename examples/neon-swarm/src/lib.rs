@@ -19,6 +19,8 @@ const MUTED: Color = Color::from_rgba(125, 150, 154, 255);
 const PAPER: Color = Color::from_rgba(221, 237, 227, 255);
 const CYAN: Color = Color::from_rgba(98, 236, 207, 255);
 const CORAL: Color = Color::from_rgba(255, 132, 93, 255);
+// Version 5 fixes staggered pursuit stalling just outside melee range.
+const RECORD_RULES: u64 = 5;
 
 fn conf() -> Conf {
     ferravex_render::window_conf("Neon Swarm · Ferravex")
@@ -208,13 +210,22 @@ async fn game() {
         hud_ui.begin(
             Viewport::fit([screen_width(), screen_height()], [1280., 800.], [0.; 4]).unwrap(),
         );
+        ferravex_render::performance::context(Some(clock.tick()), None);
         if previous_phase == Phase::Playing && game.phase != Phase::Playing {
+            ferravex_render::performance::event(
+                if game.phase == Phase::Won {
+                    ferravex_play::performance::DiagnosticKind::Completed
+                } else {
+                    ferravex_play::performance::DiagnosticKind::Death
+                },
+                game.time,
+            );
             let time = if game.phase == Phase::Won {
                 ferravex_render::storage::run_micros(game.time)
             } else {
                 None
             };
-            let _ = records.attempt("sector-07", 4, game.kills as u64, time);
+            let _ = records.attempt("sector-07", RECORD_RULES, game.kills as u64, time);
         }
         draw_hud(&mut hud_ui, &game, started, touch_mode);
         if started && !paused && game.phase == Phase::Playing && !touch_mode && !demo.autoplay {
@@ -257,7 +268,9 @@ async fn game() {
                     "{} cleared / {:.0}s / best {}",
                     game.kills,
                     game.time,
-                    records.get("sector-07", 2).map_or(0, |r| r.score)
+                    records
+                        .get("sector-07", RECORD_RULES)
+                        .map_or(0, |r| r.score)
                 ),
                 "RESTART",
             );

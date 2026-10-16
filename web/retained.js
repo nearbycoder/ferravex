@@ -123,7 +123,7 @@ export class RetainedRenderer {
 // Fixed pool: a busy GPU drops measurements rather than stalling a game frame.
 export class GpuTimer {
  constructor(gl,canvas,enabled) {
-  this.gl=gl;this.canvas=canvas;this.extension=enabled?gl.getExtension('EXT_disjoint_timer_query_webgl2'):null;
+  this.enabled=enabled;this.gl=gl;this.canvas=canvas;this.extension=enabled?gl.getExtension('EXT_disjoint_timer_query_webgl2'):null;
   this.free=[];this.pending=[];this.active=null;this.latest=null;this.disjoint=false;
   if(this.extension)for(let i=0;i<16;i++){const query=gl.createQuery();if(query)this.free.push(query);}
   canvas.dataset.gpuSource=this.extension&&this.free.length?'WebGL2 EXT_disjoint_timer_query_webgl2':enabled?'unavailable':'disabled';

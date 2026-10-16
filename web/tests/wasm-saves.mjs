@@ -64,6 +64,11 @@ for(const game of catalog){
   const r=runtime(game,data);r.frame();r.key(0xff0d);const previous=data.get(key);
   for(let frame=0;frame<7200&&data.get(key)===previous;frame++)r.frame();
   assert.ok(data.has(key)&&data.get(key)!==previous,'normal gameplay must save an actual completed attempt');
+  const ptr=r.e.ferravex_diagnostics_export(),len=r.e.ferravex_diagnostics_len();
+  const csv=new TextDecoder().decode(new Uint8Array(r.e.memory.buffer,ptr,len));
+  const deaths=csv.trim().split('\n').filter(line=>line.split(',')[3]==='death');
+  assert.equal(deaths.length,1,'actual defeat emits one diagnostic');
+  assert.ok(Number(deaths[0].split(',')[1])>0,'defeat carries the real fixed-clock tick');
   const raw=Uint8Array.from(atob(data.get(key).slice(6)),c=>c.charCodeAt(0)),view=new DataView(raw.buffer);let at=36,runs=null;
   for(let field=0;field<view.getUint16(32,true);field++){
    const n=raw[at++],name=new TextDecoder().decode(raw.subarray(at,at+n));at+=n;const tag=raw[at++],len=view.getUint32(at,true);at+=4;

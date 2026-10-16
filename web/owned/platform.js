@@ -5,11 +5,12 @@ import {configureVisuals} from '../visuals.js';
 import {bindInput} from '../input.js';
 import {bindAudio} from '../audio.js';
 import {createInputOverlay} from '../input-overlay.js';
+import {GpuTimer} from '../retained.js';
 const $=id=>document.getElementById(id),canvas=$('game'),message=$('message');
 let inputOverlay;
 let wasm,gl,program,shadowProgram,meshes=[],shadowTarget,shadowTexture,view=0,playing=false,recording=false;
 let shadowSize=1024,maxFramebufferDimension=8192;
-let uniforms={},gpuExtension,gpuQueries=[],gpuMs=null,contextLost=false;const cpuSamples=new Float32Array(120);let cpuIndex=0,cpuCount=0;
+let uniforms={},gpuTimer,gpuFrame=0,lastGpuFrame=0,gpuMs=null,gpuFresh=false,contextLost=false;const cpuSamples=new Float32Array(120);let cpuIndex=0,cpuCount=0;
 const buckets=new Map(),edits=new Map();let draws=0,frameMs=0,frames=0,elapsed=0,previous=0;
 const input=bindInput(canvas,'owned-lab',()=>wasm,()=>playing);
 const audio=bindAudio(canvas,()=>wasm,{button:$('audio')});
@@ -21,11 +22,11 @@ function link(vs,fs){let v,f,p;try{v=compile(gl.VERTEX_SHADER,vs);f=compile(gl.F
 function f32(ptr,len){return new Float32Array(wasm.memory.buffer,ptr,len);}
 function refreshUniforms(){uniforms=Object.fromEntries(["viewProjection","lightProjection","eye","fogDensity","shadowMap","visualLook","shadowsEnabled","shadowTexel","shadowRadius"].map(name=>[name,gl.getUniformLocation(program,name)]));}
 function setup(){
- meshes=[];buckets.clear();gpuQueries=[];shadowSize=1024;
+ meshes=[];buckets.clear();gpuFrame=0;lastGpuFrame=0;gpuMs=null;gpuFresh=false;shadowSize=1024;
  gl=canvas.getContext('webgl2',{alpha:false,antialias:true,powerPreference:'high-performance'});if(!gl)throw Error('WebGL 2 is required for this preview. The Rust software renderer is available through cargo run.');
  maxFramebufferDimension=gl.getParameter(gl.MAX_RENDERBUFFER_SIZE);
  inputOverlay=createInputOverlay(gl);
- program=link(vertex,$("shader").value||fragment);refreshUniforms();gpuExtension=gl.getExtension('EXT_disjoint_timer_query_webgl2');shadowProgram=link(`#version 300 es\nlayout(location=0)in vec3 position;layout(location=3)in mat4 model;uniform mat4 lightProjection;void main(){gl_Position=lightProjection*model*vec4(position,1.0);}`,`#version 300 es\nprecision highp float;void main(){}`);
+ program=link(vertex,$("shader").value||fragment);refreshUniforms();gpuTimer=new GpuTimer(gl,canvas,true);shadowProgram=link(`#version 300 es\nlayout(location=0)in vec3 position;layout(location=3)in mat4 model;uniform mat4 lightProjection;void main(){gl_Position=lightProjection*model*vec4(position,1.0);}`,`#version 300 es\nprecision highp float;void main(){}`);
  for(let i=0;i<wasm.ferravex_mesh_count();i++){
   const vao=gl.createVertexArray();gl.bindVertexArray(vao);const vertexBuffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,vertexBuffer);const vertices=f32(wasm.ferravex_mesh(i),wasm.ferravex_mesh_len(i));gl.bufferData(gl.ARRAY_BUFFER,vertices,gl.STATIC_DRAW);
   for(const [location,size,offset]of [[0,3,0],[1,3,12],[2,4,24]]){gl.enableVertexAttribArray(location);gl.vertexAttribPointer(location,size,gl.FLOAT,false,40,offset);}
@@ -39,9 +40,10 @@ function setup(){
 function uploadInstances(ptr,len){for(const b of buckets.values())b.count=0;const data=f32(ptr,len);for(let i=0;i<data.length;i+=17){const b=buckets.get(data[i]);if(b.count>=256)throw Error('Instance capacity exceeded');const offset=b.count++*16;for(let j=0;j<16;j++)b.data[offset+j]=data[i+j+1];}for(const[id,b]of buckets){if(!b.count)continue;gl.bindBuffer(gl.ARRAY_BUFFER,meshes[id].instanceBuffer);gl.bufferSubData(gl.ARRAY_BUFFER,0,b.data,0,b.count*16);}}
 function drawGroups(){for(const[id,b]of buckets){if(!b.count)continue;const mesh=meshes[id];gl.bindVertexArray(mesh.vao);gl.drawArraysInstanced(gl.TRIANGLES,0,mesh.count,b.count);draws++;}}
 function render(){
- while(gpuQueries.length&&gl.getQueryParameter(gpuQueries[0],gl.QUERY_RESULT_AVAILABLE)){const q=gpuQueries.shift();if(!gl.getParameter(gpuExtension.GPU_DISJOINT_EXT))gpuMs=gl.getQueryParameter(q,gl.QUERY_RESULT)/1e6;gl.deleteQuery(q);}
- const gpuQuery=gpuExtension&&gpuQueries.length<4?gl.createQuery():null;if(gpuQuery)gl.beginQuery(gpuExtension.TIME_ELAPSED_EXT,gpuQuery);
- const size=framebufferSize(canvas.clientWidth,canvas.clientHeight,devicePixelRatio,wasm.ferravex_resolution(),maxFramebufferDimension),width=size.width,height=size.height;canvas.dataset.renderScale=String(size.scale);if(canvas.width!==width||canvas.height!==height){canvas.width=width;canvas.height=height;}
+ gpuTimer.begin(++gpuFrame);
+ const measured=gpuTimer.latest;gpuFresh=Boolean(measured&&measured.frame>lastGpuFrame&&gpuFrame-measured.frame<8);gpuMs=measured?measured.us/1000:null;
+ if(measured)lastGpuFrame=measured.frame;
+ const size=framebufferSize(canvas.clientWidth,canvas.clientHeight,devicePixelRatio,wasm.ferravex_resolution(),maxFramebufferDimension,wasm.ferravex_adaptive_scale?.()??1),width=size.width,height=size.height;canvas.dataset.renderScale=String(size.scale);if(canvas.width!==width||canvas.height!==height){canvas.width=width;canvas.height=height;}
  draws=0;const light=f32(wasm.ferravex_light(),16);
  const detail=wasm.ferravex_shadow_detail(),desired=[0,0,512,1024][detail];
  if(desired&&desired!==shadowSize){gl.bindTexture(gl.TEXTURE_2D,shadowTexture);gl.texImage2D(gl.TEXTURE_2D,0,gl.DEPTH_COMPONENT24,desired,desired,0,gl.DEPTH_COMPONENT,gl.UNSIGNED_INT,null);shadowSize=desired;}
@@ -50,7 +52,7 @@ function render(){
  uploadInstances(wasm.ferravex_instances(),wasm.ferravex_instances_len());
  gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.viewport(0,0,width,height);gl.clearColor(.66,.72,.73,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);gl.useProgram(program);gl.uniformMatrix4fv(uniforms.viewProjection,false,f32(wasm.ferravex_matrix(),16));gl.uniformMatrix4fv(uniforms.lightProjection,false,light);const status=f32(wasm.ferravex_status(),wasm.ferravex_status_len());gl.uniform3fv(uniforms.eye,status.subarray(8,11));gl.uniform1f(uniforms.fogDensity,Number($('fog').value));gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,shadowTexture);gl.uniform1i(uniforms.shadowMap,0);gl.uniform1i(uniforms.visualLook,wasm.ferravex_visual_look());gl.uniform1i(uniforms.shadowsEnabled,desired?1:0);gl.uniform1f(uniforms.shadowTexel,1/shadowSize);gl.uniform1i(uniforms.shadowRadius,detail===3?1:0);canvas.dataset.look=String(wasm.ferravex_visual_look());drawGroups();
  $('vitals').innerHTML=`${status[0]}<span>HEALTH</span>${status[6]>0?'—':status[1]}<span>${status[6]>0?'RELOADING':'/ 30'}</span>`;$('score').textContent=`${status[2]} eliminations · ${Math.floor(status[7]/60)}:${String(Math.floor(status[7]%60)).padStart(2,'0')}`;
- if(gpuQuery){gl.endQuery(gpuExtension.TIME_ELAPSED_EXT);gpuQueries.push(gpuQuery);}
+ gpuTimer.end();
  return status;
 }
 function setPlaying(value){playing=value;$('menu').hidden=value;$('hud').hidden=!value;$('crosshair').hidden=!value||view!==1;if(value)$('tools').hidden=true;}
@@ -74,6 +76,6 @@ function frame(now){try{if(contextLost){requestAnimationFrame(frame);return;}con
  audio.sync();const panel=input.syncPanel();document.body.toggleAttribute('data-controls-open',panel);controlsButton.setAttribute('aria-pressed',String(panel));
  const menu=wasm.ferravex_menu_requested();if(menu===1)setPlaying(false);else if(menu===2){view=1;setPlaying(true);}
  const status=render();inputOverlay(wasm);details.ready();details.update();canvas.dataset.frames=String(Number(canvas.dataset.frames||0)+1);canvas.dataset.quality=String(wasm.ferravex_visual_quality());
- peerElapsed+=dt;if(peer.mode&&peerElapsed>=(peer.mode===2?1/60:.05)){peerElapsed=0;const ptr=wasm.ferravex_peer_out(),len=wasm.ferravex_peer_out_len();if(len)peer.send(new Uint8Array(wasm.memory.buffer,ptr,len));}const cpuTime=performance.now()-start;frameMs+=cpuTime;cpuSamples[cpuIndex++%120]=cpuTime;cpuCount=Math.min(120,cpuCount+1);frames++;elapsed+=dt;if(elapsed>.5){if(peer.mode)$('peerStats').textContent=`${peer.sent} packets sent · ${peer.received} received · ${peer.accepted} accepted`;const sorted=Array.from(cpuSamples.subarray(0,cpuCount)).sort((a,b)=>a-b);$('metrics').textContent=`${(frameMs/frames).toFixed(2)} ms CPU mean · ${sorted[Math.ceil(cpuCount*.99)-1].toFixed(2)} ms CPU p99${gpuMs===null?'':` · ${gpuMs.toFixed(2)} ms GPU`} · ${draws} draws · ${status[4]}/${status[5]} visible instances · 64 Hz authority`;frameMs=0;frames=0;elapsed=0;}requestAnimationFrame(frame);
+ peerElapsed+=dt;if(peer.mode&&peerElapsed>=(peer.mode===2?1/60:.05)){peerElapsed=0;const ptr=wasm.ferravex_peer_out(),len=wasm.ferravex_peer_out_len();if(len)peer.send(new Uint8Array(wasm.memory.buffer,ptr,len));}const cpuTime=performance.now()-start;wasm.ferravex_performance_sample?.(dt*1000,cpuTime,gpuFresh?gpuMs:-1);frameMs+=cpuTime;cpuSamples[cpuIndex++%120]=cpuTime;cpuCount=Math.min(120,cpuCount+1);frames++;elapsed+=dt;if(elapsed>.5){if(peer.mode)$('peerStats').textContent=`${peer.sent} packets sent · ${peer.received} received · ${peer.accepted} accepted`;const sorted=Array.from(cpuSamples.subarray(0,cpuCount)).sort((a,b)=>a-b);$('metrics').textContent=`${(frameMs/frames).toFixed(2)} ms CPU mean · ${sorted[Math.ceil(cpuCount*.99)-1].toFixed(2)} ms CPU p99${gpuMs===null?'':` · ${gpuMs.toFixed(2)} ms GPU`} · ${draws} draws · ${status[4]}/${status[5]} visible instances · 64 Hz authority`;frameMs=0;frames=0;elapsed=0;}requestAnimationFrame(frame);
  }catch(error){message.textContent=error.stack;$('tools').hidden=false;console.error(error);}}
 try{const response=await fetch('owned_lab.wasm');if(!response.ok)throw Error('Build the owned engine with python3 scripts/build-owned.py');const result=await WebAssembly.instantiate(await response.arrayBuffer(),{env:input.imports});wasm=result.instance.exports;wasm.ferravex_init();configureVisuals(wasm,location.search);controlsButton.disabled=false;setup();for(let i=0;i<wasm.ferravex_object_count();i++){const option=document.createElement('option');option.value=i;option.disabled=i===0;option.textContent=`${i===0?'Ground':i<12?'Collision solid':'Detail'} ${i}`;$('object').append(option);}$('object').value='1';showObject();$('play').disabled=false;$('play').textContent='Enter training';requestAnimationFrame(frame);}catch(error){$('play').textContent='Engine unavailable';message.textContent=error.stack;$('tools').hidden=false;console.error(error);}

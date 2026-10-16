@@ -12,7 +12,7 @@ const gl = canvas.getContext('webgl2', {alpha:false, antialias:true, depth:true}
 if (!gl) throw new Error('WebGL2 is required');
 let recoveryExtension=gl.getExtension('WEBGL_lose_context');
 const shader = (type,source) => {const s=gl.createShader(type);gl.shaderSource(s,source);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(s));return s;};
-let program,buffer,retained,spriteEffects,gpuTimer,maxFramebufferDimension;
+let program,buffer,retained,spriteEffects,gpuTimer,maxFramebufferDimension,lastGpuFrame=0;
 function initializeGraphics(){
  maxFramebufferDimension=gl.getParameter(gl.MAX_RENDERBUFFER_SIZE);
  recoveryExtension=gl.getExtension('WEBGL_lose_context');
@@ -79,7 +79,8 @@ try {
  status.textContent='';if(controlsButton)controlsButton.disabled=false;const mpButton=document.querySelector('[data-multiplayer]');if(mpButton)mpButton.disabled=false;canvas.focus();
  const loop=time=>{
   if(!graphics.active())return;
-  const r=canvas.getBoundingClientRect(),size=framebufferSize(r.width,r.height,devicePixelRatio||1,exports.ferravex_resolution(),maxFramebufferDimension),dpr=size.scale;
+  const cpuStarted=performance.now();
+  const r=canvas.getBoundingClientRect(),size=framebufferSize(r.width,r.height,devicePixelRatio||1,exports.ferravex_resolution(),maxFramebufferDimension,exports.ferravex_adaptive_scale?.()??1),dpr=size.scale;
   const w=size.width,h=size.height;
   if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;gl.viewport(0,0,w,h);}
   const dt=last?Math.min((time-last)/1000,0.1):1/60;last=time;
@@ -97,6 +98,7 @@ try {
   gl.bufferSubData(gl.ARRAY_BUFFER,0,vertices);
   const batches=exports.ferravex_batch_count(),bp=exports.ferravex_batches();
   retained.begin(exports);spriteEffects.begin(exports);
+  if(exports.ferravex_details_get(6)&&!gpuTimer.enabled)gpuTimer=new GpuTimer(gl,canvas,true);
   gpuTimer.begin(frames+1);
   gl.clearColor(...[0,1,2,3].map(c=>exports.ferravex_clear(c)));gl.depthMask(true);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
   retained.renderShadow(w,h);
@@ -115,6 +117,9 @@ try {
    (flags&1)?gl.enable(gl.DEPTH_TEST):gl.disable(gl.DEPTH_TEST);gl.depthMask((flags&1)!==0&&(flags&2)===0);gl.drawArrays(gl.TRIANGLES,view.getUint32(at,true),view.getUint32(at+4,true));immediateDraws++;
   }
   gpuTimer.end();
+  const measured=gpuTimer.latest,gpuMs=measured&&measured.frame>lastGpuFrame&&frames+1-measured.frame<8?measured.us/1000:-1;
+  if(measured)lastGpuFrame=measured.frame;
+  exports.ferravex_performance_sample?.(dt*1000,performance.now()-cpuStarted,gpuMs);
   canvas.dataset.frames=String(++frames);canvas.dataset.vertices=String(count+retained.vertices+retained.shadowVertices+spriteEffects.vertices);
   canvas.dataset.culled=String(exports.ferravex_culled_count());canvas.dataset.visible=String(exports.ferravex_visible_count());
   canvas.dataset.drawCalls=String(immediateDraws+retained.drawCalls+retained.shadowDrawCalls+spriteEffects.drawCalls);canvas.dataset.shadowDrawCalls=String(retained.shadowDrawCalls);canvas.dataset.quality=String(retained.environment.quality);canvas.dataset.look=String(exports.ferravex_visual_look());canvas.dataset.renderScale=String(dpr);canvas.dataset.lightingError=retained.lightingError;canvas.dataset.residentMeshes=String(retained.meshes.size);canvas.dataset.uploadBytes=String(count*32+retained.uploadBytes+spriteEffects.uploadBytes);

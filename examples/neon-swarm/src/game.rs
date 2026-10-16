@@ -585,6 +585,28 @@ mod tests {
         assert!(game.dash_cooldown > 1.0);
     }
     #[test]
+    fn idle_player_loses_to_ordinary_spawned_enemies() {
+        let mut game = Game::new();
+        for _ in 0..120 * 120 {
+            game.update(Input::default(), 1. / 120.);
+            if game.phase != Phase::Playing {
+                break;
+            }
+        }
+        assert_eq!(
+            game.phase,
+            Phase::Lost,
+            "health {}, player {:?}, enemies {:?}",
+            game.health,
+            game.player,
+            game.world
+                .query::<(&Position, &Enemy)>()
+                .iter()
+                .map(|(p, e)| (p.0, e.attack.phase()))
+                .collect::<Vec<_>>()
+        );
+    }
+    #[test]
     fn waves_progress_to_victory_using_normal_inputs() {
         let mut game = Game::new();
         for _ in 0..120 * 100 {

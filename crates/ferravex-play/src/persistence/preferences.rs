@@ -13,6 +13,7 @@ pub struct Preferences {
     pub shadows: u8,
     /// Preset, off, 2, 4, 8 local lights.
     pub lights: u8,
+    pub adaptive: bool,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -25,6 +26,7 @@ impl Default for Preferences {
             resolution: 0,
             shadows: 0,
             lights: 0,
+            adaptive: false,
         }
     }
 }
@@ -42,7 +44,7 @@ impl Preferences {
 }
 impl SaveData for Preferences {
     const SCHEMA: u64 = 0x4658505245465331;
-    const VERSION: u32 = 4;
+    const VERSION: u32 = 5;
     const MAX_BYTES: usize = 1024;
     fn write(&self, d: &mut Document) -> Result<(), SaveError> {
         if !self.valid() {
@@ -58,6 +60,7 @@ impl SaveData for Preferences {
         d.set("resolution", Value::U64(self.resolution as u64))?;
         d.set("shadows", Value::U64(self.shadows as u64))?;
         d.set("lights", Value::U64(self.lights as u64))?;
+        d.set("adaptive", Value::Bool(self.adaptive))?;
         for (key, v) in ["effects", "ambience", "music", "ui"]
             .into_iter()
             .zip(self.buses)
@@ -104,6 +107,9 @@ impl SaveData for Preferences {
             p.shadows = shadows as u8;
             p.lights = lights as u8;
         }
+        if d.version() >= 5 {
+            p.adaptive = d.boolean("adaptive")?;
+        }
         if !p.valid() {
             return Err(SaveError::InvalidData);
         }
@@ -143,10 +149,18 @@ mod tests {
         }
         let (migrated, _) = Preferences::decode(&v3.encode()).unwrap();
         assert_eq!(migrated, Preferences { look: 2, ..p });
+        let mut v4 = v3;
+        v4.version = 4;
+        v4.set("resolution", Value::U64(5)).unwrap();
+        v4.set("shadows", Value::U64(3)).unwrap();
+        v4.set("lights", Value::U64(4)).unwrap();
+        let (migrated, _) = Preferences::decode(&v4.encode()).unwrap();
+        assert!(!migrated.adaptive);
         let detailed = Preferences {
             resolution: 5,
             shadows: 3,
             lights: 4,
+            adaptive: true,
             ..p
         };
         assert_eq!(

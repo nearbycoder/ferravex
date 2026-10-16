@@ -5,6 +5,7 @@ pub(crate) struct Runner {
     window: native::NativeWindow,
     fixed: bool,
     performance: Option<telemetry::Session>,
+    adaptive_timing_attempted: bool,
     last: std::time::Instant,
     suspended: bool,
     finished: bool,
@@ -61,6 +62,7 @@ impl Runner {
         Ok(Self {
             window,
             fixed,
+            adaptive_timing_attempted: performance.is_some(),
             performance,
             last: std::time::Instant::now(),
             suspended: false,
@@ -134,7 +136,9 @@ impl Runner {
             .performance
             .as_ref()
             .map(|_| telemetry::FrameToken::begin());
+        let started = std::time::Instant::now();
         let active = frame(dt, w, h);
+        let adaptive_cpu_ms = started.elapsed().as_secs_f32() * 1000.;
         read(|s| self.window.set_cursor(s.grab, s.visible));
         let cpu_us = token.as_ref().map_or(0., |t| t.elapsed_us());
         let submit_start = std::time::Instant::now();
@@ -157,10 +161,18 @@ impl Runner {
                 ..Default::default()
             })));
         }
-        if let Some(session) = &mut self.performance {
-            self.window
-                .drain_gpu_results(|frame, time| session.gpu_result(frame, time));
+        if !self.adaptive_timing_attempted && read(|s| s.presentation.adaptive) {
+            self.adaptive_timing_attempted = true;
+            self.window.enable_gpu_timing();
         }
+        let mut gpu_ms = None;
+        self.window.drain_gpu_results(|frame, time| {
+            gpu_ms = Some((time / 1000.) as f32);
+            if let Some(session) = &mut self.performance {
+                session.gpu_result(frame, time);
+            }
+        });
+        performance::sample(dt * 1000., adaptive_cpu_ms, gpu_ms);
         let paths = edit(|s| std::mem::take(&mut s.screenshots));
         if !paths.is_empty() {
             let pixels = self.window.pixels();
@@ -207,6 +219,11 @@ impl Runner {
         }
         self.finished = true;
         audio::shutdown_native();
+        if let Some(path) = std::env::var_os("FERRAVEX_PLAYTEST")
+            && let Err(e) = std::fs::write(path, performance::export_csv())
+        {
+            eprintln!("Playtest export: {e}");
+        }
         if let Some(mut session) = self.performance.take() {
             session.render_quality(quality() as u32);
             self.window.finish_gpu_timing();

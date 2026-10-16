@@ -591,6 +591,7 @@ async fn game() {
         };
         impact_cooldown = (impact_cooldown - dt).max(0.);
         let frame = clock.advance(dt as f64);
+        ferravex_render::performance::context(Some(clock.tick()), None);
         for _ in 0..frame.steps {
             let controls = if demo.autoplay {
                 game.autopilot()
@@ -619,6 +620,10 @@ async fn game() {
                 impact_cooldown = 0.055;
             }
             if game.finished && !finished {
+                ferravex_render::performance::event(
+                    ferravex_engine::performance::DiagnosticKind::Completed,
+                    game.elapsed,
+                );
                 let _ = records.attempt(
                     courses::COURSES[course].id,
                     record_context,
@@ -635,6 +640,10 @@ async fn game() {
         let position = game.previous_position.lerp(game.position(), frame.alpha);
         let rotation = game.previous_rotation.slerp(game.rotation(), frame.alpha);
         if game.falls != previous_falls {
+            ferravex_render::performance::event(
+                ferravex_engine::performance::DiagnosticKind::Fall,
+                game.falls as f32,
+            );
             camera.cut();
             composition = course_composition(&game.level);
         }

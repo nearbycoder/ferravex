@@ -166,6 +166,10 @@ impl Game {
         self.objectives
             .event(index as u16 + 1, 1, self.objectives.last_event_serial() + 1)
             .unwrap();
+        ferravex_render::performance::event(
+            ferravex_play::performance::DiagnosticKind::Objective,
+            index as f32,
+        );
         self.sync_objectives();
     }
     fn sync_objectives(&mut self) {

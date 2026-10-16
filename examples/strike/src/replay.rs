@@ -46,6 +46,7 @@ pub struct Session {
     ghost_job: Option<(Playback, World, GhostTrack)>,
     pub show_ghost: bool,
     ghost_age: u64,
+    pub diagnostic_id: Option<u64>,
 }
 impl Session {
     fn load(&mut self) {
@@ -141,6 +142,7 @@ impl Session {
             self.message = "No recording yet - F4 starts one".into();
             return;
         };
+        self.diagnostic_id = Some(ferravex_play::persistence::checksum(&tape.encode()));
         let mut w = World::new(Match::new(game.arena.clone()));
         let mut p = Playback::new(tape);
         match p.start(&mut w) {

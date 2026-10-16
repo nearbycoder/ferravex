@@ -1323,3 +1323,16 @@ scan over target bodies and the ECS query's repeated type lookups. Existing
 bounded navigation scratch, particle pools, audio voices, render instance buffers
 and shared HUD buffers were left intact. Broader architectural changes need their
 own representative workload rather than assuming they will improve these games.
+
+
+## Adaptive rendering and playtest traces
+
+Optional adaptive presentation and bounded local CSV diagnostics are described in
+[shared quality update 20](QUALITY_SERIES.md#20-adaptive-presentation-and-local-playtest-reports).
+Valid GPU timing can reduce browser density and shared shadows without changing
+simulation ticks or saved fidelity choices. Native shared hosts adapt shadows;
+CPU-only hosts cannot infer GPU pressure. Reports include real game/replay context
+where supplied. Use Details > Export playtest CSV in the browser, or
+`FERRAVEX_PLAYTEST=target/playtest.csv` for the shared native GPU host. These recent
+event traces supplement the detailed performance harness above; they do not
+replace controlled measurements or durable replay files.

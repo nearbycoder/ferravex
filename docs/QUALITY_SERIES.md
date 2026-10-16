@@ -26,8 +26,8 @@ platform checks are recorded only when actually performed.
 | 16 | Procedural environment builders | [PR 39](https://github.com/nearbycoder/ferravex/pull/39), merged |
 | 17 | Acoustic zones and adaptive music | [PR 40](https://github.com/nearbycoder/ferravex/pull/40), merged |
 | 18 | Editable touch and accessibility layouts | [PR 41](https://github.com/nearbycoder/ferravex/pull/41), merged |
-| 19 | Objective and puzzle graphs | Implemented; locally validated |
-| 20 | Adaptive performance and playtest diagnostics | Pending |
+| 19 | Objective and puzzle graphs | [PR 42](https://github.com/nearbycoder/ferravex/pull/42), merged |
+| 20 | Adaptive performance and playtest diagnostics | Implemented; locally validated |
 
 ## 1. Gameplay tuning profiles
 
@@ -304,3 +304,58 @@ Crystal Cavern's actual crystals, numbered altars and exit now derive their stat
 from the graph while retaining real proximity/visibility checks. Local cycle,
 ordering, branch/timer, duplicate, save/incompatible-restore tests and an actual
 cave altar checkpoint/resume plus full playthrough pass, with strict Clippy/Wasm.
+
+## 20. Adaptive presentation and local playtest reports
+
+`performance::RenderBudget` separates presentation cost from the fixed simulation
+clock. Adaptation defaults off. Valid GPU timings, low CPU load and sustained
+pressure can reduce fidelity in four steps, with smoothing, cooldowns and slower
+recovery. CPU overload, unavailable timers, invalid values, paused controls and
+long background gaps cannot trigger a reduction. The bounded core allocates
+nothing while sampling or recording. User-selected resolution, lighting and
+shadow preferences remain saved independently of temporary fidelity changes.
+
+Enable **Adaptive performance** in the shared Controls > Devices editor or web
+Details panel. Shared WebGL hosts multiply framebuffer density by a bounded
+0.5–1 scale; the shared renderer also caps shadows as pressure persists. Native
+GPU hosts adapt shadows only. Courtyard uses its WebGL timer and density adapter.
+Canvas2D Orbit Breaker records CPU diagnostics but has no GPU timer or adaptive
+resolution path. Unsupported/disjoint GPU timing remains unavailable rather than
+being estimated from CPU time. Disabling adaptation immediately restores manual
+fidelity, including the shared shadow environment.
+
+`performance::context` attaches an optional real simulation tick and replay ID;
+`event` records host-confirmed outcomes. Strike supplies offline match ticks or
+the actual replay cursor and a checksum of the loaded tape. Online match ticks
+remain unspecified. Marble Run records falls and completions, Pocket Rally records
+completions and race ticks, Crystal Cavern records objective events, and Neon Swarm
+records actual defeats/completions and its fixed-clock tick. The shared API also
+accepts host-detected stuck and replay events. These are local diagnostic hooks,
+not an automatic stuck detector or an aggregate completion-rate dashboard.
+
+The runtime retains the latest 256 events, overwriting the oldest; the generic
+trace supports at most 4096. Frame samples are periodic, spikes and fidelity
+changes are explicit, and CSV export is chronological. Browser Details >
+**Export playtest CSV** downloads the local report. Shared native GPU hosts write
+it on exit with `FERRAVEX_PLAYTEST=target/playtest.csv`. Export may allocate;
+recording does not. No report is uploaded. A short ring is a recent-session trace,
+not durable analytics or a complete match recording; retain a replay separately.
+
+Final validation also found a Neon Swarm pursuit regression: staggered sight
+checks alternated direct movement with stale grid waypoints, allowing an idle
+player to survive indefinitely at two health. Each brain now retains the last
+completed sight result until its next scheduled check, while collision and attack
+range remain authoritative. Real idle defeat and normal-input victory both pass.
+Neon's record rules advance to 5, and the result screen reads that same context.
+
+Local checks include actual release-Wasm preference changes and fresh-instance
+reloads for all fifteen games, paused/CPU-only/missing-timer behavior, fixed saved
+fidelity and storage-I/O counts, bounded CSV export, actual saved Neon defeats,
+preference migration, immediate native shadow restoration and the expanded
+allocation probe. Final local results: 586 workspace tests passed, plus all 14 normally ignored
+GPU/audio checks explicitly executed; strict Clippy, all-feature Wasm checks and
+release builds passed. All 15 native game smoke runs and all 21 web integration
+suites passed. The workspace audit still reports zero external Cargo packages. Interactive browser UI verification is unavailable because the in-app
+browser cannot reach this Linux host; physical mobile and other native operating
+systems are untested. These checks do not establish a portable speedup or verify
+a deployment.
