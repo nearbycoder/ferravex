@@ -6,7 +6,7 @@ export function createMaterialTools(e) {
  const style=document.createElement('style');style.textContent='.ferravex-material-tools{position:fixed;right:12px;top:52px;z-index:20;width:min(420px,calc(100vw - 24px));max-height:calc(100vh - 64px);overflow:auto;background:#18201bf5;color:#e8eee6;border:1px solid #536456;border-radius:4px;font:13px system-ui}.ferravex-material-tools summary{cursor:pointer;padding:12px;color:#e59a6c}.material-tools-body{min-width:0;padding:0 12px 12px;display:grid;gap:10px}.material-tools-body label{min-width:0;display:grid;gap:5px}.material-tools-body textarea,.material-tools-body select{box-sizing:border-box;width:100%;background:#111713;color:#e8eee6;border:1px solid #536456;border-radius:3px;padding:7px}.material-tools-body textarea{height:125px;font:12px ui-monospace,monospace;resize:vertical}.material-tools-body button{background:#293a2c;color:#e8eee6;border:1px solid #637766;border-radius:3px;padding:7px 12px;margin-right:6px;cursor:pointer}.material-tools-body pre{pointer-events:auto;font:12px ui-monospace,monospace;position:static;inset:auto;width:auto;max-width:100%;text-align:left;transform:none;margin:0;white-space:pre-wrap;overflow-wrap:anywhere;max-height:120px;overflow:auto}.material-tools-body :focus-visible{outline:2px solid #e59a6c;outline-offset:2px}';
  document.head.append(style);document.body.append(root);
  const select=root.querySelector('select'),vertex=root.querySelector('[aria-label="Vertex hooks"]'),fragment=root.querySelector('[aria-label="Fragment hook"]'),status=root.querySelector('[role=status]');
- let signature='',lastStatus='';
+ let signature=null,lastStatus='';
  const source=stage=>decoder.decode(new Uint8Array(e.memory.buffer,e.ferravex_material_source(+select.value,stage),e.ferravex_material_source_len(+select.value,stage)));
  const load=()=>{if(!select.value)return;vertex.value=source(0);fragment.value=source(1);lastStatus='';};
  select.addEventListener('change',load);root.addEventListener('focusin',()=>e.ferravex_blur());
@@ -19,7 +19,7 @@ export function createMaterialTools(e) {
  });
  return {update(){
   const ids=Array.from({length:e.ferravex_material_count()},(_,i)=>e.ferravex_material_id(i)),next=ids.join(',');
-  if(next!==signature){const previous=select.value;select.replaceChildren(...ids.map(id=>{const option=document.createElement('option');option.value=String(id);option.textContent='Material '+id;return option;}));if(ids.includes(+previous))select.value=previous;signature=next;load();}
+  if(next!==signature){const previous=select.value;select.replaceChildren(...ids.map(id=>{const option=document.createElement('option');option.value=String(id);option.textContent='Material '+id;return option;}));if(ids.includes(+previous))select.value=previous;signature=next;for(const field of [select,vertex,fragment,...root.querySelectorAll('button')])field.disabled=!ids.length;if(!ids.length){status.textContent='This scene uses built-in lighting; no custom material is active.';}load();}
   if(!select.value)return;
   const id=+select.value,code=e.ferravex_material_status(id),revision=e.ferravex_material_revision(id),key=id+':'+revision+':'+code;if(key===lastStatus)return;lastStatus=key;
   if(code===3){const len=e.ferravex_material_error_len(id),ptr=e.ferravex_material_error(id);status.textContent='Rejected revision '+revision+'; keeping the last valid program.\n'+decoder.decode(new Uint8Array(e.memory.buffer,ptr,len));}

@@ -3,12 +3,18 @@ import {RetainedRenderer,GpuTimer} from './retained.js';
 import {SpriteRenderer} from './effects.js';
 import {bindInput} from './input.js';
 import {bindAudio} from './audio.js';
+import {bindGraphicsLifecycle} from './lifecycle.js';
 const canvas = document.querySelector('canvas');
 const status = document.querySelector('[role=status]');
 const gl = canvas.getContext('webgl2', {alpha:false, antialias:true, depth:true});
 if (!gl) throw new Error('WebGL2 is required');
+let recoveryExtension=gl.getExtension('WEBGL_lose_context');
 const shader = (type,source) => {const s=gl.createShader(type);gl.shaderSource(s,source);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(s));return s;};
-const program=gl.createProgram();
+let program,buffer,retained,spriteEffects,gpuTimer;
+function initializeGraphics(){
+ recoveryExtension=gl.getExtension('WEBGL_lose_context');
+ gl.bindVertexArray(null);
+program=gl.createProgram();
 gl.attachShader(program,shader(gl.VERTEX_SHADER,`#version 300 es
 precision highp float;
 layout(location=0) in vec4 position;
@@ -22,20 +28,36 @@ out vec4 pixel;
 void main(){pixel=tint;}`));
 gl.linkProgram(program);if(!gl.getProgramParameter(program,gl.LINK_STATUS))throw new Error(gl.getProgramInfoLog(program));
 gl.useProgram(program);
-const buffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
+buffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
 gl.enableVertexAttribArray(0);gl.vertexAttribPointer(0,4,gl.FLOAT,false,32,0);
 gl.enableVertexAttribArray(1);gl.vertexAttribPointer(1,4,gl.FLOAT,false,32,16);
 gl.enable(gl.BLEND);gl.blendFuncSeparate(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA,gl.ONE,gl.ONE_MINUS_SRC_ALPHA);gl.depthFunc(gl.LEQUAL);
-const retained=new RetainedRenderer(gl);
-const spriteEffects=new SpriteRenderer(gl);
-const gpuTimer=new GpuTimer(gl,canvas,new URLSearchParams(location.search).has('profile'));
-let exports,playing=false,active=true,allocated=0,frames=0,last=0;
+retained=new RetainedRenderer(gl);
+spriteEffects=new SpriteRenderer(gl);
+gpuTimer=new GpuTimer(gl,canvas,new URLSearchParams(location.search).has('profile'));
+ allocated=0;
+}
+let exports,playing=false,allocated=0,frames=0,last=0,restores=0;
+initializeGraphics();
 const game=canvas.dataset.game;
 const inputPlatform=bindInput(canvas,game,()=>exports,()=>playing);
 const controlsButton=document.querySelector('[data-controls]');
 const audio=bindAudio(canvas,()=>exports,{button:document.querySelector('[data-audio]')});
 controlsButton?.addEventListener('click',()=>{inputPlatform.openSettings();canvas.focus();});
-canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();active=false;audio.dispose();status.textContent='Graphics context lost. Reload to resume.';});
+let autoRestore=false;
+const graphics=bindGraphicsLifecycle(canvas,{
+ restore(){initializeGraphics();last=0;delete canvas.dataset.gpuUs;delete canvas.dataset.gpuFrame;delete canvas.dataset.gpuDisjoint;canvas.dataset.graphicsRestores=String(++restores);},
+ suspend(){exports?.ferravex_blur();audio.suspend();canvas.dataset.graphicsState='lost';status.textContent='Graphics paused. Waiting for the browser to restore the device.';if(autoRestore){autoRestore=false;setTimeout(()=>recoveryExtension?.restoreContext(),100);}},
+ resume(){exports?.ferravex_focus(document.hasFocus()?1:0);audio.resume();status.textContent='';canvas.dataset.graphicsState='ready';},
+ error(cause){status.textContent=`Graphics recovery failed: ${cause.message}`;console.error(cause);}
+});
+canvas.dataset.graphicsState='ready';
+if(new URLSearchParams(location.search).has('graphics-tools')){
+ const panel=document.createElement('details');panel.className='ferravex-graphics-tools';panel.open=true;panel.style.cssText='position:fixed;right:12px;bottom:12px;z-index:22;background:#18201bf5;color:#e8eee6;border:1px solid #536456;padding:10px;font:13px system-ui;max-width:calc(100vw - 44px)';
+ const summary=document.createElement('summary');summary.textContent='Graphics recovery';panel.append(summary);
+ const button=document.createElement('button');button.textContent='Test context loss and recovery';button.setAttribute('aria-label','Test context loss and recovery');button.type='button';button.style.cssText='margin-top:10px;padding:8px';const extension=recoveryExtension;button.disabled=!extension;button.addEventListener('click',()=>{autoRestore=true;recoveryExtension?.loseContext();});panel.append(button);document.body.append(panel);
+}
+
 try {
  const imports={env:{...inputPlatform.imports,ferravex_set_playing:value=>{playing=!!value;if(!playing&&document.pointerLockElement)document.exitPointerLock();}}};
  const response=await fetch(`${game.replaceAll('-','_')}.wasm`);if(!response.ok)throw new Error(`Game download failed (${response.status})`);
@@ -52,13 +74,14 @@ try {
  let materialTools=null;if(new URLSearchParams(location.search).has('material-tools')){materialTools=(await import('./material-tools.js')).createMaterialTools(exports);}
  status.textContent='';if(controlsButton)controlsButton.disabled=false;const mpButton=document.querySelector('[data-multiplayer]');if(mpButton)mpButton.disabled=false;canvas.focus();
  const loop=time=>{
-  if(!active)return;
+  if(!graphics.active())return;
   const r=canvas.getBoundingClientRect(),dpr=Math.min(devicePixelRatio||1,2);
   const w=Math.max(1,Math.round(r.width*dpr)),h=Math.max(1,Math.round(r.height*dpr));
   if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;gl.viewport(0,0,w,h);}
   const dt=last?Math.min((time-last)/1000,0.1):1/60;last=time;
   // Rust receives logical pixels; the GPU viewport alone uses framebuffer pixels.
   exports.ferravex_mp_time?.(time*1000);
+  exports.ferravex_display_scale?.(dpr);
   inputPlatform.poll();
   const running=exports.ferravex_frame(dt,Math.round(r.width),Math.round(r.height));
   const controlsOpen=inputPlatform.syncPanel();audio.sync();
@@ -94,7 +117,8 @@ try {
   canvas.dataset.effectVertices=String(exports.ferravex_effect_vertex_count?.()||0);
   canvas.dataset.skinnedDrawCalls=String(retained.skinnedDrawCalls);canvas.dataset.skinJoints=String(exports.ferravex_skin_joint_count?.()||0);
   canvas.dataset.materialError=retained.lastError;materialTools?.update();contentTools?.update();replayTools?.update();multiplayerTools?.update();
-  if(running)requestAnimationFrame(loop);else audio.dispose();
+  if(exports.ferravex_take_graphics_reset?.()){const extension=recoveryExtension;if(extension){autoRestore=true;recoveryExtension?.loseContext();}}
+  if(running)graphics.schedule(loop);else {graphics.stop();audio.dispose();}
  };
- requestAnimationFrame(loop);
+ graphics.schedule(loop);
 } catch(error) {status.textContent=error.message;console.error(error);}

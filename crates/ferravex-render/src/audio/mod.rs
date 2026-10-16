@@ -5,7 +5,7 @@ use std::cell::{Cell, RefCell};
 #[cfg(not(target_arch = "wasm32"))]
 mod capture;
 mod game;
-#[cfg(target_os = "linux")]
+#[cfg(not(target_arch = "wasm32"))]
 mod native;
 pub use game::GameAudio;
 pub const SAMPLE_RATE: u32 = 48000;
@@ -197,9 +197,11 @@ fn skip(dt: f32) {
 }
 #[cfg(not(target_arch = "wasm32"))]
 struct Output {
-    #[cfg(target_os = "linux")]
     device: Option<native::Output>,
     offline: bool,
+    enabled: bool,
+    paused: bool,
+    retry_in: f32,
     fraction: f64,
     capture: Option<capture::Capture>,
 }
@@ -219,8 +221,8 @@ pub(crate) fn boot_native(offline: bool) {
                     }
                 },
             );
-        #[cfg(target_os = "linux")]
-        let device = if !offline && std::env::var("FERRAVEX_AUDIO").ok().as_deref() != Some("off") {
+        let enabled = !offline && std::env::var("FERRAVEX_AUDIO").ok().as_deref() != Some("off");
+        let device = if enabled {
             Some(native::Output::new(
                 std::env::var("FERRAVEX_AUDIO_DEVICE").unwrap_or_else(|_| "default".into()),
             ))
@@ -228,9 +230,12 @@ pub(crate) fn boot_native(offline: bool) {
             None
         };
         *output.borrow_mut() = Some(Output {
-            #[cfg(target_os = "linux")]
+            #[cfg(not(target_arch = "wasm32"))]
             device,
             offline,
+            enabled,
+            paused: false,
+            retry_in: 2.,
             fraction: 0.,
             capture,
         });
@@ -240,6 +245,33 @@ pub(crate) fn boot_native(offline: bool) {
 pub(crate) fn shutdown_native() {
     OFFLINE.with(|v| v.set(false));
     OUTPUT.with(|o| *o.borrow_mut() = None);
+}
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn suspend_native() {
+    #[cfg(not(target_arch = "wasm32"))]
+    OUTPUT.with(|o| {
+        if let Some(o) = o.borrow_mut().as_mut() {
+            o.device = None;
+            o.paused = true;
+        }
+    });
+}
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn resume_native() {
+    #[cfg(not(target_arch = "wasm32"))]
+    OUTPUT.with(|o| {
+        if let Some(o) = o.borrow_mut().as_mut() {
+            o.paused = false;
+        }
+        if let Some(o) = o.borrow_mut().as_mut()
+            && o.enabled
+            && o.device.is_none()
+        {
+            o.device = Some(native::Output::new(
+                std::env::var("FERRAVEX_AUDIO_DEVICE").unwrap_or_else(|_| "default".into()),
+            ));
+        }
+    });
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OutputStats {
@@ -251,7 +283,7 @@ pub struct OutputStats {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn output_stats() -> OutputStats {
     OUTPUT.with(|o| {
-        #[cfg(target_os = "linux")]
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(device) = o.borrow().as_ref().and_then(|o| o.device.as_ref()) {
             let status = device.status();
             return OutputStats {
@@ -305,7 +337,21 @@ pub(crate) fn end_frame(dt: f32) {
             }
             return;
         }
-        #[cfg(target_os = "linux")]
+        if output.paused {
+            skip(dt);
+            return;
+        }
+        output.retry_in = (output.retry_in - dt.max(0.)).max(0.);
+        if output.device.as_ref().is_some_and(|d| d.status() < 0) {
+            output.device = None;
+        }
+        if output.device.is_none() && output.retry_in <= 0. && output.enabled {
+            output.device = Some(native::Output::new(
+                std::env::var("FERRAVEX_AUDIO_DEVICE").unwrap_or_else(|_| "default".into()),
+            ));
+            output.retry_in = 2.;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(device) = &output.device
             && device.status() == 1
         {
@@ -365,6 +411,69 @@ mod wasm {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires the system ALSA null PCM"]
+    fn native_sink_resume_keeps_capture_and_mixer() {
+        if std::env::var_os("FERRAVEX_AUDIO_LIFECYCLE_CHILD").is_none() {
+            let path = std::env::temp_dir()
+                .join(format!("ferravex-audio-resume-{}.wav", std::process::id()));
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "audio::tests::native_sink_resume_keeps_capture_and_mixer",
+                    "--ignored",
+                ])
+                .env("FERRAVEX_AUDIO_LIFECYCLE_CHILD", "1")
+                .env("FERRAVEX_AUDIO_DEVICE", "null")
+                .env("FERRAVEX_AUDIO", "on")
+                .env("FERRAVEX_AUDIO_CAPTURE", &path)
+                .output()
+                .unwrap();
+            let _ = std::fs::remove_file(path);
+            assert!(
+                result.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr)
+            );
+            return;
+        }
+        let wait = || {
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while !output_stats().ready && std::time::Instant::now() < end {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            assert!(output_stats().ready, "{:?}", output_stats());
+        };
+        reset();
+        set_muted(false);
+        set_master_gain(0.32);
+        boot_native(false);
+        wait();
+        play(Cue::Fire, VoiceParams::default()).unwrap();
+        end_frame(1. / 60.);
+        let path = std::path::PathBuf::from(std::env::var_os("FERRAVEX_AUDIO_CAPTURE").unwrap());
+        let before = std::fs::metadata(&path).unwrap().len();
+        assert!(before > 44);
+        suspend_native();
+        assert!(!output_stats().ready);
+        end_frame(1. / 60.);
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), before);
+        resume_native();
+        wait();
+        assert_eq!(master_gain(), 0.32);
+        play(Cue::Fire, VoiceParams::default()).unwrap();
+        end_frame(1. / 60.);
+        shutdown_native();
+        let bytes = std::fs::read(path).unwrap();
+        assert!(
+            bytes.len() > before as usize,
+            "resume must append to the existing capture"
+        );
+        let clip = Clip::wav(&bytes).unwrap();
+        assert_eq!(clip.samples.len() * 4 + 44, bytes.len());
+    }
     #[test]
     fn runtime_mute_device_rate_and_reset_are_bounded() {
         crate::edit(|s| *s = crate::State::default());

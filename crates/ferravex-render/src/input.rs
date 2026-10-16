@@ -34,6 +34,25 @@ pub fn touch_event(event: ferravex_play::input::touch::Event) {
 pub fn gamepads() -> [PadState; 4] {
     crate::read(|s| s.input.pads)
 }
+/// Supply a controller sample from a first-party embedding host. The same bounded
+/// journal and normalized axes/buttons are used by browser and Linux providers.
+pub fn gamepad_sample(index: usize, state: PadState) -> bool {
+    if index >= 4 {
+        return false;
+    }
+    crate::edit(|s| {
+        s.input.pad_connected(index, state.connected);
+        if state.connected {
+            for (i, v) in state.axes.into_iter().enumerate() {
+                s.input.pad_axis(index, i, v);
+            }
+            for (i, v) in state.buttons.into_iter().enumerate() {
+                s.input.pad_button(index, i, v);
+            }
+        }
+    });
+    true
+}
 #[cfg(target_os = "linux")]
 mod gamepad;
 #[cfg(target_os = "linux")]

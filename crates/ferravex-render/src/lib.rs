@@ -270,6 +270,8 @@ struct State {
     w: u32,
     h: u32,
     dt: f32,
+    dpi: f32,
+    graphics_reset: bool,
     time: f64,
     matrix: Mat4,
     depth: bool,
@@ -320,6 +322,8 @@ impl Default for State {
             w: 1280,
             h: 800,
             dt: 1. / 60.,
+            dpi: 1.,
+            graphics_reset: false,
             time: 0.,
             matrix: Mat4::IDENTITY,
             depth: false,
@@ -885,8 +889,23 @@ pub fn screen_height() -> f32 {
     read(|s| s.h as f32)
 }
 pub fn screen_dpi_scale() -> f32 {
-    1.
+    read(|s| s.dpi)
 }
+/// Hosts supply framebuffer pixels per logical input/UI pixel.
+pub fn set_display_scale(scale: f32) {
+    edit(|s| {
+        s.dpi = if scale.is_finite() && scale > 0. {
+            scale.clamp(0.5, 4.)
+        } else {
+            1.
+        }
+    });
+}
+/// Rebuild GPU caches on the next host frame without restarting game state.
+pub fn request_graphics_reset() {
+    edit(|s| s.graphics_reset = true);
+}
+
 pub fn get_frame_time() -> f32 {
     read(|s| s.dt)
 }
@@ -1224,123 +1243,20 @@ fn touch(id: u64, phase: u32, x: f32, y: f32) {
     });
 }
 #[cfg(not(target_arch = "wasm32"))]
+mod runner;
+#[cfg(not(target_arch = "wasm32"))]
 pub fn run(conf: Conf, future: impl Future<Output = ()> + 'static) {
-    let mut window = native::NativeWindow::new(&conf)
-        .unwrap_or_else(|e| panic!("Ferravex native platform: {e}"));
-    start(conf, future);
-    if let Ok(value) = std::env::var("FERRAVEX_QUALITY") {
-        quality_override(
-            lighting::Quality::from_name(&value)
-                .expect("FERRAVEX_QUALITY must be low, medium or high"),
-        );
-    }
-    let fixed = std::env::args().any(|s| s == "--smoke-frames");
-    audio::boot_native(fixed);
-    let mut performance = telemetry::Session::from_env();
-    // Automated fixed-step runs must not wait for an occluded desktop window
-    // to receive compositor frame callbacks. Interactive games retain vsync.
-    if fixed {
-        window.set_swap_interval(0);
-    }
-    if let Some(session) = &mut performance {
-        window.set_swap_interval(0);
-        if window.enable_gpu_timing() {
-            session.gpu_source("OpenGL TIME_ELAPSED");
-        }
-    }
-    let mut last = std::time::Instant::now();
-    loop {
-        let now = std::time::Instant::now();
-        let dt = if fixed {
-            1. / 60.
-        } else {
-            (now - last).as_secs_f32()
-        };
-        last = now;
-        for e in window.poll() {
-            use native::Event;
-            match e {
-                Event::Key(c, d) => key(c, d),
-                Event::MouseButton(c, d) => button(c, d),
-                Event::MouseMove(x, y) => {
-                    let old = read(|s| s.mouse);
-                    pointer(x, y, x - old.x, y - old.y);
-                }
-                Event::MouseDelta(dx, dy) => {
-                    let old = read(|s| s.mouse);
-                    pointer(old.x, old.y, dx, dy);
-                }
-                Event::Wheel(v) => wheel(v),
-                Event::Focus(value) => focus(value),
-                Event::Resize(_, _) => {}
-                Event::Quit => {
-                    audio::shutdown_native();
-                    return;
-                }
+    #[cfg(target_os = "ios")]
+    native::ios::launch(conf, future);
+    #[cfg(not(target_os = "ios"))]
+    {
+        let mut runner = runner::Runner::new(conf, future)
+            .unwrap_or_else(|e| panic!("Ferravex native platform: {e}"));
+        while runner.step() {
+            if runner.suspended() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
             }
         }
-        input::poll_gamepads();
-        let (w, h) = window.size();
-        let token = performance.as_ref().map(|_| telemetry::FrameToken::begin());
-        let active = frame(dt, w, h);
-        read(|s| window.set_cursor(s.grab, s.visible));
-        let cpu_us = token.as_ref().map_or(0., |t| t.elapsed_us());
-        let submit_start = std::time::Instant::now();
-        read(|s| window.present_scene(&s.vertices, &s.batches, s.clear, Some(&s.retained)));
-        if let (Some(session), Some(token)) = (&mut performance, token) {
-            session.record(token.finish(read(|s| telemetry::FrameSample {
-                cpu_us,
-                submit_us: Some(submit_start.elapsed().as_secs_f64() * 1e6),
-                draw_calls: Some(window.render_counts().0),
-                vertices: Some(window.render_counts().1),
-                upload_bytes: Some(
-                    (s.vertices.len() * 32 + s.retained.instances.len() * 112) as u64
-                        + window.last_mesh_upload_bytes()
-                        + window.skin_upload_bytes()
-                        + window.sprite_upload_bytes(),
-                ),
-                ..Default::default()
-            })));
-        }
-        if let Some(session) = &mut performance {
-            window.drain_gpu_results(|frame, time| session.gpu_result(frame, time));
-        }
-        let paths = edit(|s| std::mem::take(&mut s.screenshots));
-        if !paths.is_empty() {
-            let pixels = window.pixels();
-            match ferravex_graphics::Framebuffer::new(w, h) {
-                Ok(mut fb) if pixels.len() == w as usize * h as usize * 4 => {
-                    for (dst, src) in fb.pixels_mut().iter_mut().zip(pixels.as_chunks::<4>().0) {
-                        *dst = *src;
-                    }
-                    for path in paths {
-                        if let Err(error) = fb.save_png(&path) {
-                            eprintln!("Screenshot {path}: {error}");
-                        }
-                    }
-                }
-                _ => eprintln!("Screenshot unavailable: invalid dimensions or GPU readback"),
-            }
-        }
-        if !active {
-            break;
-        }
-        if !fixed {
-            let elapsed = now.elapsed();
-            if elapsed < std::time::Duration::from_millis(16) {
-                std::thread::sleep(std::time::Duration::from_millis(16) - elapsed);
-            }
-        }
-    }
-    audio::shutdown_native();
-    if let Some(mut session) = performance {
-        session.render_quality(quality() as u32);
-        window.finish_gpu_timing();
-        window.drain_gpu_results(|frame, time| session.gpu_result(frame, time));
-        let (w, h) = window.size();
-        session
-            .write(&window.driver_info(), w, h)
-            .expect("write performance report");
     }
 }
 #[macro_export]
@@ -1364,6 +1280,14 @@ macro_rules! game {
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use super::*;
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_display_scale(scale: f32) {
+        set_display_scale(scale);
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_take_graphics_reset() -> u32 {
+        edit(|s| u32::from(std::mem::take(&mut s.graphics_reset)))
+    }
     #[unsafe(no_mangle)]
     pub extern "C" fn ferravex_light_environment() -> *const lighting::Environment {
         read(|s| &s.retained.environment as *const lighting::Environment)

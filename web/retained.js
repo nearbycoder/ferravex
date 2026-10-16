@@ -35,6 +35,7 @@ export class RetainedRenderer {
    const next=this.compile(this.source(id,0),this.source(id,1));if(entry.valid)this.deletePair(entry.valid);entry.valid=next;entry.error='';e.ferravex_material_feedback(id,revision,1,0);
   } catch(error) {
    entry.error=String(error.message||error).slice(0,4096);
+   if(!entry.valid&&e.ferravex_material_source_len(id,2)){try{entry.valid=this.compile(this.source(id,2),this.source(id,3));}catch(rebuild){entry.error=(entry.error+'\nRestore failed: '+String(rebuild.message||rebuild)).slice(0,4096);}}
    const bytes=encoder.encode(entry.error),ptr=e.ferravex_material_feedback_buffer(),length=Math.min(bytes.length,4096);
    new Uint8Array(e.memory.buffer,ptr,length).set(bytes.subarray(0,length));e.ferravex_material_feedback(id,revision,0,length);
   }

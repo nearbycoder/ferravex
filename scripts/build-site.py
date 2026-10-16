@@ -169,7 +169,7 @@ def main():
  stale=[p.name for p in (ROOT/'target/doc').iterdir() if p.is_dir() and p.name not in targets|support]
  sources=ROOT/'target/doc/src'
  if sources.exists():stale.extend('src/'+p.name for p in sources.iterdir() if p.is_dir() and p.name not in targets)
- allowed={'index.html','games.json','build-info.json','runtime.js','audio.js','audio-worklet.js','audio-ring.js','input.js','storage.js','input-overlay.js','retained.js','retained-shader.js','effects.js','effects-shader.js','material-tools.js','content-tools.js','replay-tools.js','multiplayer-tools.js'}
+ allowed={'index.html','games.json','build-info.json','runtime.js', 'lifecycle.js','audio.js','audio-worklet.js','audio-ring.js','input.js','storage.js','input-overlay.js','retained.js','retained-shader.js','effects.js','effects-shader.js','material-tools.js','content-tools.js','replay-tools.js','multiplayer-tools.js'}
  for game in GAMES:
   allowed.add(game['host']+'/'+game['id'].replace('-','_')+'.wasm')
   allowed.update(game['host']+'/'+p.name for p in (ROOT/'web'/game['host']).iterdir() if p.is_file())
