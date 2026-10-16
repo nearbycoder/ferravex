@@ -1,3 +1,4 @@
+use ferravex_play::attributes::{EffectSet, EffectSpec};
 use ferravex_play::{
     ai::{Candidate, Observer, Sight, Unoccluded, WorkBudget, select_target},
     navigation::{PathCursor, Route3},
@@ -58,6 +59,7 @@ pub struct Pest {
     pub stagger: f32,
     pub flash: f32,
     cursor: PathCursor,
+    effects: EffectSet<4>,
 }
 #[derive(Clone, Debug)]
 pub struct Shot {
@@ -214,21 +216,23 @@ impl Game {
                     flash: 0.,
                     fast,
                     cursor: PathCursor::default(),
+                    effects: EffectSet::new().unwrap(),
                 });
                 self.remaining -= 1;
                 self.spawn_timer += wave.interval;
             }
         }
         for pest in &mut self.pests {
-            pest.slow = (pest.slow - dt).max(0.);
-            pest.stagger = (pest.stagger - dt).max(0.);
+            pest.effects.advance(dt).unwrap();
+            pest.slow = pest.effects.remaining(1);
+            pest.stagger = pest.effects.remaining(2);
             pest.flash = (pest.flash - dt).max(0.);
-            let speed = (if pest.fast {
+            let speed = if pest.fast {
                 wave.fast_speed
             } else {
                 wave.speed
-            }) * if pest.slow > 0. { 0.45 } else { 1. }
-                * if pest.stagger > 0. { 0.35 } else { 1. };
+            };
+            let speed = pest.effects.value(0, speed, 0., 10000.).unwrap();
             let sample = pest
                 .cursor
                 .advance(&self.route, speed, dt)
@@ -314,13 +318,21 @@ impl Game {
                 target.hp -= shot.damage;
                 target.flash = 0.12;
                 if shot.kind == Kind::Frost {
-                    target.slow = 1.65;
+                    target
+                        .effects
+                        .apply(EffectSpec::modifier(1, 0, 0.45, 1.65), 0)
+                        .unwrap();
+                    target.slow = target.effects.remaining(1);
                     frost_impacts[frost_count] = target.pos;
                     frost_count += 1;
                 } else {
                     // Small, bounded hit-stop gives seed hits weight without
                     // teleporting pests backward or invalidating route progress.
-                    target.stagger = 0.10;
+                    target
+                        .effects
+                        .apply(EffectSpec::modifier(2, 0, 0.35, 0.10), 0)
+                        .unwrap();
+                    target.stagger = target.effects.remaining(2);
                 }
                 false
             } else {
@@ -331,7 +343,10 @@ impl Game {
         for center in &frost_impacts[..frost_count] {
             for pest in &mut self.pests {
                 if pest.hp > 0. && pest.pos.distance_squared(*center) < 46. * 46. {
-                    pest.slow = pest.slow.max(1.15);
+                    pest.effects
+                        .apply(EffectSpec::modifier(1, 0, 0.45, 1.15), 0)
+                        .unwrap();
+                    pest.slow = pest.effects.remaining(1);
                     pest.flash = pest.flash.max(0.08);
                 }
             }

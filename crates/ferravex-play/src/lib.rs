@@ -5,6 +5,7 @@
 pub mod ability;
 pub mod ai;
 pub mod animation;
+pub mod attributes;
 pub mod audio;
 pub mod authoring;
 pub mod camera;
