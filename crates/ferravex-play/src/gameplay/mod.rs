@@ -48,3 +48,5 @@ pub mod waves;
 pub mod interaction;
 
 pub mod stagger;
+
+pub mod shield;
