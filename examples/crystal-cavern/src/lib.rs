@@ -70,6 +70,28 @@ struct Input {
     interact: bool,
 }
 
+fn objectives() -> ferravex_play::objective::ObjectiveGraph<6> {
+    use ferravex_play::objective::*;
+    ObjectiveGraph::new(
+        1,
+        std::array::from_fn(|i| ObjectiveSpec {
+            id: i as u16 + 1,
+            all: match i {
+                3 => 7,
+                4 => 1 << 3,
+                5 => 1 << 4,
+                _ => 0,
+            },
+            any: 0,
+            exclusive_group: 0,
+            kind: ObjectiveKind::Event {
+                id: i as u16 + 1,
+                count: 1,
+            },
+        }),
+    )
+    .unwrap()
+}
 struct Game {
     position: Vec2,
     velocity: Vec2,
@@ -77,6 +99,7 @@ struct Game {
     walls: Vec<Aabb2>,
     crystals: Vec<Vec2>,
     collected: [bool; 3],
+    objectives: ferravex_play::objective::ObjectiveGraph<6>,
     switches: u8,
     gate: Aabb2,
     won: bool,
@@ -107,6 +130,7 @@ impl Game {
             walls,
             crystals,
             collected: [false; 3],
+            objectives: objectives(),
             switches: 0,
             gate: Aabb2::from_min_size(at(b'G') - vec2(TILE * 0.5, 0.175), vec2(TILE, 0.35)),
             won: false,
@@ -138,10 +162,29 @@ impl Game {
         self.notice = text;
         self.notice_time = 3.5;
     }
+    fn objective_event(&mut self, index: usize) {
+        self.objectives
+            .event(index as u16 + 1, 1, self.objectives.last_event_serial() + 1)
+            .unwrap();
+        self.sync_objectives();
+    }
+    fn sync_objectives(&mut self) {
+        for (i, collected) in self.collected.iter_mut().enumerate() {
+            *collected = self.objectives.complete(i);
+        }
+        self.switches = if self.objectives.complete(4) {
+            2
+        } else if self.objectives.complete(3) {
+            1
+        } else {
+            0
+        };
+        self.won = self.objectives.complete(5);
+    }
     fn interact(&mut self) {
         for i in 0..self.crystals.len() {
             if !self.collected[i] && self.near(self.crystals[i]) {
-                self.collected[i] = true;
+                self.objective_event(i);
                 self.message(if self.count() == 3 {
                     "All three recovered. Find altar I, then altar II."
                 } else {
@@ -154,14 +197,14 @@ impl Game {
             if self.count() < 3 {
                 self.message("Altar I needs all three crystals.");
             } else if self.switches == 0 {
-                self.switches = 1;
+                self.objective_event(3);
                 self.message("Altar I awakened. The second altar is ready.");
             }
         } else if self.near(at(b'B')) {
             if self.switches == 0 {
                 self.message("Wake altar I first.");
             } else if self.switches == 1 {
-                self.switches = 2;
+                self.objective_event(4);
                 self.message("The seal is open. Follow the daylight.");
             }
         }
@@ -240,7 +283,7 @@ impl Game {
             self.interact();
         }
         if self.open() && self.position.distance(at(b'X')) < 1.2 {
-            self.won = true;
+            self.objective_event(5);
             self.message("Expedition complete.");
         }
     }
@@ -1013,6 +1056,32 @@ mod tests {
         );
         assert!(game.position.x < center(8, 13).x - TILE * 0.5 - RADIUS);
         assert!(game.position.x > at(b'S').x);
+    }
+    #[test]
+    fn objective_checkpoint_resumes_the_actual_altar_sequence() {
+        use ferravex_play::{objective::ObjectiveSnapshot, persistence::SaveData};
+        let mut game = Game::new();
+        for p in game.crystals.clone() {
+            game.position = p;
+            game.interact();
+        }
+        game.position = at(b'A');
+        game.interact();
+        let bytes = game.objectives.snapshot().encode(1).unwrap();
+        let mut restored = Game::new();
+        restored
+            .objectives
+            .restore(ObjectiveSnapshot::decode(&bytes).unwrap().0)
+            .unwrap();
+        restored.sync_objectives();
+        assert_eq!(restored.count(), 3);
+        assert_eq!(restored.switches, 1);
+        restored.position = at(b'B');
+        restored.interact();
+        assert!(restored.open());
+        restored.position = at(b'X');
+        restored.step(Input::default(), 1. / 120.);
+        assert!(restored.won);
     }
     #[test]
     fn gate_requires_crystals_and_ordered_altars() {

@@ -29,3 +29,5 @@ pub mod vehicle;
 pub mod racing;
 
 pub mod environment;
+
+pub mod objective;
