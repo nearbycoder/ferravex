@@ -64,6 +64,8 @@ pub struct Game {
     pub ccd_impacts: u64,
     transition: f32,
     launch_count: u32,
+    reward_rng: ferravex_engine::gameplay::loot::RewardRng,
+    drop_pity: ferravex_engine::gameplay::pity::PityCounter,
     trail_clock: f32,
     paddle_velocity: f32,
 }
@@ -113,6 +115,8 @@ impl Game {
             ccd_impacts: 0,
             transition: 0.0,
             launch_count: 0,
+            reward_rng: ferravex_engine::gameplay::loot::RewardRng::new(0x4f52424954),
+            drop_pity: ferravex_engine::gameplay::pity::PityCounter::new(6).unwrap(),
             trail_clock: 0.0,
             paddle_velocity: 0.,
         };
@@ -386,7 +390,11 @@ impl Game {
         if destroyed {
             self.world.remove(block.body);
             self.clears += 1;
-            if self.clears.is_multiple_of(8) && self.drops.len() < 8 {
+            let natural = ferravex_engine::gameplay::loot::RewardTable::new([3, 1])
+                .unwrap()
+                .roll(&mut self.reward_rng)
+                == 1;
+            if self.drops.len() < 8 && self.drop_pity.attempt(natural) {
                 self.drops.push(Drop { position });
             }
         }
@@ -567,5 +575,34 @@ mod chain_loop_tests {
         g.hit_block(4);
         assert_eq!(g.score, 600);
         assert_eq!(Game::new().score, 0);
+    }
+}
+
+#[cfg(test)]
+mod reward_loop_tests {
+    use super::*;
+    #[test]
+    fn actual_panel_destruction_never_leaves_more_than_five_unrewarded_clears() {
+        let mut g = Game::new();
+        let mut drought = 0;
+        let mut drops = 0;
+        for index in 0..35 {
+            g.hit_block(index);
+            if g.drops.is_empty() {
+                drought += 1;
+                assert!(drought < 6);
+            } else {
+                drought = 0;
+                drops += 1;
+                g.drops.clear();
+            }
+        }
+        assert!(drops >= 5);
+        let mut replay = Game::new();
+        for index in 0..35 {
+            replay.hit_block(index);
+            replay.drops.clear();
+        }
+        assert_eq!(g.drop_pity.misses(), replay.drop_pity.misses());
     }
 }
