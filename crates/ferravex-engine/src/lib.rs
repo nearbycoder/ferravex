@@ -59,3 +59,6 @@ pub mod system_order;
 
 /// See [`commands`] for the system contract and examples.
 pub mod commands;
+
+/// See [`pool`] for the system contract and examples.
+pub mod pool;
