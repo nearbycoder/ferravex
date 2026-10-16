@@ -45,6 +45,7 @@ struct Game {
     score: ferravex_play::gameplay::combo::ScoreChain,
     jumps: u32,
     elapsed: f32,
+    trial: ferravex_play::gameplay::trial::Trial<3>,
     respawn_flash: f32,
 }
 
@@ -90,6 +91,11 @@ impl Game {
             score: ferravex_play::gameplay::combo::ScoreChain::new(5., 2, 4).unwrap(),
             jumps: 0,
             elapsed: 0.0,
+            trial: {
+                let mut t = ferravex_play::gameplay::trial::Trial::new([12., 18., 30.]).unwrap();
+                t.start();
+                t
+            },
             respawn_flash: 0.0,
         }
     }
@@ -119,6 +125,7 @@ impl Game {
             return;
         }
         self.elapsed += dt;
+        self.trial.advance(dt).unwrap();
         self.score.advance(dt).unwrap();
         self.respawn_flash = (self.respawn_flash - dt).max(0.0);
         // A side platform moves before the motor, so standing passengers inherit its pose.
@@ -178,7 +185,14 @@ impl Game {
             self.checkpoint_lit = true;
             self.checkpoint = vec2(1410.0, 520.0);
         }
+        if self.position().x >= 900. && self.trial.splits()[0].is_none() {
+            self.trial.split(0).unwrap();
+        }
+        if self.position().x >= 1800. && self.trial.splits()[1].is_none() {
+            self.trial.split(1).unwrap();
+        }
         if self.position().x > 2560.0 && self.motor.grounded {
+            self.trial.split(2).unwrap();
             self.won = true;
         }
     }
@@ -598,6 +612,17 @@ async fn game() {
         label(zone, 34.0, 72.0, 15.0, Color::from_hex(0xa3ab91));
         label(
             &format!(
+                "{:.2}s / SPLITS {}",
+                game.trial.elapsed(),
+                game.trial.splits().iter().flatten().count()
+            ),
+            520.,
+            48.,
+            19.,
+            CREAM,
+        );
+        label(
+            &format!(
                 "{} POINTS / x{}",
                 game.score.total(),
                 game.score.multiplier()
@@ -648,6 +673,17 @@ async fn game() {
                 Color::new(0.08, 0.13, 0.11, 0.96),
             );
             label("THE LIGHT CARRIES ON", 422.0, 280.0, 33.0, CREAM);
+            label(
+                &format!(
+                    "{:?} / {:.2}s",
+                    game.trial.medal().unwrap(),
+                    game.trial.elapsed()
+                ),
+                505.,
+                370.,
+                19.,
+                GREEN,
+            );
             label(
                 &format!(
                     "{collected} embers / {} points / {} falls",
@@ -832,5 +868,28 @@ mod collectible_score_tests {
         g.respawn();
         assert_eq!(g.score.chain(), 0);
         assert_eq!(g.score.total(), 400);
+    }
+}
+
+#[cfg(test)]
+mod trial_loop_tests {
+    use super::*;
+    #[test]
+    fn ordinary_completion_records_all_splits_and_freezes_the_medal() {
+        let mut g = Game::new();
+        for _ in 0..2400 {
+            g.update(g.autoplay(), 1. / 120.);
+            if g.won {
+                break;
+            }
+        }
+        assert!(g.trial.finished());
+        let splits = g.trial.splits();
+        assert!(splits[0] < splits[1] && splits[1] < splits[2]);
+        assert!(g.trial.medal().is_some());
+        let time = g.trial.elapsed();
+        g.update(Input::default(), 1.);
+        assert_eq!(g.trial.elapsed(), time);
+        assert!(!Game::new().trial.finished());
     }
 }
