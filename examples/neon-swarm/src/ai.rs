@@ -335,6 +335,7 @@ mod tests {
                 radius: 14.,
                 speed: 100.,
                 heavy: false,
+                attack: crate::game::attack_timeline(false),
                 flash: 0.,
             },
         ));

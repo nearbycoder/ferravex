@@ -11,8 +11,8 @@ platform checks are recorded only when actually performed.
 | 1 | Gameplay tuning profiles | [PR 24](https://github.com/nearbycoder/ferravex/pull/24), merged |
 | 2 | Ability system | [PR 25](https://github.com/nearbycoder/ferravex/pull/25), merged |
 | 3 | Attributes and status effects | [PR 26](https://github.com/nearbycoder/ferravex/pull/26), merged |
-| 4 | Combat feedback controller | Implemented; locally validated |
-| 5 | Attack timelines and telegraphs | Pending |
+| 4 | Combat feedback controller | [PR 27](https://github.com/nearbycoder/ferravex/pull/27), merged |
+| 5 | Attack timelines and telegraphs | Implemented; locally validated |
 | 6 | Squad tactics and cover selection | Pending |
 | 7 | Encounter director | Pending |
 | 8 | Navigation meshes and traversal links | Pending |
@@ -96,3 +96,20 @@ rejection. Neon Swarm now routes accepted sounds through this controller and
 shows a brief damage border. Its gameplay clock is unchanged. Local tests cover
 bounded bursts, duplicate events, decay, invalid inputs, channel suppression and
 online no-hit-stop behavior; Clippy and native/Wasm consumer checks also run.
+
+## 5. Fixed-clock action timelines
+
+`action::ActionTimeline` models windup, active and recovery windows, an authored
+windup cancellation cutoff, forced interruption and a single buffered follow-up.
+Updates emit at most eight ordered transition reports with action serials and
+substep offsets. Gameplay owns hit queries and resource commit; animation consumes
+the authoritative phase. `HitWindow<N>` prevents duplicate targets in one action,
+rejects stale serials and reports bounded target capacity. Reservations compose
+with the ability bank: cancel before commitment refunds, active commitment spends.
+
+Neon enemies now wind up before contact damage, visibly telegraph the windup,
+reduce movement while planted/recovering and can be interrupted by an early shot.
+Damage still requires real proximity at activation and ordinary player invulnerability/
+dash rules. The new combat rules use record context 3. Local tests cover exact
+phase boundaries, event order/offsets, partitioning, interruption, buffering,
+resource commitment and hit-window deduplication, plus ordinary swarm autoplay.

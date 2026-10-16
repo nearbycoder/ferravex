@@ -214,7 +214,7 @@ async fn game() {
             } else {
                 None
             };
-            let _ = records.attempt("sector-07", 2, game.kills as u64, time);
+            let _ = records.attempt("sector-07", 3, game.kills as u64, time);
         }
         draw_hud(&mut hud_ui, &game, started, touch_mode);
         if started && !paused && game.phase == Phase::Playing && !touch_mode && !demo.autoplay {
@@ -440,6 +440,16 @@ fn draw_entities(game: &Game) {
             CORAL
         };
         let heading = (game.player - p.0).to_angle().to_degrees();
+        if enemy.attack.phase() == ferravex_play::action::ActionPhase::Windup {
+            let progress = enemy.attack.progress();
+            draw_circle_lines(
+                p.0.x,
+                p.0.y,
+                enemy.radius + 5. + progress * 10.,
+                2.5,
+                Color::new(1., 0.73, 0.3, 0.3 + progress * 0.7),
+            );
+        }
         let sides = if enemy.heavy { 6 } else { 4 };
         draw_poly(
             p.0.x + 2.0,
