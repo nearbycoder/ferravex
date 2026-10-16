@@ -44,7 +44,8 @@ mesh at load time. It transforms positions and inverse-transpose normals,
 corrects reflection winding, and rejects singular transforms, bad indices,
 transparent pieces and more than 65,535 vertices. Group nearby pieces so the
 combined bounds remain useful for culling. Crystal Cavern uses 3×3-tile chunks
-after its original vertex AO bake. This reduces draw calls but can submit extra
+after its original vertex AO bake, removing wall faces fully hidden by solid
+neighbors after baking. This reduces draw calls but can submit extra
 triangles at chunk edges; measure the tradeoff for the scene.
 
 The shared native/browser shadow depth passes use slope-scaled polygon offset
