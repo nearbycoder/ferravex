@@ -27,3 +27,5 @@ Health drops attract within 130 pixels when unobstructed; cover blocks attractio
 Spawns now select the farthest eligible perimeter location at least 260 pixels from the player and clear of live enemies. Unsafe locations defer admission before spending wave credits.
 
 Two concentrated hits stagger armored brutes for 0.8 seconds, canceling their attack and stopping pursuit. A cyan ring signals the opening. Hits cannot extend an active stagger indefinitely.
+
+A 20-point shield absorbs confirmed damage before health. Four seconds without a hit starts 8 points/second of recovery, rewarding a successful escape. Shield hits still break score chains and preserve ordinary invulnerability timing.

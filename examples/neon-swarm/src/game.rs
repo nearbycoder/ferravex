@@ -72,6 +72,7 @@ pub struct Game {
     velocity: Vec2,
     recoil: Vec2,
     pub health: i32,
+    pub shield: ferravex_play::gameplay::shield::Shield,
     pub phase: Phase,
     pub wave: u32,
     pub kills: u32,
@@ -116,6 +117,7 @@ impl Game {
             velocity: Vec2::ZERO,
             recoil: Vec2::ZERO,
             health: 100,
+            shield: ferravex_play::gameplay::shield::Shield::new(20., 8., 4.).unwrap(),
             phase: Phase::Playing,
             wave: 1,
             kills: 0,
@@ -233,6 +235,7 @@ impl Game {
         }
         self.time += dt;
         self.score.advance(dt).unwrap();
+        self.shield.advance(dt).unwrap();
         self.abilities.advance(dt).unwrap();
         self.resource.advance(dt).unwrap();
         self.dash_cooldown = self.abilities.remaining(1).unwrap();
@@ -310,15 +313,14 @@ impl Game {
             enemy.knockback *= (-10. * dt).exp();
             p.0 = move_body(p.0, (velocity + enemy.knockback) * dt, enemy.radius);
             let within_range = p.0.distance(self.player) < enemy.radius + PLAYER_RADIUS;
-            let attack = enemy
-                .attack
-                .step(dt, within_range && !enemy.stagger.active())
-                .unwrap();
+            let can_attack = within_range && !enemy.stagger.active();
+            let attack = enemy.attack.step(dt, can_attack).unwrap();
             if within_range && attack.activated() && self.hurt_time == 0.0 && self.dash_time == 0.0
             {
                 let damage =
                     ((if enemy.heavy { 24. } else { 14. }) * self.tuning.difficulty).round() as i32;
-                self.health = (self.health - damage.max(1)).max(0);
+                let unabsorbed = self.shield.absorb(damage.max(1) as f32).unwrap().ceil() as i32;
+                self.health = (self.health - unabsorbed).max(0);
                 self.hurt_time = 0.75;
                 self.score.break_chain();
                 self.recoil = (self.player - p.0).try_normalize().unwrap_or(-self.facing) * 150.;
@@ -587,7 +589,8 @@ mod tests {
                 break;
             }
         }
-        assert_eq!(game.health, 76);
+        assert_eq!(game.health, 96);
+        assert_eq!(game.shield.value(), 0.);
         assert!(game.recoil.length() > 100.);
     }
 
@@ -895,5 +898,27 @@ mod stagger_loop_tests {
             e.stagger.advance(1.).unwrap();
             assert!(!e.stagger.active());
         }
+    }
+}
+
+#[cfg(test)]
+mod shield_loop_tests {
+    use super::*;
+    #[test]
+    fn movement_time_recovers_shields_after_the_quiet_window() {
+        let mut g = Game::new();
+        g.remaining = 0;
+        g.intermission = 100.;
+        assert_eq!(g.shield.absorb(25.).unwrap(), 5.);
+        for _ in 0..360 {
+            g.update(Input::default(), 1. / 120.);
+        }
+        assert_eq!(g.shield.value(), 0.);
+        for _ in 0..480 {
+            g.update(Input::default(), 1. / 120.);
+        }
+        assert_eq!(g.shield.value(), 20.);
+        assert_eq!(g.health, 100);
+        assert_eq!(Game::new().shield.value(), 20.);
     }
 }
