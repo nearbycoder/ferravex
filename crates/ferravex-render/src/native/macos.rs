@@ -329,7 +329,23 @@ impl Host {
                                 _ => (0, 0),
                             };
                             if code != 0 {
-                                let down = flags & (1 << bit) != 0;
+                                let aggregate = flags & (1 << bit) != 0;
+                                // flagsChanged identifies the changed physical key;
+                                // the aggregate flag stays set while its other side is held.
+                                let down = aggregate && !self.keys.contains(&code);
+                                if !aggregate {
+                                    let pair = match bit {
+                                        17 => [0xffe1, 0xffe2],
+                                        18 => [0xffe3, 0xffe4],
+                                        19 => [0xffe9, 0xffea],
+                                        _ => [0xffeb, 0xffec],
+                                    };
+                                    for other in pair {
+                                        if other != code && self.keys.remove(&other) {
+                                            out.push(Event::Key(other, false));
+                                        }
+                                    }
+                                }
                                 if if down {
                                     self.keys.insert(code)
                                 } else {

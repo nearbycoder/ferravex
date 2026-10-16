@@ -116,6 +116,31 @@ fn keys(presses: Id, down: bool) {
             if k.is_null() {
                 continue;
             }
+            let code = match uint(k, c"keyCode") {
+                0xe0 => 0xffe3,
+                0xe1 => 0xffe1,
+                0xe2 => 0xffe9,
+                0xe3 => 0xffeb,
+                0xe4 => 0xffe4,
+                0xe5 => 0xffe2,
+                0xe6 => 0xffea,
+                0xe7 => 0xffec,
+                0x3a..=0x45 => 0xffbe + uint(k, c"keyCode") as u32 - 0x3a,
+                0x4f => 0xff53,
+                0x50 => 0xff51,
+                0x51 => 0xff54,
+                0x52 => 0xff52,
+                0x28 => 0xff0d,
+                0x29 => 0xff1b,
+                0x2a => 0xff08,
+                0x2b => 0xff09,
+                0x4c => 0xffff,
+                _ => 0,
+            };
+            if code != 0 {
+                push(Event::Key(code, down));
+                continue;
+            }
             let chars = id(k, c"charactersIgnoringModifiers");
             let p = cstr(chars, c"UTF8String");
             if p.is_null() {
