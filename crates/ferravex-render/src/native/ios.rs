@@ -28,6 +28,7 @@ unsafe extern "C" {
     fn dlsym(handle: *mut c_void, name: *const c_char) -> *const c_void;
 }
 thread_local! {
+ static WINDOW:Cell<Id>=const {Cell::new(ptr::null_mut())};
  static SCENE:Cell<Id>=const {Cell::new(ptr::null_mut())};
  static ACTIVE:Cell<bool>=const{Cell::new(true)};
  static CURRENT:Cell<(Id,u32)>=const{Cell::new((ptr::null_mut(),0))};

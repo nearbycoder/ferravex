@@ -277,6 +277,7 @@ pub struct NativeWindow {
     mesh_upload_bytes: u64,
     gpu_timer: Option<GpuTimer>,
     present_count: u64,
+    swap_interval: i32,
     width: u32,
     height: u32,
     last_clear: Color,
@@ -305,6 +306,7 @@ impl NativeWindow {
             mesh_upload_bytes: 0,
             gpu_timer: None,
             present_count: 0,
+            swap_interval: 1,
             last_clear: Color::new(0.0, 0.0, 0.0, 1.0),
             last_batches: Vec::new(),
             last_effects: Vec::new(),
@@ -353,7 +355,22 @@ impl NativeWindow {
         let mut conf = self.conf.clone();
         conf.window_width = w as i32;
         conf.window_height = h as i32;
-        let next = Self::new(&conf)?;
+        let timing = self.gpu_timer.is_some();
+        self.finish_gpu_timing();
+        let completed = self
+            .gpu_timer
+            .as_ref()
+            .map(|t| t.completed.clone())
+            .unwrap_or_default();
+        let mut next = Self::new(&conf)?;
+        next.present_count = self.present_count;
+        next.set_swap_interval(self.swap_interval);
+        if timing
+            && next.enable_gpu_timing()
+            && let Some(timer) = &mut next.gpu_timer
+        {
+            timer.completed.extend(completed);
+        }
         *self = next;
         Ok(())
     }
@@ -376,6 +393,9 @@ impl NativeWindow {
     }
 
     pub fn set_swap_interval(&mut self, interval: i32) {
+        if interval >= 0 {
+            self.swap_interval = interval;
+        }
         self.host.set_swap_interval(interval);
     }
     pub fn set_cursor(&mut self, grab: bool, visible: bool) {
@@ -2425,7 +2445,10 @@ mod tests {
         .unwrap();
         window.set_swap_interval(0);
         assert!(window.enable_gpu_timing());
-        for _ in 0..4 {
+        for i in 0..4 {
+            if i == 2 {
+                window.recreate().unwrap();
+            }
             window.present(&[], &[], crate::BLACK);
         }
         window.finish_gpu_timing();
