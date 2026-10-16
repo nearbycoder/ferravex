@@ -1,4 +1,6 @@
 //! Tracks, bounded playback/events, pose blending and reusable animation controllers.
+mod contact;
+pub use contact::*;
 mod graph;
 mod playback;
 mod pose;
