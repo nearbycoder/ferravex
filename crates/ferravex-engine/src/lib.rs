@@ -77,3 +77,6 @@ pub mod shuffle;
 
 /// See [`snapshots`] for the system contract and examples.
 pub mod snapshots;
+
+/// See [`time`] for the system contract and examples.
+pub mod time;
