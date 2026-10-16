@@ -32,3 +32,5 @@ pub mod inventory;
 pub mod crafting;
 
 pub mod upgrades;
+
+pub mod magazine;
