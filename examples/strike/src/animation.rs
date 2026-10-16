@@ -1,4 +1,4 @@
-//! Authored eight-bone operators and four-bone first-person weapons. Simulation
+//! Authored ten-bone operators and four-bone first-person weapons. Simulation
 //! remains authoritative: these players consume replicated state for presentation.
 use ferravex_fps::{Player, RELOAD_TICKS, TICK_RATE};
 use ferravex_play::{
@@ -103,6 +103,8 @@ impl OperatorRig {
             translation(-0.32, 0.18, -0.15),
             translation(0.32, 0.18, -0.15),
             translation(-0.10, -0.18, -0.34),
+            translation(0., -0.37, 0.),
+            translation(0., -0.37, 0.),
         ];
         let skeleton = skeleton(
             &bind,
@@ -115,10 +117,12 @@ impl OperatorRig {
                 Some(1),
                 Some(1),
                 Some(6),
+                Some(3),
+                Some(4),
             ],
         );
         let idle = clip(
-            8,
+            10,
             2.,
             LoopMode::Repeat,
             vec![pos(
@@ -156,7 +160,7 @@ impl OperatorRig {
                 ],
             ));
             clip(
-                8,
+                10,
                 duration,
                 LoopMode::Repeat,
                 tracks,
@@ -173,7 +177,7 @@ impl OperatorRig {
             )
         };
         let air = clip(
-            8,
+            10,
             0.5,
             LoopMode::Clamp,
             vec![
@@ -183,7 +187,7 @@ impl OperatorRig {
             vec![],
         );
         let aim = clip(
-            8,
+            10,
             1.,
             LoopMode::Clamp,
             vec![
@@ -213,7 +217,7 @@ impl OperatorRig {
         );
         let seconds = RELOAD_TICKS as f32 / TICK_RATE as f32;
         let reload = clip(
-            8,
+            10,
             seconds,
             LoopMode::Clamp,
             vec![
@@ -239,7 +243,7 @@ impl OperatorRig {
             vec![],
         );
         let fire = clip(
-            8,
+            10,
             0.12,
             LoopMode::Clamp,
             vec![pos(
@@ -340,31 +344,36 @@ impl OperatorRig {
 }
 pub struct OperatorMotion {
     player: GraphPlayer,
-    world: [[f32; 16]; 8],
-    matrices: [[f32; 16]; 8],
+    world: [[f32; 16]; 10],
+    matrices: [[f32; 16]; 10],
     palette: SkinPalette,
     events: EventBuffer<8>,
     fire: f32,
     previous_ammo: u8,
     alive: bool,
+    feet: [FootPlant; 2],
 }
 impl OperatorMotion {
     pub fn new(rig: &OperatorRig) -> Self {
         Self {
             player: GraphPlayer::new(&rig.graph, IDLE).unwrap(),
-            world: [IDENTITY; 8],
-            matrices: [IDENTITY; 8],
-            palette: SkinPalette::new(&[IDENTITY; 8]).unwrap(),
+            world: [IDENTITY; 10],
+            matrices: [IDENTITY; 10],
+            palette: SkinPalette::new(&[IDENTITY; 10]).unwrap(),
             events: EventBuffer::default(),
             fire: 1.,
             previous_ammo: 30,
             alive: true,
+            feet: [FootPlant::new(0.35, 0.035).unwrap(); 2],
         }
     }
     pub fn update(&mut self, rig: &OperatorRig, p: &Player, dt: f32) {
         if !self.alive && p.health > 0 {
             self.player.reset(IDLE).unwrap();
             self.fire = 1.;
+            for foot in &mut self.feet {
+                foot.clear();
+            }
         }
         let speed = (p.velocity.x * p.velocity.x + p.velocity.z * p.velocity.z).sqrt();
         self.player.set_parameter(0, speed).unwrap();
@@ -406,6 +415,61 @@ impl OperatorMotion {
         self.previous_ammo = p.ammo;
         rig.skeleton
             .skin_palette_into(actor.pose(), &mut self.world, &mut self.matrices)
+            .unwrap();
+        self.palette.set(&self.matrices).unwrap();
+    }
+    /// Two downward support rays affect only rendered bones. Arena solids are
+    /// axis-aligned, so a downward top-face hit has world-Y normal.
+    pub fn ground_contacts(
+        &mut self,
+        rig: &OperatorRig,
+        p: &Player,
+        arena: &ferravex_fps::Arena,
+        dt: f32,
+    ) {
+        use ferravex_render::Vec3;
+        let mut pose = [Transform::default(); 10];
+        pose.copy_from_slice(self.player.animator().pose());
+        let rotation = Quat::from_rotation_y(-p.yaw);
+        let inverse = rotation.conjugate();
+        for (i, (hip, knee)) in [(3, 8), (4, 9)].into_iter().enumerate() {
+            let origin = Vec3::from_array(pose[hip].translation);
+            let animated = origin + Quat::from_array(pose[hip].rotation) * Vec3::new(0., -0.74, 0.);
+            let foot = p.position + rotation * animated;
+            let start = foot + Vec3::Y * 0.3;
+            let contact = if p.grounded {
+                arena
+                    .raycast(start, -Vec3::Y, 0.7)
+                    .map(|distance| FootContact {
+                        position: start - Vec3::Y * distance + Vec3::Y * 0.07,
+                        normal: Vec3::Y,
+                        support: 1,
+                        support_delta: Vec3::ZERO,
+                    })
+            } else {
+                None
+            };
+            let planted = p.grounded && animated.y < 0.2;
+            let target = self.feet[i]
+                .update(foot, contact, planted, dt.min(0.25))
+                .unwrap();
+            let target = foot.lerp(target.position, target.weight);
+            let target = inverse * (target - p.position);
+            let solved = TwoBone {
+                upper: 0.37,
+                lower: 0.37,
+            }
+            .solve(origin, target, origin - Vec3::Z)
+            .unwrap();
+            let upper =
+                Quat::from_rotation_arc(-Vec3::Y, (solved.joint - origin).normalize_or_zero());
+            let lower =
+                Quat::from_rotation_arc(-Vec3::Y, (solved.end - solved.joint).normalize_or_zero());
+            pose[hip].rotation = upper.to_array();
+            pose[knee].rotation = (upper.conjugate() * lower).to_array();
+        }
+        rig.skeleton
+            .skin_palette_into(&pose, &mut self.world, &mut self.matrices)
             .unwrap();
         self.palette.set(&self.matrices).unwrap();
     }
@@ -617,6 +681,36 @@ impl WeaponMotion {
 mod tests {
     use super::*;
     #[test]
+    fn ground_contact_changes_only_the_rendered_leg_palette() {
+        use ferravex_render::{Vec3, vec3};
+        let rig = OperatorRig::new();
+        let mut actor = OperatorMotion::new(&rig);
+        let p = Player::new(1, Vec3::ZERO);
+        let original = p.clone();
+        actor.update(&rig, &p, 1. / 60.);
+        let before = actor.palette().matrices().to_vec();
+        let arena = ferravex_fps::Arena {
+            solids: vec![ferravex_fps::Obstacle {
+                center: vec3(0., 0.04, 0.),
+                half_extents: vec3(2., 0.04, 2.),
+            }],
+            spawns: vec![],
+        };
+        for _ in 0..30 {
+            actor.ground_contacts(&rig, &p, &arena, 1. / 60.);
+        }
+        assert_ne!(actor.palette().matrices(), before);
+        assert_eq!(p, original);
+        assert!(
+            actor
+                .palette()
+                .matrices()
+                .iter()
+                .flatten()
+                .all(|v| v.is_finite())
+        );
+    }
+    #[test]
     fn operators_walk_aim_reload_and_fire_without_mutating_game_state() {
         let rig = OperatorRig::new();
         let mut actor = OperatorMotion::new(&rig);
@@ -711,7 +805,7 @@ mod tests {
     fn authored_meshes_match_rig_joint_counts_and_bind_bounds() {
         let op = crate::geometry::build_operator();
         let rifle = crate::geometry::build_rifle();
-        assert_eq!(op.joint_count(), 8);
+        assert_eq!(op.joint_count(), 10);
         assert_eq!(rifle.joint_count(), 4);
         let actor = OperatorMotion::new(&OperatorRig::new());
         assert!(op.bounds(actor.palette()).is_ok());

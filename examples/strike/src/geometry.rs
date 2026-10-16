@@ -274,14 +274,16 @@ pub fn build_operator() -> ferravex_render::skinning::SkinnedMesh {
     m.cube(vec3(0., 1.66, -0.16), vec3(0.30, 0.09, 0.03), rgb(0x243331));
     for x in [-0.16, 0.16] {
         m.bone(if x < 0. { 3 } else { 4 });
-        m.cube(vec3(x, 0.44, 0.), vec3(0.23, 0.74, 0.27), cloth);
+        m.cube(vec3(x, 0.625, 0.), vec3(0.23, 0.37, 0.27), cloth);
+        m.bone(if x < 0. { 8 } else { 9 });
+        m.cube(vec3(x, 0.255, 0.), vec3(0.23, 0.37, 0.27), cloth);
         m.cube(vec3(x, 0.12, -0.07), vec3(0.25, 0.23, 0.40), boots);
         m.bone(if x < 0. { 5 } else { 6 });
         m.cube(vec3(x * 2., 1.05, -0.15), vec3(0.17, 0.46, 0.21), cloth);
     }
     m.bone(7);
     m.cube(vec3(0.22, 1.10, -0.49), vec3(0.12, 0.16, 0.78), armor);
-    m.into_skin(8)
+    m.into_skin(10)
 }
 
 pub fn build_rifle() -> ferravex_render::skinning::SkinnedMesh {

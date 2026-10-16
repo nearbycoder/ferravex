@@ -558,6 +558,7 @@ async fn game() {
             }
             if let Some(motion) = operator_motion.get_mut(p.id as usize) {
                 motion.update(&operator_rig, p, animation_dt);
+                motion.ground_contacts(&operator_rig, p, &game.arena, animation_dt);
                 if active && p.id != local.id && p.health > 0 && p.grounded {
                     for _ in 0..motion.footsteps() {
                         audio::play(
@@ -582,6 +583,7 @@ async fn game() {
         // interpolation includes an older copy of the local player.
         if let Some(motion) = operator_motion.get_mut(local.id as usize) {
             motion.update(&operator_rig, &local, animation_dt);
+            motion.ground_contacts(&operator_rig, &local, &game.arena, animation_dt);
         }
         #[cfg(not(target_arch = "wasm32"))]
         let round = client.as_ref().and_then(|c| c.tactical_view());

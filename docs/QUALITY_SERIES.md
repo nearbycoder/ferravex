@@ -21,8 +21,8 @@ platform checks are recorded only when actually performed.
 | 11 | Richer physics materials | [PR 34](https://github.com/nearbycoder/ferravex/pull/34), merged |
 | 12 | Fast-body collision robustness | [PR 35](https://github.com/nearbycoder/ferravex/pull/35), merged |
 | 13 | Breakable mechanisms | [PR 36](https://github.com/nearbycoder/ferravex/pull/36), merged |
-| 14 | Camera anticipation and authored zones | Implemented; locally validated |
-| 15 | Procedural contact animation | Pending |
+| 14 | Camera anticipation and authored zones | [PR 37](https://github.com/nearbycoder/ferravex/pull/37), merged |
+| 15 | Procedural contact animation | Implemented; locally validated |
 | 16 | Procedural environment builders | Pending |
 | 17 | Acoustic zones and adaptive music | Pending |
 | 18 | Editable touch and accessibility layouts | Pending |
@@ -232,3 +232,18 @@ slow-ball regression from item 12: balls retain their original minimum sweep
 motion threshold, preventing tiny floor sweeps from stopping ordinary rolling.
 Local zone/priority/first-person/constant-distance tests, all marble courses and
 the physics suite pass, with strict Clippy and Wasm checks.
+
+## 15. Contact animation
+
+`animation::TwoBone` solves bounded analytic limbs with pole controls and clamped
+reach; `FootPlant` blends validated support contacts, tracks support identity and
+accepts current support displacement without changing a physics body. Hosts own
+support queries and animation contact phases. Strike's operators now have actual
+knee bones, split upper/lower leg geometry and two bounded downward support rays
+per visible actor. IK adjusts only the skin palette after the authored graph.
+The current arena adapter supports horizontal axis-aligned top faces; arbitrary
+slope normals and moving-support transforms must come from a richer host query.
+Milestone validation: 568 local workspace tests, strict Clippy, all-feature Wasm,
+zero-external-dependency audit and a viewed native Strike render smoke passed.
+Tests include limb lengths, unreachable/degenerate poles, support movement/release
+and unchanged authoritative player state under rendered ground correction.
