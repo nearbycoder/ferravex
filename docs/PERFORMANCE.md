@@ -821,3 +821,75 @@ allocation distributions. The final physics-lab sample is within its allowance,
 but its GPU code was not optimized and the earlier tail remains evidence. Earlier
 iteration size/work/timing costs also remain for the final audit. Neither reports
 nor thresholds were overwritten to hide failed comparisons.
+
+## Iteration 16: bounded shared HUD and menus
+
+The renderer now shares clipped panels/gradients, aligned fitted/wrapped bitmap
+text, buttons, modal interaction scopes and a persistent formatting arena. It
+uses the existing screen-space immediate stream on native GL and WebGL2 without
+changing world camera/material/depth state. Horizontal bitmap runs replace
+individual lit-pixel rectangles. Strike's HUD/menu/roster, Neon's HUD/menus and
+Orchard's build/upgrade/wave/restart controls adopt it. The navigation adapter
+honors remapped player confirmation as well as fixed host navigation; ordered
+mouse positions and touch IDs preserve capture and release semantics. See [UI](UI.md).
+
+`target/perf/iteration-16-final/report.json` records production source
+`82dd3d056a57cb28dbd507986bc35b4df30fba0c`, compared with the unchanged
+iteration-15-final baseline. All fifteen games ran twice with 30 warmup and 120
+measured frames each (240 samples/game). The existing allowances remain 20%, a
+1000 µs CPU/submit/software floor, 20 µs GPU floor and 5% artifact growth. Native
+hashes and raw/deterministic gzip-9 sizes for all native/Wasm artifacts match the
+report; staged browser Wasm matches those measured artifacts. No builds, tests or
+agent-created game tabs ran alongside this measurement.
+
+**The comparison gate failed with four flags**, retained in the report:
+
+- Neon Wasm grew from 323917 to 352752 bytes; gzip from 120735 to 132646.
+- Orchard Wasm grew from 422156 to 444533 bytes. Its gzip grew from 167827 to
+  175802, within the existing 5% allowance.
+- The unchanged 3D physics lab workload had GPU p95 103.837 µs versus 31.259 µs,
+  above its 51.259 µs allowance. Its geometry, upload, allocation and simulation
+  work distributions are identical. This tail was not isolated or fixed here.
+
+Artifact costs for the three adopting games (raw / gzip-9 bytes):
+
+| Game | Native before → after | Wasm before → after |
+|---|---|---|
+| Strike | 1032824 / 502568 → 1056520 / 514285 | 467231 / 177768 → 486967 / 184843 |
+| Neon Swarm | 841584 / 403752 → 864768 / 415455 | 323917 / 120735 → 352752 / 132646 |
+| Orchard Guard | 950200 / 462806 → 976992 / 476293 | 422156 / 167827 → 444533 / 175802 |
+
+Measured whole-game changes, not isolated UI microbenchmarks:
+
+| Game | CPU mean / p95 µs before → after | Mean vertices before → after | Mean upload bytes before → after |
+|---|---|---|---|
+| Strike | 45.152 / 61.468 → 41.659 / 57.809 | 24228.6 → 23880.6 | 39998.93 → 28862.93 |
+| Neon Swarm | 63.615 / 79.817 → 43.831 / 55.278 | 13536.9 → 10175.9 | 432944.6 → 325392.6 |
+| Orchard Guard | 203.404 / 222.023 → 182.142 / 203.584 | 41890.9 → 38470.9 | 1340508.8 → 1231068.8 |
+
+Draw-call distributions are unchanged for these games. Strike removed two HUD
+formatting allocations and 5 bytes per frame: mean calls 2.0083 → 0.0083, p95/p99
+2 → 0; mean bytes 13.533 → 8.533, p95/p99 5 → 0. Two sampled frames still each
+allocate 1024 bytes elsewhere in the game. Neon removed four HUD allocations and
+40 bytes/frame: means 11.2333 → 7.2333 calls and 259.575 → 219.575 bytes; it still
+allocates elsewhere. Orchard remains 6 calls / 92 bytes per frame because its
+legacy HUD formatting remains. A separate allocator test records **zero calls**
+across 1000 warmed shared-UI layout/format/clip/paint frames. Each Ui reserves
+213504 CPU bytes on this 64-bit host, plus the renderer's shared geometry stream;
+startup/worst-case stream growth and UI construction are outside the warmed test.
+
+No claim of flat overall timing follows from passing the generous timing floors.
+For example, physics-3d CPU p95 increased 1354.279 → 1848.327 µs (within its 1000 µs
+floor); Orchard submit p99 increased 117.706 → 707.230 µs. All earlier iteration
+size/work/timing costs remain for the final audit. This baseline does not resolve
+or erase them, and the GPU flag above remains open.
+
+Local validation: 454 regular workspace tests; 11 separately enabled X11/GLX/ALSA
+checks including actual UI clip/paint-order pixels; strict native and Wasm library
+Clippy and Rustdoc; all fifteen native release bins and Wasm games; all fifteen
+360-frame native gameplay/PNG checks; existing real-Wasm input/audio/animation/
+effects/content contracts; new real-Wasm UI press/release, same-frame drag-out,
+multi-touch, focus, settings blocking and actual Orchard build/wave integration;
+and 21 site/search/audit/performance Python tests. Browser visual checks confirmed
+Neon keyboard start/focus, Orchard building/help spacing and Strike's smooth fade,
+with no captured warnings/errors. No iOS or unavailable native device tests ran.

@@ -3077,6 +3077,60 @@ mod linux {
             assert_eq!(&pixels[at..at + 4], &[0, 0, 255, 255]);
         }
         #[test]
+        #[ignore = "requires a live X11 display and OpenGL context"]
+        fn shared_ui_clipping_and_paint_order_match_gpu_pixels() {
+            use crate::ui::{Ui, UiRect, Viewport};
+            let mut window = NativeWindow::new(&Conf {
+                window_width: 96,
+                window_height: 64,
+                ..Default::default()
+            })
+            .unwrap();
+            window.set_swap_interval(0);
+            let mut ui = Ui::new();
+            crate::input::host_frame(1. / 60., 96, 64, || {
+                crate::set_default_camera();
+                crate::draw_rectangle(0., 0., 96., 64., crate::Color::new(0., 0., 1., 1.));
+                ui.begin(Viewport::fit([96., 64.], [96., 64.], [0.; 4]).unwrap());
+                ui.push_clip(UiRect {
+                    min: [16., 16.],
+                    size: [32., 32.],
+                })
+                .unwrap();
+                ui.panel(
+                    UiRect {
+                        min: [0.; 2],
+                        size: [96., 64.],
+                    },
+                    crate::Color::new(1., 0., 0., 1.),
+                )
+                .unwrap();
+                ui.panel(
+                    UiRect {
+                        min: [32., 32.],
+                        size: [64.; 2],
+                    },
+                    crate::Color::new(0., 1., 0., 1.),
+                )
+                .unwrap();
+                ui.finish(false);
+                ui.paint();
+            });
+            crate::read(|s| {
+                window.present_scene(&s.vertices, &s.batches, crate::BLACK, Some(&s.retained))
+            });
+            let pixels = window.pixels();
+            let (w, _) = window.size();
+            let pixel = |x: usize, y: usize| {
+                let at = (y * w as usize + x) * 4;
+                pixels[at..at + 3].to_vec()
+            };
+            assert_eq!(pixel(8, 8), vec![0, 0, 255]);
+            assert_eq!(pixel(20, 20), vec![255, 0, 0]);
+            assert_eq!(pixel(40, 40), vec![0, 255, 0]);
+            assert_eq!(pixel(56, 40), vec![0, 0, 255]);
+        }
+        #[test]
         fn event_union_covers_all_public_records() {
             assert_eq!(
                 std::mem::size_of::<XEvent>(),

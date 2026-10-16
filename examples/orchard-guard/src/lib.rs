@@ -3,6 +3,7 @@ mod level;
 use ferravex_core::FixedClock;
 use ferravex_render::audio::{Cue, GameAudio, Surface};
 use ferravex_render::input::{PlayerInput, Preset};
+use ferravex_render::ui::{Align, ButtonStyle, TextStyle, Ui, UiRect, Viewport};
 use ferravex_render::{canvas::Canvas2D, demo::Demo, prelude::*};
 use game::*;
 use std::sync::Arc;
@@ -30,36 +31,38 @@ fn center(s: &str, x: f32, y: f32, size: f32, color: Color) {
         color,
     );
 }
-fn button(rect: Rect, title: &str, subtitle: &str, enabled: bool, pointer: Option<Vec2>) -> bool {
-    let hover = pointer.is_some_and(|p| rect.contains(p));
-    draw_rectangle(
-        rect.x,
-        rect.y,
-        rect.w,
-        rect.h,
-        if enabled {
-            if hover {
-                Color::from_hex(0x4d7044)
-            } else {
-                GREEN
-            }
-        } else {
-            Color::from_hex(0xb1b49c)
+fn button(ui: &mut Ui, id: u64, rect: Rect, title: &str, subtitle: &str, enabled: bool) {
+    ui.button(
+        id,
+        UiRect {
+            min: [rect.x, rect.y],
+            size: [rect.w, rect.h],
         },
-    );
-    label(title, rect.x + 15., rect.y + 24., 19., CREAM);
-    label(
+        title,
+        enabled,
+        ButtonStyle {
+            fill: GREEN,
+            ink: CREAM,
+            focus: GOLD,
+            disabled: Color::from_hex(0xb1b49c),
+            size: 17.,
+        },
+    )
+    .unwrap();
+    ui.text(
+        UiRect {
+            min: [rect.x + 10., rect.y + 37.],
+            size: [rect.w - 20., 14.],
+        },
         subtitle,
-        rect.x + 15.,
-        rect.y + 43.,
-        14.,
-        if enabled {
-            Color::from_hex(0xd9dfb8)
-        } else {
-            CREAM
+        TextStyle {
+            size: 12.,
+            color: CREAM,
+            align: Align::Center,
+            ..Default::default()
         },
-    );
-    enabled && hover
+    )
+    .unwrap();
 }
 fn tree(p: Vec2, variant: usize) {
     draw_ellipse(
@@ -295,7 +298,7 @@ fn field(g: &Game) {
         );
     }
 }
-fn hud(g: &Game, pointer: Option<Vec2>, click: bool) -> Option<Action> {
+fn hud(ui: &mut Ui, g: &Game) {
     draw_rectangle(0., 0., 1200., 70., CREAM);
     label("ORCHARD GUARD", 28., 33., 28., INK);
     label(
@@ -327,7 +330,9 @@ fn hud(g: &Game, pointer: Option<Vec2>, click: bool) -> Option<Action> {
     draw_circle(1060., 32., 9., GOLD);
     label(&format!("{}", g.money), 1078., 39., 24., INK);
     draw_rectangle(0., 660., 1200., 100., CREAM);
-    let mut action = None;
+    if g.outcome != Outcome::Playing {
+        return;
+    }
     if let Some(tower) = g.towers[g.selected] {
         label(tower.kind.name(), 28., 692., 20., INK);
         label(
@@ -354,49 +359,39 @@ fn hud(g: &Game, pointer: Option<Vec2>, click: bool) -> Option<Action> {
         } else {
             format!("UPGRADE · {cost}")
         };
-        if button(
+        button(
+            ui,
+            3,
             Rect::new(260., 683., 190., 55.),
             &title,
             "[U]  More power + range",
             tower.level < 2 && g.money >= cost,
-            pointer,
-        ) && click
-        {
-            action = Some(Action::Upgrade);
-        }
+        );
     } else {
         label("EMPTY PLOT", 28., 696., 20., INK);
-        label(
-            "Choose what to grow",
-            28.,
-            721.,
-            15.,
-            Color::from_hex(0x727b59),
-        );
-        if button(
+        label("Choose a tower", 28., 721., 15., Color::from_hex(0x727b59));
+        button(
+            ui,
+            1,
             Rect::new(240., 683., 190., 55.),
             "SEED SLING · 60",
             "[1]  Fast damage",
             g.money >= 60,
-            pointer,
-        ) && click
-        {
-            action = Some(Action::Build(Kind::Seed));
-        }
-        if button(
+        );
+        button(
+            ui,
+            2,
             Rect::new(443., 683., 190., 55.),
             "FROST HIVE · 80",
             "[2]  Slow the swarm",
             g.money >= 80,
-            pointer,
-        ) && click
-        {
-            action = Some(Action::Build(Kind::Frost));
-        }
+        );
     }
-    label("Click a plot to build or upgrade", 670., 701., 16., GREEN);
+    label("Select a plot", 670., 701., 16., GREEN);
     label("R restart", 670., 727., 14., Color::from_hex(0x727b59));
-    if button(
+    button(
+        ui,
+        4,
         Rect::new(957., 683., 215., 55.),
         if g.active {
             "WAVE IN PROGRESS"
@@ -405,12 +400,7 @@ fn hud(g: &Game, pointer: Option<Vec2>, click: bool) -> Option<Action> {
         },
         &g.level.wave_hint,
         !g.active,
-        pointer,
-    ) && click
-    {
-        action = Some(Action::Wave);
-    }
-    action
+    );
 }
 enum Action {
     Build(Kind),
@@ -427,11 +417,14 @@ async fn game() {
     let mut clock = FixedClock::new(60., 8);
     let mut sound = GameAudio::new();
     let mut player_input = PlayerInput::preset("orchard-guard", Preset::Strategy);
+    let mut hud_ui = Ui::new();
+    hud_ui.set_auto_focus(false);
     loop {
         if let Some(next) = content.poll(demo.dt(), |text| {
             Ok(Game::with_level(Arc::new(level::Level::parse(text)?)))
         }) {
             g = next;
+            hud_ui.cancel();
             clock.reset();
             sound = GameAudio::new();
         }
@@ -443,12 +436,12 @@ async fn game() {
             .into_iter()
             .find(|t| t.phase == TouchPhase::Started);
         let pointer = canvas.pointer(touch.as_ref().map_or_else(|| cursor, |t| t.position));
-        let click =
-            (player_input.pressed("primary") || touch.is_some()) && player_input.gameplay_active();
-        if player_input.pressed("restart")
-            || g.outcome != Outcome::Playing && player_input.pressed("confirm")
-        {
+        let click = (player_input.pressed("primary") || touch.is_some())
+            && player_input.gameplay_active()
+            && !(player_input.cursor_is_virtual() && hud_ui.focused().is_some());
+        if player_input.pressed("restart") {
             g = Game::with_level(g.level.clone());
+            hud_ui.cancel();
             clock.reset();
         }
         if g.outcome == Outcome::Playing {
@@ -510,21 +503,11 @@ async fn game() {
         clear_background(Color::from_hex(0x27372a));
         set_camera(&canvas.camera());
         field(&g);
-        let action = hud(&g, pointer, click);
-        if g.outcome == Outcome::Playing {
-            match action {
-                Some(Action::Build(kind)) => {
-                    g.build(g.selected, kind);
-                }
-                Some(Action::Upgrade) => {
-                    g.upgrade(g.selected);
-                }
-                Some(Action::Wave) => {
-                    g.launch();
-                }
-                None => {}
-            }
-        } else {
+        hud_ui.begin(
+            Viewport::fit([screen_width(), screen_height()], [1200., 760.], [0.; 4]).unwrap(),
+        );
+        hud(&mut hud_ui, &g);
+        if g.outcome != Outcome::Playing {
             draw_rectangle(0., 70., 1200., 590., Color::new(0.14, 0.20, 0.13, 0.45));
             draw_rectangle(375., 235., 450., 250., CREAM);
             center(
@@ -546,18 +529,50 @@ async fn game() {
                 GREEN,
             );
             center("Four waves. One little orchard.", 600., 366., 17., GREEN);
-            if button(
+            hud_ui.modal(100).unwrap();
+            button(
+                &mut hud_ui,
+                5,
                 Rect::new(490., 398., 220., 55.),
                 "PLANT AGAIN",
-                "[R]  A fresh start",
+                "[R] A fresh start",
                 true,
-                pointer,
-            ) && click
-            {
-                g = Game::with_level(g.level.clone());
-                clock.reset();
-            }
+            );
         }
+        hud_ui.set_auto_focus(g.outcome != Outcome::Playing);
+        let ui_enabled = player_input.gameplay_active();
+        hud_ui.finish_player(&mut player_input, ui_enabled);
+        hud_ui.paint();
+        let action = if hud_ui.activated(1) {
+            Some(Action::Build(Kind::Seed))
+        } else if hud_ui.activated(2) {
+            Some(Action::Build(Kind::Frost))
+        } else if hud_ui.activated(3) {
+            Some(Action::Upgrade)
+        } else if hud_ui.activated(4) {
+            Some(Action::Wave)
+        } else {
+            None
+        };
+        if g.outcome == Outcome::Playing {
+            match action {
+                Some(Action::Build(kind)) => {
+                    g.build(g.selected, kind);
+                }
+                Some(Action::Upgrade) => {
+                    g.upgrade(g.selected);
+                }
+                Some(Action::Wave) => {
+                    g.launch();
+                }
+                None => {}
+            }
+        } else if hud_ui.activated(5) {
+            g = Game::with_level(g.level.clone());
+            hud_ui.cancel();
+            clock.reset();
+        }
+
         if player_input.cursor_is_virtual() {
             let point = canvas.unproject(cursor);
             draw_circle_lines(point.x, point.y, 6., 1.5, CREAM);

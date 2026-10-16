@@ -49,3 +49,5 @@ WAV sounds use the same voice controls. Browser worklet queues are bounded and
 reset on focus/mute changes. Windows/Apple device output remains iteration 20.
 
 Optional `content` enables bounded native file watching and a direct browser scene-editing ABI. The developer panel is loaded only with `?content-tools`; see [data-driven scenes](../../docs/SCENES.md).
+
+The bounded [HUD/menu renderer](../../docs/UI.md) supplies fitted/wrapped bitmap text, clipped panels/buttons, stable focus, release-based pointer/touch capture, keyboard/gamepad navigation and modal interaction scopes without changing the world camera.
