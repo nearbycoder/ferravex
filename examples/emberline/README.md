@@ -30,3 +30,5 @@ A shared time trial records ordered splits at the mill, furnace and exit. Gold/s
 Collect three embers to unlock one extra jump per landing for the rest of the run. Tap jump again in the air for a slightly shorter recovery jump; the HUD shows readiness. Ember ownership uses the shared bounded inventory.
 
 Green springboards on three raised side platforms launch the player into optional high routes. Their shared `LaunchPad` rule fires on real landing edges with a cooldown; ordinary jump release does not cut the spring arc.
+
+Two high bonus platforms carry additional embers. Real contact gives a 0.65-second warning before collision disappears; the platforms regrow after three seconds. The shared `CrumblePlatform` exposes solid/warning/absent phases to hosts.
