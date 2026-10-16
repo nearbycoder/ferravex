@@ -31,7 +31,7 @@ The APIs live in `ferravex_engine` and are also available through `ferravex`. Ea
 - [x] 23. Control pause and time scale independently of wall time.
 - [x] 24. Share a deterministic per-frame work budget between systems.
 - [x] 25. Smooth scalar presentation values with frame-independent half lives.
-- [ ] 26. Query bounded two-dimensional spatial buckets with exact filtering.
+- [x] 26. Query bounded two-dimensional spatial buckets with exact filtering.
 - [ ] 27. Filter hierarchical engine tags with segment-safe ancestry.
 - [ ] 28. Store typed singleton engine resources without string keys.
 - [ ] 29. Validate deferred lifecycle transitions at frame boundaries.
