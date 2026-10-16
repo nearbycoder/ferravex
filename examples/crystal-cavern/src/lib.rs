@@ -55,9 +55,7 @@ fn at(marker: u8) -> Vec2 {
     }
     panic!("map is missing marker");
 }
-fn cell(p: Vec2) -> (usize, usize) {
-    ((p.x / TILE).round() as usize, (p.y / TILE).round() as usize)
-}
+
 fn forward(yaw: f32) -> Vec2 {
     vec2(yaw.sin(), -yaw.cos())
 }
@@ -351,41 +349,39 @@ impl Pilot {
     }
 }
 fn route(game: &Game, goal: Vec2) -> VecDeque<Vec2> {
-    let start = cell(game.position);
-    let finish = cell(goal);
-    let mut previous = [[None; 13]; 15];
-    let mut queue = VecDeque::from([start]);
-    previous[start.1][start.0] = Some(start);
-    while let Some((x, z)) = queue.pop_front() {
-        if (x, z) == finish {
-            break;
-        }
-        for (dx, dz) in [(1_i32, 0_i32), (-1, 0), (0, 1), (0, -1)] {
-            let nx = x as i32 + dx;
-            let nz = z as i32 + dz;
-            if !(0..13).contains(&nx) || !(0..15).contains(&nz) {
+    use ferravex_play::{
+        ai::WorkBudget,
+        navigation::{NavMesh, NavTriangle},
+    };
+    let mut faces = Vec::new();
+    // Door state controls the actual traversable surface at planning time.
+    for (z, row) in MAP.iter().enumerate() {
+        for (x, tile) in row.bytes().enumerate() {
+            if tile == b'#' || (tile == b'G' && !game.open()) {
                 continue;
             }
-            let next = (nx as usize, nz as usize);
-            let tile = MAP[next.1].as_bytes()[next.0];
-            if tile == b'#' || (tile == b'G' && !game.open()) || previous[next.1][next.0].is_some()
-            {
-                continue;
-            }
-            previous[next.1][next.0] = Some((x, z));
-            queue.push_back(next);
+            let a = world(vec2((x as f32 - 0.5) * TILE, (z as f32 - 0.5) * TILE), 0.);
+            let b = world(vec2((x as f32 + 0.5) * TILE, (z as f32 - 0.5) * TILE), 0.);
+            let c = world(vec2((x as f32 - 0.5) * TILE, (z as f32 + 0.5) * TILE), 0.);
+            let d = world(vec2((x as f32 + 0.5) * TILE, (z as f32 + 0.5) * TILE), 0.);
+            faces.push(NavTriangle([a, b, c]));
+            faces.push(NavTriangle([b, d, c]));
         }
     }
-    let mut path = VecDeque::new();
-    let mut node = finish;
-    while node != start {
-        path.push_front(center(node.0, node.1));
-        let Some(parent) = previous[node.1][node.0] else {
-            return VecDeque::new();
-        };
-        node = parent;
+    let mesh = NavMesh::welded(faces).unwrap();
+    let Ok(mut search) = mesh.search(world(game.position, 0.), world(goal, 0.)) else {
+        return VecDeque::new();
+    };
+    // This offline pilot plans only on goal changes, with a hard work allowance.
+    if search.step(&mesh, &mut WorkBudget::new(0, 0, 10000)) != Ok(true) {
+        return VecDeque::new();
     }
-    path
+    search
+        .route(&mesh)
+        .unwrap()
+        .iter()
+        .map(|p| vec2(p.position.x, p.position.z))
+        .collect()
 }
 
 /// Small triangular rock faces, bounded to 14 cm beyond the collision slab.

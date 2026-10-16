@@ -14,8 +14,8 @@ platform checks are recorded only when actually performed.
 | 4 | Combat feedback controller | [PR 27](https://github.com/nearbycoder/ferravex/pull/27), merged |
 | 5 | Attack timelines and telegraphs | [PR 28](https://github.com/nearbycoder/ferravex/pull/28), merged |
 | 6 | Squad tactics and cover selection | [PR 29](https://github.com/nearbycoder/ferravex/pull/29), merged |
-| 7 | Encounter director | Implemented; locally validated |
-| 8 | Navigation meshes and traversal links | Pending |
+| 7 | Encounter director | [PR 30](https://github.com/nearbycoder/ferravex/pull/30), merged |
+| 8 | Navigation meshes and traversal links | Implemented; locally validated |
 | 9 | Vehicle and flight controllers | Pending |
 | 10 | Racing AI | Pending |
 | 11 | Richer physics materials | Pending |
@@ -141,3 +141,17 @@ waves through the director with a 12-enemy live cap and two-second pressure brea
 wave totals are retained and record context advances to 4. Local checks cover
 credit conservation, caps, cooldowns, hysteresis, invalid inputs, normal-input
 swarm victory, strict Clippy and Wasm compilation.
+
+## 8. Triangle surfaces and traversal links
+
+`navigation::NavMesh` validates authored triangles and directional walk/jump/drop/
+climb links, optionally welding exact shared edges at setup. Incremental Dijkstra
+uses reusable bounded scratch space and caller path allowances (one node scan is
+at most 2048 comparisons; outgoing edges are charged separately). Routes include
+interior points, portal crossings and explicit traversal actions. Hosts execute
+traversals and bake suitable agent clearance; this is not automatic world baking
+or a shortest geometric funnel. Polygon/link edits invalidate searches and routes;
+mesh identities prevent adopting another mesh's result. Crystal Cavern's actual
+pilot now plans across the open floor/door surfaces and completes the full puzzle.
+Local tests cover budgets, edits, one-way traversal, disabled links and complete
+ordinary-input exploration; strict Clippy and Wasm checks pass.
