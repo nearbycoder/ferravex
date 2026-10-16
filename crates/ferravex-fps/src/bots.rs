@@ -30,6 +30,9 @@ struct Brain {
     replan: f32,
     patrol: usize,
     alive: bool,
+    radio: u64,
+    tactical_route: bool,
+    cover_goal: Option<(Vec3, f32)>,
 }
 pub struct PracticeBots {
     brains: Vec<Brain>,
@@ -37,6 +40,8 @@ pub struct PracticeBots {
     planner: PathPlanner,
     schedule: RoundRobin,
     noises: NoiseBuffer,
+    squad: SquadBoard<16>,
+    cover_schedule: RoundRobin,
     pub work: WorkCounts,
 }
 impl PracticeBots {
@@ -70,14 +75,40 @@ impl PracticeBots {
                 replan: 0.,
                 patrol: 0,
                 alive: false,
+                radio: 0,
+                tactical_route: false,
+                cover_goal: None,
             })
             .collect();
+        let mut cover = [Vec3::ZERO; 16];
+        for (i, s) in arena
+            .solids
+            .iter()
+            .filter(|s| s.half_extents.x < 10. && s.half_extents.z < 10.)
+            .take(4)
+            .enumerate()
+        {
+            for (j, d) in [Vec3::X, -Vec3::X, Vec3::Z, -Vec3::Z]
+                .into_iter()
+                .enumerate()
+            {
+                cover[i * 4 + j] = s.center
+                    + d * (if j < 2 {
+                        s.half_extents.x
+                    } else {
+                        s.half_extents.z
+                    } + 1.1);
+                cover[i * 4 + j].y = 1.62;
+            }
+        }
         Self {
             brains,
             grid,
             planner: PathPlanner::new((WIDTH * HEIGHT) as usize, MAX_PLAYERS).unwrap(),
             schedule: RoundRobin::default(),
             noises: NoiseBuffer::new(8).unwrap(),
+            squad: SquadBoard::new(cover).unwrap(),
+            cover_schedule: RoundRobin::default(),
             work: WorkCounts::default(),
         }
     }
@@ -116,13 +147,23 @@ impl PracticeBots {
             },
         ));
         self.noises.advance(FIXED_DT).unwrap();
+        self.squad.advance(FIXED_DT).unwrap();
         let mut budget = WorkBudget::new(64, 16, 128);
         let target = game.players.iter().find(|p| p.id == 0);
         for bot in game.players.iter().filter(|p| p.id != 0) {
             let b = &mut self.brains[bot.id as usize];
             b.memory.advance(FIXED_DT).unwrap();
             b.replan = (b.replan - FIXED_DT).max(0.);
+            if let Some((_, time)) = &mut b.cover_goal {
+                *time -= FIXED_DT;
+                if *time <= 0. {
+                    b.cover_goal = None;
+                }
+            }
             if b.alive != bot.is_alive() {
+                self.squad.release(u64::from(bot.id));
+                b.tactical_route = false;
+                b.cover_goal = None;
                 b.memory.clear();
                 b.route.clear();
                 b.follower.reset();
@@ -134,6 +175,7 @@ impl PracticeBots {
             }
             if target.is_none_or(|p| !p.is_alive()) {
                 b.memory.forget(0);
+                self.squad.forget();
             }
         }
         let count = game.players.len().saturating_sub(1);
@@ -164,6 +206,7 @@ impl PracticeBots {
                     == Detection::Detected
                 {
                     b.memory.observe(candidate, Sense::Sight).unwrap();
+                    self.squad.report(candidate).unwrap();
                 }
                 for noise in self.noises.iter() {
                     if Hearing::new(45., 1, 0.5)
@@ -191,8 +234,19 @@ impl PracticeBots {
                 }
             }
         }
+        let cover_bot = self
+            .cover_schedule
+            .next(count, 1)
+            .next()
+            .map(|i| game.players[i + 1].id);
         for bot in game.players.iter().filter(|p| p.id != 0) {
             let b = &mut self.brains[bot.id as usize];
+            if let Some(radio) = self.squad.contact().filter(|c| c.revision != b.radio) {
+                if bot.is_alive() {
+                    b.memory.observe(radio.candidate, Sense::Hearing).unwrap();
+                }
+                b.radio = radio.revision;
+            }
             let memory = b.memory.best(1);
             if !bot.is_alive() {
                 commands.push((
@@ -227,7 +281,45 @@ impl PracticeBots {
                 )
                 .unwrap();
             b.intent = Some(intent);
-            let goal = intent.goal;
+            let mut goal = intent.goal;
+            b.tactical_route = false;
+            if let Some(track) = memory {
+                let role = SquadRole::for_member(u64::from(bot.id));
+                if cover_bot == Some(bot.id)
+                    && (matches!(intent.state, EnemyState::Retreat | EnemyState::Reload)
+                        || role == SquadRole::Support)
+                {
+                    if let Some(p) = self
+                        .squad
+                        .reserve(
+                            u64::from(bot.id),
+                            bot.eye_position(),
+                            track.position,
+                            &mut budget,
+                            &mut ArenaSight(&game.arena),
+                            |p| nearest(&self.grid, p).is_some(),
+                        )
+                        .unwrap()
+                    {
+                        b.cover_goal = Some((p, 1.2));
+                        goal = p;
+                        b.tactical_route = true;
+                        b.replan = 0.;
+                    }
+                } else if matches!(role, SquadRole::FlankLeft | SquadRole::FlankRight) {
+                    goal = role
+                        .goal(track.position, bot.position, Vec3::Y, 4.)
+                        .unwrap();
+                    b.tactical_route = true;
+                }
+                if let Some((p, _)) = b.cover_goal {
+                    goal = p;
+                    b.tactical_route = true;
+                }
+            } else {
+                b.cover_goal = None;
+            }
+
             if intent.replan {
                 b.replan = 0.;
                 b.route.clear();
@@ -274,7 +366,7 @@ impl PracticeBots {
             let visible = memory.is_some_and(|t| t.visible);
             let waypoint = b.follower.target(&b.route, bot.position, 0.6, 8).unwrap();
             let intent = b.intent.unwrap();
-            let direction = if visible {
+            let direction = if visible && !b.tactical_route {
                 intent.movement
             } else {
                 waypoint.map_or(Vec3::ZERO, |p| (p - bot.position).normalize_or_zero()) * 0.65
@@ -372,6 +464,34 @@ mod tests {
         assert!(!track.visible);
         assert_eq!(track.sense, Sense::Hearing);
         assert_eq!(commands[1].1.buttons & BUTTON_FIRE, 0);
+    }
+    #[test]
+    fn squad_radio_shares_position_without_granting_visibility() {
+        let mut game = Match::new(Arena {
+            solids: vec![Obstacle {
+                center: vec3(0., 2., 0.),
+                half_extents: vec3(1., 2., 8.),
+            }],
+            spawns: vec![vec3(5., 0., 0.), vec3(5., 0., 8.), vec3(-5., 0., 0.)],
+        });
+        for id in 0..3 {
+            game.spawn_player(id);
+        }
+        game.players[1].position = vec3(5., 0., 8.);
+        game.players[1].yaw = 0.;
+        game.players[2].position = vec3(-5., 0., 0.);
+        game.players[2].yaw = std::f32::consts::FRAC_PI_2;
+        let mut bots = PracticeBots::new(&game.arena);
+        let mut commands = Vec::new();
+        bots.commands(&game, InputFrame::default(), &mut commands);
+        assert!(bots.memory(1).unwrap().visible);
+        let radio = bots.memory(2).unwrap();
+        assert!(!radio.visible);
+        assert_eq!(radio.sense, Sense::Hearing);
+        assert_eq!(
+            commands.iter().find(|(id, _)| *id == 2).unwrap().1.buttons & BUTTON_FIRE,
+            0
+        );
     }
     #[test]
     fn visible_bots_submit_normal_accepted_shots_with_bounded_work() {
