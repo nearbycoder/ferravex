@@ -36,3 +36,5 @@ pub use ferravex_play::encounter;
 pub use ferravex_play::vehicle;
 
 pub use ferravex_play::racing;
+
+pub use ferravex_play::environment;
