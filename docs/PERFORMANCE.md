@@ -1084,7 +1084,7 @@ and native UDP timed shots/clock/delta recovery, reliable commands and complete
 plant/defuse/round-reset/forfeit transitions. Browser interaction verified two
 identities, late-purchase rejection and accepted bomb drop. Background browser
 throttling still caused roughly 1–2 second RTT in this UI environment; the
-compacted queues recovered without the previous unbounded latency buildup.
+compacted queues recovered without the previous retry backlog.
 
 Local validation: 494 regular workspace tests, 11 available GLX/ALSA checks,
 strict native/Wasm Clippy and Rustdoc, all fifteen release native/Wasm builds and

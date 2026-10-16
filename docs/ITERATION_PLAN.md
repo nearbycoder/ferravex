@@ -26,7 +26,7 @@ unsupported platforms or features are complete.
 | 16 | Shared HUD and menus | Merged: [PR 17](https://github.com/nearbycoder/ferravex/pull/17); 4 performance flags recorded in PERFORMANCE.md |
 | 17 | Persistent saves and settings | Merged: [PR 18](https://github.com/nearbycoder/ferravex/pull/18); 20 performance flags recorded in PERFORMANCE.md |
 | 18 | Replay, ghosts and debugging | Merged: [PR 19](https://github.com/nearbycoder/ferravex/pull/19); 4 Strike artifact-size flags recorded in PERFORMANCE.md |
-| 19 | Multiplayer integration | Pending |
+| 19 | Multiplayer integration | Merged: [PR 20](https://github.com/nearbycoder/ferravex/pull/20); 3 performance flags recorded in PERFORMANCE.md |
 | 20 | Native platform hosts | Pending |
 
 Performance checks: [PERFORMANCE.md](PERFORMANCE.md). Raw reports and baselines
