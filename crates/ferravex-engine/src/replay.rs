@@ -50,6 +50,24 @@ impl Replay {
         let end = self.frames.partition_point(|f| f.tick <= tick);
         end.checked_sub(1).map(|i| &self.frames[i])
     }
+    /// Export an inclusive tick range. Reversed bounds produce an empty stream.
+    pub fn slice_ticks(&self, first: u64, last: u64) -> Self {
+        if first > last {
+            return Self::default();
+        }
+        let start = self.frames.partition_point(|f| f.tick < first);
+        let end = self.frames.partition_point(|f| f.tick <= last);
+        Self {
+            frames: self.frames[start..end].to_vec(),
+        }
+    }
+    /// Discard frames at or after tick, allowing a simulation to record a new branch.
+    pub fn truncate_from(&mut self, tick: u64) -> usize {
+        let keep = self.frames.partition_point(|f| f.tick < tick);
+        let removed = self.frames.len() - keep;
+        self.frames.truncate(keep);
+        removed
+    }
     pub fn frames(&self) -> &[Frame] {
         &self.frames
     }
@@ -220,5 +238,36 @@ mod seek_tests {
         assert_eq!(r.frame_before_or_at(9).unwrap().tick, 2);
         assert_eq!(r.frame_at(10).unwrap().tick, 10);
         assert_eq!(r.frame_before_or_at(u64::MAX).unwrap().tick, u64::MAX);
+    }
+}
+
+#[cfg(test)]
+mod slices_tests {
+    use super::*;
+    #[test]
+    fn slices_roundtrip_and_branch_can_be_recorded() {
+        let mut r = Replay::default();
+        for tick in [2, 5, 8, u64::MAX] {
+            r.record(Frame {
+                tick,
+                input: InputFrame::default(),
+                state_hash: tick,
+            });
+        }
+        let s = r.slice_ticks(3, 8);
+        assert_eq!(
+            s.frames().iter().map(|f| f.tick).collect::<Vec<_>>(),
+            [5, 8]
+        );
+        assert_eq!(Replay::decode(&s.encode()).unwrap().frames(), s.frames());
+        assert!(r.slice_ticks(8, 2).frames().is_empty());
+        assert_eq!(r.slice_ticks(0, u64::MAX).frames().len(), 4);
+        assert_eq!(r.truncate_from(5), 3);
+        assert!(r.record(Frame {
+            tick: 5,
+            input: InputFrame::default(),
+            state_hash: 0
+        }));
+        assert_eq!(r.truncate_from(0), 2);
     }
 }
