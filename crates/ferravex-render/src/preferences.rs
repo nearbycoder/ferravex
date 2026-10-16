@@ -81,7 +81,9 @@ impl Session {
         }
     }
 }
-fn apply(p: Preferences) {
+pub(crate) fn apply(p: Preferences) {
+    crate::edit(|s| s.presentation = p);
+    crate::set_fidelity(p.resolution, p.shadows, p.lights);
     crate::set_look(crate::Look::from_index(p.look as u32).expect("validated look"));
     audio::set_master_gain(p.master);
     audio::set_muted(p.muted);
@@ -117,6 +119,7 @@ mod tests {
             muted: true,
             quality: Some(2),
             look: 1,
+            ..Default::default()
         };
         session.set(p).unwrap();
         assert_eq!(audio::master_gain(), 0.25);

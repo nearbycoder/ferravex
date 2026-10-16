@@ -344,6 +344,27 @@ fn raster_triangle(
     let max_x = (max.x as i64).clamp(0, i64::from(frame.width) - 1) as u32;
     let min_y = (min.y as i64).clamp(0, i64::from(frame.height) - 1) as u32;
     let max_y = (max.y as i64).clamp(0, i64::from(frame.height) - 1) as u32;
+    // A sphere is convex: if all vertices are before fog start, every
+    // perspective-correct surface sample is too. Keep the general fog path for
+    // crossing triangles rather than approximating distance at the vertices.
+    let fog = settings
+        .fog
+        .filter(|fog| {
+            triangle
+                .iter()
+                .any(|v| v.world.distance_squared(camera.position) > fog.start * fog.start)
+        })
+        .map(|f| (f, (f.end - f.start).recip()));
+    let flat_color = if fog.is_none()
+        && triangle[0].color == triangle[1].color
+        && triangle[0].color == triangle[2].color
+    {
+        let mut opaque = triangle[0].color;
+        opaque.w = 1.;
+        Some((triangle[0].color.w, Color::from(opaque).to_rgba()))
+    } else {
+        None
+    };
     stats.rasterized_triangles += 1;
     for y in min_y..=max_y {
         for x in min_x..=max_x {
@@ -369,24 +390,35 @@ fn raster_triangle(
             {
                 continue;
             }
+            if let Some((alpha, rgba)) = flat_color {
+                if alpha > 0. {
+                    frame.pixels[index] = rgba;
+                    frame.depth[index] = depth.clamp(0.0, 1.0);
+                    stats.shaded_pixels += 1;
+                }
+                continue;
+            }
             let weights = std::array::from_fn::<_, 3, _>(|i| bary[i] * inverse_w[i]);
             let sum = weights.iter().sum::<f32>();
             if !sum.is_finite() || sum <= 0.0 {
                 continue;
             }
             let mut color = Vec4::ZERO;
-            let mut position = Vec3::ZERO;
+            // One reciprocal serves every perspective-correct attribute. World
+            // position is only needed for fog, so un-fogged draws skip it entirely.
+            let inverse_sum = sum.recip();
+            let weights = weights.map(|weight| weight * inverse_sum);
             for i in 0..3 {
-                let weight = weights[i] / sum;
-                color += triangle[i].color * weight;
-                position += triangle[i].world * weight;
+                color += triangle[i].color * weights[i];
             }
             if color.w <= 0.0 {
                 continue;
             }
-            if let Some(fog) = settings.fog {
-                let amount = ((position.distance(camera.position) - fog.start)
-                    / (fog.end - fog.start))
+            if let Some((fog, inverse_range)) = fog {
+                let position = triangle[0].world * weights[0]
+                    + triangle[1].world * weights[1]
+                    + triangle[2].world * weights[2];
+                let amount = ((position.distance(camera.position) - fog.start) * inverse_range)
                     .clamp(0.0, 1.0);
                 color = color.lerp(fog.color.to_vec(), amount);
             }

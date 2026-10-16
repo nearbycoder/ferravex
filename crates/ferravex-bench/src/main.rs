@@ -61,6 +61,24 @@ fn main() {
         }
         black_box(game.step(&inputs));
     });
+    // Snapshot compression is a server hot path independent of rendering.
+    let base = [0_u8; 1000];
+    let mut sparse = base;
+    for byte in sparse.iter_mut().step_by(97) {
+        *byte = 1;
+    }
+    for (name, next) in [
+        ("unchanged 1000-byte snapshot delta", &base),
+        ("sparse 1000-byte snapshot delta", &sparse),
+        ("dense 1000-byte snapshot delta", &[1_u8; 1000]),
+    ] {
+        measure(name, ticks, || {
+            black_box(
+                ferravex_net::delta::Delta::between(0, black_box(&base), 1, black_box(next))
+                    .unwrap(),
+            );
+        });
+    }
     use ferravex_dynamics::{BodyDesc, PhysicsWorld, Shape};
     let mut p2 = PhysicsWorld::<2>::new([0., -9.81]);
     p2.insert(BodyDesc::fixed(Shape::cuboid([60., 0.5]), [0., -0.5]))

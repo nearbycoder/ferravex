@@ -334,7 +334,7 @@ impl Scene {
         let draw = |mesh: &Mesh3d, offset: Vec3, local: Quat| {
             mesh.draw(center + rotation * offset, rotation * local);
         };
-        if ferravex_render::quality() == ferravex_render::lighting::Quality::Low {
+        if ferravex_render::shadow_quality() == ferravex_render::lighting::Quality::Low {
             for z in [-0.8, 0.8] {
                 self.shadow
                     .draw(world(position + forward * z, 0.022), Quat::IDENTITY);

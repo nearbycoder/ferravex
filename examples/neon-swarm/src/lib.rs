@@ -188,7 +188,7 @@ async fn game() {
             } else {
                 None
             };
-            let _ = records.attempt("sector-07", 1, game.kills as u64, time);
+            let _ = records.attempt("sector-07", 2, game.kills as u64, time);
         }
         draw_hud(&mut hud_ui, &game, started, touch_mode);
         if started && !paused && game.phase == Phase::Playing && !touch_mode && !demo.autoplay {
@@ -230,7 +230,7 @@ async fn game() {
                     "{} cleared / {:.0}s / best {}",
                     game.kills,
                     game.time,
-                    records.get("sector-07", 1).map_or(0, |r| r.score)
+                    records.get("sector-07", 2).map_or(0, |r| r.score)
                 ),
                 "RESTART",
             );

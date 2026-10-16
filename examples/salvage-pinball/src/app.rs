@@ -201,6 +201,11 @@ fn table_render(table: &Table, touch_mode: bool) -> Rect {
     }
     let reset = Rect::new(board.x + board.w - 49.0, 18.0, 49.0, 20.0);
     draw_text("RESET", reset.x, 32.0, 13.0, MINT);
+    if table.save_notice > 0. {
+        centered("BALL SAVED", p([4.7, 9.8]), 0.37 * scale, MINT);
+    } else if table.ball_save > 0. {
+        centered("BALL SAVE LIT", p([4.7, 11.6]), 0.24 * scale, MINT);
+    }
     if table.waiting && !table.over() {
         let v = p([4.7, 11.85]);
         centered(
@@ -318,6 +323,7 @@ async fn game() {
             let hits = table.hits;
             let launches = table.launches;
             let drains = table.drains;
+            let saves = table.saves;
             for (i, down) in [controls.left, controls.right].into_iter().enumerate() {
                 if down && !flippers[i] {
                     sound.cue(Cue::Click, 0.3);
@@ -331,7 +337,9 @@ async fn game() {
             if table.launches > launches {
                 sound.cue(Cue::Jump, 0.55);
             }
-            if table.drains > drains {
+            if table.saves > saves {
+                sound.cue(Cue::Pickup, 0.5);
+            } else if table.drains > drains {
                 sound.cue(Cue::Failure, 0.4);
             }
             launch_pending = false;

@@ -174,10 +174,10 @@ fn handshake(bytes: &[u8], origins: &[String]) -> Result<Option<(usize, Vec<u8>)
         return Err(400);
     }
     let protocol = if let Some(p) = get("Sec-WebSocket-Protocol") {
-        if !p.split(',').any(|v| v.trim() == "ferravex.v4") {
+        if !p.split(',').any(|v| v.trim() == "ferravex.v5") {
             return Err(400);
         }
-        "Sec-WebSocket-Protocol: ferravex.v4\r\n"
+        "Sec-WebSocket-Protocol: ferravex.v5\r\n"
     } else {
         ""
     };
@@ -355,7 +355,7 @@ mod tests {
                 0xc2, 0x6c, 0x9c, 0xd0, 0xd8, 0x9d
             ]
         );
-        let req=b"GET /ferravex HTTP/1.1\r\nHost: localhost:4001\r\nUpgrade: websocket\r\nConnection: keep-alive, Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nOrigin: http://localhost:8087\r\nSec-WebSocket-Protocol: ferravex.v4\r\n\r\n";
+        let req=b"GET /ferravex HTTP/1.1\r\nHost: localhost:4001\r\nUpgrade: websocket\r\nConnection: keep-alive, Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nOrigin: http://localhost:8087\r\nSec-WebSocket-Protocol: ferravex.v5\r\n\r\n";
         for n in 0..req.len() {
             assert_eq!(
                 handshake(&req[..n], &["http://localhost:8087".into()]),

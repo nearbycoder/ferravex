@@ -123,6 +123,7 @@ pub struct Race {
     boost_exhausted: bool,
     impact_cooldown: f32,
     stranded_time: f32,
+    turn_rate: f32,
 }
 impl Race {
     pub fn new() -> Self {
@@ -149,6 +150,7 @@ impl Race {
             boost_exhausted: false,
             impact_cooldown: 0.0,
             stranded_time: 0.0,
+            turn_rate: 0.,
         }
     }
     pub fn forward(&self) -> Vec2 {
@@ -185,8 +187,10 @@ impl Race {
         self.boost = (self.boost + dt * if self.boosting { -0.26 } else { 0.11 }).clamp(0.0, 1.0);
         // Turn rate stays useful at a standstill. Lateral damping gives the craft
         // controlled slip, while sand outside the racing line costs momentum.
-        self.yaw =
-            (self.yaw + steer * (1.15 + self.speed().min(32.0) * 0.018) * dt).rem_euclid(TAU);
+        let desired_turn = steer * (1.15 + self.speed().min(32.0) * 0.018);
+        self.turn_rate +=
+            (desired_turn - self.turn_rate) * ferravex_play::motion::response(12., dt);
+        self.yaw = (self.yaw + self.turn_rate * dt).rem_euclid(TAU);
         let forward = self.forward();
         let lateral = right(forward);
         let side_speed = self.velocity.dot(lateral);
@@ -228,6 +232,15 @@ impl Race {
                     self.boosting = false;
                 }
             }
+            // A centered pass feeds the next straight; clipping the opening
+            // still counts, but earns no extra boost.
+            if (self.position - course.gates[self.next_gate].position)
+                .dot(right(course.gates[self.next_gate].direction))
+                .abs()
+                < 2.2
+            {
+                self.boost = (self.boost + 0.10).min(1.);
+            }
             self.next_gate = (self.next_gate + 1) % GATES;
             self.last_gate_timer = 0.8;
         }
@@ -254,8 +267,14 @@ impl Race {
             self.position = center + normal * minimum;
             let into = self.velocity.dot(normal);
             if into < 0.0 {
-                self.velocity -= normal * into * 1.35;
-                self.velocity *= 0.68;
+                self.velocity = ferravex_play::motion::impact_velocity(
+                    self.velocity.extend(0.),
+                    normal.extend(0.),
+                    0.25,
+                    0.93,
+                )
+                .expect("finite skimmer collision")
+                .truncate();
                 if self.impact_cooldown <= 0.0 {
                     self.impacts += 1;
                     self.impact_cooldown = 0.7;
@@ -273,6 +292,8 @@ impl Race {
         self.elapsed += 3.0;
         self.recovery_count += 1;
         self.stranded_time = 0.0;
+        self.turn_rate = 0.;
+        self.bank = 0.;
     }
     /// Pure pursuit drives exactly the same throttle/steer/boost path as a player.
     pub fn autoplay(&self, course: &Course) -> Input {
@@ -294,6 +315,28 @@ impl Race {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn glancing_impacts_keep_tangential_speed_and_turning_has_inertia() {
+        let mut race = Race::new();
+        race.position = Vec2::X;
+        race.velocity = vec2(-10., 20.);
+        race.resolve_obstacle(Vec2::ZERO, 1.);
+        assert!(race.velocity.x > 0. && race.velocity.y > 18.);
+        let course = Course::new();
+        race = Race::new();
+        race.countdown = 0.;
+        race.step(
+            &course,
+            Input {
+                steer: 1.,
+                ..Default::default()
+            },
+            1. / 120.,
+        );
+        assert!(race.turn_rate > 0. && race.turn_rate < 0.3);
+    }
+
     #[test]
     fn autoplay_completes_three_laps_using_real_controls() {
         let course = Course::new();

@@ -1,5 +1,6 @@
 // Original platform bridge: browser standards only. No generated loader or JS packages.
 import {PeerLink} from './peer.js';
+import {bindDetails,framebufferSize} from '../details.js';
 import {configureVisuals} from '../visuals.js';
 import {bindInput} from '../input.js';
 import {bindAudio} from '../audio.js';
@@ -7,19 +8,22 @@ import {createInputOverlay} from '../input-overlay.js';
 const $=id=>document.getElementById(id),canvas=$('game'),message=$('message');
 let inputOverlay;
 let wasm,gl,program,shadowProgram,meshes=[],shadowTarget,shadowTexture,view=0,playing=false,recording=false;
+let shadowSize=1024,maxFramebufferDimension=8192;
 let uniforms={},gpuExtension,gpuQueries=[],gpuMs=null,contextLost=false;const cpuSamples=new Float32Array(120);let cpuIndex=0,cpuCount=0;
 const buckets=new Map(),edits=new Map();let draws=0,frameMs=0,frames=0,elapsed=0,previous=0;
 const input=bindInput(canvas,'owned-lab',()=>wasm,()=>playing);
 const audio=bindAudio(canvas,()=>wasm,{button:$('audio')});
+const details=bindDetails(canvas,'owned-lab',()=>wasm);
 const controlsButton=$('controls');controlsButton.onclick=()=>{input.openSettings();canvas.focus();};
 const vertex=await fetch('scene.vert').then(r=>r.text()),fragment=await fetch('scene.frag').then(r=>r.text());$('shader').value=fragment;
 function compile(type,source){const shader=gl.createShader(type);gl.shaderSource(shader,source);gl.compileShader(shader);if(!gl.getShaderParameter(shader,gl.COMPILE_STATUS)){const error=gl.getShaderInfoLog(shader);gl.deleteShader(shader);throw Error(error);}return shader;}
 function link(vs,fs){let v,f,p;try{v=compile(gl.VERTEX_SHADER,vs);f=compile(gl.FRAGMENT_SHADER,fs);p=gl.createProgram();gl.attachShader(p,v);gl.attachShader(p,f);gl.linkProgram(p);if(!gl.getProgramParameter(p,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(p));return p;}catch(error){if(p)gl.deleteProgram(p);throw error;}finally{if(v)gl.deleteShader(v);if(f)gl.deleteShader(f);}}
 function f32(ptr,len){return new Float32Array(wasm.memory.buffer,ptr,len);}
-function refreshUniforms(){uniforms=Object.fromEntries(["viewProjection","lightProjection","eye","fogDensity","shadowMap","visualLook","shadowsEnabled"].map(name=>[name,gl.getUniformLocation(program,name)]));}
+function refreshUniforms(){uniforms=Object.fromEntries(["viewProjection","lightProjection","eye","fogDensity","shadowMap","visualLook","shadowsEnabled","shadowTexel","shadowRadius"].map(name=>[name,gl.getUniformLocation(program,name)]));}
 function setup(){
- meshes=[];buckets.clear();gpuQueries=[];
+ meshes=[];buckets.clear();gpuQueries=[];shadowSize=1024;
  gl=canvas.getContext('webgl2',{alpha:false,antialias:true,powerPreference:'high-performance'});if(!gl)throw Error('WebGL 2 is required for this preview. The Rust software renderer is available through cargo run.');
+ maxFramebufferDimension=gl.getParameter(gl.MAX_RENDERBUFFER_SIZE);
  inputOverlay=createInputOverlay(gl);
  program=link(vertex,$("shader").value||fragment);refreshUniforms();gpuExtension=gl.getExtension('EXT_disjoint_timer_query_webgl2');shadowProgram=link(`#version 300 es\nlayout(location=0)in vec3 position;layout(location=3)in mat4 model;uniform mat4 lightProjection;void main(){gl_Position=lightProjection*model*vec4(position,1.0);}`,`#version 300 es\nprecision highp float;void main(){}`);
  for(let i=0;i<wasm.ferravex_mesh_count();i++){
@@ -37,12 +41,14 @@ function drawGroups(){for(const[id,b]of buckets){if(!b.count)continue;const mesh
 function render(){
  while(gpuQueries.length&&gl.getQueryParameter(gpuQueries[0],gl.QUERY_RESULT_AVAILABLE)){const q=gpuQueries.shift();if(!gl.getParameter(gpuExtension.GPU_DISJOINT_EXT))gpuMs=gl.getQueryParameter(q,gl.QUERY_RESULT)/1e6;gl.deleteQuery(q);}
  const gpuQuery=gpuExtension&&gpuQueries.length<4?gl.createQuery():null;if(gpuQuery)gl.beginQuery(gpuExtension.TIME_ELAPSED_EXT,gpuQuery);
- const ratio=Math.min(devicePixelRatio,wasm.ferravex_visual_quality()===0?1:1.5),width=Math.floor(innerWidth*ratio),height=Math.floor(innerHeight*ratio);if(canvas.width!==width||canvas.height!==height){canvas.width=width;canvas.height=height;}
+ const size=framebufferSize(canvas.clientWidth,canvas.clientHeight,devicePixelRatio,wasm.ferravex_resolution(),maxFramebufferDimension),width=size.width,height=size.height;canvas.dataset.renderScale=String(size.scale);if(canvas.width!==width||canvas.height!==height){canvas.width=width;canvas.height=height;}
  draws=0;const light=f32(wasm.ferravex_light(),16);
- if(wasm.ferravex_visual_quality()>0){uploadInstances(wasm.ferravex_shadow_instances(),wasm.ferravex_shadow_instances_len());
- gl.bindFramebuffer(gl.FRAMEBUFFER,shadowTarget);gl.viewport(0,0,1024,1024);gl.clear(gl.DEPTH_BUFFER_BIT);gl.useProgram(shadowProgram);gl.uniformMatrix4fv(gl.getUniformLocation(shadowProgram,'lightProjection'),false,light);gl.enable(gl.POLYGON_OFFSET_FILL);gl.polygonOffset(1.5,3);drawGroups();gl.disable(gl.POLYGON_OFFSET_FILL);}
+ const detail=wasm.ferravex_shadow_detail(),desired=[0,0,512,1024][detail];
+ if(desired&&desired!==shadowSize){gl.bindTexture(gl.TEXTURE_2D,shadowTexture);gl.texImage2D(gl.TEXTURE_2D,0,gl.DEPTH_COMPONENT24,desired,desired,0,gl.DEPTH_COMPONENT,gl.UNSIGNED_INT,null);shadowSize=desired;}
+ if(desired){uploadInstances(wasm.ferravex_shadow_instances(),wasm.ferravex_shadow_instances_len());
+ gl.bindFramebuffer(gl.FRAMEBUFFER,shadowTarget);gl.viewport(0,0,shadowSize,shadowSize);gl.clear(gl.DEPTH_BUFFER_BIT);gl.useProgram(shadowProgram);gl.uniformMatrix4fv(gl.getUniformLocation(shadowProgram,'lightProjection'),false,light);gl.enable(gl.POLYGON_OFFSET_FILL);gl.polygonOffset(1.5,3);drawGroups();gl.disable(gl.POLYGON_OFFSET_FILL);}
  uploadInstances(wasm.ferravex_instances(),wasm.ferravex_instances_len());
- gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.viewport(0,0,width,height);gl.clearColor(.66,.72,.73,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);gl.useProgram(program);gl.uniformMatrix4fv(uniforms.viewProjection,false,f32(wasm.ferravex_matrix(),16));gl.uniformMatrix4fv(uniforms.lightProjection,false,light);const status=f32(wasm.ferravex_status(),wasm.ferravex_status_len());gl.uniform3fv(uniforms.eye,status.subarray(8,11));gl.uniform1f(uniforms.fogDensity,Number($('fog').value));gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,shadowTexture);gl.uniform1i(uniforms.shadowMap,0);gl.uniform1i(uniforms.visualLook,wasm.ferravex_visual_look());gl.uniform1i(uniforms.shadowsEnabled,wasm.ferravex_visual_quality()>0?1:0);canvas.dataset.look=String(wasm.ferravex_visual_look());drawGroups();
+ gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.viewport(0,0,width,height);gl.clearColor(.66,.72,.73,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);gl.useProgram(program);gl.uniformMatrix4fv(uniforms.viewProjection,false,f32(wasm.ferravex_matrix(),16));gl.uniformMatrix4fv(uniforms.lightProjection,false,light);const status=f32(wasm.ferravex_status(),wasm.ferravex_status_len());gl.uniform3fv(uniforms.eye,status.subarray(8,11));gl.uniform1f(uniforms.fogDensity,Number($('fog').value));gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,shadowTexture);gl.uniform1i(uniforms.shadowMap,0);gl.uniform1i(uniforms.visualLook,wasm.ferravex_visual_look());gl.uniform1i(uniforms.shadowsEnabled,desired?1:0);gl.uniform1f(uniforms.shadowTexel,1/shadowSize);gl.uniform1i(uniforms.shadowRadius,detail===3?1:0);canvas.dataset.look=String(wasm.ferravex_visual_look());drawGroups();
  $('vitals').innerHTML=`${status[0]}<span>HEALTH</span>${status[6]>0?'—':status[1]}<span>${status[6]>0?'RELOADING':'/ 30'}</span>`;$('score').textContent=`${status[2]} eliminations · ${Math.floor(status[7]/60)}:${String(Math.floor(status[7]%60)).padStart(2,'0')}`;
  if(gpuQuery){gl.endQuery(gpuExtension.TIME_ELAPSED_EXT);gpuQueries.push(gpuQuery);}
  return status;
@@ -63,10 +69,11 @@ $('save').onclick=()=>{localStorage.setItem('ferravex-owned-scene-v1',JSON.strin
 $('reset').onclick=()=>{peer.close();wasm.ferravex_init();edits.clear();recording=false;$('record').textContent='Record inputs';showObject();message.textContent='Scene reset.';};$('record').onclick=()=>{recording=!recording;wasm.ferravex_record(Number(recording));$('record').textContent=recording?'Stop recording':'Record inputs';};$('download').onclick=()=>{const len=wasm.ferravex_export_replay(),bytes=new Uint8Array(wasm.memory.buffer,wasm.ferravex_replay_bytes(),len).slice(),url=URL.createObjectURL(new Blob([bytes]));const a=document.createElement('a');a.href=url;a.download='courtyard.ferravexreplay';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
 canvas.addEventListener("webglcontextlost",event=>{event.preventDefault();contextLost=true;wasm?.ferravex_blur();audio.mute();});canvas.addEventListener("webglcontextrestored",()=>{setup();contextLost=false;previous=0;});
 function frame(now){try{if(contextLost){requestAnimationFrame(frame);return;}const dt=previous?Math.min((now-previous)/1000,.1):1/60;previous=now;const start=performance.now();input.poll();
- wasm.ferravex_controls_step(dt,Number(playing),view,innerWidth/innerHeight,innerWidth,innerHeight);
+ const rect=canvas.getBoundingClientRect(),w=Math.max(1,Math.round(rect.width)),h=Math.max(1,Math.round(rect.height));
+ wasm.ferravex_controls_step(dt,Number(playing),view,w/h,w,h);
  audio.sync();const panel=input.syncPanel();document.body.toggleAttribute('data-controls-open',panel);controlsButton.setAttribute('aria-pressed',String(panel));
  const menu=wasm.ferravex_menu_requested();if(menu===1)setPlaying(false);else if(menu===2){view=1;setPlaying(true);}
- const status=render();inputOverlay(wasm);canvas.dataset.frames=String(Number(canvas.dataset.frames||0)+1);canvas.dataset.quality=String(wasm.ferravex_visual_quality());
+ const status=render();inputOverlay(wasm);details.ready();details.update();canvas.dataset.frames=String(Number(canvas.dataset.frames||0)+1);canvas.dataset.quality=String(wasm.ferravex_visual_quality());
  peerElapsed+=dt;if(peer.mode&&peerElapsed>=(peer.mode===2?1/60:.05)){peerElapsed=0;const ptr=wasm.ferravex_peer_out(),len=wasm.ferravex_peer_out_len();if(len)peer.send(new Uint8Array(wasm.memory.buffer,ptr,len));}const cpuTime=performance.now()-start;frameMs+=cpuTime;cpuSamples[cpuIndex++%120]=cpuTime;cpuCount=Math.min(120,cpuCount+1);frames++;elapsed+=dt;if(elapsed>.5){if(peer.mode)$('peerStats').textContent=`${peer.sent} packets sent · ${peer.received} received · ${peer.accepted} accepted`;const sorted=Array.from(cpuSamples.subarray(0,cpuCount)).sort((a,b)=>a-b);$('metrics').textContent=`${(frameMs/frames).toFixed(2)} ms CPU mean · ${sorted[Math.ceil(cpuCount*.99)-1].toFixed(2)} ms CPU p99${gpuMs===null?'':` · ${gpuMs.toFixed(2)} ms GPU`} · ${draws} draws · ${status[4]}/${status[5]} visible instances · 64 Hz authority`;frameMs=0;frames=0;elapsed=0;}requestAnimationFrame(frame);
  }catch(error){message.textContent=error.stack;$('tools').hidden=false;console.error(error);}}
 try{const response=await fetch('owned_lab.wasm');if(!response.ok)throw Error('Build the owned engine with python3 scripts/build-owned.py');const result=await WebAssembly.instantiate(await response.arrayBuffer(),{env:input.imports});wasm=result.instance.exports;wasm.ferravex_init();configureVisuals(wasm,location.search);controlsButton.disabled=false;setup();for(let i=0;i<wasm.ferravex_object_count();i++){const option=document.createElement('option');option.value=i;option.disabled=i===0;option.textContent=`${i===0?'Ground':i<12?'Collision solid':'Detail'} ${i}`;$('object').append(option);}$('object').value='1';showObject();$('play').disabled=false;$('play').textContent='Enter training';requestAnimationFrame(frame);}catch(error){$('play').textContent='Engine unavailable';message.textContent=error.stack;$('tools').hidden=false;console.error(error);}

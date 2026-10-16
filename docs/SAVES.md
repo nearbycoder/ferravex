@@ -31,6 +31,9 @@ validate decoded fields and explicitly migrate supported older versions. Use
 Document's typed integer, boolean, finite double, UTF-8 text and byte fields.
 U64/I64 values never pass through floating point. Version-1 presentation settings
 (master/mute/quality) migrate to version 2 by supplying unity audio-bus gains.
+Version 3 adds visual style; version 4 adds independent resolution, shadows and
+local-light details. Versions 1–3 migrate with device resolution and preset
+shadow/light defaults, preserving the existing fields.
 Newer application versions and wrong schema IDs are rejected.
 
 Slot construction validates its default, then stages a decoded replacement.
@@ -101,6 +104,14 @@ changes immediately. The graphics preference overrides authored game quality;
 an explicit FERRAVEX_QUALITY or browser ?quality= override takes precedence and
 is not saved as a new preference. Existing bindings, sensitivity, inversion and
 controller selection remain in the FXIN profile.
+
+All browser hosts also expose the shared Details panel for lighting preset,
+resolution, shadows, local lights and visual style. Its validated changes use
+the same per-game Rust preference slot and commit only on edits. Opening it
+pauses gameplay through the shared controls context; closing clears held input.
+Disabled controls describe features the current renderer or scene does not use.
+Reset details leaves audio and bindings intact. A failed write retains the
+session value and displays “Session only · save failed.”
 
 PlayerInput::preferences returns a copy; set_preferences applies/commits a
 validated replacement, save_preferences retries an unsaved value, and

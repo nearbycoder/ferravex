@@ -1,4 +1,5 @@
 // Original CPU raster stays in Rust; the shared action host handles every device.
+import {bindDetails,framebufferSize} from '../details.js';
 import {configureVisuals} from '../visuals.js';
 import {bindInput} from '../input.js';
 import {bindAudio} from '../audio.js';
@@ -8,6 +9,7 @@ const notice=document.querySelector('#notice'),noticeTitle=document.querySelecto
 const pauseButton=document.querySelector('#pause'),stateLabel=document.querySelector('#game-state'),controlsButton=document.querySelector('[data-controls]');
 let engine,previous=0,image,memoryBuffer,previousDescription='';
 const input=bindInput(canvas,'owned-orbit',()=>engine,()=>false);
+const details=bindDetails(canvas,'owned-orbit',()=>engine);
 const audio=bindAudio(canvas,()=>engine,{button:document.querySelector('[data-audio]')});
 function setPaused(value){engine?.orbit_pause(Number(value));canvas.focus({preventScroll:true});}
 pauseButton.addEventListener('click',()=>{if(engine)setPaused(!engine.orbit_paused());});
@@ -20,7 +22,7 @@ function render(timestamp){
  const dt=previous?Math.min((timestamp-previous)/1000,.05):0;previous=timestamp;
  const rect=canvas.getBoundingClientRect();input.poll();
  engine.orbit_controls_frame(dt,Math.max(1,Math.round(rect.width)),Math.max(1,Math.round(rect.height)));
- audio.sync();const panel=input.syncPanel();controlsButton.setAttribute('aria-pressed',String(panel));
+ audio.sync();details.ready();details.update();const panel=input.syncPanel();controlsButton.setAttribute('aria-pressed',String(panel));
  if(memoryBuffer!==engine.memory.buffer){memoryBuffer=engine.memory.buffer;image=new ImageData(new Uint8ClampedArray(memoryBuffer,engine.pixels(),engine.width()*engine.height()*4),engine.width(),engine.height());}
  ctx.putImageData(image,0,0);drawInput2d(ctx,engine,canvas.width,canvas.height);
  const paused=!!engine.orbit_paused();pauseButton.textContent=paused?'Resume':'Pause';

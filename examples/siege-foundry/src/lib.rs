@@ -60,6 +60,9 @@ struct Range {
     since_shot: f32,
     elapsed: f32,
     phase: Phase,
+    preview: Vec<Vec3>,
+    preview_hit: Option<Vec3>,
+    preview_aim: (u32, u32),
 }
 
 impl Range {
@@ -102,6 +105,54 @@ impl Range {
             since_shot: 0.0,
             elapsed: 0.0,
             phase: Phase::Aiming,
+            preview: Vec::with_capacity(45),
+            preview_hit: None,
+            preview_aim: (u32::MAX, u32::MAX),
+        }
+    }
+
+    fn refresh_preview(&mut self, simulated: bool) {
+        if self.cooldown > 0. {
+            return;
+        }
+        let aim = (self.yaw.to_bits(), self.elevation.to_bits());
+        let moving = simulated
+            && (self.blocks.iter().any(|block| {
+                let body = &self.physics.bodies[block.handle];
+                Vec3::from_array(body.translation().to_array()) != block.previous_position
+                    || Quat::from_array(body.rotation().to_array()) != block.previous_rotation
+            }) || self.shots.iter().any(|shot| {
+                Vec3::from_array(self.physics.bodies[shot.handle].translation().to_array())
+                    != shot.previous_position
+            }));
+        if aim == self.preview_aim && !moving {
+            return;
+        }
+        self.preview_aim = aim;
+        self.preview.clear();
+        self.preview_hit = None;
+        let direction = self.direction();
+        let start = PIVOT + direction * 1.6;
+        self.preview.push(start);
+        for i in 1..=44 {
+            let t = i as f32 * 0.035;
+            let next = start + direction * SPEED * t - Vec3::Y * (4.905 * t * t);
+            let previous = *self.preview.last().unwrap();
+            let delta = next - previous;
+            if let Some(hit) = self.physics.spherecast(
+                previous.to_array(),
+                delta.to_array(),
+                delta.length(),
+                0.36,
+                u32::MAX,
+                None,
+            ) {
+                let point = Vec3::from_array(hit.point);
+                self.preview.push(point);
+                self.preview_hit = Some(point);
+                break;
+            }
+            self.preview.push(next);
         }
     }
 
@@ -329,19 +380,16 @@ impl Art {
         self.barrel.draw(PIVOT + direction * (0.3 - recoil), q);
         self.muzzle.draw(PIVOT + direction * (1.515 - recoil), q);
         material.end();
-        if game.phase == Phase::Aiming && game.ammo > 0 {
-            let start = PIVOT + direction * 1.6;
-            let mut previous = start;
-            for i in 1..=44 {
-                let t = i as f32 * 0.025;
-                let p = start + direction * SPEED * t - Vec3::Y * (4.905 * t * t);
-                if p.y <= 0.05 {
-                    break;
-                }
+        if game.phase == Phase::Aiming && game.ammo > 0 && game.cooldown == 0. {
+            for (i, segment) in game.preview.windows(2).enumerate() {
                 if i % 2 == 0 {
-                    draw_line_3d(previous, p, Color::from_rgba(249, 225, 157, 180));
+                    draw_line_3d(segment[0], segment[1], Color::from_rgba(249, 225, 157, 180));
                 }
-                previous = p;
+            }
+            if let Some(hit) = game.preview_hit {
+                let size = 0.38;
+                draw_line_3d(hit - Vec3::X * size, hit + Vec3::X * size, PAPER);
+                draw_line_3d(hit - Vec3::Y * size, hit + Vec3::Y * size, PAPER);
             }
         }
         set_default_camera();
@@ -466,6 +514,7 @@ async fn game() {
                 );
             }
         }
+        game.refresh_preview(frame.steps > 0);
         clear_background(SKY);
         art.draw(&game, frame.alpha, &material);
         label("SIEGE FOUNDRY", 28.0, 37.0, 26.0, INK);
@@ -560,6 +609,27 @@ async fn game() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trajectory_preview_stops_at_real_tower_geometry_and_reuses_storage() {
+        let mut game = Range::new();
+        game.aim_at(vec3(0., 1.8, -4.));
+        game.refresh_preview(false);
+        let hit = game
+            .preview_hit
+            .expect("arc should hit the front of the tower");
+        assert!(hit.z > -3.2 && hit.z < -2.8, "{hit:?}");
+        assert_eq!(game.preview.last(), Some(&hit));
+        let capacity = game.preview.capacity();
+        let old = game.preview.clone();
+        game.refresh_preview(false);
+        assert_eq!(game.preview, old);
+        game.yaw += 0.4;
+        game.refresh_preview(false);
+        assert_ne!(game.preview, old);
+        assert_eq!(game.preview.capacity(), capacity);
+    }
+
     fn tick(game: &mut Range, seconds: f32) {
         for _ in 0..(seconds / DT).round() as usize {
             game.step(DT);

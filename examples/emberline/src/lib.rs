@@ -30,6 +30,7 @@ const GREEN: Color = Color::new(0.48, 0.68, 0.48, 1.0);
 struct Input {
     direction: f32,
     jump: bool,
+    jump_held: bool,
 }
 
 struct Game {
@@ -145,6 +146,12 @@ impl Game {
             )
             .expect("authored Emberline character terrain");
         self.jumps += u32::from(result.jumped);
+        // Release makes a short hop; holding keeps the full gap-clearing arc.
+        // Cutting velocity once avoids applying a frame-rate-dependent force.
+        if !result.jumped && !input.jump_held && !input.jump && self.motor.velocity.y > JUMP * 0.45
+        {
+            self.motor.velocity.y = JUMP * 0.45;
+        }
         self.motor.position.x = self
             .motor
             .position
@@ -183,6 +190,7 @@ impl Game {
         Input {
             direction: 1.0,
             jump: self.motor.grounded && (hazard || gap),
+            jump_held: true,
         }
     }
 }
@@ -516,6 +524,7 @@ async fn game() {
                 Input {
                     direction,
                     jump: player_input.pressed("jump"),
+                    jump_held: player_input.held("jump"),
                 }
             };
             let grounded = game.motor.grounded;
@@ -590,7 +599,7 @@ async fn game() {
         );
         if game.elapsed < 7.0 && !touch_mode {
             label(
-                "A / D  move     SPACE  jump     R  restart",
+                "A / D  move     SPACE  tap / hold jump     R  restart",
                 34.0,
                 680.0,
                 19.0,
@@ -655,6 +664,39 @@ async fn game() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tap_and_hold_produce_distinct_controlled_jump_arcs() {
+        let apex = |held| {
+            let mut game = Game::new();
+            for _ in 0..8 {
+                game.update(Input::default(), DT);
+            }
+            let mut rise = 0_f32;
+            for tick in 0..130 {
+                game.update(
+                    Input {
+                        jump: tick == 0,
+                        jump_held: held,
+                        direction: 0.,
+                    },
+                    DT,
+                );
+                rise = rise.max(520. - game.position().y);
+            }
+            assert_eq!(game.jumps, 1);
+            assert_eq!(game.deaths, 0);
+            assert!(game.motor.grounded);
+            rise
+        };
+        let short = apex(false);
+        let full = apex(true);
+        assert!(
+            short > 20. && full > short + 60.,
+            "tap={short}, hold={full}"
+        );
+    }
+
     const DT: f32 = 1.0 / 120.0;
 
     #[test]
@@ -696,7 +738,13 @@ mod tests {
             DT,
         );
         for _ in 0..4 {
-            game.update(Input::default(), DT);
+            game.update(
+                Input {
+                    jump_held: true,
+                    ..Input::default()
+                },
+                DT,
+            );
         }
         assert!(game.velocity().y < -500.0);
         assert_eq!(game.jumps, 2);

@@ -46,6 +46,12 @@ Use `FERRAVEX_QUALITY=low|medium|high` on native or `?quality=low|medium|high` i
 the browser to override game defaults. Crystal Cavern uses local lights and baked
 occlusion without a sun. Dune keeps its cheap blob shadows only on Low.
 
+The shared browser Details panel can override shadows and local-light count
+independently of this preset. `set_fidelity` applies those validated preferences;
+`shadow_quality()` reports the effective shadow tier so games can choose their
+blob-shadow fallback even when lighting remains Low. Resolution is independent
+of these tiers; see [visual settings](VISUALS.md).
+
 ## Shadow costs and limits
 
 The sun uses a texel-snapped orthographic depth map, slope-scaled raster offset, normal offset and depth bias.

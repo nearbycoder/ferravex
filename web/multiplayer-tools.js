@@ -9,7 +9,7 @@ export function createMultiplayerTools(e,canvas,{address='ws://127.0.0.1:4001/fe
  const stop=()=>{generation++;const old=socket;socket=null;old?.close(1000);e.ferravex_mp_start(0,0,0);transport='Offline practice.';connect.disabled=false;disconnect.disabled=true;};
  connect.addEventListener('click',()=>{try{
   const url=new URL(field.value);if(!['ws:','wss:'].includes(url.protocol)||url.username||url.password)throw new Error('Use a ws:// or wss:// server address without credentials.');
-  stop();const current=++generation;const ws=new WebSocket(url,'ferravex.v4');socket=ws;ws.binaryType='arraybuffer';transport='Connecting…';connect.disabled=true;disconnect.disabled=false;sent=0;received=0;
+  stop();const current=++generation;const ws=new WebSocket(url,'ferravex.v5');socket=ws;ws.binaryType='arraybuffer';transport='Connecting…';connect.disabled=true;disconnect.disabled=false;sent=0;received=0;
   ws.onopen=()=>{if(current!==generation)return;const seed=crypto.getRandomValues(new Uint32Array(2));e.ferravex_mp_start(2,seed[0],seed[1]);transport='Connected transport; joining server…';};
   ws.onmessage=event=>{if(current!==generation||!(event.data instanceof ArrayBuffer))return;const bytes=new Uint8Array(event.data);if(bytes.length===0||bytes.length>1200){transport='Server sent an oversized game packet.';ws.close(1009);return;}const ptr=e.ferravex_mp_buffer();new Uint8Array(e.memory.buffer,ptr,bytes.length).set(bytes);if(e.ferravex_mp_submit(bytes.length))received++;};
   ws.onerror=()=>{if(current===generation)transport='Connection failed. Check the address and server origin settings.';};

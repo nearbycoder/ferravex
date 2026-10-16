@@ -68,6 +68,9 @@ struct Flight {
     remaining: f32,
     outcome: Outcome,
     recovery: f32,
+    turn_rate: f32,
+    boost_energy: f32,
+    boost_exhausted: bool,
 }
 impl Flight {
     fn new() -> Self {
@@ -82,6 +85,9 @@ impl Flight {
             remaining: 90.,
             outcome: Outcome::Flying,
             recovery: 0.,
+            turn_rate: 0.,
+            boost_energy: 1.,
+            boost_exhausted: false,
         }
     }
     fn forward(&self) -> Vec3 {
@@ -109,6 +115,7 @@ impl Flight {
         self.yaw = delta.x.atan2(delta.z);
         self.pitch = 0.;
         self.bank = 0.;
+        self.turn_rate = 0.;
         self.speed = 24.;
         self.recovery = 2.5;
         self.remaining = (self.remaining - 5.).max(0.);
@@ -124,17 +131,28 @@ impl Flight {
         }
         self.recovery = (self.recovery - dt).max(0.);
         let turn = input.turn.clamp(-1., 1.);
-        self.yaw += turn * 1.15 * dt;
-        self.pitch += (input.climb.clamp(-1., 1.) * 0.58 - self.pitch) * (dt * 3.8).min(1.);
-        self.bank += (-turn * 0.7 - self.bank) * (dt * 4.).min(1.);
+        self.turn_rate += (turn * 1.15 - self.turn_rate) * ferravex_play::motion::response(9., dt);
+        self.yaw += self.turn_rate * dt;
+        self.pitch += (input.climb.clamp(-1., 1.) * 0.58 - self.pitch)
+            * ferravex_play::motion::response(4.2, dt);
+        self.bank += (-turn * 0.7 - self.bank) * ferravex_play::motion::response(5., dt);
+        if self.boost_energy < 0.03 {
+            self.boost_exhausted = true;
+        }
+        if self.boost_energy > 0.3 {
+            self.boost_exhausted = false;
+        }
+        let boosting = input.boost && !input.slow && !self.boost_exhausted;
+        self.boost_energy =
+            (self.boost_energy + dt * if boosting { -0.32 } else { 0.16 }).clamp(0., 1.);
         let target_speed = if input.slow {
             13.
-        } else if input.boost {
+        } else if boosting {
             35.
         } else {
             24.
         };
-        self.speed += (target_speed - self.speed) * (dt * 2.).min(1.);
+        self.speed += (target_speed - self.speed) * ferravex_play::motion::response(2.5, dt);
         let previous = self.pos;
         self.pos += self.forward() * self.speed * dt;
         if self.pos.y < -17.
@@ -152,6 +170,7 @@ impl Flight {
         if segment_hits(previous, self.pos, ROUTE[self.next], radius)
             && (self.next < 5 || self.speed <= 18.)
         {
+            self.boost_energy = (self.boost_energy + 0.18).min(1.);
             self.next += 1;
             if self.next == ROUTE.len() {
                 self.outcome = Outcome::Delivered;
@@ -374,6 +393,8 @@ fn hud(game: &Flight, touch: bool) {
         );
     }
     let bottom = screen_height() - 25.;
+    draw_rectangle(28., bottom - 43., 90., 3., INK);
+    draw_rectangle(28., bottom - 43., 90. * game.boost_energy, 3., CREAM);
     label(
         &format!("{} m", game.pos.y.max(0.) as u32),
         28.,
@@ -714,6 +735,36 @@ async fn game() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn boost_is_a_recoverable_resource_and_slow_overrides_it() {
+        let mut game = Flight::new();
+        for _ in 0..600 {
+            game.tick(
+                Input {
+                    boost: true,
+                    ..Default::default()
+                },
+                1. / 120.,
+            );
+        }
+        assert_eq!(game.outcome, Outcome::Flying);
+        assert!(game.boost_energy < 0.3 && game.speed < 34.);
+        let energy = game.boost_energy;
+        for _ in 0..360 {
+            game.tick(
+                Input {
+                    boost: true,
+                    slow: true,
+                    ..Default::default()
+                },
+                1. / 120.,
+            );
+        }
+        assert!(game.boost_energy > energy + 0.3);
+        assert!(game.speed < 14.);
+    }
+
     #[test]
     fn ordinary_flight_inputs_complete_the_route_and_delivery() {
         let mut game = Flight::new();

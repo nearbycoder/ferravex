@@ -2,9 +2,11 @@
 //! Hosts supply candidates and authoritative occlusion queries. Deferred sight
 //! never counts as a fresh sighting; decisions cannot manufacture combat hits.
 mod decision;
+mod enemy;
 mod perception;
 mod scheduler;
 pub use decision::*;
+pub use enemy::*;
 pub use perception::*;
 pub use scheduler::*;
 

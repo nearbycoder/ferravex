@@ -16,22 +16,22 @@ impl Delta {
         if base.len() != next.len() || next.len() > MAX_PACKET_BYTES - 11 {
             return Err(ProtocolError::Invalid);
         }
-        let mut changes = Vec::new();
-        for (i, (&a, &b)) in base.iter().zip(next).enumerate() {
-            if a != b {
-                changes.extend_from_slice(&(i as u16).to_le_bytes());
-                changes.push(b);
-            }
-        }
-        // Full snapshot fallback avoids larger packets for dense changes.
-        let mut bytes = Vec::new();
+        // Decide the representation before allocating. Dense changes previously
+        // built a temporary 3x payload that was immediately discarded.
+        let changes = base.iter().zip(next).filter(|(a, b)| a != b).count();
+        let sparse = changes * 3 < next.len();
+        let mut bytes = Vec::with_capacity(3 + if sparse { changes * 3 } else { next.len() });
         bytes.extend_from_slice(&(next.len() as u16).to_le_bytes());
-        if changes.len() < next.len() {
-            bytes.push(1);
-            bytes.extend(changes)
-        } else {
-            bytes.push(0);
-            bytes.extend(next)
+        bytes.push(u8::from(sparse));
+        if sparse && changes > 0 {
+            for (i, (&a, &b)) in base.iter().zip(next).enumerate() {
+                if a != b {
+                    bytes.extend_from_slice(&(i as u16).to_le_bytes());
+                    bytes.push(b);
+                }
+            }
+        } else if !sparse {
+            bytes.extend_from_slice(next);
         }
         Ok(Self {
             base_tick,
@@ -99,6 +99,41 @@ mod tests {
         let dense = Delta::between(1, &base, 2, &vec![4; 1000]).unwrap();
         assert_eq!(dense.bytes.len(), 1003);
         assert_eq!(dense.apply(1, &base).unwrap(), vec![4; 1000]);
+    }
+    #[test]
+    fn representation_boundaries_preserve_wire_bytes_and_packet_limit() {
+        for len in [0, 1, 2, 3, 4, 10, MAX_PACKET_BYTES - 11] {
+            let base = vec![7; len];
+            for changed in [0, len / 3, (len / 3 + 1).min(len), len] {
+                let mut next = base.clone();
+                next[..changed].fill(9);
+                let delta = Delta::between(3, &base, 4, &next).unwrap();
+                assert_eq!(delta.apply(3, &base).unwrap(), next);
+                let sparse = changed * 3 < len;
+                assert_eq!(delta.bytes[2], u8::from(sparse));
+                let mut expected = (len as u16).to_le_bytes().to_vec();
+                expected.push(u8::from(sparse));
+                if sparse {
+                    for i in 0..changed {
+                        expected.extend_from_slice(&(i as u16).to_le_bytes());
+                        expected.push(9);
+                    }
+                } else {
+                    expected.extend_from_slice(&next);
+                }
+                assert_eq!(delta.bytes, expected);
+                assert!(delta.bytes.len() <= len + 3);
+            }
+        }
+        assert!(
+            Delta::between(
+                0,
+                &[0; MAX_PACKET_BYTES - 10],
+                1,
+                &[0; MAX_PACKET_BYTES - 10]
+            )
+            .is_err()
+        );
     }
     #[test]
     fn malformed_deltas_never_write_out_of_bounds() {

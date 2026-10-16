@@ -26,6 +26,7 @@ pub struct Run {
     pub finished: bool,
     pub notice: f32,
     pub recovered: bool,
+    pub sweepers: Vec<RigidBodyHandle>,
     route_index: usize,
 }
 impl Run {
@@ -40,9 +41,26 @@ impl Run {
                 RigidBodyBuilder::fixed().translation(Vector::from_array(p.center.to_array())),
                 ColliderBuilder::cuboid(p.size.x * 0.5, p.size.y * 0.5, p.size.z * 0.5)
                     .rotation(p.rotation)
-                    .friction(0.9),
+                    .friction(p.friction),
             );
         }
+        let sweepers = level
+            .sweepers
+            .iter()
+            .map(|p| {
+                physics
+                    .raw
+                    .insert(
+                        RigidBodyBuilder::kinematic_position_based()
+                            .translation(Vector::from_array(p.position.to_array())),
+                        ColliderBuilder::cuboid(p.size.x * 0.5, p.size.y * 0.5, p.size.z * 0.5)
+                            .rotation(p.rotation(0.))
+                            .friction(0.7)
+                            .restitution(0.12),
+                    )
+                    .0
+            })
+            .collect();
         for p in &level.obstacles {
             physics.raw.insert(
                 RigidBodyBuilder::fixed().translation(Vector::from_array(p.position.to_array())),
@@ -75,6 +93,7 @@ impl Run {
             finished: false,
             notice: 0.,
             recovered: false,
+            sweepers,
             route_index: level.spawn_route,
             level,
         }
@@ -114,6 +133,12 @@ impl Run {
             return;
         }
         self.elapsed += dt;
+        for (sweeper, &handle) in self.level.sweepers.iter().zip(&self.sweepers) {
+            // Rotation belongs to the body so the solver transfers its velocity.
+            // The collider's authored phase is local; advance only the time term here.
+            self.physics.bodies[handle]
+                .set_next_kinematic_rotation(Quat::from_rotation_y(sweeper.speed * self.elapsed));
+        }
         self.notice = (self.notice - dt).max(0.);
         self.previous_position = self.position();
         self.previous_rotation = self.rotation();
@@ -126,8 +151,15 @@ impl Run {
             } else {
                 self.level.tuning.speed
             };
-        let delta =
-            (desired - horizontal).clamp_length_max(1.8) * if input.brake { 8.0 } else { 4.0 };
+        let delta = if input.brake {
+            // Deliberate braking is strong enough to catch a downhill hairpin.
+            ((desired - horizontal) * 12.).clamp_length_max(24.)
+        } else if input.roll.length_squared() > 0.0001 {
+            (desired - horizontal).clamp_length_max(1.8) * 4.
+        } else {
+            // Releasing the stick coasts; surface friction/damping decide the roll.
+            Vec2::ZERO
+        };
         let mass = body.mass();
         body.apply_impulse(Vector::new(delta.x, 0., delta.y) * (mass * dt), true);
         // Torque makes the ball truly roll. Surface friction and rigid-body contacts
@@ -139,7 +171,7 @@ impl Run {
         if input.brake {
             body.apply_torque_impulse(
                 -body.angvel()
-                    * (mass * self.level.tuning.radius * self.level.tuning.radius * dt * 1.5),
+                    * (mass * self.level.tuning.radius * self.level.tuning.radius * dt * 6.),
                 true,
             );
         }
@@ -190,6 +222,120 @@ impl Run {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn releasing_coasts_and_deliberate_braking_stops_the_marble() {
+        let mut coast = Run::new();
+        let mut brake = Run::new();
+        for _ in 0..90 {
+            coast.step(Controls::default(), 1. / 120.);
+            brake.step(Controls::default(), 1. / 120.);
+        }
+        for game in [&mut coast, &mut brake] {
+            game.physics.bodies[game.marble].set_linvel(Vector::new(3., 0., 0.), true);
+        }
+        for _ in 0..25 {
+            coast.step(Controls::default(), 1. / 120.);
+            brake.step(
+                Controls {
+                    brake: true,
+                    ..Default::default()
+                },
+                1. / 120.,
+            );
+        }
+        let coast_speed = coast.physics.bodies[coast.marble].linvel().x.abs();
+        let brake_speed = brake.physics.bodies[brake.marble].linvel().x.abs();
+        assert!(
+            brake_speed < coast_speed * 0.6,
+            "coast={coast_speed}, brake={brake_speed}"
+        );
+        assert_eq!((coast.falls, brake.falls), (0, 0));
+    }
+
+    #[test]
+    fn every_authored_course_is_finishable_using_only_ordinary_inputs() {
+        for course in &crate::courses::COURSES {
+            let mut game = Run::with_level(Arc::new(Level::parse(course.source).unwrap()));
+            for _ in 0..120 * 180 {
+                let input = game.autopilot();
+                game.step(input, 1. / 120.);
+                assert!(
+                    game.position().is_finite(),
+                    "{} produced invalid physics",
+                    course.id
+                );
+                if game.finished {
+                    break;
+                }
+            }
+            assert!(
+                game.finished,
+                "{}: position={:?}, route={}, gems={}, falls={}",
+                course.id,
+                game.position(),
+                game.route_index,
+                game.gems(),
+                game.falls
+            );
+            eprintln!(
+                "{} finished {:.1}s / {} falls",
+                course.id, game.elapsed, game.falls
+            );
+        }
+    }
+    #[test]
+    fn rotating_sweeper_transfers_motion_through_real_contacts() {
+        let mut game = Run::with_level(Arc::new(
+            Level::parse(crate::courses::COURSES[2].source).unwrap(),
+        ));
+        let pivot = game.level.sweepers[0].position;
+        let start = pivot + Vec3::new(-1.5, 0., 0.9);
+        game.physics.bodies[game.marble]
+            .set_translation(Vector::from_array(start.to_array()), true);
+        let mut displaced = false;
+        for _ in 0..240 {
+            game.step(
+                Controls {
+                    brake: true,
+                    ..Default::default()
+                },
+                1. / 120.,
+            );
+            let p = game.position();
+            displaced |= Vec2::new(p.x - start.x, p.z - start.z).length() > 0.35;
+        }
+        assert!(
+            displaced,
+            "the rotating bar must physically push the marble"
+        );
+    }
+    #[test]
+    fn every_checkpoint_is_a_safe_recovery_surface() {
+        for course in &crate::courses::COURSES {
+            let level = Arc::new(Level::parse(course.source).unwrap());
+            for checkpoint in 1..=level.checkpoints.len() {
+                let mut game = Run::with_level(level.clone());
+                game.checkpoint = checkpoint;
+                game.collected[0] = true;
+                game.recover();
+                let start = game.position();
+                for _ in 0..240 {
+                    game.step(Controls::default(), 1. / 120.);
+                }
+                assert_eq!(
+                    game.falls, 1,
+                    "{} checkpoint {} falls again without input",
+                    course.id, checkpoint
+                );
+                assert!(
+                    game.position().distance(start) < 0.3,
+                    "recovery must settle safely"
+                );
+                assert!(game.collected[0]);
+            }
+        }
+    }
     #[test]
     fn gravity_and_contacts_keep_marble_on_platform() {
         let mut game = Run::new();

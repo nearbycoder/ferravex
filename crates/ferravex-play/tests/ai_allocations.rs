@@ -65,6 +65,7 @@ fn perception_decisions_queued_search_and_route_following_allocate_nothing_after
     )
     .unwrap();
     let mut state = graph.initial();
+    let mut enemy = EnemyController::new(EnemyConfig::ranged(), 1).unwrap();
     let mut memory = Memory::new(MemorySettings::default()).unwrap();
     let mut sounds = NoiseBuffer::new(8).unwrap();
     let mut route = Route3::new(64).unwrap();
@@ -149,6 +150,21 @@ fn perception_decisions_queued_search_and_route_following_allocate_nothing_after
         follower.target(&route, Vec3::ZERO, 0.1, 8).unwrap();
         cursor.advance(&route, 2., 1. / 60.).unwrap();
         assert!(memory.best(1).unwrap().visible);
+        enemy
+            .tick(
+                EnemyInput {
+                    position: Vec3::ZERO,
+                    forward: Vec3::Z,
+                    up: Vec3::Y,
+                    patrol_goal: Vec3::X,
+                    target: memory.best(1).copied(),
+                    health_fraction: 1.,
+                    weapon_ready: true,
+                    alive: true,
+                },
+                1. / 60.,
+            )
+            .unwrap();
     }
     RECORD.with(|v| v.set(false));
     assert_eq!(CALLS.with(|v| v.get()), 0, "hot AI allocated");

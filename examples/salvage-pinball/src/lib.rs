@@ -55,6 +55,10 @@ pub struct Table {
     pub launches: u32,
     pub hits: u32,
     pub drains: u32,
+    pub saves: u32,
+    pub ball_save: f32,
+    pub save_notice: f32,
+    save_available: bool,
     pub time: f32,
     pub trail: [[f32; 2]; 12],
     trail_tick: u32,
@@ -150,6 +154,10 @@ impl Table {
             launches: 0,
             hits: 0,
             drains: 0,
+            saves: 0,
+            ball_save: 0.,
+            save_notice: 0.,
+            save_available: true,
             time: 0.0,
             trail: [[9.25, 14.4]; 12],
             trail_tick: 0,
@@ -196,6 +204,8 @@ impl Table {
             return;
         }
         self.time += dt;
+        self.ball_save = (self.ball_save - dt).max(0.);
+        self.save_notice = (self.save_notice - dt).max(0.);
         for (i, pressed) in [controls.left, controls.right].into_iter().enumerate() {
             let target = if pressed {
                 if i == 0 { -0.9 } else { 0.9 }
@@ -209,6 +219,10 @@ impl Table {
         if controls.launch && self.waiting {
             self.waiting = false;
             self.launches += 1;
+            if self.save_available {
+                self.ball_save = 5.;
+                self.save_available = false;
+            }
             let ball = &mut self.world.bodies[self.ball];
             ball.set_gravity_scale(1.0, true);
             ball.apply_impulse(Vector::new(0.0, -25.0) * ball.mass(), true);
@@ -237,6 +251,13 @@ impl Table {
             }
             self.contacts[i] = touching;
         }
+        // Powered bumpers/flippers can add energy, but a readable table needs a
+        // ceiling. Apply this after real contacts rather than steering the ball.
+        let ball = &mut self.world.bodies[self.ball];
+        let bounded = ball.linvel().clamp_length_max(34.);
+        if bounded != ball.linvel() {
+            ball.set_linvel(bounded, true);
+        }
         self.trail_tick += 1;
         if self.trail_tick.is_multiple_of(3) {
             self.trail.rotate_right(1);
@@ -252,7 +273,15 @@ impl Table {
             self.waiting = true;
         }
         if p[1] > 16.0 || p[0] < -1.0 || p[0] > 11.0 {
-            self.lives -= 1;
+            let saved = self.ball_save > 0.;
+            if saved {
+                self.saves += 1;
+                self.save_notice = 2.;
+            } else {
+                self.lives -= 1;
+                self.save_available = true;
+            }
+            self.ball_save = 0.;
             self.drains += 1;
             if self.lives > 0 {
                 self.world.raw.remove_body(self.ball);
@@ -268,6 +297,38 @@ impl Table {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn early_drain_saves_once_and_powered_contacts_have_a_speed_ceiling() {
+        let mut table = Table::new();
+        table.step(
+            DT,
+            Controls {
+                launch: true,
+                ..Default::default()
+            },
+        );
+        table.world.bodies[table.ball].set_translation(Vector::new(4.9, 16.2), true);
+        table.world.bodies[table.ball].set_linvel(Vector::new(0., 8.), true);
+        table.step(DT, Controls::default());
+        assert_eq!((table.saves, table.lives), (1, 3));
+        assert!(table.waiting);
+        table.step(
+            DT,
+            Controls {
+                launch: true,
+                ..Default::default()
+            },
+        );
+        table.world.bodies[table.ball].set_translation(Vector::new(4.9, 16.2), true);
+        table.world.bodies[table.ball].set_linvel(Vector::new(0., 8.), true);
+        table.step(DT, Controls::default());
+        assert_eq!((table.saves, table.lives), (1, 2));
+        table.world.bodies[table.ball].set_linvel(Vector::new(-100., 0.), true);
+        table.step(DT, Controls::default());
+        assert!(table.world.bodies[table.ball].linvel().length() <= 34.01);
+    }
+
     const DT: f32 = 1.0 / 120.0;
 
     #[test]

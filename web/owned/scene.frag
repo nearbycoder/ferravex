@@ -9,6 +9,8 @@ uniform sampler2D shadowMap;
 uniform float fogDensity;
 uniform int visualLook;
 uniform bool shadowsEnabled;
+uniform float shadowTexel;
+uniform int shadowRadius;
 out vec4 outputColor;
 void main(){
  vec3 normal=normalize(surfaceNormal);
@@ -18,10 +20,13 @@ void main(){
  float visible=1.0;
  if(shadowsEnabled&&all(greaterThanEqual(projected,vec3(0.0)))&&all(lessThanEqual(projected,vec3(1.0)))){
   float bias=max(0.0015*(1.0-dot(normal,light)),0.0004);visible=0.0;
+  float samples=0.0;
   for(int x=-1;x<=1;x++)for(int y=-1;y<=1;y++){
-   float depth=texture(shadowMap,projected.xy+vec2(x,y)/1024.0).r;
-   visible+=projected.z-bias<=depth?1.0/9.0:0.0;
+   if(abs(x)>shadowRadius||abs(y)>shadowRadius)continue;
+   float depth=texture(shadowMap,projected.xy+vec2(x,y)*shadowTexel).r;
+   visible+=projected.z-bias<=depth?1.0:0.0;samples+=1.0;
   }
+  visible/=max(samples,1.0);
  }
  float hemispheric=0.5+0.5*normal.y;
  vec3 ambient=mix(vec3(0.29,0.32,0.34),vec3(0.54,0.57,0.58),hemispheric);

@@ -75,6 +75,9 @@ impl PlayerInput {
     /// Draw after the game's HUD. F2, the browser Controls button or controller
     /// Home opens this editor. Tab/arrows and Enter or the D-pad/A navigate it.
     pub fn draw_settings(&mut self) {
+        if self.external_details {
+            return;
+        }
         if !self.open {
             if self.paused {
                 crate::set_default_camera();

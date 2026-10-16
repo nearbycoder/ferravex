@@ -277,6 +277,7 @@ struct State {
     matrix: Mat4,
     depth: bool,
     frustum: Option<ferravex_graphics::Frustum>,
+    shadow_frustum: Option<ferravex_graphics::Frustum>,
     eye: Option<Vec3>,
     visibility: visibility::VisibilitySettings,
     visibility_stats: visibility::VisibilityStats,
@@ -288,6 +289,13 @@ struct State {
     lighting: Option<shaders::LitSettings>,
     shader: Option<material::ShaderMaterial>,
     shader_params: [f32; 16],
+    presentation: preferences::Preferences,
+    pending_presentation: Option<preferences::Preferences>,
+    details_open: bool,
+    details_error: bool,
+    resolution: u8,
+    shadow_detail: u8,
+    light_detail: u8,
     look: Look,
     look_override: Option<Look>,
     world_colors: bool,
@@ -332,6 +340,7 @@ impl Default for State {
             matrix: Mat4::IDENTITY,
             depth: false,
             frustum: None,
+            shadow_frustum: None,
             eye: None,
             visibility: Default::default(),
             visibility_stats: Default::default(),
@@ -343,6 +352,13 @@ impl Default for State {
             lighting: None,
             shader: None,
             shader_params: [0.; 16],
+            presentation: Default::default(),
+            pending_presentation: None,
+            details_open: false,
+            details_error: false,
+            resolution: 0,
+            shadow_detail: 0,
+            light_detail: 0,
             look: Look::Authored,
             look_override: None,
             world_colors: false,
@@ -381,9 +397,17 @@ impl Default for State {
 }
 impl State {
     fn refresh_environment(&mut self) {
-        self.retained
-            .environment
-            .update(&self.points, self.sun, self.quality, self.eye);
+        self.retained.environment.update_details(
+            &self.points,
+            self.sun,
+            self.quality,
+            self.eye,
+            self.shadow_detail,
+            self.light_detail,
+        );
+        // All mesh submissions share the current light volume. Extract and
+        // normalize its six planes once per environment update, not per draw.
+        self.shadow_frustum = self.retained.environment.frustum();
     }
     fn submit(
         &mut self,
@@ -399,9 +423,7 @@ impl State {
                 m.0.options.blend == material::BlendMode::Opaque && m.0.options.casts_shadows
             })
             && self
-                .retained
-                .environment
-                .frustum()
+                .shadow_frustum
                 .is_some_and(|f| f.intersects_bounds(bounds, model));
         if !visible && !casts {
             return false;
@@ -651,9 +673,7 @@ fn draw_shadow_pose(
                 !m.0.options.casts_shadows || m.0.options.blend != material::BlendMode::Opaque
             })
             || !s
-                .retained
-                .environment
-                .frustum()
+                .shadow_frustum
                 .is_some_and(|f| f.intersects_bounds(bounds, model))
         {
             return false;
@@ -693,8 +713,30 @@ pub fn set_quality_preference(quality: Option<lighting::Quality>) {
         s.refresh_environment();
     });
 }
+/// Independent presentation detail overrides. Zero follows device/preset defaults.
+pub fn set_fidelity(resolution: u8, shadows: u8, lights: u8) -> bool {
+    if resolution > 5 || shadows > 3 || lights > 4 {
+        return false;
+    }
+    edit(|s| {
+        s.resolution = resolution;
+        s.shadow_detail = shadows;
+        s.light_detail = lights;
+        s.refresh_environment();
+    });
+    true
+}
 pub fn quality() -> lighting::Quality {
     read(|s| s.quality)
+}
+/// Effective shadow tier, including the independent player detail override.
+pub fn shadow_quality() -> lighting::Quality {
+    read(|s| match s.shadow_detail {
+        1 => lighting::Quality::Low,
+        2 => lighting::Quality::Medium,
+        3 => lighting::Quality::High,
+        _ => s.quality,
+    })
 }
 pub fn set_point_lights(lights: &[lighting::PointLight]) -> Result<(), &'static str> {
     if lights.len() > lighting::MAX_POINT_LIGHTS || lights.iter().any(|l| !l.valid()) {
@@ -1355,6 +1397,47 @@ mod wasm {
         read(|s| &s.retained.environment as *const lighting::Environment)
     }
     #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_details_get(field: u32) -> u32 {
+        read(|s| match field {
+            0 => s.presentation.quality.map_or(0, |q| q as u32 + 1),
+            1 => s.presentation.resolution as u32,
+            2 => s.presentation.shadows as u32,
+            3 => s.presentation.lights as u32,
+            4 => s.presentation.look as u32,
+            5 => s.details_error as u32,
+            _ => u32::MAX,
+        })
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_details_set(field: u32, value: u32) -> u32 {
+        edit(|s| {
+            let mut p = s.presentation;
+            match field {
+                0 if value <= 3 => p.quality = value.checked_sub(1).map(|q| q as u8),
+                1 if value <= 5 => p.resolution = value as u8,
+                2 if value <= 3 => p.shadows = value as u8,
+                3 if value <= 4 => p.lights = value as u8,
+                4 if value <= 3 => p.look = value as u8,
+                _ => return 0,
+            };
+            s.presentation = p;
+            s.pending_presentation = Some(p);
+            1
+        })
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_details_open(open: u32) {
+        edit(|s| s.details_open = open != 0);
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_resolution() -> u32 {
+        read(|s| s.resolution as u32)
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_shadow_detail() -> u32 {
+        shadow_quality() as u32 + 1
+    }
+    #[unsafe(no_mangle)]
     pub extern "C" fn ferravex_visual_look() -> u32 {
         look() as u32
     }
@@ -1638,6 +1721,34 @@ mod tests {
             assert_ne!(s.retained.batches[0].depth & 32, 0);
             assert_eq!(s.retained.batches[0].depth & 8, 0);
         });
+    }
+    #[test]
+    fn shadow_visibility_refreshes_when_lighting_settings_change() {
+        reset();
+        set_camera(&Camera3D::default());
+        set_quality(lighting::Quality::High);
+        let mesh = mesh::Mesh3d::cuboid(Vec3::ONE, WHITE);
+        let sun = lighting::SunShadow {
+            extent: 4.,
+            depth: 20.,
+            ..Default::default()
+        };
+        set_sun_shadow(Some(sun)).unwrap();
+        assert!(draw_shadow(mesh.resident(), Mat4::IDENTITY));
+        set_sun_shadow(Some(lighting::SunShadow {
+            center: Vec3::X * 100.,
+            ..sun
+        }))
+        .unwrap();
+        assert!(!draw_shadow(mesh.resident(), Mat4::IDENTITY));
+        set_sun_shadow(Some(sun)).unwrap();
+        assert!(draw_shadow(mesh.resident(), Mat4::IDENTITY));
+        set_fidelity(0, 1, 0);
+        assert!(!draw_shadow(mesh.resident(), Mat4::IDENTITY));
+        set_fidelity(0, 0, 0);
+        assert!(draw_shadow(mesh.resident(), Mat4::IDENTITY));
+        clear_background(BLACK);
+        assert!(!draw_shadow(mesh.resident(), Mat4::IDENTITY));
     }
     #[test]
     fn shared_camera_culls_residents_and_default_ui_camera_does_not() {

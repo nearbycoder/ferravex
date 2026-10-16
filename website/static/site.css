@@ -4,3 +4,9 @@
 
 /* Approved Ferravex F mark replaces the original slash placeholder. */
 img.brand-mark{width:28px;height:28px;padding:0;flex-shrink:0}
+
+/* Keep touch gestures inside a running player; text elsewhere stays selectable. */
+.player,.player iframe,.player .launch{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
+.player iframe{touch-action:none;outline:none}
+.player.player-expanded{position:fixed;inset:0;width:100%;height:100dvh;max-width:none;aspect-ratio:auto;border:0;border-radius:0;margin:0;z-index:100;background:#101a21;overscroll-behavior:none}
+.player.player-expanded iframe{width:100%;height:100%;display:block}

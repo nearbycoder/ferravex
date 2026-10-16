@@ -3,12 +3,12 @@
 First-party bounded binary codecs, replication/clock/reliable queues, native UDP,
 and an optional native WebSocket gateway. No registry dependencies.
 
-## Protocol version 4
+## Protocol version 5
 
-Packets begin with `FVRX`, version byte `4`, and a kind byte. Integers and float
+Packets begin with `FVRX`, version byte `5`, and a kind byte. Integers and float
 bits are little-endian; the maximum packet is 1200 bytes. Truncation, unsupported
 versions/kinds, invalid numeric/boolean values and trailing bytes are rejected.
-Version 3 peers must upgrade together. The original input frame remains 21
+Version 4 and older peers must upgrade together. Version 5 retains the v4 payload layout but rejects older prediction/movement rules. The original input frame remains 21
 bytes; full snapshots now include life epochs. Extensions add timed inputs, clock exchange, snapshot ACKs, deltas and
 reliable client commands.
 

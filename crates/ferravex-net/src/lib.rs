@@ -27,7 +27,8 @@ pub const BUTTON_RELOAD: u8 = 4;
 pub const MAX_PITCH: f32 = 1.55;
 const MAGIC: &[u8; 4] = b"FVRX";
 /// Version 4 adds timed inputs, clock exchanges, snapshot ACK/deltas and commands.
-pub const PROTOCOL_VERSION: u8 = 4;
+// Version 5 preserves the v4 payloads and gates the retuned prediction rules.
+pub const PROTOCOL_VERSION: u8 = 5;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct InputFrame {

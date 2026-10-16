@@ -91,6 +91,7 @@ pub struct Car {
     pub velocity: Vec2,
     pub offroad: bool,
     pub sliding: bool,
+    steering: f32,
 }
 impl Car {
     fn new(track: &Track) -> Self {
@@ -103,6 +104,7 @@ impl Car {
             velocity: Vec2::ZERO,
             offroad: false,
             sliding: false,
+            steering: 0.,
         }
     }
     fn step(&mut self, track: &Track, control: Controls, dt: f32) {
@@ -137,10 +139,26 @@ impl Car {
         };
         self.sliding = lateral.abs() > 30. || control.handbrake && longitudinal > 30.;
         self.velocity = forward * longitudinal + right * lateral * (-grip * dt).exp();
-        let steering = control.steer.clamp(-1., 1.) * 2.9 * (longitudinal / 90.).clamp(-0.8, 1.0);
+        self.steering += (control.steer.clamp(-1., 1.) - self.steering)
+            * ferravex_play::motion::response(14., dt);
+        let steering = self.steering
+            * (if control.handbrake { 3.6 } else { 2.9 })
+            * (longitudinal / 90.).clamp(-0.8, 1.0);
         self.pose.angle = (self.pose.angle + steering * dt).rem_euclid(std::f32::consts::TAU);
         self.pose.position += self.velocity * dt;
-        self.pose.position = self.pose.position.clamp(vec2(28., 25.), vec2(1072., 625.));
+        let bounded = self.pose.position.clamp(vec2(28., 25.), vec2(1072., 625.));
+        let correction = bounded - self.pose.position;
+        if correction.length_squared() > 0. {
+            self.velocity = ferravex_play::motion::impact_velocity(
+                self.velocity.extend(0.),
+                correction.extend(0.),
+                0.15,
+                0.94,
+            )
+            .expect("finite rally boundary")
+            .truncate();
+        }
+        self.pose.position = bounded;
     }
 }
 
@@ -280,6 +298,34 @@ impl Race {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn handbrake_retains_slip_and_boundary_impacts_preserve_a_slide() {
+        let track = Track::new();
+        let mut road = Car::new(&track);
+        let mut drift = Car::new(&track);
+        let forward = Vec2::from_angle(road.pose.angle);
+        let side = vec2(-forward.y, forward.x);
+        road.velocity = forward * 150. + side * 80.;
+        drift.velocity = road.velocity;
+        road.step(&track, Controls::default(), 1. / 120.);
+        drift.step(
+            &track,
+            Controls {
+                handbrake: true,
+                ..Default::default()
+            },
+            1. / 120.,
+        );
+        assert!(drift.velocity.dot(side) > road.velocity.dot(side));
+        road.pose.position = vec2(1072., 300.);
+        road.pose.angle = 0.;
+        road.velocity = vec2(200., 30.);
+        road.step(&track, Controls::default(), 1. / 120.);
+        assert!(road.velocity.x < 0. && road.velocity.y > 20.);
+        assert_eq!(road.pose.position.x, 1072.);
+    }
+
     #[test]
     fn shortcut_and_reverse_cannot_score_laps() {
         let track = Track::new();

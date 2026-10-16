@@ -29,7 +29,7 @@ def main():
     candidates += [(f"wasm/{name.replace('-', '_')}.wasm", wasm / f"{name.replace('-', '_')}.wasm") for name in EXAMPLES]
     for game in GAMES:
         candidates += [(f"web/{game['host']}/{path.name}", path) for path in (ROOT / 'dist/web' / game['host']).glob('*') if path.is_file() and path.suffix != '.wasm']
-    candidates += [(f"web/{name}", ROOT / "dist/web" / name) for name in ("runtime.js", "lifecycle.js", "visuals.js", "audio.js", "audio-worklet.js", "audio-ring.js", "input.js", "storage.js", "input-overlay.js", "retained.js", "retained-shader.js", "effects.js", "effects-shader.js", "material-tools.js", "content-tools.js", "replay-tools.js", "multiplayer-tools.js")]
+    candidates += [(f"web/{name}", ROOT / "dist/web" / name) for name in ("runtime.js", "lifecycle.js", "visuals.js", "details.js", "fullscreen.js", "audio.js", "audio-worklet.js", "audio-ring.js", "input.js", "storage.js", "input-overlay.js", "retained.js", "retained-shader.js", "effects.js", "effects-shader.js", "material-tools.js", "content-tools.js", "replay-tools.js", "multiplayer-tools.js")]
     rows = []
     missing = []
     for label, path in candidates:

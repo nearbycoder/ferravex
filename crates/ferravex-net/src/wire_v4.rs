@@ -378,7 +378,7 @@ mod tests {
         .unwrap();
         bad[15] = 1;
         assert!(super::super::decode_client(&bad).is_err());
-        bad[4] = 3;
+        bad[4] = 4;
         assert_eq!(
             super::super::decode_client(&bad),
             Err(ProtocolError::Version)

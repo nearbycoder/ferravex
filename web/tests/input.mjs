@@ -44,3 +44,17 @@ assert.equal(calls.slice(afterEscape).filter(c=>c[0]==='key').length,0,'one phys
 const beforeRepeat=calls.length;win.emit('keydown',{code:'KeyW',repeat:true});assert.equal(calls.length,beforeRepeat,'autorepeat cannot reactivate a held key after a focus reset');
 
 win.emit('keydown',{code:'Semicolon'});win.emit('keyup',{code:'Semicolon'});assert.deepEqual(calls.slice(-2),[['key',59,1],['key',59,0]]);
+
+// Rotation/resizing and OS capture loss must never strand held fingers or keys.
+{
+ const w=new Target(),d=new Target(),c=new Target(),events=[];
+ const e={ferravex_touch_mouse:()=>0,ferravex_grab:()=>0,ferravex_touch_pointer(){},ferravex_touch:(...v)=>events.push(['touch',...v]),ferravex_key:(...v)=>events.push(['key',...v]),ferravex_blur:()=>events.push(['blur']),ferravex_focus:(...v)=>events.push(['focus',...v])};
+ bindInput(c,'resize-test',()=>e,()=>false,{...host,window:w,document:d});
+ c.emit('pointerdown',{pointerType:'touch',pointerId:9,clientX:30,clientY:50,button:0});
+ c.emit('lostpointercapture',{pointerId:9});assert.deepEqual(events.at(-1),['touch',9,3,20,30]);
+ w.emit('keydown',{code:'KeyW'});c.emit('pointerdown',{pointerType:'touch',pointerId:10,clientX:30,clientY:50,button:0});
+ w.emit('resize');assert.deepEqual(events.slice(-2),[['blur'],['focus',1]]);
+ const count=events.length;c.emit('lostpointercapture',{pointerId:10});assert.equal(events.length,count,'capture loss after resize cannot deliver a stale release');
+ let prevented=false;c.emit('selectstart',{preventDefault(){prevented=true;}});assert.ok(prevented,'canvas selection is blocked');
+ prevented=false;c.emit('touchmove',{preventDefault(){prevented=true;}});assert.ok(prevented,'canvas touch moves cannot scroll or select the surrounding page');
+}

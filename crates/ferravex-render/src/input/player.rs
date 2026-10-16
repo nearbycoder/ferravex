@@ -67,6 +67,7 @@ pub struct PlayerInput {
     ui_taps: [Vec2; 16],
     ui_tap_len: usize,
     ui_block: bool,
+    external_details: bool,
     devices_tab: bool,
     page: usize,
     ui_focus: usize,
@@ -117,6 +118,7 @@ impl PlayerInput {
             ui_taps: [Vec2::ZERO; 16],
             ui_tap_len: 0,
             ui_block: false,
+            external_details: false,
             devices_tab: false,
             page: 0,
             ui_focus: 0,
@@ -469,6 +471,10 @@ impl PlayerInput {
         self.save();
     }
     pub fn set_controls_open(&mut self, open: bool) {
+        // A browser modal owns the pause until it closes, including for pads/F2.
+        if self.external_details && !open {
+            return;
+        }
         if self.open == open {
             return;
         }
@@ -621,6 +627,25 @@ impl PlayerInput {
         if self.persistent {
             self.preferences.as_mut().unwrap().sync_audio();
         }
+        let external = crate::read(|s| s.details_open);
+        if external != self.external_details {
+            self.external_details = external;
+            self.set_controls_open(external);
+        }
+        if let Some(pending) = crate::edit(|s| s.pending_presentation.take()) {
+            let current = self.preferences();
+            let next = crate::preferences::Preferences {
+                quality: pending.quality,
+                look: pending.look,
+                resolution: pending.resolution,
+                shadows: pending.shadows,
+                lights: pending.lights,
+                ..current
+            };
+            let failed = self.set_preferences(next).is_err();
+            crate::edit(|s| s.details_error = failed);
+        }
+        crate::edit(|s| s.details_error = self.preferences_error().is_some());
         self.ui_click = false;
         self.ui_tap_len = 0;
         self.ui_block = false;

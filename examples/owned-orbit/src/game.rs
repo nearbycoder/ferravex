@@ -64,6 +64,7 @@ pub struct Game {
     transition: f32,
     launch_count: u32,
     trail_clock: f32,
+    paddle_velocity: f32,
 }
 impl Default for Game {
     fn default() -> Self {
@@ -111,6 +112,7 @@ impl Game {
             transition: 0.0,
             launch_count: 0,
             trail_clock: 0.0,
+            paddle_velocity: 0.,
         };
         game.build_sector();
         game
@@ -184,10 +186,16 @@ impl Game {
         } else {
             0.0
         };
+        let previous_paddle = self.paddle_x;
         self.paddle_x = (self.paddle_x + axis * 590.0 * dt).clamp(
             LEFT + self.paddle_half + 1.0,
             RIGHT - self.paddle_half - 1.0,
         );
+        self.paddle_velocity = if dt > 0. {
+            (self.paddle_x - previous_paddle) / dt
+        } else {
+            0.
+        };
         self.world
             .body_mut(self.paddle_body)
             .expect("paddle alive")
@@ -328,6 +336,10 @@ impl Game {
                 } else {
                     offset
                 } * 0.86;
+                // The paddle's actual movement adds a little English. Angle and
+                // total speed remain bounded so a save never creates a flat orbit.
+                let horizontal =
+                    (horizontal + self.paddle_velocity / 590. * 0.11).clamp(-0.90, 0.90);
                 let next_speed = self.speed();
                 self.velocity = [
                     horizontal * next_speed,
@@ -339,6 +351,13 @@ impl Game {
                 if dot < 0.0 {
                     self.velocity[0] -= 2.0 * dot * hit.normal[0];
                     self.velocity[1] -= 2.0 * dot * hit.normal[1];
+                    // Avoid an unplayable near-horizontal loop between side walls.
+                    if self.velocity[1].abs() < speed * 0.18 {
+                        let sign = if self.velocity[1] < 0. { -1. } else { 1. };
+                        self.velocity[1] = sign * speed * 0.18;
+                        self.velocity[0] = self.velocity[0].signum()
+                            * (speed * speed - self.velocity[1].powi(2)).sqrt();
+                    }
                 }
                 if let Some(index) = self
                     .blocks
@@ -425,6 +444,32 @@ fn reflect_x(x: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn moving_paddle_adds_english_and_shallow_wall_bounces_remain_playable() {
+        for axis in [-1., 1.] {
+            let mut game = Game::new();
+            game.phase = Phase::Playing;
+            game.ball = [320. + axis * 590. / 120., PADDLE_Y - 8. - BALL_RADIUS - 1.];
+            game.velocity = [0., 325.];
+            game.tick(
+                Input {
+                    axis,
+                    ..Default::default()
+                },
+                1. / 120.,
+            );
+            assert!(game.velocity[1] < 0. && game.velocity[0] * axis > 0.);
+            assert!((game.velocity[0].hypot(game.velocity[1]) - game.speed()).abs() < 0.01);
+        }
+        let mut game = Game::new();
+        game.phase = Phase::Playing;
+        game.ball = [RIGHT - BALL_RADIUS - 0.5, 500.];
+        game.velocity = [325., 0.01];
+        game.tick(Input::default(), 1. / 120.);
+        assert!(game.velocity[0] < 0. && game.velocity[1].abs() >= 325. * 0.179);
+    }
+
     #[test]
     fn swept_ball_destroys_thin_block_at_high_speed_without_tunneling() {
         let mut g = Game::new();

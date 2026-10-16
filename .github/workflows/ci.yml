@@ -3,6 +3,7 @@ name: Rust and platform checks
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -21,6 +22,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - name: Linux graphics libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev libgl1-mesa-dev libasound2-dev xvfb
       - name: Formatting
         if: runner.os == 'Linux'
         run: cargo fmt --all --check
@@ -40,7 +44,13 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           cargo build --release --workspace --bins --all-features --offline --locked
-          python3 scripts/smoke-games.py --frames 180 --output target/game-smoke
+          LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 1280x1024x24" python3 scripts/smoke-games.py --frames 180 --output target/game-smoke
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux' && always()
+        with:
+          name: native-gameplay-captures
+          path: target/game-smoke
+          if-no-files-found: warn
 
   web:
     name: WebAssembly / all examples
@@ -51,17 +61,28 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
       - name: Build and stage the first-party browser hosts
         run: |
           sh scripts/build-web.sh release
+      - name: Browser host and actual-Wasm regressions
+        run: |
+          for suite in web/tests/*.mjs; do node "$suite" || exit; done
+          node crates/ferravex-render/tests/browser-input.mjs
+          node examples/owned-orbit/tests/platform-input.mjs
+      - name: Native authority and browser WebSocket integration
+        run: |
+          cargo build --release -p ferravex-fps --bin ferravex-server --offline --locked
+          node web/tests/multiplayer.mjs --native
       - name: Report exact artifact sizes
         run: python3 scripts/report-size.py --profile release
       - name: Documentation site and HTTP regressions
         run: |
           cargo doc --workspace --no-deps --all-features --offline --locked
           python3 scripts/build-site.py --skip-build
-          python3 -B scripts/test_site.py
-          python3 -B scripts/test_audit_owned.py
+          python3 -B -m unittest discover -s scripts -p 'test_*.py'
       - uses: actions/upload-artifact@v4
         with:
           name: ferravex-web
