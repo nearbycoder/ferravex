@@ -83,3 +83,6 @@ pub mod time;
 
 /// See [`work_budget`] for the system contract and examples.
 pub mod work_budget;
+
+/// See [`smoothing`] for the system contract and examples.
+pub mod smoothing;
