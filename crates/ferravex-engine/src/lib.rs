@@ -92,3 +92,6 @@ pub mod spatial;
 
 /// See [`tags`] for the system contract and examples.
 pub mod tags;
+
+/// See [`resources`] for the system contract and examples.
+pub mod resources;
