@@ -27,7 +27,7 @@ The APIs live in `ferravex_engine` and are also available through `ferravex`. Ea
 - [x] 19. Provide reproducible random streams and unbiased bounded draws.
 - [x] 20. Select weighted engine variants using checked integer weights.
 - [x] 21. Cycle randomized variants without repeats within each cycle.
-- [ ] 22. Retain bounded tick snapshots for interpolation and rollback hosts.
+- [x] 22. Retain bounded tick snapshots for interpolation and rollback hosts.
 - [ ] 23. Control pause and time scale independently of wall time.
 - [ ] 24. Share a deterministic per-frame work budget between systems.
 - [ ] 25. Smooth scalar presentation values with frame-independent half lives.
