@@ -62,3 +62,6 @@ pub mod commands;
 
 /// See [`pool`] for the system contract and examples.
 pub mod pool;
+
+/// See [`bitset`] for the system contract and examples.
+pub mod bitset;
