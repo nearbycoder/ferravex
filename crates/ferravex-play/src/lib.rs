@@ -15,4 +15,5 @@ pub mod persistence;
 pub mod replay;
 pub mod rounds;
 pub mod scene;
+pub mod tuning;
 pub mod ui;
