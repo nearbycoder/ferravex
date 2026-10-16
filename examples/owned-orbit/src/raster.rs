@@ -203,7 +203,10 @@ impl Canvas {
                 } else {
                     "READY FOR LAUNCH"
                 },
-                "BREAK THE PANELS. CATCH THE RETURN.",
+                &format!(
+                    "SERVE CHARGE {:03}% / FULL CHARGE PIERCES ARMOR",
+                    (g.serve_charge.power() * 100.) as u32
+                ),
                 "SPACE / TAP TO LAUNCH",
             ),
             Phase::Won => self.overlay(
