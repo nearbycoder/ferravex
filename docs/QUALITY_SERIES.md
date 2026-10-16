@@ -9,8 +9,8 @@ platform checks are recorded only when actually performed.
 | # | Engine system | State |
 | --- | --- | --- |
 | 1 | Gameplay tuning profiles | [PR 24](https://github.com/nearbycoder/ferravex/pull/24), merged |
-| 2 | Ability system | Implemented; locally validated |
-| 3 | Attributes and status effects | Pending |
+| 2 | Ability system | [PR 25](https://github.com/nearbycoder/ferravex/pull/25), merged |
+| 3 | Attributes and status effects | Implemented; locally validated |
 | 4 | Combat feedback controller | Pending |
 | 5 | Attack timelines and telegraphs | Pending |
 | 6 | Squad tactics and cover selection | Pending |
@@ -63,3 +63,18 @@ time and charging work is bounded by slots, without per-update allocation.
 Neon Swarm's actual shot and dash actions now use this system; its HUD reads the
 shared dash timer. Cancellation, denied activation, resource conservation, stale
 and foreign tokens, charge saturation and clock partitioning have local regressions.
+
+## 3. Attributes and status effects
+
+`attributes::EffectSet<N>` composes additive and multiplicative stat modifiers,
+refresh/strongest/capped-stack policies, tag immunities and expiry in fixed storage
+(up to 32 effects). Periodic effects aggregate elapsed pulses into at most N reports;
+refresh preserves pulse phase, and no post-expiry damage is emitted. Hosts apply
+the reports through their authoritative rules. `Vitals` supplies eight resistance
+channels, flat armor, shields, bounded health damage and healing. Attribute IDs,
+effect IDs and resistance channels are host-defined, without renderer or ECS ties.
+Orchard Guard now runs real frost slows and seed flinches through the shared set,
+while keeping its public HUD timers and collision-driven path progress.
+Local regressions cover stacking/expiry, repeated refresh, periodic boundaries,
+immunity, capacity, invalid edits, damage conservation and the existing four-wave
+Orchard autoplay. Strict Clippy and Wasm checks run locally; CI stays skipped.
