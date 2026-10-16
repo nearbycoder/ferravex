@@ -28,3 +28,5 @@ Optional embers now build a five-second score chain, with multipliers every two 
 A shared time trial records ordered splits at the mill, furnace and exit. Gold/silver/bronze targets are 12/18/30 seconds. Falls keep the clock running; finishing freezes the result.
 
 Collect three embers to unlock one extra jump per landing for the rest of the run. Tap jump again in the air for a slightly shorter recovery jump; the HUD shows readiness. Ember ownership uses the shared bounded inventory.
+
+Green springboards on three raised side platforms launch the player into optional high routes. Their shared `LaunchPad` rule fires on real landing edges with a cooldown; ordinary jump release does not cut the spring arc.

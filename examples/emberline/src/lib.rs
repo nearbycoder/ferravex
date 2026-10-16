@@ -47,6 +47,8 @@ struct Game {
     ember_inventory: ferravex_play::gameplay::inventory::Inventory<1>,
     air_jump_used: bool,
     jump_down: bool,
+    springs: [ferravex_play::gameplay::platforms::LaunchPad; 3],
+    spring_flight: bool,
     elapsed: f32,
     trial: ferravex_play::gameplay::trial::Trial<3>,
     respawn_flash: f32,
@@ -96,6 +98,8 @@ impl Game {
             ember_inventory: ferravex_play::gameplay::inventory::Inventory::new().unwrap(),
             air_jump_used: false,
             jump_down: false,
+            springs: [ferravex_play::gameplay::platforms::LaunchPad::new(780., 0.25).unwrap(); 3],
+            spring_flight: false,
             elapsed: 0.0,
             trial: {
                 let mut t = ferravex_play::gameplay::trial::Trial::new([12., 18., 30.]).unwrap();
@@ -123,6 +127,7 @@ impl Game {
         self.motor = Character::new(feet(self.checkpoint));
         self.air_jump_used = false;
         self.jump_down = false;
+        self.spring_flight = false;
         self.deaths += 1;
         self.score.break_chain();
         self.respawn_flash = 0.6;
@@ -182,9 +187,30 @@ impl Game {
             self.air_jump_used = true;
             self.jumps += 1;
         }
+        if self.motor.grounded {
+            self.spring_flight = false;
+        }
+        for (pad, platform) in self.springs.iter_mut().zip([4, 6, 7]) {
+            let surface = self.platforms[platform];
+            let contact = self.motor.grounded
+                && self.motor.velocity.y <= 0.
+                && (self.motor.position.x - surface.center().x).abs() < 25.
+                && (-self.motor.position.y - surface.y).abs() < 1.;
+            if let Some(speed) = pad.step(dt, contact).unwrap() {
+                self.motor.velocity.y = speed;
+                self.motor.grounded = false;
+                self.motor.jump.coyote = 0.;
+                self.motor.jump.buffer = 0.;
+                self.spring_flight = true;
+            }
+        }
         // Release makes a short hop; holding keeps the full gap-clearing arc.
         // Cutting velocity once avoids applying a frame-rate-dependent force.
-        if !result.jumped && !input.jump_held && !input.jump && self.motor.velocity.y > JUMP * 0.45
+        if !self.spring_flight
+            && !result.jumped
+            && !input.jump_held
+            && !input.jump
+            && self.motor.velocity.y > JUMP * 0.45
         {
             self.motor.velocity.y = JUMP * 0.45;
         }
@@ -392,6 +418,11 @@ fn world(game: &Game, camera: f32, time: f32, motion: &EmberAnimation) {
                 Color::from_hex(0x62634d),
             );
         }
+    }
+    for index in [4, 6, 7] {
+        let p = game.platforms[index];
+        draw_rectangle(p.center().x - 25. - camera, p.y - 5., 50., 5., GREEN);
+        label("^", p.center().x - 6. - camera, p.y - 10., 19., GREEN);
     }
     for h in &game.hazards {
         for i in 0..4 {
@@ -997,5 +1028,21 @@ mod earned_jump_tests {
         }
         assert!(g.motor.grounded);
         assert!(!g.air_jump_used);
+    }
+}
+
+#[cfg(test)]
+mod spring_route_tests {
+    use super::*;
+    #[test]
+    fn bonus_route_springboards_launch_from_actual_platform_contact() {
+        let mut g = Game::new();
+        g.motor = Character::new(feet(vec2(168., 405.)));
+        g.update(Input::default(), 1. / 120.);
+        assert!(g.spring_flight);
+        assert!(!g.motor.grounded);
+        assert!(g.motor.velocity.y > 750.);
+        g.update(Input::default(), 1. / 120.);
+        assert!(g.motor.velocity.y > 700.);
     }
 }
