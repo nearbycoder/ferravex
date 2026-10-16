@@ -406,3 +406,82 @@ fn closest_segments(p: Vec3, q: Vec3, r: Vec3, s: Vec3) -> (Vec3, Vec3) {
     }
     (p + a * u, r + b * v)
 }
+
+/// Exact translation-only OBB time of impact, using the separating axes of
+/// frozen orientations. Rotation is handled by the world's bounded substeps;
+/// this does not claim continuous rotational CCD or unsupported shape pairs.
+pub(crate) fn sweep_box(
+    start: Vec3,
+    end: Vec3,
+    half: Vec3,
+    rotation: Quat,
+    target_half: Vec3,
+    target: &Pose,
+) -> Option<(f32, Vec3)> {
+    let a = [rotation * Vec3::X, rotation * Vec3::Y, rotation * Vec3::Z];
+    let b = [
+        target.rotation * Vec3::X,
+        target.rotation * Vec3::Y,
+        target.rotation * Vec3::Z,
+    ];
+    let mut axes = [Vec3::ZERO; 15];
+    axes[..3].copy_from_slice(&a);
+    axes[3..6].copy_from_slice(&b);
+    for i in 0..3 {
+        for j in 0..3 {
+            axes[6 + i * 3 + j] = a[i].cross(b[j]);
+        }
+    }
+    let delta = end - start;
+    let center = start - target.position;
+    let mut entry = 0_f32;
+    let mut exit = 1_f32;
+    let mut normal = Vec3::ZERO;
+    let mut overlapping = true;
+    let mut penetration = f32::INFINITY;
+    let mut overlap_normal = Vec3::ZERO;
+    for axis in axes {
+        let Some(n) = axis.try_normalize() else {
+            continue;
+        };
+        if target.planar && n.z.abs() > 0.5 {
+            continue;
+        }
+        let radius = (0..3)
+            .map(|i| half[i] * a[i].dot(n).abs() + target_half[i] * b[i].dot(n).abs())
+            .sum::<f32>();
+        let distance = center.dot(n);
+        let speed = delta.dot(n);
+        overlapping &= distance.abs() <= radius;
+        if radius - distance.abs() < penetration {
+            penetration = radius - distance.abs();
+            overlap_normal = if distance >= 0. { n } else { -n };
+        }
+        if speed.abs() < 1e-9 {
+            if distance.abs() > radius {
+                return None;
+            }
+            continue;
+        }
+        let t1 = (-radius - distance) / speed;
+        let t2 = (radius - distance) / speed;
+        let near = t1.min(t2);
+        let far = t1.max(t2);
+        if near >= entry {
+            entry = near;
+            normal = if distance + speed * near >= 0. { n } else { -n };
+        }
+        exit = exit.min(far);
+        if entry > exit {
+            return None;
+        }
+    }
+    if overlapping {
+        return Some((0., overlap_normal));
+    }
+    if !(0. ..=1.).contains(&entry) || normal.length_squared() < 0.5 {
+        None
+    } else {
+        Some((entry, normal))
+    }
+}
