@@ -893,3 +893,90 @@ multi-touch, focus, settings blocking and actual Orchard build/wave integration;
 and 21 site/search/audit/performance Python tests. Browser visual checks confirmed
 Neon keyboard start/focus, Orchard building/help spacing and Strike's smooth fade,
 with no captured warnings/errors. No iOS or unavailable native device tests ran.
+
+## Iteration 17: typed saves, persistent preferences and records
+
+The first-party save container validates versions, schema, bounded fields and
+checksums before accepting values. Native storage uses synced same-directory
+replacement; browser storage uses a bounded game-scoped localStorage bridge.
+All fifteen examples persist audio/graphics preferences through the existing F2
+Devices panel. Existing FXIN control profiles retain their format and paths,
+with native writes sharing the new atomic-file code. Rally persists best laps
+and ghosts; Marble and Neon persist records; Orchard validates and restores safe
+between-wave progress. Details and storage limitations: [saves](SAVES.md).
+
+`target/perf/iteration-17-final/report.json` records source
+`c3eb5897dbc8cf914beccf98dc93cf5b2df047cc` against the unchanged iteration-16-final
+baseline. The same fifteen workloads ran twice, with 30 warmup and 120 measured
+frames/run. Existing 20% / 1000 µs CPU/submit/software floors, 20 µs GPU floor and
+5% size allowance are unchanged. All native hashes and native/Wasm raw and
+deterministic gzip-9 sizes match the report; staged Wasm matches. No builds,
+tests or agent-created game tabs ran alongside the measurements.
+
+**The comparison gate failed with 20 flags: 19 Wasm-size flags and one GPU tail.**
+Raw Wasm exceeds the allowance for Courtyard, Orbit, Emberline, Neon, Rally,
+Pinball, Orchard, Dune, Cavern, Sky and the 2D physics lab. Gzip exceeds it for
+Orbit, Emberline, Neon, Rally, Orchard, Cavern, Sky and the 2D physics lab. No
+native-size flag remains, but native artifacts also grew. The 2D physics lab GPU
+p99 is 72.699 µs versus 27.371 µs (47.371 µs allowance); its draw/upload/geometry,
+allocation and simulation-work distributions are identical. That tail was not
+isolated or fixed in this iteration.
+
+Artifact costs (raw / gzip-9 bytes):
+
+| Game | Native before → after | Wasm before → after |
+|---|---|---|
+| Strike | 1056520 / 514285 → 1077688 / 524274 | 486967 / 184843 → 504414 / 191265 |
+| Neon Swarm | 864768 / 415455 → 895144 / 429727 | 352752 / 132646 → 377020 / 141314 |
+| Pocket Rally | 775144 / 373168 → 804408 / 387562 | 262507 / 98878 → 286906 / 108283 |
+| Orchard Guard | 976992 / 476293 → 1018336 / 496506 | 444533 / 175802 → 478035 / 188607 |
+| Marble Run | 1148704 / 558911 → 1181360 / 574353 | 604109 / 232975 → 629960 / 242583 |
+
+Ordinary sampled gameplay has **identical allocation, draw, vertex, upload and
+simulation-work distributions across all fifteen games**. Real-Wasm transport
+counters separately confirm that 120 unchanged frames per game perform no
+storage reads/writes. These facts do not make saving free: load/encode/commit
+allocate and synchronous native sync/localStorage calls can stall a save frame.
+The short warmed workload and transient autoplay mode do not measure storage
+latency, full-recording memory, startup loading or a durable end-of-run save.
+
+Observed whole-game CPU mean / p95 / p99 µs, before → after:
+
+| Game | Before | After |
+|---|---|---|
+| Strike | 41.659 / 57.809 / 75.548 | 41.654 / 56.548 / 101.587 |
+| Neon Swarm | 43.831 / 55.278 / 74.068 | 47.105 / 64.958 / 100.387 |
+| Pocket Rally | 482.742 / 503.386 / 537.505 | 513.440 / 533.413 / 548.542 |
+| Orchard Guard | 182.142 / 203.584 / 242.583 | 204.606 / 225.833 / 629.719 |
+| Marble Run | 126.580 / 142.176 / 272.182 | 98.542 / 110.536 / 289.350 |
+
+Passing the generous timing floors is not evidence that CPU timings stayed flat;
+several means and tails increased. These measurements do not isolate the cost of
+preference sampling from compiler layout or machine variation. Earlier iteration
+costs remain open. In particular, physics-3d GPU p95 is now 32.141 µs, but its
+iteration-16 103.837 µs flag was not fixed by this storage change and is retained.
+
+The first build/report is preserved at
+`target/perf/iteration-17-before-field-vector/report.json`, source
+`08a308de5ee5b2ded2ed878a3d97395a89334aaf`. It had 29 flags: 28 artifact-size
+flags and Courtyard software-render p99 21714.778 µs versus its 19128.581 µs
+allowance. Replacing the sorted save-field tree with a bounded sorted vector
+reduced raw Wasm by **77410 bytes across the fifteen artifacts** (roughly 5–6 KiB
+per game) without changing wire bytes or limits. The original timing tail remains
+evidence: the software renderer was not optimized; final p99 16274.859 µs is
+within the allowance but does not establish a causal rendering improvement.
+Neither report nor thresholds were overwritten to erase a failed comparison.
+
+Local validation: 469 regular workspace tests; 11 separately enabled GLX/ALSA
+checks; strict native and Wasm library Clippy and Rustdoc; all fifteen native/Wasm
+release builds and all fifteen 360-frame native gameplay/PNG checks; existing
+real-Wasm input/audio/animation/effects/content/UI contracts; new browser storage
+bounds/quota/scope/memory-growth contracts; all fifteen real-Wasm preference
+editing/reload/mute/quality and idle-I/O checks; actual Orchard checkpoint
+reload/restart; actual Neon completed-attempt counts across fresh Wasm instances;
+Rally's real simulated lap ghost roundtrip and Orchard's resumed campaign test;
+and 21 site/search/audit/performance Python tests. Browser checks confirmed
+Orchard progress and volume/mute/quality reload, plus compatibility with a save
+written before the field-vector change, with no captured warnings/errors. Apple
+and Windows runtime/device checks were unavailable; iOS SDK/device checks remain
+excluded. No external Cargo packages were added.
