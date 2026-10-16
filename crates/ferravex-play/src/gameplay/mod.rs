@@ -36,3 +36,5 @@ pub mod upgrades;
 pub mod magazine;
 
 pub mod charge;
+
+pub mod homing;
