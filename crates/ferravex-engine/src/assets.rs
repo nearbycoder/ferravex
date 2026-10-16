@@ -15,6 +15,13 @@ pub enum AssetError {
     Format,
     Checksum,
 }
+/// Sorted content changes from one bundle generation to the next.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct BundleDiff {
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+    pub changed: Vec<String>,
+}
 #[derive(Clone, Default)]
 pub struct Bundle {
     files: BTreeMap<String, Arc<[u8]>>,
@@ -95,6 +102,24 @@ impl Bundle {
             result.files.insert(relative.into(), bytes.clone());
         }
         Ok(result)
+    }
+    /// Compare decoded content, ignoring Arc identity and encoding choices.
+    pub fn diff(&self, next: &Self) -> BundleDiff {
+        let mut diff = BundleDiff::default();
+        for (name, old) in &self.files {
+            match next.files.get(name) {
+                None => diff.removed.push(name.clone()),
+                Some(new) if old != new => diff.changed.push(name.clone()),
+                _ => {}
+            }
+        }
+        diff.added.extend(
+            next.files
+                .keys()
+                .filter(|name| !self.files.contains_key(*name))
+                .cloned(),
+        );
+        diff
     }
     pub fn get(&self, path: &str) -> Option<Arc<[u8]>> {
         self.files.get(path).cloned()
@@ -448,5 +473,35 @@ mod subtrees_tests {
         assert_eq!(b.subtree("").unwrap().encode(), b.encode());
         assert!(b.subtree("absent").unwrap().is_empty());
         assert!(b.subtree("../").is_err());
+    }
+}
+
+#[cfg(test)]
+mod diff_tests {
+    use super::*;
+    #[test]
+    fn compares_content_in_sorted_order() {
+        let mut old = Bundle::default();
+        for (n, v) in [("gone", b"a"), ("same", b"b"), ("edit", b"c")] {
+            old.insert(n, v).unwrap();
+        }
+        let mut next = old.clone();
+        next.remove("gone");
+        next.insert("same", b"b").unwrap();
+        next.insert("edit", b"d").unwrap();
+        next.insert("z", b"").unwrap();
+        next.insert("a", b"").unwrap();
+        assert_eq!(
+            old.diff(&next),
+            BundleDiff {
+                added: vec!["a".into(), "z".into()],
+                removed: vec!["gone".into()],
+                changed: vec!["edit".into()]
+            }
+        );
+        assert_eq!(
+            next.diff(&Bundle::decode(&next.encode()).unwrap()),
+            BundleDiff::default()
+        );
     }
 }
