@@ -33,3 +33,5 @@ Browser verification exercised Space launch, pointer steering, pause/resume, and
 Successive panel hits within four seconds build a volley multiplier every three hits, capped at x4. Paddle returns and misses break the chain. The input harness now supplies the performance clock required by the host’s existing diagnostics.
 
 Panel clears roll a seeded 25% capsule reward with a guarantee by the sixth eligible clear. The shared reward table and pity counter bound unlucky droughts while preserving replayable runs; drop storage remains capped at eight.
+
+Capsules within 100 pixels bend toward the paddle using the shared magnet rule. This rewards steering toward a drop without requiring a pixel-perfect catch; distant or already-missed drops keep falling.
