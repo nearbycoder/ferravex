@@ -16,3 +16,5 @@ fn seconds(value: f32) -> Result<f64, LoopError> {
         Err(LoopError::Invalid)
     }
 }
+
+pub mod combo;
