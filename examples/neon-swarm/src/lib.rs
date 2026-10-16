@@ -214,7 +214,7 @@ async fn game() {
             } else {
                 None
             };
-            let _ = records.attempt("sector-07", 3, game.kills as u64, time);
+            let _ = records.attempt("sector-07", 4, game.kills as u64, time);
         }
         draw_hud(&mut hud_ui, &game, started, touch_mode);
         if started && !paused && game.phase == Phase::Playing && !touch_mode && !demo.autoplay {

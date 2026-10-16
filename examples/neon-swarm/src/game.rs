@@ -86,7 +86,7 @@ pub struct Game {
     ai: crate::ai::SwarmAi,
     abilities: AbilityBank<2>,
     resource: ResourcePool,
-    spawn_timer: f32,
+    director: ferravex_play::encounter::EncounterDirector,
     remaining: u32,
     spawn_index: u32,
     intermission: f32,
@@ -164,7 +164,7 @@ impl Game {
             )
             .unwrap(),
             resource: ResourcePool::new(0., 0., 0.).unwrap(),
-            spawn_timer: 0.8,
+            director: encounter(8, 1, 0.8),
             remaining: 8,
             spawn_index: 0,
             intermission: 1.6,
@@ -268,10 +268,12 @@ impl Game {
             self.muzzle_time = 0.055;
             self.shots += 1;
         }
-        self.spawn_timer -= dt;
-        if self.remaining > 0 && self.spawn_timer <= 0.0 {
+        let alive = self.enemy_count();
+        let pressure =
+            ((1. - self.health as f32 / 100.) * 0.55 + alive as f32 / 12. * 0.55).clamp(0., 1.);
+        self.director.advance(dt, pressure).unwrap();
+        if self.remaining > 0 && self.director.admit(1, alive) {
             self.spawn_enemy();
-            self.spawn_timer = 0.68 - self.wave as f32 * 0.06;
         }
         self.ai.update(&self.world, self.player, shot, dt);
         for (mut p, mut enemy) in &mut self.world.query::<(&mut Position, &mut Enemy)>() {
@@ -320,7 +322,7 @@ impl Game {
                     self.wave += 1;
                     self.remaining = 4 + self.wave * 5;
                     self.intermission = 1.6;
-                    self.spawn_timer = 0.7;
+                    self.director = encounter(self.remaining, self.wave, 0.7);
                     self.wave_banner = 2.4;
                 }
             }
@@ -652,4 +654,16 @@ mod telegraph_tests {
             "a missed attack must not damage a departed target"
         );
     }
+}
+
+fn encounter(credits: u32, wave: u32, delay: f32) -> ferravex_play::encounter::EncounterDirector {
+    use ferravex_play::encounter::*;
+    EncounterDirector::new(EncounterConfig {
+        credits,
+        max_alive: 12,
+        interval: 0.68 - wave as f32 * 0.06,
+        first_delay: delay,
+        recovery_seconds: 2.,
+    })
+    .unwrap()
 }

@@ -21,3 +21,5 @@ pub mod rounds;
 pub mod scene;
 pub mod tuning;
 pub mod ui;
+
+pub mod encounter;
