@@ -130,12 +130,6 @@ impl Flight {
             return;
         }
         self.recovery = (self.recovery - dt).max(0.);
-        let turn = input.turn.clamp(-1., 1.);
-        self.turn_rate += (turn * 1.15 - self.turn_rate) * ferravex_play::motion::response(9., dt);
-        self.yaw += self.turn_rate * dt;
-        self.pitch += (input.climb.clamp(-1., 1.) * 0.58 - self.pitch)
-            * ferravex_play::motion::response(4.2, dt);
-        self.bank += (-turn * 0.7 - self.bank) * ferravex_play::motion::response(5., dt);
         if self.boost_energy < 0.03 {
             self.boost_exhausted = true;
         }
@@ -152,7 +146,28 @@ impl Flight {
         } else {
             24.
         };
-        self.speed += (target_speed - self.speed) * ferravex_play::motion::response(2.5, dt);
+        use ferravex_play::vehicle::*;
+        let mut motor = FlightState {
+            yaw: self.yaw,
+            pitch: self.pitch,
+            bank: self.bank,
+            turn_rate: self.turn_rate,
+            speed: self.speed,
+        };
+        motor
+            .step(
+                FlightHandling::default(),
+                input.turn,
+                input.climb,
+                target_speed,
+                dt,
+            )
+            .unwrap();
+        self.yaw = motor.yaw;
+        self.pitch = motor.pitch;
+        self.bank = motor.bank;
+        self.turn_rate = motor.turn_rate;
+        self.speed = motor.speed;
         let previous = self.pos;
         self.pos += self.forward() * self.speed * dt;
         if self.pos.y < -17.

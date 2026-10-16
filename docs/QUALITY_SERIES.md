@@ -15,8 +15,8 @@ platform checks are recorded only when actually performed.
 | 5 | Attack timelines and telegraphs | [PR 28](https://github.com/nearbycoder/ferravex/pull/28), merged |
 | 6 | Squad tactics and cover selection | [PR 29](https://github.com/nearbycoder/ferravex/pull/29), merged |
 | 7 | Encounter director | [PR 30](https://github.com/nearbycoder/ferravex/pull/30), merged |
-| 8 | Navigation meshes and traversal links | Implemented; locally validated |
-| 9 | Vehicle and flight controllers | Pending |
+| 8 | Navigation meshes and traversal links | [PR 31](https://github.com/nearbycoder/ferravex/pull/31), merged |
+| 9 | Vehicle and flight controllers | Implemented; locally validated |
 | 10 | Racing AI | Pending |
 | 11 | Richer physics materials | Pending |
 | 12 | Fast-body collision robustness | Pending |
@@ -155,3 +155,15 @@ mesh identities prevent adopting another mesh's result. Crystal Cavern's actual
 pilot now plans across the open floor/door surfaces and completes the full puzzle.
 Local tests cover budgets, edits, one-way traversal, disabled links and complete
 ordinary-input exploration; strict Clippy and Wasm checks pass.
+
+## 9. Shared handling motors
+
+`vehicle` supplies a planar arcade/hover motor with speed-dependent steering,
+steering inertia, lateral grip, drag, speed caps and non-reversing brakes, plus an
+assisted-flight motor with pitch/bank limits, turn inertia and speed response.
+Validated updates allocate nothing and return candidate motion; world collision,
+boost accounting and mission authority stay in the host. Dune Skimmer and Sky
+Courier now use these motors with their original handling values. These are
+arcade controllers, not simulated tire suspensions or aerodynamic airframes.
+Local brake/slip/invalid-input/flight-envelope tests and both full race/flight
+ordinary-input completions pass, with strict Clippy and Wasm checks.

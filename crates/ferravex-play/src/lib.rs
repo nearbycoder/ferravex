@@ -23,3 +23,5 @@ pub mod tuning;
 pub mod ui;
 
 pub mod encounter;
+
+pub mod vehicle;
