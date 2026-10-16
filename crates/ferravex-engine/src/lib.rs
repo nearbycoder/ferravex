@@ -30,3 +30,5 @@ pub use ferravex_physics as physics;
 pub use ferravex_physics::character;
 /// Original window/input/GPU runtime shared by the restored low-poly games.
 pub use ferravex_render as render;
+
+pub use ferravex_play::encounter;

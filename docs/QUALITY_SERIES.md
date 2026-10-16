@@ -13,8 +13,8 @@ platform checks are recorded only when actually performed.
 | 3 | Attributes and status effects | [PR 26](https://github.com/nearbycoder/ferravex/pull/26), merged |
 | 4 | Combat feedback controller | [PR 27](https://github.com/nearbycoder/ferravex/pull/27), merged |
 | 5 | Attack timelines and telegraphs | [PR 28](https://github.com/nearbycoder/ferravex/pull/28), merged |
-| 6 | Squad tactics and cover selection | Implemented; locally validated |
-| 7 | Encounter director | Pending |
+| 6 | Squad tactics and cover selection | [PR 29](https://github.com/nearbycoder/ferravex/pull/29), merged |
+| 7 | Encounter director | Implemented; locally validated |
 | 8 | Navigation meshes and traversal links | Pending |
 | 9 | Vehicle and flight controllers | Pending |
 | 10 | Racing AI | Pending |
@@ -129,3 +129,15 @@ ordinary authoritative inputs retain collision, ammo and hit rules. Death releas
 leases. Local tests cover exclusive leases/expiry, zero-budget deferral, opposing
 flanks, contact expiry, hidden silent players, radio without visibility, accepted
 normal bot shots and strict native/Wasm checks.
+
+## 7. Encounter pacing
+
+`encounter::EncounterDirector` admits spawns against finite wave credits, a live
+actor cap and a fixed-clock cadence, with hysteresis-controlled recovery breaks.
+It never catches up with an unbounded spawn burst. Hosts supply danger pressure,
+validate safe locations before spending, and perform the actual spawn. It does
+not inspect hidden positions or change enemy health. Neon Swarm now runs its real
+waves through the director with a 12-enemy live cap and two-second pressure breaks;
+wave totals are retained and record context advances to 4. Local checks cover
+credit conservation, caps, cooldowns, hysteresis, invalid inputs, normal-input
+swarm victory, strict Clippy and Wasm compilation.
