@@ -75,3 +75,40 @@ Windows/Apple runtime and SDK linking were unavailable. iOS SDK/simulator/device
 checks remain excluded. See [Platforms](PLATFORMS.md) and [Performance](PERFORMANCE.md)
 for exact scope and measured costs. CI stays enabled in the repository; this
 iteration uses `[skip ci]` commits and local checks.
+
+
+## Gameplay and mobile fidelity iteration (2026-10-16)
+
+The current iteration adds shared detail/resolution/lighting settings and mobile
+fullscreen/orientation requests to every browser example. Fullscreen and rotation
+support depend on the browser; physical iOS gameplay remains unverified.
+Marble Run's camera keeps a stable follow distance and its four courses progress
+from Aqueduct to Needlewalk, Clockwork sweepers and icy Frostline.
+
+| Game | Play tuning and regression coverage |
+| --- | --- |
+| Emberline | Tap/hold jump height; buffered/coyote jumps and ordinary traversal remain covered |
+| Neon Swarm | Accelerated movement, contact recoil and bounded projectile knockback |
+| Pocket Rally | Steering response, handbrake yaw, glancing boundary response and full race autoplay |
+| Salvage Pinball | One five-second ball save per life, powered-contact speed cap, physical flippers |
+| Orchard Guard | Brief seed flinch and clustered frost slow without extra splash damage |
+| Marble Run | Coasting versus stronger braking, safe checkpoints and completion of all four courses |
+| Dune Skimmer | Smoothed steering, glancing collision momentum, centered-gate boost rewards |
+| Crystal Cavern | Short acceleration/stopping response, collision-derived velocity and full puzzle autoplay |
+| Siege Foundry | Cached spherecast trajectory terminates at actual cover/targets, ordinary demolition autoplay |
+| Sky Courier | Turn/bank response, finite rechargeable boost, beacon rewards and full route/landing autoplay |
+| Strike / Courtyard | Shared ground stop/countersteer with retained air momentum; prediction uses the same motor |
+| Strike | Built-in bounded practice bots with reaction, limited aim, search, range control, retreat and reload |
+| Orbit Breaker | Paddle-motion English, speed-preserving shallow-angle recovery and two-sector autoplay |
+| 2D / 3D Physics Lab | Mass-normalized radial pulse, cooldown and bounded kick regressions |
+
+Shared `ferravex_play::motion` functions provide exponential response, normal/tangent
+impact response and bounded radial velocity kicks. The tests compare actual motion,
+contacts and ordinary game progression; short native PNG captures separately check
+startup and rendering. Gameplay quality still benefits from human playtesting.
+The FPS motor changes require protocol v5 peers and invalidate prior motor-specific
+records; other changed race/course rules also use new record contexts.
+
+GitHub Actions are enabled for this release, including Linux/macOS/Windows tests,
+WebAssembly/browser integration and the two Apple SDK compile targets. The Linux
+smoke job runs on Mesa in Xvfb and uploads its screenshots for review.

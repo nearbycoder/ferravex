@@ -6,6 +6,7 @@ use ferravex_physics::character::{
     Character, CharacterError, CharacterInput, CharacterSettings, CharacterShape, JumpState,
     Obstacle as CharacterObstacle, ObstacleShape, QueryBounds, Terrain,
 };
+pub mod bots;
 pub mod checkpoint;
 pub mod combat;
 pub mod tactical;
@@ -469,6 +470,19 @@ pub fn try_move_player(
         },
         CharacterSettings {
             speed: WALK_SPEED,
+            // Crisp starts/counter-strafes, with momentum retained in the air.
+            // Authority and prediction execute these same deterministic settings.
+            ground_acceleration: if input.move_x * input.move_x + input.move_z * input.move_z < 0.01
+            {
+                100.
+            } else if (right * input.move_x + forward * input.move_z).dot(player.velocity) < -0.1 {
+                110.
+            } else {
+                72.
+            },
+            air_acceleration: 11.,
+            gravity: 27.,
+            jump_speed: 8.4,
             ..Default::default()
         },
         CharacterInput {
@@ -561,6 +575,39 @@ pub use network::{GameClient, GameServer, TacticalOptions};
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ground_release_stops_promptly_while_airborne_momentum_survives() {
+        let arena = Arena::default();
+        let mut player = Player::new(0, arena.spawn(0));
+        for _ in 0..30 {
+            move_player(
+                &mut player,
+                InputFrame {
+                    move_x: 1.,
+                    ..Default::default()
+                },
+                &arena,
+            );
+        }
+        let mut air = player.clone();
+        move_player(
+            &mut air,
+            InputFrame {
+                move_x: 1.,
+                buttons: BUTTON_JUMP,
+                ..Default::default()
+            },
+            &arena,
+        );
+        for _ in 0..5 {
+            move_player(&mut player, InputFrame::default(), &arena);
+            move_player(&mut air, InputFrame::default(), &arena);
+        }
+        assert!(player.velocity.x.abs() < 0.01);
+        assert!(!air.grounded && air.velocity.x > 4.);
+    }
+
     fn empty_arena() -> Arena {
         Arena {
             solids: vec![],

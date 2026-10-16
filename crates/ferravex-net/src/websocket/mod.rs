@@ -60,10 +60,10 @@ fn sha1(bytes: &[u8]) -> [u8; 20] {
         0x10325476,
         0xc3d2e1f0,
     ];
-    for block in padded.chunks_exact(64) {
+    for block in padded.as_chunks::<64>().0.iter() {
         let mut w = [0u32; 80];
-        for (i, row) in block.chunks_exact(4).enumerate() {
-            w[i] = u32::from_be_bytes(row.try_into().unwrap());
+        for (i, row) in block.as_chunks::<4>().0.iter().enumerate() {
+            w[i] = u32::from_be_bytes(*row);
         }
         for t in 16..80 {
             w[t] = (w[t - 3] ^ w[t - 8] ^ w[t - 14] ^ w[t - 16]).rotate_left(1);
@@ -93,7 +93,7 @@ fn sha1(bytes: &[u8]) -> [u8; 20] {
         }
     }
     let mut out = [0u8; 20];
-    for (row, word) in out.chunks_exact_mut(4).zip(h) {
+    for (row, word) in out.as_chunks_mut::<4>().0.iter_mut().zip(h) {
         row.copy_from_slice(&word.to_be_bytes());
     }
     out
@@ -174,10 +174,10 @@ fn handshake(bytes: &[u8], origins: &[String]) -> Result<Option<(usize, Vec<u8>)
         return Err(400);
     }
     let protocol = if let Some(p) = get("Sec-WebSocket-Protocol") {
-        if !p.split(',').any(|v| v.trim() == "ferravex.v4") {
+        if !p.split(',').any(|v| v.trim() == "ferravex.v5") {
             return Err(400);
         }
-        "Sec-WebSocket-Protocol: ferravex.v4\r\n"
+        "Sec-WebSocket-Protocol: ferravex.v5\r\n"
     } else {
         ""
     };
@@ -355,7 +355,7 @@ mod tests {
                 0xc2, 0x6c, 0x9c, 0xd0, 0xd8, 0x9d
             ]
         );
-        let req=b"GET /ferravex HTTP/1.1\r\nHost: localhost:4001\r\nUpgrade: websocket\r\nConnection: keep-alive, Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nOrigin: http://localhost:8087\r\nSec-WebSocket-Protocol: ferravex.v4\r\n\r\n";
+        let req=b"GET /ferravex HTTP/1.1\r\nHost: localhost:4001\r\nUpgrade: websocket\r\nConnection: keep-alive, Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nOrigin: http://localhost:8087\r\nSec-WebSocket-Protocol: ferravex.v5\r\n\r\n";
         for n in 0..req.len() {
             assert_eq!(
                 handshake(&req[..n], &["http://localhost:8087".into()]),

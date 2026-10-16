@@ -1,0 +1,52 @@
+ferravex_scene 1;
+# clockwork: authored geometry and the same rigid-body path used by players.
+# No collision rails: teal edges mark the safe route.
+node tuning {transform 0 0 0 0 0 0 1 1 1 1; component tuning {gravity number -16; radius number 0.55; density number 2; friction number 1; restitution number 0.08; linear_damping number 0.28; angular_damping number 0.22; speed number 4.5; fall_y number -7; gem_radius number 0.9; checkpoint_radius number 1.15; finish_radius number 1.25;}}
+node spawn {transform 0 1.05 2 0 0 0 1 1 1 1; component spawn {route ref /way0;}}
+node finish {transform 0 0.9 -55 0 0 0 1 1 1 1; component finish {}}
+node bridge0 {transform 0 0 2 0 0 0 1 1 1 1; component platform {order int 0; size vec3 6 0.6 6; friction number 0.9;}}
+node bridge1 {transform 0 0 -5 0 0 0 1 1 1 1; component platform {order int 1; size vec3 2.2 0.6 8.5; friction number 0.9;}}
+node bridge2 {transform 0 0 -12 0 0 0 1 1 1 1; component platform {order int 2; size vec3 7 0.6 7; friction number 0.9;}}
+node bridge3 {transform 0 0 -20 0 0 0 1 1 1 1; component platform {order int 3; size vec3 1.9 0.6 10; friction number 0.9;}}
+node bridge4 {transform 0 0 -28 0 0 0 1 1 1 1; component platform {order int 4; size vec3 7 0.6 7; friction number 0.9;}}
+node bridge5 {transform 0 0 -36 0 0 0 1 1 1 1; component platform {order int 5; size vec3 1.8 0.6 10; friction number 0.9;}}
+node bridge6 {transform 0 0 -44 0 0 0 1 1 1 1; component platform {order int 6; size vec3 7 0.6 7; friction number 0.9;}}
+node bridge7 {transform 0 0 -49 0 0 0 1 1 1 1; component platform {order int 7; size vec3 2 0.6 9; friction number 0.9;}}
+node bridge8 {transform 0 0 -55 0 0 0 1 1 1 1; component platform {order int 8; size vec3 6 0.6 6; friction number 0.9;}}
+node way0 {transform 0 0 -6 0 0 0 1 1 1 1; component waypoint {order int 0;}}
+node way1 {transform 0 0 -9 0 0 0 1 1 1 1; component waypoint {order int 1;}}
+node way2 {transform 0 0 -12 0 0 0 1 1 1 1; component waypoint {order int 2;}}
+node way3 {transform 0 0 -16 0 0 0 1 1 1 1; component waypoint {order int 3;}}
+node way4 {transform 0 0 -20 0 0 0 1 1 1 1; component waypoint {order int 4;}}
+node way5 {transform 0 0 -25 0 0 0 1 1 1 1; component waypoint {order int 5;}}
+node way6 {transform 0 0 -28 0 0 0 1 1 1 1; component waypoint {order int 6;}}
+node way7 {transform 0 0 -32 0 0 0 1 1 1 1; component waypoint {order int 7;}}
+node way8 {transform 0 0 -36 0 0 0 1 1 1 1; component waypoint {order int 8;}}
+node way9 {transform 0 0 -41 0 0 0 1 1 1 1; component waypoint {order int 9;}}
+node way10 {transform 0 0 -44 0 0 0 1 1 1 1; component waypoint {order int 10;}}
+node way11 {transform 0 0 -48 0 0 0 1 1 1 1; component waypoint {order int 11;}}
+node way12 {transform 0 0 -51 0 0 0 1 1 1 1; component waypoint {order int 12;}}
+node way13 {transform 0 0 -55 0 0 0 1 1 1 1; component waypoint {order int 13;}}
+node gem0 {transform 0 1 -6 0 0 0 1 1 1 1; component gem {order int 0;}}
+node gem1 {transform 0 1 -12 0 0 0 1 1 1 1; component gem {order int 1;}}
+node gem2 {transform 0 1 -20 0 0 0 1 1 1 1; component gem {order int 2;}}
+node gem3 {transform 0 1 -28 0 0 0 1 1 1 1; component gem {order int 3;}}
+node gem4 {transform 0 1 -36 0 0 0 1 1 1 1; component gem {order int 4;}}
+node gem5 {transform 0 1 -44 0 0 0 1 1 1 1; component gem {order int 5;}}
+node gem6 {transform 0 1 -51 0 0 0 1 1 1 1; component gem {order int 6;}}
+node gem7 {transform 0 1 -55 0 0 0 1 1 1 1; component gem {order int 7;}}
+node checkpoint0 {transform 0 1.05 -9 0 0 0 1 1 1 1; component checkpoint {order int 0; route ref /way2;}}
+node flagpole0 {transform -1.5 1.55 -9 0 0 0 1 1 1 1; component prop {shape text cylinder; size vec3 0.14 2.5 0.14; color rgba 32 57 60 255;}}
+node flag0 {transform -1.1 2.45 -9 0 0 0 1 1 1 1; component prop {shape text box; size vec3 0.9 0.5 0.04; color rgba 62 143 133 255;}}
+node checkpoint1 {transform 0 1.05 -25 0 0 0 1 1 1 1; component checkpoint {order int 1; route ref /way6;}}
+node flagpole1 {transform -1.5 1.55 -25 0 0 0 1 1 1 1; component prop {shape text cylinder; size vec3 0.14 2.5 0.14; color rgba 32 57 60 255;}}
+node flag1 {transform -1.1 2.45 -25 0 0 0 1 1 1 1; component prop {shape text box; size vec3 0.9 0.5 0.04; color rgba 62 143 133 255;}}
+node checkpoint2 {transform 0 1.05 -41 0 0 0 1 1 1 1; component checkpoint {order int 2; route ref /way10;}}
+node flagpole2 {transform -1.5 1.55 -41 0 0 0 1 1 1 1; component prop {shape text cylinder; size vec3 0.14 2.5 0.14; color rgba 32 57 60 255;}}
+node flag2 {transform -1.1 2.45 -41 0 0 0 1 1 1 1; component prop {shape text box; size vec3 0.9 0.5 0.04; color rgba 62 143 133 255;}}
+node pillar0 {transform 1.9 0.95 -12 0 0 0 1 1 1 1; component obstacle {order int 0; radius number 0.26; height number 1.3;}}
+node pillar1 {transform -1.9 0.95 -28 0 0 0 1 1 1 1; component obstacle {order int 1; radius number 0.26; height number 1.3;}}
+node pillar2 {transform 1.9 0.95 -44 0 0 0 1 1 1 1; component obstacle {order int 2; radius number 0.26; height number 1.3;}}
+node sweeper0 {transform 1.9 0.9 -12 0 0 0 1 1 1 1; component sweeper {order int 0; size vec3 5 0.7 0.42; speed number 0.75; phase number 0.3;}}
+node sweeper1 {transform -1.9 0.9 -28 0 0 0 1 1 1 1; component sweeper {order int 1; size vec3 5 0.7 0.42; speed number -0.95; phase number 1.4;}}
+node sweeper2 {transform 1.9 0.9 -44 0 0 0 1 1 1 1; component sweeper {order int 2; size vec3 5 0.7 0.42; speed number 1.15; phase number 0.8;}}

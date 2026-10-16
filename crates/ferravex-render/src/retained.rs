@@ -21,7 +21,7 @@ pub(crate) struct Geometry {
 #[derive(Default)]
 struct Registry {
     next: u32,
-    meshes: Vec<Weak<Geometry>>,
+    meshes: Vec<(u32, Weak<Geometry>)>,
 }
 thread_local! {static REGISTRY: RefCell<Registry> = RefCell::new(Registry::default());}
 impl ResidentMesh {
@@ -52,11 +52,11 @@ impl ResidentMesh {
         }
         REGISTRY.with(|registry| {
             let mut r = registry.borrow_mut();
-            r.meshes.retain(|m| m.strong_count() > 0);
+            r.meshes.retain(|(_, mesh)| mesh.strong_count() > 0);
             let bytes: usize = r
                 .meshes
                 .iter()
-                .filter_map(Weak::upgrade)
+                .filter_map(|(_, mesh)| mesh.upgrade())
                 .map(|m| m.vertices.len() * if m.skin.is_some() { 72 } else { 40 })
                 .sum();
             if r.meshes.len() >= MAX_MESHES || bytes + mesh.indices.len() * stride > MAX_BYTES {
@@ -107,7 +107,7 @@ impl ResidentMesh {
                     })
                     .collect(),
             });
-            r.meshes.push(Rc::downgrade(&data));
+            r.meshes.push((data.id, Rc::downgrade(&data)));
             Ok(Self(data))
         })
     }
@@ -124,18 +124,23 @@ impl ResidentMesh {
         self.0.bounds
     }
 }
+// IDs increase monotonically and pruning retains order. Binary search avoids
+// walking/upgrading every earlier mesh during each host liveness check.
 pub(crate) fn geometry(id: u32) -> Option<Rc<Geometry>> {
     REGISTRY.with(|r| {
-        r.borrow()
-            .meshes
-            .iter()
-            .filter_map(Weak::upgrade)
-            .find(|m| m.id == id)
+        let r = r.borrow();
+        let index = r.meshes.binary_search_by_key(&id, |(id, _)| *id).ok()?;
+        r.meshes[index].1.upgrade()
     })
 }
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn is_live(id: u32) -> bool {
-    geometry(id).is_some()
+    REGISTRY.with(|r| {
+        let r = r.borrow();
+        r.meshes
+            .binary_search_by_key(&id, |(id, _)| *id)
+            .is_ok_and(|index| r.meshes[index].1.strong_count() > 0)
+    })
 }
 /// ABI: kind 0 = immediate, kind 1 = retained, kind 2 = flagged triangles, kind 3 = instanced sprites. Preserves transparency/UI order.
 #[repr(C)]
@@ -520,6 +525,30 @@ mod tests {
         f.clear();
         assert!(!is_live(id));
         assert_ne!(id, mesh().id());
+    }
+    #[test]
+    fn lookup_survives_dead_entries_and_registry_pruning() {
+        let meshes: Vec<_> = (0..64).map(|_| mesh()).collect();
+        let ids: Vec<_> = meshes.iter().map(ResidentMesh::id).collect();
+        let live: Vec<_> = meshes
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, mesh)| (i % 3 == 0).then_some(mesh))
+            .collect();
+        for (i, &id) in ids.iter().enumerate() {
+            assert_eq!(geometry(id).is_some(), i % 3 == 0);
+            assert_eq!(is_live(id), i % 3 == 0);
+        }
+        let next = mesh(); // Removes expired weak entries without recycling IDs.
+        assert!(next.id() > *ids.last().unwrap());
+        for mesh in &live {
+            assert_eq!(geometry(mesh.id()).unwrap().id, mesh.id());
+        }
+        for (i, &id) in ids.iter().enumerate() {
+            assert_eq!(is_live(id), i % 3 == 0);
+        }
+        assert!(geometry(0).is_none());
+        assert!(geometry(u32::MAX).is_none());
     }
     #[test]
     fn wire_layout_and_normal_matrix_are_defined() {

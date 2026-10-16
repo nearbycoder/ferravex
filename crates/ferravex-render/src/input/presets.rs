@@ -312,6 +312,15 @@ impl PlayerInput {
                 false,
             );
         }
+        if matches!(preset, Preset::Lab2 | Preset::Lab3) {
+            add(
+                "pulse",
+                "Impulse pulse",
+                ActionKind::Button,
+                vec![key(KeyCode::F), b(InputCode::PadButton(4))],
+                false,
+            );
+        }
         if preset == Preset::Strategy {
             add(
                 "upgrade",

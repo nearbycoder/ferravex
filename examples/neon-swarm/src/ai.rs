@@ -329,6 +329,7 @@ mod tests {
         let actor = world.spawn((
             Position(vec2(300., 284.)),
             Enemy {
+                knockback: Vec2::ZERO,
                 ai_slot: 0,
                 health: 24.,
                 radius: 14.,

@@ -290,45 +290,84 @@ impl Peer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // A single poll cannot guarantee that loopback TCP bytes have reached the
+    // kernel receive queue, especially on a loaded macOS runner. Keep driving
+    // the nonblocking gateway while awaiting each real transport milestone.
+    fn pump_until<T>(
+        gateway: &mut Gateway,
+        mut receive: impl FnMut() -> io::Result<Option<T>>,
+    ) -> T {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            gateway.poll().unwrap();
+            match receive() {
+                Ok(Some(value)) => return value,
+                Ok(None) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                    ) => {}
+                Err(error) => panic!("loopback I/O failed: {error}"),
+            }
+            assert!(
+                Instant::now() < deadline,
+                "gateway loopback milestone timed out"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+    fn read_until(
+        gateway: &mut Gateway,
+        client: &mut TcpStream,
+        complete: impl Fn(&[u8]) -> bool,
+    ) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        pump_until(gateway, || {
+            let mut part = [0; 4096];
+            let count = client.read(&mut part)?;
+            if count == 0 {
+                return Err(io::Error::from(io::ErrorKind::UnexpectedEof));
+            }
+            bytes.extend_from_slice(&part[..count]);
+            assert!(bytes.len() <= 4096, "unexpected loopback response size");
+            Ok(complete(&bytes).then_some(()))
+        });
+        bytes
+    }
     #[test]
     fn actual_tcp_upgrade_binary_udp_return_and_close() {
         let authority = UdpSocket::bind("127.0.0.1:0").unwrap();
-        authority
-            .set_read_timeout(Some(Duration::from_millis(250)))
-            .unwrap();
+        authority.set_nonblocking(true).unwrap();
         let mut gateway = Gateway::bind(Config::new(
             "127.0.0.1:0".parse().unwrap(),
             authority.local_addr().unwrap(),
         ))
         .unwrap();
         let mut client = TcpStream::connect(gateway.local_addr().unwrap()).unwrap();
-        client
-            .set_read_timeout(Some(Duration::from_millis(250)))
-            .unwrap();
+        client.set_nonblocking(true).unwrap();
         client.write_all(b"GET /ferravex HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n").unwrap();
-        let deadline = Instant::now() + Duration::from_millis(250);
-        while gateway.connection_count() == 0 && Instant::now() < deadline {
-            gateway.poll().unwrap();
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        gateway.poll().unwrap();
-        let mut buf = [0u8; 4096];
-        let n = client.read(&mut buf).unwrap();
+        let header = read_until(&mut gateway, &mut client, |bytes| {
+            bytes.ends_with(b"\r\n\r\n")
+        });
         assert!(
-            std::str::from_utf8(&buf[..n])
+            std::str::from_utf8(&header)
                 .unwrap()
                 .contains("101 Switching Protocols")
         );
         client
             .write_all(&super::super::tests::masked(2, true, b"packet"))
             .unwrap();
-        gateway.poll().unwrap();
-        let (n, source) = authority.recv_from(&mut buf).unwrap();
+        let mut buf = [0; 4096];
+        let (n, source) = pump_until(&mut gateway, || authority.recv_from(&mut buf).map(Some));
         assert_eq!(&buf[..n], b"packet");
         authority.send_to(b"reply", source).unwrap();
-        gateway.poll().unwrap();
-        let n = client.read(&mut buf).unwrap();
-        assert_eq!(&buf[..n], &frame(2, b"reply"));
+        let reply = frame(2, b"reply");
+        assert_eq!(
+            read_until(&mut gateway, &mut client, |bytes| bytes.len()
+                >= reply.len()),
+            reply
+        );
         client
             .write_all(&super::super::tests::masked(
                 8,
@@ -336,9 +375,12 @@ mod tests {
                 &1000u16.to_be_bytes(),
             ))
             .unwrap();
-        gateway.poll().unwrap();
-        let n = client.read(&mut buf).unwrap();
-        assert_eq!(&buf[..n], &frame(8, &1000u16.to_be_bytes()));
+        let closed = frame(8, &1000u16.to_be_bytes());
+        assert_eq!(
+            read_until(&mut gateway, &mut client, |bytes| bytes.len()
+                >= closed.len()),
+            closed
+        );
         assert_eq!(gateway.connection_count(), 0);
         assert_eq!(gateway.stats().client_bytes, 6);
     }

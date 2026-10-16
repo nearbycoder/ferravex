@@ -10,7 +10,9 @@ const poses=new Set();let operator=false,weapon=false,recoil=false,reload=false;
 for(let frame=0;frame<200;frame++){
  if(frame===1){key(0xff0d);}
  if(frame===3){e.ferravex_key(119,1);e.ferravex_button(1,1);}
- if(frame===20)e.ferravex_button(1,0);
+ // Finish the movement sample before testing reload; running indefinitely into
+ // live enemies can interrupt the reload with death and a respawn.
+ if(frame===20){e.ferravex_button(1,0);e.ferravex_key(119,0);}
  if(frame===50)key(114);
  e.ferravex_frame(1/60,1280,720);
  const joints=e.ferravex_skin_joint_count();assert.ok(joints<=32768);

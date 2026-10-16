@@ -8,6 +8,7 @@ struct Bridge {
     status: String,
     generation: u32,
     revision: u32,
+    document: u32,
     code: u32,
     pending: Option<String>,
     #[cfg(target_arch = "wasm32")]
@@ -50,10 +51,12 @@ impl ContentSource {
             return Err(ContentError::domain("invalid embedded source size/UTF-8"));
         }
         BRIDGE.with(|b| {
+            let document = b.borrow().document.wrapping_add(1);
             *b.borrow_mut() = Bridge {
                 source: embedded.into(),
                 status: "Embedded content loaded. Applying an edit restarts this game.".into(),
                 code: 1,
+                document,
                 ..Default::default()
             }
         });
@@ -174,6 +177,11 @@ fn read_source(path: &std::path::Path) -> Result<Vec<u8>, ContentError> {
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use super::*;
+    /// Changes when a game selects another authored document, not on live edits.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_content_document() -> u32 {
+        BRIDGE.with(|b| b.borrow().document)
+    }
     #[unsafe(no_mangle)]
     pub extern "C" fn ferravex_content_source_len() -> u32 {
         BRIDGE.with(|b| b.borrow().source.len() as u32)

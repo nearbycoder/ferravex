@@ -4,12 +4,12 @@ use ferravex_render::input::{
     ActionKind, Binding, InputCode, PlayerInput, Preset,
     touch::{Control, Output, Region},
 };
+mod course_ui;
+mod courses;
 mod level;
 mod sim;
 use ferravex_core::FixedClock;
-use ferravex_engine::camera::{
-    Input3, Mode3, ObstructionSettings, Rig3, RigidObstructions, Settings3, Target3,
-};
+use ferravex_engine::camera::{Input3, Mode3, NoObstructions, Rig3, Settings3, Target3};
 use ferravex_render::{
     demo::Demo,
     mesh::Mesh3d,
@@ -77,6 +77,36 @@ impl Prop {
         }
     }
 }
+// The aqueduct is an open overhead course. Small gameplay poles must never
+// retract the camera toward its subject; retain the authored scale near them.
+fn follow_settings() -> Settings3 {
+    Settings3 {
+        position_half_life: std::f32::consts::LN_2 / 6.,
+        target_half_life: std::f32::consts::LN_2 / 6.,
+        teleport_distance: Some(8.),
+        obstruction: None,
+        ..Default::default()
+    }
+}
+fn follow_input(position: Vec3) -> Input3 {
+    Input3 {
+        target: Target3::at(position),
+        mode: Mode3::Follow {
+            eye_offset: vec3(8., 12., 14.),
+            look_offset: vec3(0., -0.2, -5.),
+        },
+        fov_y: 48_f32.to_radians(),
+    }
+}
+fn touch_hud(size: Vec2) -> (Vec2, Vec2, f32) {
+    let radius = (size.x * 0.15).min(size.y * 0.22).clamp(28., 66.);
+    let y = (size.y - radius - 14.).max(radius + 14.);
+    (
+        vec2(radius + 18., y),
+        vec2(size.x - radius - 18., y),
+        radius,
+    )
+}
 type GeometryKey = (level::Shape, [u32; 3], [u8; 4], u16);
 fn cached_prop(bank: &mut BTreeMap<GeometryKey, Rc<Mesh3d>>, d: level::Decoration) -> Prop {
     let key = (
@@ -114,6 +144,7 @@ struct Scene {
     checkpoint: Mesh3d,
     checkpoint_lit: Mesh3d,
     shadow: Mesh3d,
+    sweepers: Vec<Mesh3d>,
 }
 impl Scene {
     fn new(level: &level::Level) -> Self {
@@ -125,7 +156,9 @@ impl Scene {
                 Prop::new(
                     Mesh3d::cuboid(
                         p.size,
-                        if i % 2 == 0 {
+                        if p.friction < 0.2 {
+                            rgb(151, 193, 202)
+                        } else if i % 2 == 0 {
                             rgb(190, 149, 113)
                         } else {
                             rgb(210, 172, 126)
@@ -288,6 +321,27 @@ impl Scene {
             checkpoint: Mesh3d::cylinder(1.25, 0.02, rgb(105, 142, 128), 16),
             checkpoint_lit: Mesh3d::cylinder(1.25, 0.025, TEAL, 16),
             shadow: Mesh3d::cylinder(0.62, 0.015, rgb(131, 113, 90), 12),
+            sweepers: level
+                .sweepers
+                .iter()
+                .map(|s| {
+                    let beam = Mesh3d::cuboid(s.size, rgb(172, 83, 52));
+                    let stripe = Mesh3d::cuboid(vec3(0.28, 0.025, s.size.z + 0.02), CREAM);
+                    Mesh3d::combine(std::iter::once((&beam.mesh, Mat4::IDENTITY)).chain(
+                        [-2., -1., 0., 1., 2.].into_iter().map(|x| {
+                            (
+                                &stripe.mesh,
+                                Mat4::from_translation(vec3(
+                                    x * s.size.x / 5.,
+                                    s.size.y * 0.5 + 0.02,
+                                    0.,
+                                )),
+                            )
+                        }),
+                    ))
+                    .unwrap()
+                })
+                .collect(),
         }
     }
     fn draw(&self, game: &Run, position: Vec3, rotation: Quat, time: f32) {
@@ -299,6 +353,9 @@ impl Scene {
         }
         for prop in &self.obstacles {
             prop.draw();
+        }
+        for (mesh, sweeper) in self.sweepers.iter().zip(&game.level.sweepers) {
+            mesh.draw(sweeper.position, sweeper.rotation(time));
         }
         for (i, p) in game.level.checkpoints.iter().enumerate() {
             (if game.checkpoint > i {
@@ -359,7 +416,10 @@ async fn game() {
     let mut game = Run::with_level(Arc::new(level::Level::parse(content.current()).unwrap()));
     let mut scene = Scene::new(&game.level);
     let mut records = ferravex_render::storage::Records::new("marble-run").unwrap();
-    let mut record_context = ferravex_engine::persistence::checksum(content.current().as_bytes());
+    let mut record_context = courses::context(content.current());
+    let mut course = 0;
+    let mut picker = !demo.autoplay && demo.content.is_none();
+    let mut course_ui = ferravex_render::ui::Ui::new();
     let material = LitMaterial::new().expect("Ferravex's portable lit material must compile");
     let mut clock = FixedClock::new(120., 12);
     let mut sound = GameAudio::new();
@@ -376,29 +436,68 @@ async fn game() {
             ],
         )
         .unwrap();
-    let mut camera = Rig3::new(Settings3 {
-        position_half_life: std::f32::consts::LN_2 / 6.,
-        target_half_life: std::f32::consts::LN_2 / 6.,
-        teleport_distance: Some(8.),
-        obstruction: Some(ObstructionSettings {
-            radius: 0.16,
-            ..Default::default()
-        }),
-        ..Default::default()
-    })
-    .unwrap();
+    for (name, label, key, pad) in [
+        ("courses", "Choose course", KeyCode::C, 2),
+        ("recover", "Return to checkpoint", KeyCode::V, 4),
+    ] {
+        player_input
+            .global_action(
+                name,
+                label,
+                ActionKind::Button,
+                vec![
+                    Binding::digital(InputCode::Key(key as u16)),
+                    Binding::digital(InputCode::PadButton(pad)),
+                ],
+            )
+            .unwrap();
+    }
+    player_input.set_paused(picker);
+    let mut camera = Rig3::new(follow_settings()).unwrap();
     let mut previous_falls = 0;
     let forward = vec3(-8., 0., -19.).normalize();
     let right = vec3(-forward.z, 0., forward.x);
+    let mut pending_course: Option<usize> = None;
     loop {
+        if let Some(index) = pending_course.take() {
+            if index != course {
+                // The shared content editor must show the selected course too.
+                content = ferravex_render::content::ContentSource::new(
+                    courses::COURSES[index].source,
+                    None,
+                )
+                .unwrap();
+            }
+            course = index;
+            let source = content.current();
+            game = Run::with_level(Arc::new(level::Level::parse(source).unwrap()));
+            scene = Scene::new(&game.level);
+            record_context = courses::context(source);
+            picker = false;
+            clock.reset();
+            camera.cut();
+            previous_falls = 0;
+            impact_cooldown = 0.;
+            sound = GameAudio::new();
+            player_input.set_paused(true);
+            player_input.set_paused(false);
+        }
         if let Some((next, next_scene)) = content.poll(demo.dt(), |text| {
             let level = Arc::new(level::Level::parse(text)?);
             let next_scene = Scene::new(&level);
             Ok((Run::with_level(level), next_scene))
         }) {
             game = next;
+            if let Some(index) = courses::COURSES
+                .iter()
+                .position(|c| c.source == content.current())
+            {
+                course = index;
+            }
+            picker = false;
+            player_input.set_paused(false);
             scene = next_scene;
-            record_context = ferravex_engine::persistence::checksum(content.current().as_bytes());
+            record_context = courses::context(content.current());
             clock.reset();
             camera.cut();
             previous_falls = 0;
@@ -406,41 +505,53 @@ async fn game() {
             sound = GameAudio::new();
         }
         ferravex_render::ui::warm_up_font_sizes(&[12, 17, 18, 20, 23, 26, 30]);
+        let (stick_center, brake_center, touch_radius) =
+            touch_hud(vec2(screen_width(), screen_height()));
         player_input
             .set_touch_layout(&[
                 Control {
                     region: Region::Circle {
-                        center: vec2(100., screen_height() - 105.),
-                        radius: 100.,
+                        center: stick_center,
+                        radius: touch_radius + 8.,
                     },
                     output: Output::Stick {
                         x: 0,
                         y: 1,
-                        radius: 48.,
+                        radius: touch_radius * 0.72,
                         floating: false,
                     },
                 },
                 Control {
                     region: Region::Circle {
-                        center: vec2(screen_width() - 75., screen_height() - 90.),
-                        radius: 65.,
+                        center: brake_center,
+                        radius: touch_radius + 8.,
                     },
                     output: Output::Button(6),
                 },
             ])
             .unwrap();
         player_input.sample_play();
+        if player_input.pressed("courses") {
+            picker = !picker;
+            player_input.set_paused(picker);
+        }
+        if !picker && !game.finished && player_input.pressed("recover") {
+            game.recover();
+            clock.reset();
+            camera.cut();
+            sound.cue(Cue::Failure, 0.3);
+        }
         let touch_mode = player_input.touch_seen();
         let touch = player_input
             .touch_stick(0, 1)
             .map_or(Vec2::ZERO, |(_, delta)| delta);
-        if player_input.pressed("restart")
-            || game.finished
-                && (player_input.pressed("confirm") || is_mouse_button_pressed(MouseButton::Left))
-        {
+        if player_input.pressed("restart") {
             game = Run::with_level(game.level.clone());
             clock.reset();
             camera.cut();
+            previous_falls = 0;
+            picker = false;
+            player_input.set_paused(false);
         }
         let movement = player_input.movement();
         let direction = right * movement.x + forward * movement.y;
@@ -448,7 +559,9 @@ async fn game() {
             roll: vec2(direction.x, direction.z).clamp_length_max(1.),
             brake: player_input.held("brake"),
         };
-        let dt = if demo.autoplay {
+        let dt = if picker || game.finished {
+            0.
+        } else if demo.autoplay {
             demo.dt()
         } else {
             player_input.simulation_dt(demo.dt())
@@ -484,9 +597,13 @@ async fn game() {
             }
             if game.finished && !finished {
                 let _ = records.attempt(
-                    "aqueduct",
+                    courses::COURSES[course].id,
                     record_context,
-                    game.gems() as u64,
+                    match courses::COURSES[course].medal(game.elapsed, game.falls) {
+                        "GOLD" => 3,
+                        "SILVER" => 2,
+                        _ => 1,
+                    },
                     ferravex_render::storage::run_micros(game.elapsed),
                 );
                 sound.cue(Cue::Success, 0.65);
@@ -499,36 +616,26 @@ async fn game() {
         }
         previous_falls = game.falls;
         let view = camera
-            .update(
-                demo.dt(),
-                Input3 {
-                    target: Target3::at(position),
-                    mode: Mode3::Follow {
-                        eye_offset: vec3(8., 12., 14.),
-                        look_offset: vec3(0., -0.2, -5.),
-                    },
-                    fov_y: 48_f32.to_radians(),
-                },
-                &RigidObstructions {
-                    world: &game.physics,
-                    mask: u32::MAX,
-                    ignore: Some(game.marble),
-                },
-            )
+            .update(demo.dt(), follow_input(position), &NoObstructions)
             .expect("valid rolling camera")
             .pose;
         clear_background(SKY);
         let overview = player_input.held("overview");
+        let mut lo = game.level.spawn;
+        let mut hi = lo;
+        for p in &game.level.platforms {
+            lo = lo.min(p.center);
+            hi = hi.max(p.center);
+        }
+        let course_center = (lo + hi) * 0.5;
+        let course_span =
+            (hi - lo).max_element().max(20.) / (screen_width() / screen_height()).min(1.);
         let camera_position = if overview {
-            vec3(31., 40., 20.)
+            course_center + vec3(course_span * 0.6, course_span, course_span * 0.8)
         } else {
             view.position
         };
-        let target = if overview {
-            vec3(3., 0., -18.)
-        } else {
-            view.target
-        };
+        let target = if overview { course_center } else { view.target };
         set_camera(&Camera3D {
             position: camera_position,
             target,
@@ -546,12 +653,20 @@ async fn game() {
             light_direction: vec3(-0.55, 0.85, 0.35),
             ambient: 0.48,
         });
-        scene.draw(&game, position, rotation, demo.time());
+        let visual_time = (game.elapsed - frame.dt * (1. - frame.alpha)).max(0.);
+        scene.draw(&game, position, rotation, visual_time);
         material.end();
         set_default_camera();
-        text("MARBLE RUN", 27., 39., 26., INK);
+        let compact = screen_width() < 560.;
+        text(
+            courses::COURSES[course].name,
+            if compact { 16. } else { 27. },
+            if compact { 29. } else { 39. },
+            if compact { 20. } else { 26. },
+            INK,
+        );
         if screen_width() > 620. {
-            text("THE HANGING AQUEDUCT", 28., 60., 12., INK);
+            text(courses::COURSES[course].challenge, 28., 60., 12., INK);
         }
         let status = format!(
             "{} / {}     {:02}:{:04.1}",
@@ -560,9 +675,22 @@ async fn game() {
             (game.elapsed / 60.) as u32,
             game.elapsed % 60.
         );
-        let status_width = measure_text(&status, None, 23, 1.).width;
-        text(&status, screen_width() - status_width - 27., 39., 23., INK);
-        draw_poly(screen_width() - status_width - 43., 31., 4, 8., 0., GOLD);
+        let status_size = if screen_width() < 360. {
+            13
+        } else if compact {
+            17
+        } else {
+            23
+        };
+        let status_width = measure_text(&status, None, status_size, 1.).width;
+        let status_x = if compact {
+            32.
+        } else {
+            screen_width() - status_width - 120.
+        };
+        let status_y = if compact { 55. } else { 39. };
+        text(&status, status_x, status_y, status_size as f32, INK);
+        draw_poly(status_x - 16., status_y - 8., 4, 6., 0., GOLD);
         if game.notice > 0. && !game.finished {
             centered(
                 if game.recovered {
@@ -577,80 +705,84 @@ async fn game() {
                 INK,
             );
         }
-        if touch_mode && !game.finished {
-            let center = vec2(100., screen_height() - 105.);
-            draw_circle(center.x, center.y, 66., Color::new(0.12, 0.25, 0.24, 0.15));
-            draw_circle_lines(center.x, center.y, 66., 2., CREAM);
+        if touch_mode && !game.finished && !picker {
+            let center = stick_center;
             draw_circle(
-                center.x + touch.x * 35.,
-                center.y + touch.y * 35.,
-                24.,
+                center.x,
+                center.y,
+                touch_radius,
+                Color::new(0.12, 0.25, 0.24, 0.15),
+            );
+            draw_circle_lines(center.x, center.y, touch_radius, 2., CREAM);
+            draw_circle(
+                center.x + touch.x * touch_radius * 0.53,
+                center.y + touch.y * touch_radius * 0.53,
+                touch_radius * 0.36,
                 Color::new(0.98, 0.94, 0.81, 0.7),
             );
             draw_circle(
-                screen_width() - 75.,
-                screen_height() - 90.,
-                45.,
+                brake_center.x,
+                brake_center.y,
+                touch_radius * 0.8,
                 Color::new(0.12, 0.25, 0.24, 0.35),
             );
             text(
                 "BRAKE",
-                screen_width() - 102.,
-                screen_height() - 85.,
-                18.,
+                brake_center.x - measure_text("BRAKE", None, 14, 1.).width * 0.5,
+                brake_center.y + 5.,
+                14.,
                 CREAM,
             );
-        } else if game.elapsed < 10. {
+        } else if game.elapsed < 10. && !picker && !game.finished {
             centered(
                 if screen_width() > 700. {
-                    "WASD / ARROWS  roll     SPACE  brake     TAB  course     R  restart"
+                    "WASD roll / SPACE brake / TAB view / V recover / C courses"
                 } else {
-                    "Arrows roll / Space brake / R restart"
+                    "Arrows roll / Space brake / C courses"
                 },
                 screen_height() - 27.,
-                17,
+                if compact { 12 } else { 17 },
                 INK,
             );
         }
-        if game.finished {
-            let w = 330_f32.min(screen_width() - 30.);
-            let y = screen_height() * 0.43;
-            draw_rectangle(
-                (screen_width() - w) * 0.5,
-                y - 62.,
-                w,
-                182.,
-                Color::new(0.12, 0.23, 0.23, 0.94),
-            );
-            centered("COURSE CLEAR", y - 20., 30, CREAM);
-            centered(
-                &format!("{} crystals / {:.1} seconds", game.gems(), game.elapsed),
-                y + 17.,
-                20,
-                CREAM,
-            );
-            let best = records
-                .get("aqueduct", record_context)
-                .and_then(|r| r.fastest_us)
-                .map_or(game.elapsed, |us| us as f32 / 1_000_000.);
-            centered(
-                &format!(
-                    "{} falls / {} {:.1}s",
-                    game.falls,
-                    if records.error().is_some() {
-                        "session best"
-                    } else {
-                        "best"
-                    },
-                    best
-                ),
-                y + 48.,
-                18,
-                CREAM,
-            );
-            centered("R or tap to roll again", y + 90., 17, CREAM);
+        if let Some(command) = course_ui::draw(
+            &mut course_ui,
+            &mut player_input,
+            &game,
+            course,
+            picker,
+            &records,
+            record_context,
+        ) {
+            use course_ui::Command;
+            let selected = match command {
+                Command::Select(index) => Some(index),
+                Command::Next if course + 1 < courses::COURSES.len() => Some(course + 1),
+                Command::Retry => Some(course),
+                Command::Next => {
+                    picker = true;
+                    player_input.set_paused(true);
+                    None
+                }
+                Command::Toggle => {
+                    picker = !picker;
+                    player_input.set_paused(picker);
+                    None
+                }
+                Command::Recover => {
+                    game.recover();
+                    clock.reset();
+                    camera.cut();
+                    sound.cue(Cue::Failure, 0.3);
+                    None
+                }
+            };
+            // Keep the current frame's resident meshes alive through GPU submission.
+            pending_course = selected;
         }
-        player_input.draw_settings();
+        if (!picker && !game.finished) || player_input.controls_open() {
+            player_input.draw_settings();
+        }
         if demo.finish_frame() {
             break;
         }
@@ -703,5 +835,39 @@ mod content_scene_tests {
                 .iter()
                 .all(|v| v.position.is_finite()))
         );
+    }
+}
+
+#[cfg(test)]
+mod presentation_tests {
+    use super::*;
+    use ferravex_engine::camera::RigidObstructions;
+    #[test]
+    fn follow_distance_stays_constant_beside_every_pole() {
+        let run = Run::new();
+        let query = RigidObstructions {
+            world: &run.physics,
+            mask: u32::MAX,
+            ignore: Some(run.marble),
+        };
+        let mut rig = Rig3::new(follow_settings()).unwrap();
+        for pole in &run.level.obstacles {
+            for step in 0..16 {
+                let angle = step as f32 * std::f32::consts::TAU / 16.;
+                let radius = pole.radius + run.level.tuning.radius + 0.02;
+                let p = pole.position
+                    + vec3(
+                        angle.cos() * radius,
+                        -pole.height * 0.5 + run.level.tuning.radius,
+                        angle.sin() * radius,
+                    );
+                rig.cut();
+                let view = rig.update(1. / 60., follow_input(p), &query).unwrap();
+                assert!(!view.obstructed);
+                assert!(
+                    (view.pose.position - view.pose.target).abs_diff_eq(vec3(8., 12.2, 19.), 0.001)
+                );
+            }
+        }
     }
 }

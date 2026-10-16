@@ -1217,3 +1217,109 @@ a wall-facing route segment or the practice death overlay. Presets preserve HUD
 colors and use the existing rendering paths. Details: [visual presets](VISUALS.md).
 Windows/macOS remain cross-checks, not runtime verification. iOS SDK/device
 checks remain excluded. No deployment command was issued.
+
+
+### Local performance cleanup (2026-10-16)
+
+This pass compares the local working tree containing the mobile detail settings,
+Marble Run campaign and fullscreen changes against the same tree with the
+performance edits below. Both reports share HEAD `f87eb6d`; that commit alone
+**does not identify either measured source tree**. Per-game binary SHA-256 values
+in the reports identify the executables actually run. All native and Wasm games
+were rebuilt before recording artifact sizes. Nothing was pushed or deployed.
+
+The shared Linux x86_64/Radeon 8060S machine used Rust 1.97.0, the release profile,
+default game quality, native DPI scale 1, 60 warmup frames and 180 measured frames
+in each of three processes per game. No builds or test suites ran during the
+recordings. Background desktop workloads remained present, so sub-millisecond
+tail changes require caution. These measurements are not phone or iOS results.
+The independent player resolution setting was preserved; lighting quality no
+longer imposes the historical browser Low 1x density cap described above.
+
+Changes:
+
+- Shared retained rendering extracts the shadow frustum once per environment
+  update rather than normalizing six planes for every submitted mesh. Lighting
+  and user detail changes immediately refresh it.
+- The mesh registry keeps ordered IDs beside weak references. Host liveness and
+  geometry lookups use binary search instead of scanning and upgrading every
+  preceding mesh. Expired handles remain invalid and IDs never recycle.
+- Software rasterization skips fog position interpolation when the entire
+  triangle is inside the fog start sphere. Flat-colored triangles in this region
+  reuse one color conversion. Gradient/fogged triangles retain perspective-correct
+  interpolation, using one reciprocal for their attribute weights. Original
+  depth division is retained to preserve coplanar surface ordering.
+- Rotational physics reuses each contact's normal effective mass across velocity
+  iterations after island waking. Tangent mass still follows current slip, and
+  position corrections still recompute mass after rotations. Fixed/kinematic
+  bodies skip zero-inertia quaternion transforms; 3D bodies skip the unused
+  planar-angle calculation.
+- Snapshot deltas select sparse/full representation before allocating, then write
+  directly into one exactly sized output buffer. Packet bytes and bounds are
+  unchanged. `ferravex-bench` now includes unchanged, sparse and dense snapshots.
+
+| Local workload | Before mean | After mean | Observation |
+|---|---:|---:|---|
+| Courtyard software render, 960x540 | 14.367 ms | 11.844 ms | 17.6% less render time |
+| 128-box rotational solver, sleeping enabled | 374.287 us | 304.119 us | 18.7% less step time |
+| Same solver, sleep disabled | 2570.233 us | 2153.613 us | 16.2% less step time |
+| Dense 1000-byte snapshot encoding | 1.39 us | 0.42 us | 69.8% less encode time |
+
+The rigid workload uses 1200 ticks at 120 Hz and 12 velocity iterations. Its
+constraint visits, persisted/warmed contact counts and final sleeping counts are
+identical before/after. The snapshot timings use 8192 iterations after 256 warmup
+iterations, exclude network transport and include allocation/free. Unchanged and
+sparse timings vary by tenths of a microsecond between processes; this pass makes
+no speedup claim for them or the unrelated FPS/translational-solver kernels.
+
+A separate allocator probe ran both snapshot implementations in one process,
+1000 encodes per case, with identical output bytes:
+
+| Snapshot | Before allocations/reallocations | After | Before requested bytes | After |
+|---|---:|---:|---:|---:|
+| Unchanged 1000 bytes | 1 | 1 | 8 | 3 |
+| Sparse (11 changes) | 6 | 1 | 164 | 36 |
+| Dense (1000 changes) | 12 | 1 | 9195 | 1003 |
+
+These are cumulative requested allocation bytes per encode, not live heap/peak
+memory or wire sizes. The probe and original snapshot source are retained under
+`target/perf/pass-reference` for local reproduction.
+
+All fifteen final recordings preserve the exact distributions of draw calls,
+vertices, upload bytes, physics steps, pairs, contacts and CCD impacts. GPU query
+coverage is 100% for the thirteen GPU games. This is CPU-side optimization; no
+GPU throughput improvement is claimed. The total of the fifteen Wasm modules grew
+16,565 raw / 10,616 gzip bytes (0.27% / 0.45%); every per-artifact size/work budget
+passes. This total excludes shared host files, docs and assets.
+
+The final full comparison retained two tail flags: Dune Skimmer GPU p99 and
+Physics 2D CPU p99. Those exact binary hashes had passed in the preceding full
+recording. A same-configuration repeat of just those games against an unchanged
+subset of the original baseline passed the original 20% / 200-us CPU / 20-us GPU
+budgets. Original failure reports remain intact; no baseline or tolerance was
+relaxed. This is evidence of shared-host variation, not certification of stable
+frame pacing on mobile hardware.
+
+A full 960x540 Courtyard framebuffer comparison changes 2074 of 2,073,600 color
+channels by one quantization unit; none changes by more than one. Analytical
+perspective-color/fog tests, clip/depth/winding tests, shadow-refresh tests and
+registry pruning tests cover correctness. Validation passed 507 workspace tests,
+14 native graphics/audio checks, all browser/Wasm integration suites, strict
+native/Wasm Clippy, 21 Python tests, all fifteen native game captures and the
+zero-external-Cargo-package audit. The complete local site also rebuilt successfully.
+
+Raw local evidence (ignored, not committed):
+
+- `target/perf/pass-before/report.json` and `pass-before-baseline.json`
+- `target/perf/pass-after/report.json` (initial candidate, retained tail flags)
+- `target/perf/pass-final/report.json` (intermediate candidate, passed budgets)
+- `target/perf/pass-verified/report.json` (finished source, retained tail flags)
+- `target/perf/pass-tail-repeat/report.json` (same-binary diagnostic repeat)
+- `target/perf/pass-reference/{kernels-before,kernels-verified,net-alloc}.log`
+- `target/perf/pass-reference/{rigid-before,rigid-final,rigid-awake-before,rigid-awake-final,pixel-comparison}.json`
+
+Remaining candidates for a separately measured pass include the CCD ball sweep's
+scan over target bodies and the ECS query's repeated type lookups. Existing
+bounded navigation scratch, particle pools, audio voices, render instance buffers
+and shared HUD buffers were left intact. Broader architectural changes need their
+own representative workload rather than assuming they will improve these games.

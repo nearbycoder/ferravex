@@ -36,6 +36,8 @@ struct Sandbox {
     sequence: u32,
     links: Vec<JointHandle>,
     impact: Option<(f32, Surface)>,
+    pulse_time: f32,
+    pulse_center: Vec3,
 }
 
 impl Sandbox {
@@ -46,6 +48,8 @@ impl Sandbox {
             sequence: 0,
             links: Vec::new(),
             impact: None,
+            pulse_time: 0.,
+            pulse_center: Vec3::ZERO,
         };
         sandbox
             .physics
@@ -196,7 +200,27 @@ impl Sandbox {
         self.spawn(vec3(phase.cos() * 2.3, 10.0, phase.sin() * 2.3), ball);
     }
 
+    fn pulse(&mut self, center: Vec3) -> bool {
+        if self.pulse_time > 0. {
+            return false;
+        }
+        self.pulse_time = 0.65;
+        self.pulse_center = center;
+        for body in &self.bodies {
+            let rigid = &mut self.physics.bodies[body.handle];
+            let position = rigid.translation();
+            if let Some(mut kick) =
+                ferravex_play::motion::radial_velocity(center, position, 8., 11.)
+            {
+                kick.y = kick.y.max(0.) + kick.length() * 0.55;
+                rigid.apply_impulse(kick * rigid.mass(), true);
+            }
+        }
+        true
+    }
+
     fn step(&mut self, dt: f32) {
+        self.pulse_time = (self.pulse_time - dt).max(0.);
         let mut velocities = [Vec3::ZERO; MAX_BODIES];
         for (i, body) in self.bodies.iter_mut().enumerate() {
             velocities[i] = Vec3::from_array(self.physics.bodies[body.handle].linvel().to_array());
@@ -319,6 +343,9 @@ async fn game() {
         }
         if player_input.pressed("select_two") {
             sandbox.drop_body(true);
+        }
+        if player_input.pressed("pulse") && !paused && sandbox.pulse(vec3(0., 0.5, 0.)) {
+            sound.cue(Cue::Impact(Surface::Metal), 0.5);
         }
         impact_cooldown = (impact_cooldown - get_frame_time()).max(0.);
         let frame = clock.advance(if paused {
@@ -469,18 +496,30 @@ async fn game() {
                 draw_line_3d(a, b, ui::CYAN);
             }
         }
+        if sandbox.pulse_time > 0. {
+            let radius = (0.65 - sandbox.pulse_time) * 12.;
+            for i in 0..32 {
+                let a = i as f32 / 32. * std::f32::consts::TAU;
+                let b = (i + 1) as f32 / 32. * std::f32::consts::TAU;
+                draw_line_3d(
+                    sandbox.pulse_center + vec3(a.cos() * radius, 0.02, a.sin() * radius),
+                    sandbox.pulse_center + vec3(b.cos() * radius, 0.02, b.sin() * radius),
+                    ui::CYAN,
+                );
+            }
+        }
         set_default_camera();
         ui::header(
             "3D RIGID BODIES",
             "The loading yard.",
             if screen_width() > 660.0 {
-                "Drag or use arrow keys to orbit  /  Scroll: zoom  /  1, 2: drop bodies  /  Space: pause"
+                "Drag: orbit  /  Scroll: zoom  /  1, 2: drop  /  F: pulse  /  Space: pause"
             } else {
                 "Drag to orbit. Drop bodies below."
             },
         );
         ui::panel(Rect::new(20.0, footer_y, screen_width() - 40.0, 78.0));
-        let button_width = ((screen_width() - 92.0) / 4.0).clamp(38.0, 90.0);
+        let button_width = ((screen_width() - 100.0) / 5.0).clamp(38.0, 72.0);
         let button_rect = |index: f32| {
             Rect::new(
                 34.0 + index * (button_width + 8.0),
@@ -489,20 +528,26 @@ async fn game() {
                 36.0,
             )
         };
-        if ui::button(button_rect(0.0), "+ CRATE", false) {
+        if ui::button(button_rect(0.0), "CRATE", false) {
             sandbox.drop_body(false);
         }
-        if ui::button(button_rect(1.0), "+ BALL", false) {
+        if ui::button(button_rect(1.0), "BALL", false) {
             sandbox.drop_body(true);
         }
+        if ui::button(button_rect(2.0), "PULSE", sandbox.pulse_time > 0.)
+            && !paused
+            && sandbox.pulse(vec3(0., 0.5, 0.))
+        {
+            sound.cue(Cue::Impact(Surface::Metal), 0.5);
+        }
         if ui::button(
-            button_rect(2.0),
+            button_rect(3.0),
             if paused { "RESUME" } else { "PAUSE" },
             paused,
         ) {
             paused = !paused;
         }
-        if ui::button(button_rect(3.0), "RESET", false) {
+        if ui::button(button_rect(4.0), "RESET", false) {
             sandbox = Sandbox::new();
             clock.reset();
         }
@@ -542,6 +587,31 @@ async fn game() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pulse_wakes_and_lifts_props_and_cannot_be_spammed() {
+        let mut sandbox = Sandbox::new();
+        assert!(sandbox.pulse(vec3(0., 0.5, 0.)));
+        assert!(
+            sandbox
+                .bodies
+                .iter()
+                .any(|body| sandbox.physics.bodies[body.handle].linvel().y > 0.1)
+        );
+        let velocities: Vec<_> = sandbox
+            .bodies
+            .iter()
+            .map(|body| sandbox.physics.bodies[body.handle].linvel())
+            .collect();
+        assert!(!sandbox.pulse(vec3(0., 0.5, 0.)));
+        for (body, velocity) in sandbox.bodies.iter().zip(velocities) {
+            assert_eq!(sandbox.physics.bodies[body.handle].linvel(), velocity);
+        }
+        for _ in 0..80 {
+            sandbox.step(1. / 120.);
+        }
+        assert!(sandbox.pulse(vec3(0., 0.5, 0.)));
+    }
 
     #[test]
     fn falling_bodies_produce_bounded_impact_hints() {

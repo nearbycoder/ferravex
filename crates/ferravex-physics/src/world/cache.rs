@@ -381,6 +381,7 @@ impl<B: Access> World<B> {
                         local_a,
                         local_b,
                         normal_impulse,
+                        normal_denominator: 0.,
                         tangent_impulse,
                         bounce: if speed < -1. {
                             -speed * restitution

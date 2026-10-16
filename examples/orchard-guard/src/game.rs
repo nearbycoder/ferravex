@@ -55,6 +55,8 @@ pub struct Pest {
     pub max_hp: f32,
     pub slow: f32,
     pub fast: bool,
+    pub stagger: f32,
+    pub flash: f32,
     cursor: PathCursor,
 }
 #[derive(Clone, Debug)]
@@ -208,6 +210,8 @@ impl Game {
                     hp,
                     max_hp: hp,
                     slow: 0.,
+                    stagger: 0.,
+                    flash: 0.,
                     fast,
                     cursor: PathCursor::default(),
                 });
@@ -217,11 +221,14 @@ impl Game {
         }
         for pest in &mut self.pests {
             pest.slow = (pest.slow - dt).max(0.);
+            pest.stagger = (pest.stagger - dt).max(0.);
+            pest.flash = (pest.flash - dt).max(0.);
             let speed = (if pest.fast {
                 wave.fast_speed
             } else {
                 wave.speed
-            }) * if pest.slow > 0. { 0.45 } else { 1. };
+            }) * if pest.slow > 0. { 0.45 } else { 1. }
+                * if pest.stagger > 0. { 0.35 } else { 1. };
             let sample = pest
                 .cursor
                 .advance(&self.route, speed, dt)
@@ -291,6 +298,8 @@ impl Game {
                 } - tower.level as f32 * 0.08;
             }
         }
+        let mut frost_impacts = [Vec2::ZERO; MAX_SHOTS];
+        let mut frost_count = 0;
         self.shots.retain_mut(|shot| {
             let Some(target) = self
                 .pests
@@ -303,8 +312,15 @@ impl Game {
             let travel = 400. * dt;
             if delta.length_squared() <= (travel + 9.).powi(2) {
                 target.hp -= shot.damage;
+                target.flash = 0.12;
                 if shot.kind == Kind::Frost {
                     target.slow = 1.65;
+                    frost_impacts[frost_count] = target.pos;
+                    frost_count += 1;
+                } else {
+                    // Small, bounded hit-stop gives seed hits weight without
+                    // teleporting pests backward or invalidating route progress.
+                    target.stagger = 0.10;
                 }
                 false
             } else {
@@ -312,6 +328,14 @@ impl Game {
                 true
             }
         });
+        for center in &frost_impacts[..frost_count] {
+            for pest in &mut self.pests {
+                if pest.hp > 0. && pest.pos.distance_squared(*center) < 46. * 46. {
+                    pest.slow = pest.slow.max(1.15);
+                    pest.flash = pest.flash.max(0.08);
+                }
+            }
+        }
         self.pests.retain(|p| {
             if p.hp <= 0. {
                 self.money += self.level.kill_reward;
@@ -334,6 +358,30 @@ impl Game {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frost_splashes_slow_nearby_pests_without_duplicate_damage() {
+        let mut game = Game::new();
+        game.launch();
+        game.step(0.01);
+        game.spawn_timer = 0.;
+        game.step(0.01);
+        assert_eq!(game.pests.len(), 2);
+        let target = &game.pests[0];
+        let before = target.hp;
+        game.shots.push(Shot {
+            pos: target.pos,
+            target: target.id,
+            damage: 8.,
+            kind: Kind::Frost,
+        });
+        let neighbor_hp = game.pests[1].hp;
+        game.step(1. / 120.);
+        assert_eq!(game.pests[0].hp, before - 8.);
+        assert_eq!(game.pests[1].hp, neighbor_hp);
+        assert!(game.pests.iter().all(|p| p.slow > 1. && p.flash > 0.));
+    }
+
     #[test]
     fn purchases_are_atomic_and_cannot_overspend() {
         let mut game = Game::new();

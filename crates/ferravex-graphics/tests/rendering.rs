@@ -244,3 +244,126 @@ fn png_and_ppm_headers_and_invalid_dimensions() {
     assert!(Framebuffer::new(0, 5).is_err());
     assert!(Framebuffer::new(u32::MAX, 1).is_err());
 }
+
+#[test]
+fn perspective_color_and_fog_match_analytic_samples() {
+    // Different depths make affine color interpolation observably incorrect.
+    let positions = [
+        vec3(-0.8, -0.8, -1.),
+        vec3(1.6, -1.6, -2.),
+        vec3(0., 3.2, -4.),
+    ];
+    let mut cache = MeshCache::new();
+    let mesh = cache
+        .insert(Mesh {
+            vertices: positions
+                .into_iter()
+                .zip([RED, Color::new(0., 1., 0., 1.), BLUE])
+                .map(|(position, color)| Vertex::new(position, Vec3::Z, color))
+                .collect(),
+            indices: vec![0, 1, 2],
+        })
+        .unwrap();
+    for clip_depth in [ClipDepth::ZeroToOne, ClipDepth::NegativeOneToOne] {
+        let projection = if clip_depth == ClipDepth::ZeroToOne {
+            Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, 1., 0.1, 10.)
+        } else {
+            Mat4::perspective_rh_gl(std::f32::consts::FRAC_PI_2, 1., 0.1, 10.)
+        };
+        let camera = Camera {
+            view_projection: projection,
+            position: Vec3::ZERO,
+            clip_depth,
+        };
+        for fog in [
+            None,
+            Some(Fog {
+                color: Color::new(0.2, 0.3, 0.4, 1.),
+                start: 0.3,
+                end: 6.5,
+            }),
+        ] {
+            let mut r = renderer();
+            r.settings.fog = fog;
+            r.render(&cache, &[RenderItem::new(mesh, Mat4::IDENTITY)], camera)
+                .unwrap();
+            for (x, y) in [(32, 32), (24, 40), (40, 44), (30, 20)] {
+                // Solve the known projected triangle in f64, independent of the
+                // rasterizer's f32 edge equations and reciprocal implementation.
+                let nx = (f64::from(x) + 0.5) / 32. - 1.;
+                let ny = 1. - (f64::from(y) + 0.5) / 32.;
+                let top = (ny + 0.8) / 1.6;
+                let right = (nx + 0.8 - 0.8 * top) / 1.6;
+                let left = 1. - top - right;
+                let mut weights = [left, right / 2., top / 4.];
+                let sum = weights.iter().sum::<f64>();
+                for w in &mut weights {
+                    *w /= sum;
+                }
+                let mut expected = weights.map(|w| w as f32);
+                if let Some(fog) = fog {
+                    let position = positions[0] * weights[0] as f32
+                        + positions[1] * weights[1] as f32
+                        + positions[2] * weights[2] as f32;
+                    let amount =
+                        ((position.length() - fog.start) / (fog.end - fog.start)).clamp(0., 1.);
+                    for (value, fog) in expected.iter_mut().zip(fog.color.to_array()) {
+                        *value += (fog - *value) * amount;
+                    }
+                }
+                let expected = Color::new(expected[0], expected[1], expected[2], 1.).to_rgba();
+                let actual = r.framebuffer.pixel(x, y).unwrap();
+                for (actual, expected) in actual.into_iter().zip(expected) {
+                    assert!(
+                        actual.abs_diff(expected) <= 1,
+                        "pixel {x},{y}: {actual} != {expected}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn flat_fog_free_surfaces_preserve_transparency_depth_and_color() {
+    let mut cache = MeshCache::new();
+    let solid = cache.insert(triangle(0.5, RED)).unwrap();
+    let transparent = cache
+        .insert(triangle(0.2, Color::new(0., 1., 0., 0.)))
+        .unwrap();
+    let mut r = renderer();
+    // Every point is inside the fog start sphere, so the exact result is red.
+    r.settings.fog = Some(Fog {
+        color: BLUE,
+        start: 2.,
+        end: 4.,
+    });
+    r.render(
+        &cache,
+        &[solid, transparent].map(|mesh| RenderItem::new(mesh, Mat4::IDENTITY)),
+        camera(),
+    )
+    .unwrap();
+    assert_eq!(r.framebuffer.pixel(32, 32), Some([255, 0, 0, 255]));
+    assert!((r.framebuffer.depths()[32 * 64 + 32] - 0.5).abs() < 1.0e-6);
+    let translucent = cache
+        .insert(triangle(0.2, Color::new(0., 1., 0., 0.5)))
+        .unwrap();
+    r.render(
+        &cache,
+        &[RenderItem::new(translucent, Mat4::IDENTITY)],
+        camera(),
+    )
+    .unwrap();
+    assert_eq!(r.framebuffer.pixel(32, 32), Some([0, 255, 0, 255]));
+    // Outside vertices with an inside center must still use per-pixel distance.
+    r.settings.fog = Some(Fog {
+        color: BLUE,
+        start: 0.55,
+        end: 0.6,
+    });
+    r.render(&cache, &[RenderItem::new(solid, Mat4::IDENTITY)], camera())
+        .unwrap();
+    assert_eq!(r.framebuffer.pixel(32, 32), Some([255, 0, 0, 255]));
+    assert_eq!(r.framebuffer.pixel(32, 50), Some([0, 0, 255, 255]));
+}

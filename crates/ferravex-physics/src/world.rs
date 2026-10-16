@@ -59,6 +59,7 @@ struct Constraint {
     local_a: Vec3,
     local_b: Vec3,
     normal_impulse: f32,
+    normal_denominator: f32,
     tangent_impulse: Vec3,
     bounce: f32,
     friction: f32,
@@ -427,6 +428,24 @@ impl<B: Access> World<B> {
         hits
     }
     fn solve_velocities(&mut self, stats: &mut StepStats) {
+        // Waking is complete and velocity iterations do not change body poses,
+        // masses or contact normals. Reuse the normal denominator for all
+        // iterations; tangent directions still follow the current slip velocity.
+        for c in &mut self.constraints {
+            let a = self.bodies[c.a].core();
+            let b = self.bodies[c.b].core();
+            c.normal_denominator = if a.contact_inv_mass() + b.contact_inv_mass() == 0. {
+                0.
+            } else {
+                effective_mass(
+                    a,
+                    b,
+                    c.point - a.world_com(),
+                    c.point - b.world_com(),
+                    c.normal,
+                )
+            };
+        }
         for _ in 0..self.settings.velocity_iterations {
             for c in &mut self.constraints {
                 let (a, b) = self.bodies.two_mut(c.a, c.b);
@@ -441,7 +460,7 @@ impl<B: Access> World<B> {
                 stats.velocity_constraints += 1;
                 let ra = c.point - a.world_com();
                 let rb = c.point - b.world_com();
-                let denom = effective_mass(a, b, ra, rb, c.normal);
+                let denom = c.normal_denominator;
                 if denom <= 1e-10 {
                     continue;
                 }

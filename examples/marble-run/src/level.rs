@@ -6,6 +6,7 @@ pub struct Platform {
     pub center: Vec3,
     pub size: Vec3,
     pub rotation: Quat,
+    pub friction: f32,
 }
 impl Platform {
     pub fn at(&self, offset: Vec3) -> Vec3 {
@@ -18,6 +19,18 @@ pub struct Obstacle {
     pub radius: f32,
     pub height: f32,
     pub rotation: Quat,
+}
+#[derive(Clone, Copy)]
+pub struct Sweeper {
+    pub position: Vec3,
+    pub size: Vec3,
+    pub speed: f32,
+    pub phase: f32,
+}
+impl Sweeper {
+    pub fn rotation(&self, time: f32) -> Quat {
+        Quat::from_rotation_y(self.phase + self.speed * time)
+    }
 }
 #[derive(Clone, Copy)]
 pub struct Checkpoint {
@@ -59,6 +72,7 @@ pub struct Level {
     pub spawn_route: usize,
     pub platforms: Vec<Platform>,
     pub obstacles: Vec<Obstacle>,
+    pub sweepers: Vec<Sweeper>,
     pub checkpoints: Vec<Checkpoint>,
     pub gems: Vec<Vec3>,
     pub finish: Vec3,
@@ -83,6 +97,17 @@ fn schema() -> Schema {
         &[
             index(31),
             FieldRule::required("size", ValueKind::Vec3).range(0.05, 30.),
+            FieldRule::optional("friction", ValueKind::Number).range(0., 2.),
+        ],
+    )
+    .unwrap();
+    s.register(
+        "sweeper",
+        &[
+            index(15),
+            FieldRule::required("size", ValueKind::Vec3).range(0.15, 8.),
+            FieldRule::required("speed", ValueKind::Number).range(-2., 2.),
+            FieldRule::required("phase", ValueKind::Number).range(-7., 7.),
         ],
     )
     .unwrap();
@@ -218,6 +243,8 @@ impl Level {
                             center: p,
                             size,
                             rotation: r,
+                            friction: c.get("friction").and_then(Value::number).unwrap_or(0.9)
+                                as f32,
                         },
                     ))
                 })
@@ -267,6 +294,34 @@ impl Level {
             1,
             128,
             "waypoints",
+        )?;
+        let sweepers = ordered(
+            data.of_kind("sweeper")
+                .map(|(n, c)| {
+                    let (scale, rotation, position) = trs(n)?;
+                    let size = Vec3::from_array(value(c, "size").vec3().unwrap()) * scale;
+                    if size.min_element() < 0.15
+                        || size.max_element() > 8.
+                        || !rotation.abs_diff_eq(Quat::IDENTITY, 1e-5)
+                    {
+                        return Err(ContentError::domain(
+                            "sweepers need identity rotation and size <=8",
+                        ));
+                    }
+                    Ok((
+                        order(c),
+                        Sweeper {
+                            position,
+                            size,
+                            speed: number(c, "speed"),
+                            phase: number(c, "phase"),
+                        },
+                    ))
+                })
+                .collect::<Result<_, ContentError>>()?,
+            0,
+            16,
+            "sweepers",
         )?;
         let route_index = |c: &Component| -> usize {
             let target = value(c, "route").reference().unwrap();
@@ -380,6 +435,7 @@ impl Level {
             spawn_route,
             platforms,
             obstacles,
+            sweepers,
             checkpoints,
             gems,
             finish,

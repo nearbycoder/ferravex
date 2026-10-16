@@ -300,11 +300,19 @@ impl Core {
     pub(crate) fn set_rotation(&mut self, q: Quat) {
         assert!(q.is_finite());
         self.rotation = q.normalize();
-        let axis = self.rotation * Vec3::X;
-        self.rotation2 = Rotation2::from_angle(axis.y.atan2(axis.x));
+        if self.planar {
+            let axis = self.rotation * Vec3::X;
+            self.rotation2 = Rotation2::from_angle(axis.y.atan2(axis.x));
+        }
     }
     pub(crate) fn inverse_inertia(&self, v: Vec3) -> Vec3 {
-        self.rotation * self.inv_inertia.apply(self.rotation.conjugate() * v)
+        // Fixed and kinematic bodies have zero inverse inertia. Contacts with
+        // floors/walls need no quaternion transforms for that half of the pair.
+        if self.kind != Kind::Dynamic {
+            Vec3::ZERO
+        } else {
+            self.rotation * self.inv_inertia.apply(self.rotation.conjugate() * v)
+        }
     }
     pub(crate) fn contact_inverse_inertia(&self, v: Vec3) -> Vec3 {
         if self.sleeping {

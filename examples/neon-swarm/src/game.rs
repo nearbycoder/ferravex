@@ -24,6 +24,7 @@ pub struct Enemy {
     pub speed: f32,
     pub heavy: bool,
     pub flash: f32,
+    pub knockback: Vec2,
 }
 #[derive(Clone, Copy)]
 pub struct Bullet {
@@ -52,6 +53,8 @@ pub struct Game {
     pub world: World,
     pub player: Vec2,
     pub facing: Vec2,
+    velocity: Vec2,
+    recoil: Vec2,
     pub health: i32,
     pub phase: Phase,
     pub wave: u32,
@@ -81,6 +84,8 @@ impl Game {
             ai: crate::ai::SwarmAi::new(),
             player: vec2(640.0, 414.0),
             facing: vec2(1.0, 0.0),
+            velocity: Vec2::ZERO,
+            recoil: Vec2::ZERO,
             health: 100,
             phase: Phase::Playing,
             wave: 1,
@@ -196,9 +201,19 @@ impl Game {
         let velocity = if self.dash_time > 0.0 {
             self.dash_direction * 700.0
         } else {
-            input.movement.clamp_length_max(1.0) * 230.0
+            let desired = input.movement.clamp_length_max(1.0) * 230.0;
+            self.velocity = self
+                .velocity
+                .lerp(desired, ferravex_play::motion::response(24., dt));
+            self.velocity
         };
-        self.player = move_body(self.player, velocity * dt, PLAYER_RADIUS);
+        self.recoil *= (-15. * dt).exp();
+        let previous_player = self.player;
+        self.player = move_body(self.player, (velocity + self.recoil) * dt, PLAYER_RADIUS);
+        if self.dash_time == 0. && dt > 0. {
+            self.velocity =
+                ((self.player - previous_player) / dt - self.recoil).clamp_length_max(230.);
+        }
         let shot = input.fire && self.fire_cooldown == 0.0;
         if shot {
             self.world.spawn((
@@ -221,13 +236,15 @@ impl Game {
         for (mut p, mut enemy) in &mut self.world.query::<(&mut Position, &mut Enemy)>() {
             enemy.flash = (enemy.flash - dt).max(0.0);
             let velocity = self.ai.velocity(enemy.ai_slot, p.0, enemy.speed);
-            p.0 = move_body(p.0, velocity * dt, enemy.radius);
+            enemy.knockback *= (-10. * dt).exp();
+            p.0 = move_body(p.0, (velocity + enemy.knockback) * dt, enemy.radius);
             if p.0.distance(self.player) < enemy.radius + PLAYER_RADIUS
                 && self.hurt_time == 0.0
                 && self.dash_time == 0.0
             {
                 self.health = (self.health - if enemy.heavy { 24 } else { 14 }).max(0);
                 self.hurt_time = 0.75;
+                self.recoil = (self.player - p.0).try_normalize().unwrap_or(-self.facing) * 150.;
             }
         }
         self.update_bullets(dt);
@@ -279,6 +296,7 @@ impl Game {
         self.world.spawn((
             Position(p),
             Enemy {
+                knockback: Vec2::ZERO,
                 ai_slot,
                 health: if heavy { 72.0 } else { 24.0 },
                 radius: if heavy { 22.0 } else { 14.0 },
@@ -330,12 +348,19 @@ impl Game {
         }
         let mut dead = Vec::new();
         for (id, point) in impacts {
+            let target_position = self.world.get::<&Position>(id).ok().map(|p| p.0);
             if let Ok(mut enemy) = self.world.get::<&mut Enemy>(id) {
                 if enemy.health <= 0.0 {
                     continue;
                 }
                 enemy.health -= 24.0;
                 enemy.flash = 0.09;
+                if let Some(position) = target_position {
+                    let direction = (position - self.player).normalize_or_zero();
+                    enemy.knockback = (enemy.knockback
+                        + direction * if enemy.heavy { 75. } else { 180. })
+                    .clamp_length_max(240.);
+                }
                 if enemy.health <= 0.0 {
                     dead.push((id, point));
                 }
@@ -394,6 +419,40 @@ fn segment_rect(start: Vec2, end: Vec2, r: Rect) -> Option<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn surviving_hits_push_heavy_enemies_and_contact_pushes_the_player() {
+        let mut game = Game::new();
+        game.remaining = 0;
+        let enemy = game.world.spawn((
+            Position(game.player + Vec2::X * 80.),
+            Enemy {
+                ai_slot: 0,
+                health: 72.,
+                radius: 22.,
+                speed: 0.,
+                heavy: true,
+                flash: 0.,
+                knockback: Vec2::ZERO,
+            },
+        ));
+        game.world.spawn((
+            Position(game.player),
+            Bullet {
+                velocity: Vec2::X * 900.,
+                remaining: 1.,
+            },
+        ));
+        game.update_bullets(0.1);
+        let actor = game.world.get::<&Enemy>(enemy).unwrap();
+        assert_eq!(actor.health, 48.);
+        assert!(actor.knockback.x > 50.);
+        drop(actor);
+        game.world.get::<&mut Position>(enemy).unwrap().0 = game.player;
+        game.update(Input::default(), 1. / 120.);
+        assert!(game.health < 100 && game.recoil.length() > 100.);
+    }
+
     #[test]
     fn swept_shots_hit_between_frames_and_cover_stops_them() {
         assert_eq!(
@@ -410,6 +469,7 @@ mod tests {
             Position(vec2(500.0, 284.0)),
             Enemy {
                 ai_slot: 0,
+                knockback: Vec2::ZERO,
                 health: 24.0,
                 radius: 14.0,
                 speed: 0.0,
@@ -437,6 +497,7 @@ mod tests {
             Position(game.player),
             Enemy {
                 ai_slot: 0,
+                knockback: Vec2::ZERO,
                 health: 24.0,
                 radius: 14.0,
                 speed: 0.0,

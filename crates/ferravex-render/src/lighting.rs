@@ -156,6 +156,7 @@ impl Default for Environment {
     }
 }
 impl Environment {
+    #[cfg(test)]
     pub(crate) fn update(
         &mut self,
         lights: &[PointLight],
@@ -163,9 +164,26 @@ impl Environment {
         quality: Quality,
         eye: Option<Vec3>,
     ) {
+        self.update_details(lights, sun, quality, eye, 0, 0);
+    }
+    pub(crate) fn update_details(
+        &mut self,
+        lights: &[PointLight],
+        sun: Option<SunShadow>,
+        quality: Quality,
+        eye: Option<Vec3>,
+        shadows: u8,
+        local_lights: u8,
+    ) {
         self.quality = quality as u32;
         self.points = [0.; 64];
-        self.light_count = lights.len().min(quality.point_limit()) as u32;
+        self.light_count = lights.len().min(match local_lights {
+            1 => 0,
+            2 => 2,
+            3 => 4,
+            4 => 8,
+            _ => quality.point_limit(),
+        }) as u32;
         let mut order = [0usize; MAX_POINT_LIGHTS];
         for (i, index) in order.iter_mut().take(lights.len()).enumerate() {
             *index = i;
@@ -191,8 +209,13 @@ impl Environment {
                 light.intensity,
             ]);
         }
-        self.shadow_size = sun.map_or(0, |_| quality.shadow_size());
-        self.pcf_radius = if quality == Quality::High { 1 } else { 0 };
+        self.shadow_size = sun.map_or(0, |_| match shadows {
+            1 => 0,
+            2 => 512,
+            3 => 1024,
+            _ => quality.shadow_size(),
+        });
+        self.pcf_radius = u32::from(shadows == 3 || shadows == 0 && quality == Quality::High);
         if let Some(sun) = sun {
             self.shadow_matrix = sun.matrix(self.shadow_size).to_cols_array();
             let d = sun.direction.normalize();

@@ -7,6 +7,12 @@ pub struct Preferences {
     pub muted: bool,
     pub quality: Option<u8>,
     pub look: u8,
+    /// Browser framebuffer density: device, 0.75x, 1x, 1.5x, 2x, 3x.
+    pub resolution: u8,
+    /// Preset, off, 512 hard, 1024 soft.
+    pub shadows: u8,
+    /// Preset, off, 2, 4, 8 local lights.
+    pub lights: u8,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -16,6 +22,9 @@ impl Default for Preferences {
             muted: false,
             quality: None,
             look: 0,
+            resolution: 0,
+            shadows: 0,
+            lights: 0,
         }
     }
 }
@@ -26,11 +35,14 @@ impl Preferences {
             .all(|v| v.is_finite() && (0. ..=1.).contains(&v))
             && self.quality.is_none_or(|q| q <= 2)
             && self.look <= 3
+            && self.resolution <= 5
+            && self.shadows <= 3
+            && self.lights <= 4
     }
 }
 impl SaveData for Preferences {
     const SCHEMA: u64 = 0x4658505245465331;
-    const VERSION: u32 = 3;
+    const VERSION: u32 = 4;
     const MAX_BYTES: usize = 1024;
     fn write(&self, d: &mut Document) -> Result<(), SaveError> {
         if !self.valid() {
@@ -43,6 +55,9 @@ impl SaveData for Preferences {
             Value::U64(self.quality.map_or(0, |v| v as u64 + 1)),
         )?;
         d.set("look", Value::U64(self.look as u64))?;
+        d.set("resolution", Value::U64(self.resolution as u64))?;
+        d.set("shadows", Value::U64(self.shadows as u64))?;
+        d.set("lights", Value::U64(self.lights as u64))?;
         for (key, v) in ["effects", "ambience", "music", "ui"]
             .into_iter()
             .zip(self.buses)
@@ -78,6 +93,17 @@ impl SaveData for Preferences {
             }
             p.look = look as u8;
         }
+        if d.version() >= 4 {
+            let resolution = d.u64("resolution")?;
+            let shadows = d.u64("shadows")?;
+            let lights = d.u64("lights")?;
+            if resolution > 5 || shadows > 3 || lights > 4 {
+                return Err(SaveError::InvalidData);
+            }
+            p.resolution = resolution as u8;
+            p.shadows = shadows as u8;
+            p.lights = lights as u8;
+        }
         if !p.valid() {
             return Err(SaveError::InvalidData);
         }
@@ -106,6 +132,34 @@ mod tests {
         assert_eq!(p.buses, [1.; 4]);
         assert_eq!(p.quality, Some(1));
         assert_eq!(p.look, 0);
+        assert_eq!((p.resolution, p.shadows, p.lights), (0, 0, 0));
+        let mut v3 = Document::new(Preferences::SCHEMA, 3, 8).unwrap();
+        v3.set("master", Value::F64(p.master as f64)).unwrap();
+        v3.set("muted", Value::Bool(p.muted)).unwrap();
+        v3.set("quality", Value::U64(2)).unwrap();
+        v3.set("look", Value::U64(2)).unwrap();
+        for key in ["effects", "ambience", "music", "ui"] {
+            v3.set(key, Value::F64(1.)).unwrap();
+        }
+        let (migrated, _) = Preferences::decode(&v3.encode()).unwrap();
+        assert_eq!(migrated, Preferences { look: 2, ..p });
+        let detailed = Preferences {
+            resolution: 5,
+            shadows: 3,
+            lights: 4,
+            ..p
+        };
+        assert_eq!(
+            Preferences::decode(&detailed.encode(9).unwrap()).unwrap(),
+            (detailed, 9)
+        );
+        for bad in [
+            Preferences { resolution: 6, ..p },
+            Preferences { shadows: 4, ..p },
+            Preferences { lights: 5, ..p },
+        ] {
+            assert!(bad.encode(0).is_err());
+        }
         let styled = Preferences { look: 3, ..p };
         assert_eq!(
             Preferences::decode(&styled.encode(9).unwrap()).unwrap(),

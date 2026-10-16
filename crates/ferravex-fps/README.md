@@ -55,7 +55,7 @@ shot aim/time while movement coalesces to the newest sample. Input floods cannot
 advance simulation faster. Prediction runs the same capsule motor and weapon
 settings, then replays unacknowledged controls after authority snapshots.
 
-Protocol v4 exchanges correlated monotonic clock probes and timestamps shots
+Protocol v5 exchanges correlated monotonic clock probes and timestamps shots
 with the tick used to present remote actors. Snapshots carry per-slot life epochs; rendering uses the latest roster and never
 blends a respawn/reused slot with its old life. The client keeps a 32-snapshot
 interpolation history, unwraps tick counters, and chooses a jitter-adjusted
@@ -139,7 +139,7 @@ Native UDP and the plain `ws://` gateway are development/LAN transports. They do
 not implement accounts, native encryption/TLS, hosted matchmaking, NAT traversal,
 congestion control or Internet abuse mitigation. `wss://` requires the deployment
 host's TLS termination. TCP can stall newer snapshots behind retransmitted data.
-Both peers must run protocol v4 and the same map/rules; custom arenas must be
+Both peers must run protocol v5 and the same map/rules; custom arenas must be
 provided to both. Pistol/rifle/sniper have distinct authority timing/damage, but
 Strike currently uses the existing rifle mesh as their presentation proxy. Dockyard
 shows its two default objective areas with ground paint and renders the device

@@ -251,7 +251,9 @@ fn field(g: &Game) {
                 draw_line(root.x, root.y, leg.x, leg.y, 2., INK);
             }
         }
-        let color = if pest.slow > 0. {
+        let color = if pest.flash > 0. {
+            CREAM
+        } else if pest.slow > 0. {
             Color::from_hex(0x75bfca)
         } else if pest.fast {
             Color::from_hex(0x9a7451)
@@ -347,7 +349,7 @@ fn hud(ui: &mut Ui, g: &Game) {
             if tower.kind == Kind::Seed {
                 "Fast, focused damage"
             } else {
-                "Chills pests to 45% speed"
+                "Chills a cluster to 45% speed"
             },
             28.,
             740.,

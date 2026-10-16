@@ -6,6 +6,7 @@ hosts for Courtyard and Orbit Breaker. Requires DISPLAY for windowed examples.
 This is an integration smoke check, not a frame-rate benchmark.
 """
 import argparse
+from collections import Counter
 import json
 from pathlib import Path
 import struct
@@ -15,6 +16,19 @@ import subprocess
 import time
 
 ROOT = Path(__file__).resolve().parent.parent
+
+def validate_samples(samples):
+    """Reject clear-only/tiny-error output without requiring an antialiased palette.
+
+    Mesa may render authored flat colors exactly, where a hardware MSAA resolve
+    adds dozens of edge shades. Color count alone is not a portable scene check.
+    """
+    colors = Counter(samples)
+    total = colors.total()
+    foreground = 1 - max(colors.values(), default=0) / max(1, total)
+    if len(colors) < 4 or foreground < 0.02 or not any(color[3] for color in colors):
+        raise ValueError("blank or incomplete GPU capture")
+    return {"sampled_colors": len(colors), "foreground_fraction": round(foreground, 4)}
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -76,11 +90,9 @@ def main():
             stride = width * 4 + 1
             if len(raw) != stride * height or any(raw[y * stride] for y in range(height)):
                 raise ValueError("unexpected original PNG scanline layout")
-            colors = {raw[y * stride + 1 + x * 4:y * stride + 5 + x * 4]
-                      for y in range(0, height, 7) for x in range(0, width, 7)}
-            if len(colors) < 16:
-                raise ValueError("blank or incomplete GPU capture")
-            result.update(passed=True, screenshot=str(screenshot.relative_to(ROOT)) if screenshot.is_relative_to(ROOT) else str(screenshot), width=width, height=height, sampled_colors=len(colors), sha256=hashlib.sha256(data).hexdigest())
+            coverage = validate_samples(raw[y * stride + 1 + x * 4:y * stride + 5 + x * 4]
+                      for y in range(0, height, 7) for x in range(0, width, 7))
+            result.update(passed=True, screenshot=str(screenshot.relative_to(ROOT)) if screenshot.is_relative_to(ROOT) else str(screenshot), width=width, height=height, **coverage, sha256=hashlib.sha256(data).hexdigest())
         except (OSError, ValueError, subprocess.TimeoutExpired) as error:
             result["error"] = str(error)
         result["wall_seconds"] = round(time.monotonic() - started, 3)

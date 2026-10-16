@@ -74,6 +74,7 @@ struct Input {
 
 struct Game {
     position: Vec2,
+    velocity: Vec2,
     yaw: f32,
     walls: Vec<Aabb2>,
     crystals: Vec<Vec2>,
@@ -103,6 +104,7 @@ impl Game {
         }
         Self {
             position: at(b'S'),
+            velocity: Vec2::ZERO,
             yaw: 0.0,
             walls,
             crystals,
@@ -203,7 +205,17 @@ impl Game {
         let front = forward(self.yaw);
         let right = vec2(-front.y, front.x);
         let movement = input.movement.clamp_length_max(1.0);
-        let delta = (front * movement.y + right * movement.x) * SPEED * dt;
+        let desired = (front * movement.y + right * movement.x) * SPEED;
+        let weight = ferravex_play::motion::response(
+            if desired.length_squared() < 0.01 {
+                24.
+            } else {
+                18.
+            },
+            dt,
+        );
+        self.velocity = self.velocity.lerp(desired, weight);
+        let delta = self.velocity * dt;
         let motion = move_and_slide(
             &CaveTerrain(self),
             CharacterShape::Capsule {
@@ -220,7 +232,12 @@ impl Game {
             true,
         )
         .expect("authored cave character terrain");
-        self.position = vec2(motion.position.x, motion.position.z);
+        let next = vec2(motion.position.x, motion.position.z);
+        if dt > 0. {
+            // Wall sliding must not retain hidden velocity into a blocked wall.
+            self.velocity = (next - self.position) / dt;
+        }
+        self.position = next;
         if input.interact {
             self.interact();
         }
@@ -952,6 +969,28 @@ async fn game() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exploration_accelerates_quickly_and_release_has_a_short_stop() {
+        let mut game = Game::new();
+        for _ in 0..20 {
+            game.step(
+                Input {
+                    movement: Vec2::Y,
+                    ..Default::default()
+                },
+                1. / 120.,
+            );
+        }
+        assert!(game.velocity.length() > SPEED * 0.9);
+        let released = game.position;
+        for _ in 0..45 {
+            game.step(Input::default(), 1. / 120.);
+        }
+        assert!(game.velocity.length() < 0.01);
+        assert!(released.distance(game.position) < 0.25);
+    }
+
     #[test]
     fn walls_block_even_large_steps() {
         let mut game = Game::new();

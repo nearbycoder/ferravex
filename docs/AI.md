@@ -5,6 +5,49 @@ navigation in `ferravex_play::navigation`. `ferravex_engine::ai` adds current-po
 rigid-world visibility. These are first-party Rust systems; no scripting runtime,
 behavior-tree dependency, external navigation library or asset download is used.
 
+## Creating an enemy
+
+`EnemyController` is the built-in tactics layer over perception and navigation.
+Start with `EnemyConfig::ranged()` or `EnemyConfig::melee()`, then tune distances,
+reaction time, attack cadence, turn speed, aim tolerance, retreat health and strafe.
+Use the same world units as the game; the melee defaults assume meter-sized actors.
+Pass only a validated `Memory` track, never an occluded actor's live position.
+
+```rust
+use ferravex_play::ai::*;
+use ferravex_math::Vec3;
+let mut enemy = EnemyController::new(EnemyConfig::ranged(), 7).unwrap();
+let intent = enemy.tick(EnemyInput {
+    position: Vec3::ZERO, forward: Vec3::Z, up: Vec3::Y,
+    patrol_goal: Vec3::X * 10., target: None, health_fraction: 1.,
+    weapon_ready: true, alive: true,
+}, 1. / 64.).unwrap();
+assert_eq!(intent.state, EnemyState::Patrol);
+```
+
+The controller returns patrol, investigate, search, engage, retreat, reload or
+dead intentions. Feed `goal` through a collision-aware path planner. Use
+`movement` only for direct visible combat, apply `aim` through ordinary controls,
+and submit `attack`/`reload` to the real weapon system. No output awards hits or
+bypasses collision. Set `up` to Y for an XZ ground plane or Z for top-down XY.
+
+A fresh sighting, completed reaction, attack range, aim alignment, ready weapon
+and cooldown must all agree before attack. The controller turns gradually rather
+than snapping; hearing and lost sight permit investigation/search only. Recent
+sight maintains reaction awareness between budgeted sensing slots, but only a
+current-tick sighting authorizes attack. Target identity changes and death reset
+reaction. Low health backs away; an unavailable weapon requests reload and makes
+space. Stationary movement attempts request replanning after 0.75 seconds.
+The deterministic per-identity strafe phase and all updates allocate nothing.
+
+For the supplied shooter arena, `ferravex_fps::bots::PracticeBots::new(&arena)`
+provides the complete sensing, memory, budgeted grid routing and input adapter.
+Call `commands(&game, local_input, &mut reusable_commands)` before `Match::step`,
+then `events(&events)` with the accepted game events. Actor 0 is the human and
+other actors are practice enemies. This adapter uses the reference 48×56 arena
+bounds; custom levels should supply their own grid adapter around `EnemyController`.
+It is an offline practice opponent, without squad tactics or network bot hosting.
+
 ## Sight and hearing
 
 `Sight::new(range, field_of_view_radians, group_mask)` validates a full field of
@@ -78,7 +121,7 @@ agents. Counts record consumed work and deferred candidate/query attempts. A que
 allowance bounds the number of calls, not the internal cost of an arbitrary host
 query. Host broadphase/query implementations must also have reasonable limits.
 Construct fresh budgets each simulation tick; deferred work must be revisited by
-the host scheduler. All dt-taking AI APIs accept finite 0..60 seconds.
+the host scheduler. Perception and decision timers accept finite 0..60 seconds. Enemy control ticks accept 0..1 second; run them on the fixed simulation clock.
 
 ## Reusable search and paths
 
@@ -119,7 +162,7 @@ These are grid/polyline tools, not a navmesh, avoidance solver or off-mesh-link 
 ## Current games
 
 - Strike uses sight cones/static-solid queries, occluded accepted-shot hearing,
-  expiring memory, patrol/investigate/engage/reload/dead decisions and queued routes
+  expiring memory, shared enemy tactics (including search and retreat) and queued routes
   over an inflated XZ grid. Three bots receive sensing slots per tick, with 64
   candidates, 16 world queries and 128 path steps shared per tick. Reused command
   storage submits ordinary `InputFrame`s; Match owns ammo, collision, damage and

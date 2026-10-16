@@ -96,7 +96,7 @@ fn valid(context: u64, time_us: u64, poses: &[Pose]) -> bool {
         })
 }
 pub fn context(track: &Track) -> u64 {
-    let mut bytes = b"rally-rules-1-120hz-20hz-ghost".to_vec();
+    let mut bytes = b"rally-rules-2-120hz-20hz-ghost".to_vec();
     for point in &track.points {
         bytes.extend(point.x.to_le_bytes());
         bytes.extend(point.y.to_le_bytes());

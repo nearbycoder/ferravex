@@ -28,6 +28,8 @@ for game in games:
 shutil.copy2(ROOT/'web/runtime.js',output/'runtime.js')
 shutil.copy2(ROOT/'web/lifecycle.js',output/'lifecycle.js')
 shutil.copy2(ROOT/'web/visuals.js',output/'visuals.js')
+shutil.copy2(ROOT/'web/details.js',output/'details.js')
+shutil.copy2(ROOT/'web/fullscreen.js',output/'fullscreen.js')
 for name in ('audio.js','audio-worklet.js','audio-ring.js'):shutil.copy2(ROOT/'web'/name,output/name)
 shutil.copy2(ROOT/'web/input.js',output/'input.js')
 shutil.copy2(ROOT/'web/storage.js',output/'storage.js')

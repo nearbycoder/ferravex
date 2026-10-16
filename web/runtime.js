@@ -1,6 +1,7 @@
 // Original Ferravex browser platform: WebGL2, DOM input, direct Rust/Wasm ABI.
 import {RetainedRenderer,GpuTimer} from './retained.js';
 import {SpriteRenderer} from './effects.js';
+import {bindDetails,framebufferSize} from './details.js';
 import {configureVisuals} from './visuals.js';
 import {bindInput} from './input.js';
 import {bindAudio} from './audio.js';
@@ -11,8 +12,9 @@ const gl = canvas.getContext('webgl2', {alpha:false, antialias:true, depth:true}
 if (!gl) throw new Error('WebGL2 is required');
 let recoveryExtension=gl.getExtension('WEBGL_lose_context');
 const shader = (type,source) => {const s=gl.createShader(type);gl.shaderSource(s,source);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(s));return s;};
-let program,buffer,retained,spriteEffects,gpuTimer;
+let program,buffer,retained,spriteEffects,gpuTimer,maxFramebufferDimension;
 function initializeGraphics(){
+ maxFramebufferDimension=gl.getParameter(gl.MAX_RENDERBUFFER_SIZE);
  recoveryExtension=gl.getExtension('WEBGL_lose_context');
  gl.bindVertexArray(null);
 program=gl.createProgram();
@@ -43,6 +45,7 @@ initializeGraphics();
 const game=canvas.dataset.game;
 const inputPlatform=bindInput(canvas,game,()=>exports,()=>playing);
 const controlsButton=document.querySelector('[data-controls]');
+const details=bindDetails(canvas,game,()=>exports);
 const audio=bindAudio(canvas,()=>exports,{button:document.querySelector('[data-audio]')});
 controlsButton?.addEventListener('click',()=>{inputPlatform.openSettings();canvas.focus();});
 let autoRestore=false;
@@ -76,8 +79,8 @@ try {
  status.textContent='';if(controlsButton)controlsButton.disabled=false;const mpButton=document.querySelector('[data-multiplayer]');if(mpButton)mpButton.disabled=false;canvas.focus();
  const loop=time=>{
   if(!graphics.active())return;
-  const r=canvas.getBoundingClientRect(),dpr=Math.min(devicePixelRatio||1,exports.ferravex_visual_quality()===0?1:2);
-  const w=Math.max(1,Math.round(r.width*dpr)),h=Math.max(1,Math.round(r.height*dpr));
+  const r=canvas.getBoundingClientRect(),size=framebufferSize(r.width,r.height,devicePixelRatio||1,exports.ferravex_resolution(),maxFramebufferDimension),dpr=size.scale;
+  const w=size.width,h=size.height;
   if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;gl.viewport(0,0,w,h);}
   const dt=last?Math.min((time-last)/1000,0.1):1/60;last=time;
   // Rust receives logical pixels; the GPU viewport alone uses framebuffer pixels.
@@ -85,7 +88,7 @@ try {
   exports.ferravex_display_scale?.(dpr);
   inputPlatform.poll();
   const running=exports.ferravex_frame(dt,Math.round(r.width),Math.round(r.height));
-  const controlsOpen=inputPlatform.syncPanel();audio.sync();
+  details.ready();const controlsOpen=inputPlatform.syncPanel();audio.sync();details.update();
   controlsButton?.setAttribute('aria-pressed',String(controlsOpen));
   const count=exports.ferravex_vertex_count(),ptr=exports.ferravex_vertices();
   const vertices=new Float32Array(exports.memory.buffer,ptr,count*8);
