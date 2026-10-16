@@ -5,6 +5,7 @@ pub use ferravex_ecs as ecs;
 pub use ferravex_math as math;
 pub use ferravex_net as net;
 pub use ferravex_play as play;
+pub use ferravex_play::ability;
 pub use ferravex_play::authoring;
 pub use ferravex_play::persistence;
 pub use ferravex_play::tuning;
