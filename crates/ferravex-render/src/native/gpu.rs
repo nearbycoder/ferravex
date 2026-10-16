@@ -1613,8 +1613,10 @@ mod tests {
                 });
                 let actual = window.pixels();
                 let different = expected
-                    .chunks_exact(4)
-                    .zip(actual.chunks_exact(4))
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .zip(actual.as_chunks::<4>().0.iter())
                     .filter(|(a, b)| a.iter().zip(*b).any(|(a, b)| a.abs_diff(*b) > 2))
                     .count();
                 assert!(
@@ -1860,8 +1862,10 @@ mod tests {
         window.present_scene(&[], &[], crate::BLACK, Some(&frame));
         let animated = window.pixels();
         let mismatches = reference
-            .chunks_exact(4)
-            .zip(animated.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(animated.as_chunks::<4>().0.iter())
             .filter(|(a, b)| a.iter().zip(*b).any(|(a, b)| a.abs_diff(*b) > 3))
             .count();
         assert!(
@@ -1903,8 +1907,10 @@ mod tests {
         let changed = window.pixels();
         assert!(
             animated
-                .chunks_exact(4)
-                .zip(changed.chunks_exact(4))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(changed.as_chunks::<4>().0.iter())
                 .filter(|(a, b)| a != b)
                 .count()
                 > 100,
@@ -1975,8 +1981,10 @@ mod tests {
         window.present_scene(&[], &[], crate::BLACK, Some(&frame));
         let shaded = window.pixels();
         let darker = lit
-            .chunks_exact(4)
-            .zip(shaded.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(shaded.as_chunks::<4>().0.iter())
             .filter(|(a, b)| {
                 a[0] > 150
                     && a[0].abs_diff(a[1]) < 3
@@ -2046,8 +2054,10 @@ mod tests {
         window.present_scene(&[], &[], crate::BLACK, Some(&frame));
         let points = window.pixels();
         assert!(
-            dark.chunks_exact(4)
-                .zip(points.chunks_exact(4))
+            dark.as_chunks::<4>()
+                .0
+                .iter()
+                .zip(points.as_chunks::<4>().0.iter())
                 .filter(|(a, b)| b[0] > a[0].saturating_add(20) && b[0] > b[1].saturating_add(20))
                 .count()
                 > 50,

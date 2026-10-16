@@ -147,7 +147,7 @@ impl Recording {
         consume(initial.state, MAX_STATE_BYTES, true)?;
         let mut ci = 1;
         let mut ei = 0;
-        for (i, row) in ticks.chunks_exact(32).enumerate() {
+        for (i, row) in ticks.as_chunks::<32>().0.iter().enumerate() {
             let t = tick(row);
             if initial.tick.checked_add(i as u64 + 1) != Some(t.tick)
                 || t.event_start as usize != ei
@@ -187,9 +187,24 @@ impl Recording {
         }
         Ok(Self {
             header,
-            ticks: ticks.chunks_exact(32).map(tick).collect(),
-            events: events.chunks_exact(12).map(event).collect(),
-            checkpoints: cps.chunks_exact(24).map(checkpoint).collect(),
+            ticks: ticks
+                .as_chunks::<32>()
+                .0
+                .iter()
+                .map(|row| tick(row))
+                .collect(),
+            events: events
+                .as_chunks::<12>()
+                .0
+                .iter()
+                .map(|row| event(row))
+                .collect(),
+            checkpoints: cps
+                .as_chunks::<24>()
+                .0
+                .iter()
+                .map(|row| checkpoint(row))
+                .collect(),
             arena: arena.to_vec(),
         })
     }

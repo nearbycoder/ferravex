@@ -42,6 +42,8 @@ impl Grid {
             .checked_mul(height)
             .filter(|n| *n > 0 && *n <= 4_000_000)
             .ok_or(NavigationError::InvalidDimensions)?;
+        // Retain the atomic API available to our Rust 1.88 minimum toolchain.
+        #[allow(deprecated)]
         let identity = NEXT_GRID_ID
             .fetch_update(
                 std::sync::atomic::Ordering::Relaxed,

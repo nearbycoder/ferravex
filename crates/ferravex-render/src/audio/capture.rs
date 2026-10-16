@@ -26,7 +26,11 @@ impl Capture {
         let mut bytes = [0_u8; 4096];
         let remaining = ferravex_play::audio::MAX_CLIP_FRAMES.saturating_sub(self.frames as usize);
         for chunk in frames[..frames.len().min(remaining)].chunks(1024) {
-            for (sample, out) in chunk.iter().flatten().zip(bytes.chunks_exact_mut(2)) {
+            for (sample, out) in chunk
+                .iter()
+                .flatten()
+                .zip(bytes.as_chunks_mut::<2>().0.iter_mut())
+            {
                 let v = if sample.is_finite() {
                     sample.clamp(-1., 1.)
                 } else {

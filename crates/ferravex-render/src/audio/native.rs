@@ -106,14 +106,15 @@ impl Output {
         }
         let mut count = 0;
         for _ in 0..QUEUE {
-            if self
-                .shared
-                .free
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |free| {
-                    free.checked_sub(1)
-                })
-                .is_err()
-            {
+            // try_update is newer than the supported minimum Rust toolchain.
+            #[allow(deprecated)]
+            let reserved =
+                self.shared
+                    .free
+                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |free| {
+                        free.checked_sub(1)
+                    });
+            if reserved.is_err() {
                 break;
             }
             let mut block = [[0.; 2]; BLOCK];
