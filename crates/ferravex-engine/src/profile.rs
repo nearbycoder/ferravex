@@ -121,6 +121,18 @@ impl Profiler {
             .get(id.0)
             .map(|counter| Duration::from_micros(counter.budget_us))
     }
+    /// Nearest-rank percentile in microseconds. Percentiles 0 and 100 return
+    /// min/max; empty captures, invalid IDs and percentages above 100 return None.
+    pub fn percentile_us(&self, id: CounterId, percent: u8) -> Option<u64> {
+        let counter = self.counters.get(id.0)?;
+        if percent > 100 || counter.len == 0 {
+            return None;
+        }
+        let mut values = counter.values;
+        values[..counter.len].sort_unstable();
+        let rank = (counter.len * usize::from(percent)).div_ceil(100).max(1);
+        Some(values[rank - 1])
+    }
     pub fn summary(&self, id: CounterId) -> Summary {
         self.try_summary(id)
             .expect("counter id does not belong to this profiler")
@@ -237,5 +249,24 @@ mod budget_tests {
         assert_eq!(p.budget(id), Some(Duration::from_micros(u64::MAX)));
         assert!(!p.set_budget(CounterId(999), Duration::ZERO));
         assert_eq!(p.budget(CounterId(999)), None);
+    }
+}
+
+#[cfg(test)]
+mod percentile_tests {
+    use super::*;
+    #[test]
+    fn nearest_ranks_empty_and_wrapped_window() {
+        let mut p = Profiler::default();
+        let id = p.register("frame", Duration::MAX);
+        assert_eq!(p.percentile_us(id, 50), None);
+        for i in 1..=200 {
+            p.record(id, Duration::from_micros(i));
+        }
+        for (percent, expected) in [(0, 81), (50, 140), (95, 194), (99, 199), (100, 200)] {
+            assert_eq!(p.percentile_us(id, percent), Some(expected));
+        }
+        assert_eq!(p.percentile_us(id, 101), None);
+        assert_eq!(p.percentile_us(CounterId(999), 50), None);
     }
 }
