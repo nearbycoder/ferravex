@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 pub mod ability;
+pub mod action;
 pub mod ai;
 pub mod animation;
 pub mod attributes;

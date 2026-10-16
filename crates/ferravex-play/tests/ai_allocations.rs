@@ -54,6 +54,16 @@ fn shared_gameplay_systems_allocate_nothing_after_construction() {
     let mut statuses = ferravex_play::attributes::EffectSet::<4>::new().unwrap();
     let mut feedback =
         ferravex_play::feedback::FeedbackController::<16>::new(Default::default(), 1).unwrap();
+    let mut actions =
+        ferravex_play::action::ActionTimeline::new(ferravex_play::action::ActionSpec {
+            windup: 0.1,
+            active: 0.1,
+            recovery: 0.2,
+            cancel_before: 0.05,
+            buffer_seconds: 0.1,
+        })
+        .unwrap();
+    let mut hit_window = ferravex_play::action::HitWindow::<4>::new().unwrap();
     let grid = Grid::new(16, 16).unwrap();
     let mut planner = PathPlanner::new(256, 8).unwrap();
     let graph = DecisionGraph::new(
@@ -95,6 +105,12 @@ fn shared_gameplay_systems_allocate_nothing_after_construction() {
     let mut points = [Vec3::ZERO; 64];
     RECORD.with(|v| v.set(true));
     for tick in 0..1000 {
+        for event in actions.step(1. / 60., tick % 20 == 0).unwrap().events() {
+            if event.edge == ferravex_play::action::ActionEdge::Activated {
+                hit_window.begin(event.serial);
+                hit_window.accept(event.serial, 1).unwrap();
+            }
+        }
         abilities.advance(1. / 60.).unwrap();
         let _ = abilities.activate(0, &mut resource, true);
         statuses.advance(1. / 60.).unwrap();

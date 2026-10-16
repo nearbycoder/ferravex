@@ -1,6 +1,7 @@
 pub use ferravex_core::collision::segment_circle;
 use ferravex_core::{Entity, World};
 use ferravex_play::ability::{AbilityBank, AbilitySpec, ResourcePool};
+use ferravex_play::action::{ActionPhase, ActionSpec, ActionTimeline};
 use ferravex_play::particles::{
     Emitter, EmitterDesc, EmitterTransform, ParticleDesc, ParticleMotion, ParticlePool,
 };
@@ -26,6 +27,18 @@ pub struct Enemy {
     pub heavy: bool,
     pub flash: f32,
     pub knockback: Vec2,
+    pub attack: ActionTimeline,
+}
+pub fn attack_timeline(heavy: bool) -> ActionTimeline {
+    let windup = if heavy { 0.38 } else { 0.16 };
+    ActionTimeline::new(ActionSpec {
+        windup,
+        active: 0.08,
+        recovery: if heavy { 1.0 } else { 0.65 },
+        cancel_before: windup * 0.75,
+        buffer_seconds: 0.1,
+    })
+    .unwrap()
 }
 #[derive(Clone, Copy)]
 pub struct Bullet {
@@ -263,12 +276,17 @@ impl Game {
         self.ai.update(&self.world, self.player, shot, dt);
         for (mut p, mut enemy) in &mut self.world.query::<(&mut Position, &mut Enemy)>() {
             enemy.flash = (enemy.flash - dt).max(0.0);
-            let velocity = self.ai.velocity(enemy.ai_slot, p.0, enemy.speed);
+            let planted = match enemy.attack.phase() {
+                ActionPhase::Windup => 0.2,
+                ActionPhase::Recovery => 0.6,
+                _ => 1.,
+            };
+            let velocity = self.ai.velocity(enemy.ai_slot, p.0, enemy.speed * planted);
             enemy.knockback *= (-10. * dt).exp();
             p.0 = move_body(p.0, (velocity + enemy.knockback) * dt, enemy.radius);
-            if p.0.distance(self.player) < enemy.radius + PLAYER_RADIUS
-                && self.hurt_time == 0.0
-                && self.dash_time == 0.0
+            let within_range = p.0.distance(self.player) < enemy.radius + PLAYER_RADIUS;
+            let attack = enemy.attack.step(dt, within_range).unwrap();
+            if within_range && attack.activated() && self.hurt_time == 0.0 && self.dash_time == 0.0
             {
                 let damage =
                     ((if enemy.heavy { 24. } else { 14. }) * self.tuning.difficulty).round() as i32;
@@ -336,6 +354,7 @@ impl Game {
                     89.0 + self.wave as f32 * 8.0
                 },
                 heavy,
+                attack: attack_timeline(heavy),
                 flash: 0.16,
             },
         ));
@@ -384,6 +403,7 @@ impl Game {
                     continue;
                 }
                 enemy.health -= 24.0;
+                enemy.attack.cancel(false);
                 enemy.flash = 0.09;
                 if let Some(position) = target_position {
                     let direction = (position - self.player).normalize_or_zero();
@@ -462,6 +482,7 @@ mod tests {
                 radius: 22.,
                 speed: 0.,
                 heavy: true,
+                attack: attack_timeline(true),
                 flash: 0.,
                 knockback: Vec2::ZERO,
             },
@@ -479,8 +500,21 @@ mod tests {
         assert!(actor.knockback.x > 50.);
         drop(actor);
         game.world.get::<&mut Position>(enemy).unwrap().0 = game.player;
+        game.world.get::<&mut Enemy>(enemy).unwrap().knockback = Vec2::ZERO;
         game.update(Input::default(), 1. / 120.);
-        assert!(game.health < 100 && game.recoil.length() > 100.);
+        assert_eq!(game.health, 100, "contact must first telegraph its attack");
+        assert_eq!(
+            game.world.get::<&Enemy>(enemy).unwrap().attack.phase(),
+            ActionPhase::Windup
+        );
+        for _ in 0..60 {
+            game.update(Input::default(), 1. / 120.);
+            if game.health < 100 {
+                break;
+            }
+        }
+        assert_eq!(game.health, 76);
+        assert!(game.recoil.length() > 100.);
     }
 
     #[test]
@@ -504,6 +538,7 @@ mod tests {
                 radius: 14.0,
                 speed: 0.0,
                 heavy: false,
+                attack: attack_timeline(false),
                 flash: 0.0,
             },
         ));
@@ -532,6 +567,7 @@ mod tests {
                 radius: 14.0,
                 speed: 0.0,
                 heavy: false,
+                attack: attack_timeline(false),
                 flash: 0.0,
             },
         ));
@@ -582,5 +618,38 @@ mod tests {
         game.health = 0;
         game.update(Input::default(), 1.0 / 120.0);
         assert_eq!(game.phase, Phase::Lost);
+    }
+}
+
+#[cfg(test)]
+mod telegraph_tests {
+    use super::*;
+    #[test]
+    fn stepping_out_of_a_real_contact_windup_avoids_damage() {
+        let mut game = Game::new();
+        game.remaining = 0;
+        game.world.spawn((
+            Position(game.player),
+            Enemy {
+                ai_slot: 0,
+                health: 72.,
+                radius: 22.,
+                speed: 0.,
+                heavy: true,
+                attack: attack_timeline(true),
+                flash: 0.,
+                knockback: Vec2::ZERO,
+            },
+        ));
+        game.update(Input::default(), 1. / 120.);
+        assert_eq!(game.health, 100);
+        game.player += Vec2::X * 100.;
+        for _ in 0..60 {
+            game.update(Input::default(), 1. / 120.);
+        }
+        assert_eq!(
+            game.health, 100,
+            "a missed attack must not damage a departed target"
+        );
     }
 }

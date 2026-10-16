@@ -6,6 +6,7 @@ pub use ferravex_math as math;
 pub use ferravex_net as net;
 pub use ferravex_play as play;
 pub use ferravex_play::ability;
+pub use ferravex_play::action;
 pub use ferravex_play::attributes;
 pub use ferravex_play::authoring;
 pub use ferravex_play::feedback;
