@@ -44,3 +44,6 @@ pub use ferravex_play::objective;
 pub use ferravex_play::performance;
 
 pub use ferravex_play::gameplay;
+
+/// See [`events`] for the system contract and examples.
+pub mod events;

@@ -17,7 +17,7 @@ The APIs live in `ferravex_engine` and are also available through `ferravex`. Ea
 - [x] 9. Seek legacy input replays by exact or preceding tick.
 - [x] 10. Export bounded tick ranges and truncate replay branches.
 - [x] 11. Locate the first mismatched or missing replay state.
-- [ ] 12. Bound engine event queues with explicit overflow policies.
+- [x] 12. Bound engine event queues with explicit overflow policies.
 - [ ] 13. Publish double-buffered events at explicit frame boundaries.
 - [ ] 14. Schedule and cancel deterministic tick-delayed work.
 - [ ] 15. Resolve stable system dependencies and reject cycles.
