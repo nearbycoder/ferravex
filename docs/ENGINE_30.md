@@ -22,7 +22,7 @@ The APIs live in `ferravex_engine` and are also available through `ferravex`. Ea
 - [x] 14. Schedule and cancel deterministic tick-delayed work.
 - [x] 15. Resolve stable system dependencies and reject cycles.
 - [x] 16. Buffer bounded world mutations until a synchronization point.
-- [ ] 17. Reuse bounded object slots while rejecting stale handles.
+- [x] 17. Reuse bounded object slots while rejecting stale handles.
 - [ ] 18. Track dirty engine indices with bounded dense bit sets.
 - [ ] 19. Provide reproducible random streams and unbiased bounded draws.
 - [ ] 20. Select weighted engine variants using checked integer weights.
