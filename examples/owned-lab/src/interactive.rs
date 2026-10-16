@@ -124,7 +124,7 @@ pub extern "C" fn ferravex_controls_step(
                     controls.pending = 0;
                 }
             }
-            if playing != 0 && p.touch_seen() && !p.controls_open() {
+            if playing != 0 && p.touch_seen() && !p.touch_customized() && !p.controls_open() {
                 let tint = render::Color::new(0.9, 0.92, 0.83, 0.45);
                 let (origin, delta) = p
                     .touch_stick(0, 1)

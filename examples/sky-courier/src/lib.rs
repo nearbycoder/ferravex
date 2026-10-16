@@ -731,7 +731,7 @@ async fn game() {
             )
             .unwrap();
         set_default_camera();
-        hud(&flight, touch_mode);
+        hud(&flight, touch_mode && !player_input.touch_customized());
         if demo.autoplay && flight.outcome != Outcome::Flying && !reported {
             println!(
                 "Sky Courier autoplay: {:?}; beacons={}; hull={}; remaining={:.1}s",

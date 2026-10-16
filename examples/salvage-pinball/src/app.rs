@@ -349,7 +349,7 @@ async fn game() {
         } else {
             game_over_time = 0.0;
         }
-        let reset = table_render(&table, touch_mode);
+        let reset = table_render(&table, touch_mode && !player_input.touch_customized());
         if player_input.pressed("restart")
             || table.over() && player_input.pressed("confirm")
             || (tapped && (reset.contains(pointer) || table.over()))

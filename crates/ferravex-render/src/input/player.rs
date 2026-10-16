@@ -43,6 +43,10 @@ pub struct PlayerInput {
     persistent: bool,
     preferences: Option<crate::preferences::Session>,
     surface: TouchSurface,
+    raw_touch: Vec<touch::Control>,
+    touch_settings: touch::TouchLayoutSettings,
+    touch_store: Option<crate::storage::Slot<touch::TouchLayoutSettings>>,
+    touch_save_failed: bool,
     last_frame: Option<u64>,
     focus_epoch: u64,
     focused: bool,
@@ -94,6 +98,10 @@ impl PlayerInput {
             persistent: true,
             preferences: None,
             surface: TouchSurface::default(),
+            raw_touch: Vec::with_capacity(16),
+            touch_settings: touch::TouchLayoutSettings::default(),
+            touch_store: None,
+            touch_save_failed: false,
             last_frame: None,
             focus_epoch: 0,
             focused: true,
@@ -306,7 +314,79 @@ impl PlayerInput {
         }
     }
     pub fn set_touch_layout(&mut self, layout: &[touch::Control]) -> Result<(), InputError> {
-        self.surface.set_layout(layout, &mut self.map)
+        self.ensure_touch_settings();
+        if layout.len() > 16 {
+            return Err(InputError::TouchCapacity);
+        }
+        let mut controls = [touch::Control {
+            region: touch::Region::Rect(Rect::new(0., 0., 1., 1.)),
+            output: touch::Output::Button(0),
+        }; 16];
+        for (i, c) in layout.iter().enumerate() {
+            controls[i] = self.touch_settings.apply(
+                *c,
+                i,
+                vec2(screen_width().max(64.), screen_height().max(64.)),
+            )?;
+        }
+        self.surface
+            .set_layout(&controls[..layout.len()], &mut self.map)?;
+        self.raw_touch.clear();
+        self.raw_touch.extend_from_slice(layout);
+        Ok(())
+    }
+    fn ensure_touch_settings(&mut self) {
+        if self.touch_store.is_some() {
+            return;
+        }
+        let backend = if self.persistent {
+            crate::storage::PlatformStore::new()
+        } else {
+            crate::storage::PlatformStore::transient()
+        };
+        let slot = crate::storage::Slot::with_backend(
+            &self.owner,
+            "touch-layout",
+            touch::TouchLayoutSettings::default(),
+            backend,
+        )
+        .unwrap();
+        self.touch_save_failed = matches!(slot.status(), crate::storage::LoadStatus::Rejected(_));
+        self.touch_settings = *slot.value();
+        self.touch_store = Some(slot);
+    }
+    pub fn touch_customized(&self) -> bool {
+        self.touch_settings != touch::TouchLayoutSettings::default()
+    }
+    pub fn touch_settings(&self) -> touch::TouchLayoutSettings {
+        self.touch_settings
+    }
+    pub fn set_touch_settings(
+        &mut self,
+        next: touch::TouchLayoutSettings,
+    ) -> Result<(), crate::storage::StorageError> {
+        if !next.valid() {
+            return Err(crate::storage::StorageError::Invalid(
+                ferravex_play::persistence::SaveError::InvalidData,
+            ));
+        }
+        self.ensure_touch_settings();
+        self.touch_settings = next;
+        self.surface.clear(&mut self.map);
+        let count = self.raw_touch.len();
+        let mut layout = [touch::Control {
+            region: touch::Region::Rect(Rect::new(0., 0., 1., 1.)),
+            output: touch::Output::Button(0),
+        }; 16];
+        layout[..count].copy_from_slice(&self.raw_touch);
+        self.set_touch_layout(&layout[..count]).map_err(|_| {
+            crate::storage::StorageError::Invalid(
+                ferravex_play::persistence::SaveError::InvalidData,
+            )
+        })?;
+        let result = self.touch_store.as_mut().unwrap().commit(next);
+        self.touch_save_failed = result.is_err();
+        result
     }
     pub fn touch_stick(&self, x: u8, y: u8) -> Option<(Vec2, Vec2)> {
         self.surface.stick(x, y)
@@ -595,6 +675,7 @@ impl PlayerInput {
         if !self.loaded {
             self.load();
         }
+        self.ensure_touch_settings();
         self.enabled = enabled;
         let mut events = [PlatformEvent::None; MAX_EVENTS];
         let (frame, epoch, focused, overflow, pads, requested, size, pointer) = crate::read(|s| {

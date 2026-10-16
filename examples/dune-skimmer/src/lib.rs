@@ -711,7 +711,7 @@ async fn game() {
             .unwrap();
         set_default_camera();
         draw_hud(&race, touch_mode);
-        if touch_mode && !race.finished {
+        if touch_mode && !player_input.touch_customized() && !race.finished {
             for (rect, text) in touch_controls().into_iter().zip(["<", ">", "GO", "BOOST"]) {
                 draw_rectangle(
                     rect.x,
