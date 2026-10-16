@@ -35,7 +35,7 @@ The APIs live in `ferravex_engine` and are also available through `ferravex`. Ea
 - [x] 27. Filter hierarchical engine tags with segment-safe ancestry. [API source](../crates/ferravex-engine/src/tags.rs) · [PR](https://github.com/nearbycoder/ferravex/pull/110)
 - [x] 28. Store typed singleton engine resources without string keys. [API source](../crates/ferravex-engine/src/resources.rs) · [PR](https://github.com/nearbycoder/ferravex/pull/111)
 - [x] 29. Validate deferred lifecycle transitions at frame boundaries. [API source](../crates/ferravex-engine/src/state.rs) · [PR](https://github.com/nearbycoder/ferravex/pull/112)
-- [x] 30. Retain severity-filtered bounded engine diagnostic records. [API source](../crates/ferravex-engine/src/diagnostics.rs)
+- [x] 30. Retain severity-filtered bounded engine diagnostic records. [API source](../crates/ferravex-engine/src/diagnostics.rs) · [PR](https://github.com/nearbycoder/ferravex/pull/113)
 
 ## Local validation
 
