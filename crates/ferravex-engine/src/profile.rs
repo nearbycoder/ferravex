@@ -108,6 +108,19 @@ impl Profiler {
             self.reset(CounterId(i));
         }
     }
+    /// Change a live counter's budget without clearing its samples.
+    pub fn set_budget(&mut self, id: CounterId, budget: Duration) -> bool {
+        let Some(counter) = self.counters.get_mut(id.0) else {
+            return false;
+        };
+        counter.budget_us = micros(budget);
+        true
+    }
+    pub fn budget(&self, id: CounterId) -> Option<Duration> {
+        self.counters
+            .get(id.0)
+            .map(|counter| Duration::from_micros(counter.budget_us))
+    }
     pub fn summary(&self, id: CounterId) -> Summary {
         self.try_summary(id)
             .expect("counter id does not belong to this profiler")
@@ -205,5 +218,24 @@ mod reset_tests {
         p.reset_all();
         assert_eq!(p.summary(a).samples + p.summary(b).samples, 0);
         assert!(!p.reset(CounterId(999)));
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+    #[test]
+    fn rebudget_existing_capture_and_saturate_large_durations() {
+        let mut p = Profiler::default();
+        let id = p.register("physics", Duration::from_micros(5));
+        p.record(id, Duration::from_micros(10));
+        assert!(p.summary(id).over_budget);
+        assert!(p.set_budget(id, Duration::from_micros(10)));
+        assert!(!p.summary(id).over_budget);
+        assert_eq!(p.summary(id).samples, 1);
+        assert!(p.set_budget(id, Duration::MAX));
+        assert_eq!(p.budget(id), Some(Duration::from_micros(u64::MAX)));
+        assert!(!p.set_budget(CounterId(999), Duration::ZERO));
+        assert_eq!(p.budget(CounterId(999)), None);
     }
 }
