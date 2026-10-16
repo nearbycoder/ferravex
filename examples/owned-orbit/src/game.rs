@@ -428,6 +428,20 @@ impl Game {
         let mut caught = false;
         self.drops.retain_mut(|drop| {
             drop.position[1] += 130.0 * dt;
+            if drop.position[1] <= PADDLE_Y + 12. {
+                let motion = ferravex_engine::gameplay::pickup::Magnet {
+                    radius: 100.,
+                    collect_radius: 0.,
+                    speed: 180.,
+                }
+                .step(
+                    ferravex_engine::math::Vec2::from_array(drop.position),
+                    ferravex_engine::math::Vec2::new(self.paddle_x, PADDLE_Y),
+                    dt,
+                )
+                .unwrap();
+                drop.position = motion.position.to_array();
+            }
             if (drop.position[1] - PADDLE_Y).abs() < 12.0
                 && (drop.position[0] - self.paddle_x).abs() < self.paddle_half + 8.0
             {
@@ -604,5 +618,30 @@ mod reward_loop_tests {
             replay.drops.clear();
         }
         assert_eq!(g.drop_pity.misses(), replay.drop_pity.misses());
+    }
+}
+
+#[cfg(test)]
+mod drop_magnet_tests {
+    use super::*;
+    #[test]
+    fn nearby_capsules_follow_the_paddle_but_distant_ones_stay_on_course() {
+        let mut g = Game::new();
+        g.drops.push(Drop {
+            position: [g.paddle_x + 65., PADDLE_Y - 60.],
+        });
+        let mut caught = false;
+        for _ in 0..120 {
+            g.update_drops(1. / 120.);
+            caught |= g.wide_time > 0.;
+        }
+        assert!(caught);
+        assert_eq!(g.paddle_half, 67.);
+        g.drops.push(Drop {
+            position: [LEFT + 10., 400.],
+        });
+        let x = g.drops[0].position[0];
+        g.update_drops(0.1);
+        assert_eq!(g.drops[0].position[0], x);
     }
 }
