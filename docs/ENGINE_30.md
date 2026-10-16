@@ -25,7 +25,7 @@ The APIs live in `ferravex_engine` and are also available through `ferravex`. Ea
 - [x] 17. Reuse bounded object slots while rejecting stale handles.
 - [x] 18. Track dirty engine indices with bounded dense bit sets.
 - [x] 19. Provide reproducible random streams and unbiased bounded draws.
-- [ ] 20. Select weighted engine variants using checked integer weights.
+- [x] 20. Select weighted engine variants using checked integer weights.
 - [ ] 21. Cycle randomized variants without repeats within each cycle.
 - [ ] 22. Retain bounded tick snapshots for interpolation and rollback hosts.
 - [ ] 23. Control pause and time scale independently of wall time.

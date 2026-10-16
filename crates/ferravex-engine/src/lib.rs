@@ -68,3 +68,6 @@ pub mod bitset;
 
 /// See [`random`] for the system contract and examples.
 pub mod random;
+
+/// See [`weighted`] for the system contract and examples.
+pub mod weighted;
