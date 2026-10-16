@@ -98,3 +98,6 @@ pub mod resources;
 
 /// See [`state`] for the system contract and examples.
 pub mod state;
+
+/// See [`diagnostics`] for the system contract and examples.
+pub mod diagnostics;
