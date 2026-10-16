@@ -34,3 +34,5 @@ pub mod crafting;
 pub mod upgrades;
 
 pub mod magazine;
+
+pub mod charge;
