@@ -10,6 +10,10 @@ use std::{
 };
 #[link(name = "AppKit", kind = "framework")]
 unsafe extern "C" {
+    static NSApp: Id;
+}
+#[link(name = "Foundation", kind = "framework")]
+unsafe extern "C" {
     static NSDefaultRunLoopMode: Id;
 }
 #[link(name = "OpenGL", kind = "framework")]
@@ -83,7 +87,11 @@ impl Host {
                 return Err("AppKit must run on the main thread".into());
             }
             let _pool = Pool::new();
-            let app = id(class(c"NSApplication"), c"sharedApplication");
+            let app = if NSApp.is_null() {
+                id(class(c"NSApplication"), c"sharedApplication")
+            } else {
+                NSApp
+            };
             if app.is_null() {
                 return Err("AppKit application unavailable".into());
             }

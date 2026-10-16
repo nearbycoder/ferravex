@@ -763,23 +763,75 @@ pub(super) fn default_framebuffer() -> u32 {
     0
 }
 
+// DPI uses a bounded decimal grammar with checked mantissa arithmetic.
+// Exponent work is capped at 38.
+fn decimal(value: &str) -> Option<f32> {
+    let value = value.trim().strip_prefix('+').unwrap_or(value.trim());
+    if value.is_empty() || value.len() > 32 {
+        return None;
+    }
+    let (mantissa, exponent) = value
+        .find(['e', 'E'])
+        .map_or((value, None), |i| (&value[..i], Some(&value[i + 1..])));
+    let (mut coefficient, mut fraction, mut dot, mut digits) = (0u64, 0u32, false, false);
+    for b in mantissa.bytes() {
+        match b {
+            b'0'..=b'9' => {
+                coefficient = coefficient
+                    .checked_mul(10)?
+                    .checked_add(u64::from(b - b'0'))?;
+                digits = true;
+                if dot {
+                    fraction += 1;
+                }
+            }
+            b'.' if !dot => dot = true,
+            _ => return None,
+        }
+    }
+    if !digits {
+        return None;
+    }
+    let mut number = coefficient as f64;
+    for _ in 0..fraction {
+        number *= 0.1;
+    }
+    if let Some(exponent) = exponent {
+        let (negative, text) = if let Some(v) = exponent.strip_prefix('-') {
+            (true, v)
+        } else {
+            (false, exponent.strip_prefix('+').unwrap_or(exponent))
+        };
+        if text.is_empty() {
+            return None;
+        }
+        let mut power = 0u32;
+        for b in text.bytes() {
+            if !b.is_ascii_digit() {
+                return None;
+            }
+            power = power.checked_mul(10)?.checked_add(u32::from(b - b'0'))?;
+            if power > 38 {
+                return None;
+            }
+        }
+        for _ in 0..power {
+            number *= if negative { 0.1 } else { 10. };
+        }
+    }
+    let number = number as f32;
+    number.is_finite().then_some(number)
+}
 fn display_scale(override_value: Option<&str>, resources: &str) -> f32 {
-    let valid = |v: &str| {
-        v.trim()
-            .parse::<f32>()
-            .ok()
-            .filter(|n| n.is_finite() && *n >= 0.5 && *n <= 4.)
-    };
+    let valid = |n: f32| (0.5..=4.).contains(&n).then_some(n);
     override_value
+        .and_then(decimal)
         .and_then(valid)
         .or_else(|| {
             resources.lines().find_map(|line| {
                 let (k, v) = line.split_once(':')?;
                 if k.trim().eq_ignore_ascii_case("Xft.dpi") {
-                    v.trim()
-                        .parse::<f32>()
-                        .ok()
-                        .and_then(|dpi| valid(&(dpi / 96.).to_string()))
+                    decimal(v).and_then(|dpi| valid(dpi / 96.))
                 } else {
                     None
                 }
@@ -796,5 +848,21 @@ mod dpi_tests {
         assert_eq!(display_scale(Some("2"), "Xft.dpi:96"), 2.);
         assert_eq!(display_scale(Some("NaN"), "Xft.dpi:192"), 2.);
         assert_eq!(display_scale(None, "Xft.dpi:100000"), 1.);
+        assert_eq!(display_scale(Some("+1.25"), ""), 1.25);
+        assert_eq!(display_scale(Some(".5"), ""), 0.5);
+        assert_eq!(display_scale(None, "Xft.dpi:1.44e2"), 1.5);
+        for bad in [
+            "",
+            ".",
+            "-1",
+            "1e",
+            "1e9999999",
+            "999999999999999999999999999999",
+            "1.2.3",
+            "inf",
+            "1e2e0",
+        ] {
+            assert!(decimal(bad).is_none(), "{bad}");
+        }
     }
 }

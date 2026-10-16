@@ -213,6 +213,7 @@ impl Runner {
             }
         }
     }
+    #[cfg(not(target_os = "ios"))]
     pub(crate) fn suspended(&self) -> bool {
         self.suspended
     }
