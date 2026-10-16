@@ -220,3 +220,169 @@ fn shared_gameplay_systems_allocate_nothing_after_construction() {
     RECORD.with(|v| v.set(false));
     assert_eq!(CALLS.with(|v| v.get()), 0, "hot AI allocated");
 }
+#[test]
+fn new_quality_systems_reuse_all_hot_storage() {
+    use ferravex_math::{Vec2, Vec3};
+    use ferravex_play::{
+        ai::*, animation::*, audio::*, camera::*, environment::*, input::touch::*, navigation::*,
+        objective::*, performance::*, racing::*, vehicle::*,
+    };
+    let mut squad = SquadBoard::new([Vec3::X, Vec3::Z]).unwrap();
+    let mut director = ferravex_play::encounter::EncounterDirector::new(
+        ferravex_play::encounter::EncounterConfig {
+            credits: 1000,
+            max_alive: 10,
+            interval: 0.1,
+            first_delay: 0.,
+            recovery_seconds: 1.,
+        },
+    )
+    .unwrap();
+    let mesh = NavMesh::welded(vec![
+        NavTriangle([Vec3::ZERO, Vec3::X, Vec3::Z]),
+        NavTriangle([Vec3::X, Vec3::X + Vec3::Z, Vec3::Z]),
+    ])
+    .unwrap();
+    let mut search = mesh.search(Vec3::ZERO, Vec3::X + Vec3::Z).unwrap();
+    let mut driver = RacingDriver::new(1);
+    let path = [Vec2::ZERO, Vec2::X * 20., Vec2::splat(20.), Vec2::Y * 20.];
+    let mut composer = CameraComposer::<0>::new([], 0.2, 2., 0.1).unwrap();
+    let camera = Input3 {
+        target: Target3::at(Vec3::ZERO),
+        mode: Mode3::Follow {
+            eye_offset: Vec3::Y * 5.,
+            look_offset: Vec3::ZERO,
+        },
+        fov_y: 1.,
+    };
+    let mut foot = FootPlant::new(0.3, 0.1).unwrap();
+    let mut music = MusicConductor::new(120).unwrap();
+    let acoustic = AcousticScene::<0>::new([]).unwrap();
+    let layout = TouchLayoutSettings {
+        mirrored: true,
+        ..Default::default()
+    };
+    let control = Control {
+        region: Region::Circle {
+            center: Vec2::splat(50.),
+            radius: 24.,
+        },
+        output: Output::Button(0),
+    };
+    let base = ObjectiveGraph::new(
+        1,
+        [ObjectiveSpec {
+            id: 1,
+            all: 0,
+            any: 0,
+            exclusive_group: 0,
+            kind: ObjectiveKind::Event { id: 1, count: 2 },
+        }],
+    )
+    .unwrap();
+    let mut budget = RenderBudget::default();
+    budget.set_enabled(true);
+    let mut trace = PlaytestTrace::<16>::new().unwrap();
+    let mut plan = EnvironmentPlan::new(16).unwrap();
+    plan.stairs(Vec3::ZERO, 2., 0.2, 0.5, 4, 0).unwrap();
+    let mut flight = FlightState {
+        yaw: 0.,
+        pitch: 0.,
+        bank: 0.,
+        turn_rate: 0.,
+        speed: 20.,
+    };
+    CALLS.with(|v| v.set(0));
+    RECORD.with(|v| v.set(true));
+    for frame in 0..1000 {
+        squad.advance(0.01).unwrap();
+        squad
+            .report(Candidate {
+                id: 1,
+                position: Vec3::Z,
+                groups: 1,
+            })
+            .unwrap();
+        squad
+            .reserve(
+                1,
+                Vec3::ZERO,
+                Vec3::Z,
+                &mut WorkBudget::new(4, 4, 0),
+                &mut Unoccluded,
+                |_| true,
+            )
+            .unwrap();
+        director.advance(0.01, 0.2).unwrap();
+        director.admit(1, 0);
+        search.step(&mesh, &mut WorkBudget::new(0, 0, 3)).unwrap();
+        driver
+            .step(
+                &path,
+                DriverSettings::default(),
+                DriverInput {
+                    position: Vec2::ZERO,
+                    forward: Vec2::X,
+                    velocity: Vec2::X * 10.,
+                    rivals: &[],
+                },
+                0.01,
+            )
+            .unwrap();
+        flight
+            .step(FlightHandling::default(), 0.1, 0.1, 24., 0.01)
+            .unwrap();
+        composer.update(camera, Vec3::ZERO, 0.01).unwrap();
+        let target = foot
+            .update(
+                Vec3::ZERO,
+                Some(FootContact {
+                    position: Vec3::Y * 0.1,
+                    normal: Vec3::Y,
+                    support: 1,
+                    support_delta: Vec3::ZERO,
+                }),
+                true,
+                0.01,
+            )
+            .unwrap();
+        TwoBone {
+            upper: 0.5,
+            lower: 0.5,
+        }
+        .solve(Vec3::Y, target.position, Vec3::Z)
+        .unwrap();
+        music.update(0.01, 0.5).unwrap();
+        acoustic.sample(Vec3::ZERO, false).unwrap();
+        layout.apply(control, 0, Vec2::new(320., 200.)).unwrap();
+        let mut graph = base.clone();
+        graph.event(1, 1, 1).unwrap();
+        graph.advance(0.01).unwrap();
+        graph.restore(graph.snapshot()).unwrap();
+        let d = budget
+            .observe(BudgetSample {
+                frame_ms: 30.,
+                cpu_ms: 2.,
+                gpu_ms: Some(24.),
+                paused: false,
+            })
+            .unwrap();
+        trace
+            .record(PlaytestEvent {
+                frame,
+                tick: Some(frame),
+                replay: Some(1),
+                kind: DiagnosticKind::Fidelity,
+                value: d.scale,
+                frame_ms: 30.,
+                cpu_ms: 2.,
+                gpu_ms: Some(24.),
+            })
+            .unwrap();
+        for piece in plan.pieces() {
+            std::hint::black_box(piece.bounds());
+        }
+    }
+    RECORD.with(|v| v.set(false));
+    assert_eq!(CALLS.with(|v| v.get()), 0);
+}

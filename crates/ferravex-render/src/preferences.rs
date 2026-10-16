@@ -82,7 +82,10 @@ impl Session {
     }
 }
 pub(crate) fn apply(p: Preferences) {
-    crate::edit(|s| s.presentation = p);
+    crate::edit(|s| {
+        s.presentation = p;
+        s.performance.budget.set_enabled(p.adaptive);
+    });
     crate::set_fidelity(p.resolution, p.shadows, p.lights);
     crate::set_look(crate::Look::from_index(p.look as u32).expect("validated look"));
     audio::set_master_gain(p.master);

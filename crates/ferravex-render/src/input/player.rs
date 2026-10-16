@@ -721,6 +721,7 @@ impl PlayerInput {
                 resolution: pending.resolution,
                 shadows: pending.shadows,
                 lights: pending.lights,
+                adaptive: pending.adaptive,
                 ..current
             };
             let failed = self.set_preferences(next).is_err();

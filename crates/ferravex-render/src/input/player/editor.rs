@@ -109,7 +109,7 @@ impl PlayerInput {
         draw_text("CONTROLS", x + 18., y + 31., 20., WHITE);
         let per_page = (((height - 190.) / 43.).floor() as usize).clamp(1, 8);
         let count = if self.devices_tab {
-            19 + self.raw_touch.len() * 3
+            20 + self.raw_touch.len() * 3
         } else {
             self.actions.len()
         };
@@ -264,9 +264,13 @@ impl PlayerInput {
                     ),
                     17 => ("Touch scale", format!("{:.0}%", touch.scale * 100.)),
                     18 => ("Touch opacity", format!("{:.0}%", touch.opacity * 100.)),
+                    19 => (
+                        "Adaptive performance",
+                        if preferences.adaptive { "On" } else { "Off" }.into(),
+                    ),
                     _ => {
-                        let slot = (i - 19) / 3;
-                        let axis = (i - 19) % 3;
+                        let slot = (i - 20) / 3;
+                        let axis = (i - 20) % 3;
                         (
                             ["Touch X", "Touch Y", "Touch size"][axis],
                             format!(
@@ -348,9 +352,10 @@ impl PlayerInput {
                         16 => touch.mirrored = !touch.mirrored,
                         17 => touch.scale = (touch.scale + d * 0.1).clamp(0.6, 1.8),
                         18 => touch.opacity = (touch.opacity + d * 0.1).clamp(0.2, 1.),
+                        19 => preferences.adaptive = !preferences.adaptive,
                         _ => {
-                            let slot = (i - 19) / 3;
-                            match (i - 19) % 3 {
+                            let slot = (i - 20) / 3;
+                            match (i - 20) % 3 {
                                 0 => {
                                     touch.edits[slot].offset.x =
                                         (touch.edits[slot].offset.x + d * 0.025).clamp(-0.4, 0.4)

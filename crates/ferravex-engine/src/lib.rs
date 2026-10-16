@@ -40,3 +40,5 @@ pub use ferravex_play::racing;
 pub use ferravex_play::environment;
 
 pub use ferravex_play::objective;
+
+pub use ferravex_play::performance;

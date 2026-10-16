@@ -294,6 +294,7 @@ struct State {
     details_open: bool,
     details_error: bool,
     resolution: u8,
+    performance: performance::Runtime,
     shadow_detail: u8,
     light_detail: u8,
     look: Look,
@@ -357,6 +358,7 @@ impl Default for State {
             details_open: false,
             details_error: false,
             resolution: 0,
+            performance: performance::Runtime::default(),
             shadow_detail: 0,
             light_detail: 0,
             look: Look::Authored,
@@ -396,13 +398,28 @@ impl Default for State {
     }
 }
 impl State {
+    fn effective_shadow_detail(&self) -> u8 {
+        if self.presentation.adaptive {
+            let level = self.performance.budget.level();
+            if level >= 3 {
+                return 1;
+            }
+            if level >= 1
+                && (self.shadow_detail == 3
+                    || self.shadow_detail == 0 && self.quality == lighting::Quality::High)
+            {
+                return 2;
+            }
+        }
+        self.shadow_detail
+    }
     fn refresh_environment(&mut self) {
         self.retained.environment.update_details(
             &self.points,
             self.sun,
             self.quality,
             self.eye,
-            self.shadow_detail,
+            self.effective_shadow_detail(),
             self.light_detail,
         );
         // All mesh submissions share the current light volume. Extract and
@@ -731,7 +748,7 @@ pub fn quality() -> lighting::Quality {
 }
 /// Effective shadow tier, including the independent player detail override.
 pub fn shadow_quality() -> lighting::Quality {
-    read(|s| match s.shadow_detail {
+    read(|s| match s.effective_shadow_detail() {
         1 => lighting::Quality::Low,
         2 => lighting::Quality::Medium,
         3 => lighting::Quality::High,
@@ -1346,6 +1363,7 @@ fn touch(id: u64, phase: u32, x: f32, y: f32) {
         }
     });
 }
+pub mod performance;
 #[cfg(not(target_arch = "wasm32"))]
 mod runner;
 #[cfg(not(target_arch = "wasm32"))]
@@ -1405,6 +1423,7 @@ mod wasm {
             3 => s.presentation.lights as u32,
             4 => s.presentation.look as u32,
             5 => s.details_error as u32,
+            6 => u32::from(s.presentation.adaptive),
             _ => u32::MAX,
         })
     }
@@ -1418,6 +1437,7 @@ mod wasm {
                 2 if value <= 3 => p.shadows = value as u8,
                 3 if value <= 4 => p.lights = value as u8,
                 4 if value <= 3 => p.look = value as u8,
+                6 if value <= 1 => p.adaptive = value != 0,
                 _ => return 0,
             };
             s.presentation = p;

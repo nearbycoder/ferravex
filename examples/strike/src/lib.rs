@@ -545,6 +545,13 @@ async fn game() {
         hit_timer = (hit_timer - dt).max(0.);
         damage_timer = (damage_timer - dt).max(0.);
         effects.update(dt);
+        if let Some(playback) = &replays.playback {
+            ferravex_render::performance::context(Some(playback.position()), replays.diagnostic_id);
+        } else if !network {
+            ferravex_render::performance::context(Some(u64::from(game.tick)), None);
+        } else {
+            ferravex_render::performance::context(None, None);
+        }
         let animation_dt = if cut_replay || (replays.playing() && replays.paused) {
             0.
         } else if active {

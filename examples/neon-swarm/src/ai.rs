@@ -21,6 +21,7 @@ impl VisibilityQuery for CoverSight {
 }
 struct Brain {
     memory: Memory,
+    direct: bool,
     state: DecisionState,
     route: Route3,
     follower: WaypointFollower,
@@ -89,6 +90,7 @@ impl SwarmAi {
                     hearing_seconds: 2.5,
                 })
                 .unwrap(),
+                direct: false,
                 state: graph.initial(),
                 route: Route3::new(128).unwrap(),
                 follower: WaypointFollower::default(),
@@ -109,6 +111,7 @@ impl SwarmAi {
     pub fn reset_agent(&mut self, slot: usize) {
         let b = &mut self.brains[slot];
         b.memory.clear();
+        b.direct = false;
         b.route.clear();
         b.follower.reset();
         b.state.reset(&self.graph);
@@ -152,7 +155,7 @@ impl SwarmAi {
                 position: player.extend(0.),
                 groups: 1,
             };
-            if Sight::new(500., std::f32::consts::TAU, 1)
+            let detection = Sight::new(500., std::f32::consts::TAU, 1)
                 .unwrap()
                 .test(
                     Observer {
@@ -163,9 +166,14 @@ impl SwarmAi {
                     &mut budget,
                     &mut CoverSight,
                 )
-                .unwrap()
-                == Detection::Detected
-            {
+                .unwrap();
+            // Sensing is staggered. Retain the last completed line-of-sight
+            // result between scheduled samples so pursuit does not alternate
+            // with a route back to an older grid waypoint every other tick.
+            if detection != Detection::Deferred {
+                b.direct = detection == Detection::Detected;
+            }
+            if detection == Detection::Detected {
                 b.memory.observe(target, Sense::Sight).unwrap();
             }
             for noise in self.noises.iter() {
@@ -251,7 +259,7 @@ impl SwarmAi {
         } else {
             track.map_or(position, |t| t.position.truncate())
         };
-        let direct = track.is_some_and(|t| t.visible);
+        let direct = b.direct && track.is_some_and(|t| t.sense == Sense::Sight);
         let target = if direct {
             goal
         } else {

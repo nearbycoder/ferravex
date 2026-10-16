@@ -19,6 +19,7 @@ controlsButton.addEventListener('click',()=>{input.openSettings();canvas.focus()
 window.addEventListener('blur',()=>setPaused(true));
 document.addEventListener('visibilitychange',()=>{previous=0;if(document.hidden)setPaused(true);});
 function render(timestamp){
+ const cpuStarted=performance.now();
  const dt=previous?Math.min((timestamp-previous)/1000,.05):0;previous=timestamp;
  const rect=canvas.getBoundingClientRect();input.poll();
  engine.orbit_controls_frame(dt,Math.max(1,Math.round(rect.width)),Math.max(1,Math.round(rect.height)));
@@ -30,6 +31,7 @@ function render(timestamp){
  const description=`${paused?'Paused.':descriptions[engine.status()]} Score ${engine.score()}. ${engine.lives()} lives.`;
  if(description!==previousDescription){stateLabel.textContent=description;previousDescription=description;}
  canvas.dataset.frames=String(Number(canvas.dataset.frames??0)+1);
+ engine.ferravex_performance_sample?.(dt*1000,performance.now()-cpuStarted,-1);
  requestAnimationFrame(render);
 }
 try {
