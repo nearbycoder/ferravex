@@ -261,6 +261,7 @@ async fn game() {
         show_mouse(false);
     }
 
+    let mut replay_initial_cut = replays.playing();
     loop {
         let dt = if opts.smoke_frames.is_some() {
             1.0 / 60.0
@@ -279,6 +280,7 @@ async fn game() {
             diagnostics = !diagnostics;
         }
         let mut cut_replay = replays.controls(&mut controls.input, &game, network);
+        cut_replay |= std::mem::take(&mut replay_initial_cut);
         cut_replay |= replays.browser_poll(&game, network);
         cut_replay |= replays.pump();
         if cut_replay {

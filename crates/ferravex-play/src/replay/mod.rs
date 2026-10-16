@@ -405,9 +405,11 @@ impl Playback {
         index: usize,
     ) -> Result<(), PlaybackError<W::Error>> {
         let cp = self.recording.checkpoints[index];
-        world
-            .restore(cp.state.bytes(&self.recording.arena))
-            .map_err(PlaybackError::State)?;
+        self.seek = None;
+        if let Err(e) = world.restore(cp.state.bytes(&self.recording.arena)) {
+            self.poisoned = true;
+            return Err(PlaybackError::State(e));
+        }
         self.position = cp.tick;
         self.row = self.recording.ticks.partition_point(|f| f.tick <= cp.tick);
         self.fault = None;
@@ -501,7 +503,10 @@ impl Playback {
         };
         let mut steps = 0;
         while self.position < target && steps < budget.min(MAX_TICKS) {
-            self.step_inner(world)?;
+            if let Err(e) = self.step_inner(world) {
+                self.seek = None;
+                return Err(e);
+            }
             steps += 1;
         }
         if self.position == target {

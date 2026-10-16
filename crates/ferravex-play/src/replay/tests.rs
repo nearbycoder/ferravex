@@ -114,6 +114,8 @@ fn playback_seek_and_desync() {
         Err(PlaybackError::Desync { tick: 1, .. })
     ));
     assert!(p.fault().is_some());
+    assert!(!p.seeking());
+    assert_eq!(p.pump_seek(&mut w, 64), Ok(0));
     w.broken = false;
     p.seek(&mut w, 0).unwrap();
     p.step(&mut w).unwrap();
