@@ -19,7 +19,7 @@ const engine={memory:{buffer:new ArrayBuffer(640*720*4)},init(){},width:()=>640,
  ferravex_grab:()=>0,ferravex_controls_open:()=>0,orbit_controls_frame(...args){frames.push(args);},orbit_paused:()=>paused,orbit_pause(v){paused=!!v;},orbit_restart(){},
  ferravex_key:(...args)=>events.push(args),ferravex_blur:()=>events.push(['blur']),ferravex_focus(){},ferravex_input_settings(){events.push(['settings']);}};
 const host={window,document,navigator:{},storage:()=>({getItem:()=>null}),atob,btoa};
-const sandbox={document,window,ImageData:class{},Uint8ClampedArray,Math,Number,Error,
+const sandbox={document,window,performance,ImageData:class{},Uint8ClampedArray,Math,Number,Error,
  location:{search:""},configureVisuals(){},bindDetails:()=>({ready(){},update(){}}),
  bindInput:(canvas,game,getExports,isPlaying)=>bindInput(canvas,game,getExports,isPlaying,host),drawInput2d(){},bindAudio:()=>({sync(){}}),
  requestAnimationFrame:fn=>pendingFrame=fn,fetch:async()=>({ok:true,clone(){return this;}}),WebAssembly:{instantiateStreaming:async()=>({instance:{exports:engine}})}};
