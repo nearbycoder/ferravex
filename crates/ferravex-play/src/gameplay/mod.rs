@@ -28,3 +28,5 @@ pub mod pity;
 pub mod pickup;
 
 pub mod inventory;
+
+pub mod crafting;
