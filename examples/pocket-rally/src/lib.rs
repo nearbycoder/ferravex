@@ -4,6 +4,7 @@ use ferravex_render::input::{
     PlayerInput, Preset,
     touch::{Control, Output, Region},
 };
+mod save;
 mod sim;
 use ferravex_core::FixedClock;
 use ferravex_play::particles::{RibbonFacing, Trail, TrailConfig, TrailSample};
@@ -262,6 +263,12 @@ async fn game() {
     let mut race = Race::new(&track);
     let mut clock = FixedClock::new(120., 8);
     let mut demo = Demo::new();
+    let record_context = save::context(&track);
+    let mut saved_lap =
+        ferravex_render::storage::Slot::open("pocket-rally", "best-lap", save::BestLap::default())
+            .unwrap();
+    saved_lap.value().restore(&mut race, record_context);
+    let mut record_error = false;
     let mut sound = GameAudio::new();
     let mut marks: [Trail; 2] = std::array::from_fn(|_| {
         Trail::new(TrailConfig {
@@ -342,7 +349,14 @@ async fn game() {
             };
             let laps = race.laps;
             let finished = race.finished();
+            let previous_best = race.best_time;
             race.step(&track, input, frame.dt);
+            if race.best_time != previous_best
+                && !demo.autoplay
+                && let Some(best) = save::BestLap::from_race(&race, record_context)
+            {
+                record_error = saved_lap.commit(best).is_err();
+            }
             if race.laps > laps {
                 sound.cue(Cue::Pickup, 0.5);
             }
@@ -480,7 +494,11 @@ async fn game() {
         text("KM/H", width - 85., 54., 12., CREAM);
         if let Some(best) = race.best_time {
             text(
-                &format!("BEST {}", time(best)),
+                &format!(
+                    "{} {}",
+                    if record_error { "SESSION BEST" } else { "BEST" },
+                    time(best)
+                ),
                 26.,
                 screen_height() - 24.,
                 17.,

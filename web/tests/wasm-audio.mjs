@@ -6,7 +6,7 @@ const results=[];
 for(const game of catalog){
  const path=new URL(`../../dist/web/${game.host}/${game.id.replaceAll('-','_')}.wasm`,import.meta.url);
  const module=new WebAssembly.Module(fs.readFileSync(path));
- const env={ferravex_controls_len:()=>0,ferravex_controls_load:()=>-1,ferravex_controls_store:()=>-1,ferravex_set_playing(){}};
+ const env={ferravex_save_len:()=>0,ferravex_save_load:()=>-1,ferravex_save_store:()=>-1,ferravex_controls_len:()=>0,ferravex_controls_load:()=>-1,ferravex_controls_store:()=>-1,ferravex_set_playing(){}};
  const e=new WebAssembly.Instance(module,{env}).exports;(e.ferravex_init??e.init)();e.ferravex_autoplay(1);e.ferravex_audio_state(1);
  const key=code=>{e.ferravex_key(code,1);e.ferravex_key(code,0);};let peak=0,frames=0;
  for(;frames<600&&peak<.0001;frames++){

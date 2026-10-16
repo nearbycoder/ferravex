@@ -29,6 +29,7 @@ async fn game() {
     let mut sound = GameAudio::new();
     let mut particles = ferravex_render::effects::ParticleRenderer::new(512).unwrap();
     let mut game = Game::new();
+    let mut records = ferravex_render::storage::Records::new("neon-swarm").unwrap();
     let mut clock = FixedClock::new(120.0, 12);
     let mut started = demo.autoplay;
     let mut paused = false;
@@ -102,6 +103,7 @@ async fn game() {
         if touch_aim {
             input.aim = game.nearest_enemy().unwrap_or(game.player + game.facing);
         }
+        let previous_phase = game.phase;
         if started && !paused {
             let dt = if demo.autoplay {
                 demo.dt()
@@ -179,6 +181,14 @@ async fn game() {
         hud_ui.begin(
             Viewport::fit([screen_width(), screen_height()], [1280., 800.], [0.; 4]).unwrap(),
         );
+        if previous_phase == Phase::Playing && game.phase != Phase::Playing {
+            let time = if game.phase == Phase::Won {
+                ferravex_render::storage::run_micros(game.time)
+            } else {
+                None
+            };
+            let _ = records.attempt("sector-07", 1, game.kills as u64, time);
+        }
         draw_hud(&mut hud_ui, &game, started, touch_mode);
         if started && !paused && game.phase == Phase::Playing && !touch_mode && !demo.autoplay {
             draw_circle_lines(mouse.x, mouse.y, 7.0, 1.2, CYAN);
@@ -216,8 +226,10 @@ async fn game() {
                 &mut hud_ui,
                 if won { "SECTOR SECURED" } else { "SIGNAL LOST" },
                 &format!(
-                    "{} hostiles cleared  /  {:.0} seconds",
-                    game.kills, game.time
+                    "{} cleared / {:.0}s / best {}",
+                    game.kills,
+                    game.time,
+                    records.get("sector-07", 1).map_or(0, |r| r.score)
                 ),
                 "RESTART",
             );

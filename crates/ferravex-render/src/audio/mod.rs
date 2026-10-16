@@ -60,6 +60,16 @@ pub(crate) fn focus_lost() {
         suspend();
     }
 }
+pub fn master_gain() -> f32 {
+    GAIN.with(Cell::get)
+}
+pub fn bus_gains() -> [f32; 4] {
+    AUDIO.with(|a| {
+        a.borrow().as_ref().map_or([1.; 4], |a| {
+            [Bus::Effects, Bus::Ambience, Bus::Music, Bus::Ui].map(|bus| a.mixer.bus_gain(bus))
+        })
+    })
+}
 pub fn set_master_gain(value: f32) -> bool {
     if !value.is_finite() || !(0. ..=1.).contains(&value) {
         return false;
@@ -323,6 +333,10 @@ mod wasm {
     #[unsafe(no_mangle)]
     pub extern "C" fn ferravex_audio_mute(mute: u32) {
         set_muted(mute != 0);
+    }
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_audio_master_gain() -> f32 {
+        master_gain()
     }
     #[unsafe(no_mangle)]
     pub extern "C" fn ferravex_audio_muted() -> u32 {

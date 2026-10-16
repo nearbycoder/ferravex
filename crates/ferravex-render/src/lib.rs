@@ -22,9 +22,11 @@ pub mod material;
 pub mod mesh;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native;
+pub mod preferences;
 pub mod retained;
 pub mod shaders;
 pub mod skinning;
+pub mod storage;
 pub mod ui;
 pub mod visibility;
 pub use ferravex_core::telemetry;
@@ -281,6 +283,8 @@ struct State {
     shader: Option<material::ShaderMaterial>,
     shader_params: [f32; 16],
     quality: lighting::Quality,
+    authored_quality: lighting::Quality,
+    preferred_quality: Option<lighting::Quality>,
     quality_override: Option<lighting::Quality>,
     points: Vec<lighting::PointLight>,
     sun: Option<lighting::SunShadow>,
@@ -329,6 +333,8 @@ impl Default for State {
             shader: None,
             shader_params: [0.; 16],
             quality: Default::default(),
+            authored_quality: Default::default(),
+            preferred_quality: None,
             quality_override: None,
             points: Vec::new(),
             sun: None,
@@ -602,7 +608,19 @@ fn draw_shadow_pose(
 }
 pub fn set_quality(quality: lighting::Quality) {
     edit(|s| {
-        s.quality = s.quality_override.unwrap_or(quality);
+        s.authored_quality = quality;
+        s.quality = s
+            .quality_override
+            .or(s.preferred_quality)
+            .unwrap_or(quality);
+        s.refresh_environment();
+    });
+}
+/// User preference overrides authored quality; explicit env/URL overrides win.
+pub fn set_quality_preference(quality: Option<lighting::Quality>) {
+    edit(|s| {
+        s.preferred_quality = quality;
+        s.quality = s.quality_override.or(quality).unwrap_or(s.authored_quality);
         s.refresh_environment();
     });
 }

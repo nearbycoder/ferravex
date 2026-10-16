@@ -1,5 +1,6 @@
 mod game;
 mod level;
+mod save;
 use ferravex_core::FixedClock;
 use ferravex_render::audio::{Cue, GameAudio, Surface};
 use ferravex_render::input::{PlayerInput, Preset};
@@ -414,6 +415,10 @@ async fn game() {
         ferravex_render::content::ContentSource::new(level::SOURCE, demo.content.as_deref())
             .unwrap();
     let mut g = Game::with_level(Arc::new(level::Level::parse(content.current()).unwrap()));
+    let mut progress = save::Progress::new(
+        &mut g,
+        ferravex_play::persistence::checksum(content.current().as_bytes()),
+    );
     let mut clock = FixedClock::new(60., 8);
     let mut sound = GameAudio::new();
     let mut player_input = PlayerInput::preset("orchard-guard", Preset::Strategy);
@@ -424,6 +429,10 @@ async fn game() {
             Ok(Game::with_level(Arc::new(level::Level::parse(text)?)))
         }) {
             g = next;
+            progress.content_changed(
+                &g,
+                ferravex_play::persistence::checksum(content.current().as_bytes()),
+            );
             hud_ui.cancel();
             clock.reset();
             sound = GameAudio::new();
@@ -441,6 +450,7 @@ async fn game() {
             && !(player_input.cursor_is_virtual() && hud_ui.focused().is_some());
         if player_input.pressed("restart") {
             g = Game::with_level(g.level.clone());
+            progress.restart(&g);
             hud_ui.cancel();
             clock.reset();
         }
@@ -569,10 +579,15 @@ async fn game() {
             }
         } else if hud_ui.activated(5) {
             g = Game::with_level(g.level.clone());
+            progress.restart(&g);
             hud_ui.cancel();
             clock.reset();
         }
 
+        progress.sync(&g);
+        if progress.error().is_some() {
+            label("Session progress", 670., 747., 12., GREEN);
+        }
         if player_input.cursor_is_virtual() {
             let point = canvas.unproject(cursor);
             draw_circle_lines(point.x, point.y, 6., 1.5, CREAM);

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 const catalog=JSON.parse(fs.readFileSync(new URL('../../examples/catalog.json',import.meta.url)));
 for(const id of ['strike','neon-swarm','dune-skimmer','pocket-rally','sky-courier']){
  const game=catalog.find(g=>g.id===id),module=new WebAssembly.Module(fs.readFileSync(new URL(`../../dist/web/${game.host}/${id.replaceAll('-','_')}.wasm`,import.meta.url)));
- const env={ferravex_controls_len:()=>0,ferravex_controls_load:()=>-1,ferravex_controls_store:()=>-1,ferravex_set_playing(){}};
+ const env={ferravex_save_len:()=>0,ferravex_save_load:()=>-1,ferravex_save_store:()=>-1,ferravex_controls_len:()=>0,ferravex_controls_load:()=>-1,ferravex_controls_store:()=>-1,ferravex_set_playing(){}};
  const e=new WebAssembly.Instance(module,{env}).exports;e.ferravex_init();e.ferravex_autoplay(id==='sky-courier'?0:1);
  const tap=code=>{e.ferravex_key(code,1);e.ferravex_key(code,0);};let sprites=false,ribbons=false,firstSprite=null,firstRibbon=null;
  for(let frame=0;frame<900;frame++){
