@@ -282,7 +282,7 @@ impl<B: Access> World<B> {
                     b.integrate(h);
                 }
             }
-            stats.ccd_impacts += self.sweep_balls();
+            stats.ccd_impacts += self.sweep_fast_bodies();
             self.find_contacts(h, &mut stats);
             self.wake_contact_islands();
             self.warm_start(&mut stats);
@@ -355,7 +355,7 @@ impl<B: Access> World<B> {
         );
         stats
     }
-    fn sweep_balls(&mut self) -> usize {
+    fn sweep_fast_bodies(&mut self) -> usize {
         let mut hits = 0;
         for &(id, start_origin, start_rotation) in &self.old_positions {
             let body = self.bodies[id].core();
@@ -369,8 +369,10 @@ impl<B: Access> World<B> {
                 if collider.sensor {
                     continue;
                 }
-                let Shape::Ball(radius) = collider.shape else {
-                    continue;
+                let radius = match collider.shape {
+                    Shape::Ball(r) => r,
+                    Shape::Box(h) => h.length(),
+                    _ => continue,
                 };
                 let start = start_origin + start_rotation * collider.local_translation;
                 let end = collider.pose(body).position;
@@ -390,7 +392,7 @@ impl<B: Access> World<B> {
                         let target_pose = tc.pose(target);
                         let target_start = old_origin + old_rotation * tc.local_translation;
                         let relative_start = start - target_start + target_pose.position;
-                        if relative_start.distance_squared(end) < radius * radius * 0.04 {
+                        if relative_start.distance_squared(end) < 1e-12 {
                             continue;
                         }
                         let swept = Bounds {
@@ -404,15 +406,28 @@ impl<B: Access> World<B> {
                         )) {
                             continue;
                         }
-                        if let Some((t, n)) = geometry::sweep_ball(
-                            relative_start,
-                            end,
-                            radius,
-                            tc.shape,
-                            target_pose.position,
-                            target_pose.rotation,
-                            self.planar,
-                        ) && t < closest
+                        let impact = match (collider.shape, tc.shape) {
+                            (Shape::Ball(r), shape) => geometry::sweep_ball(
+                                relative_start,
+                                end,
+                                r,
+                                shape,
+                                target_pose.position,
+                                target_pose.rotation,
+                                self.planar,
+                            ),
+                            (Shape::Box(h), Shape::Box(target_half)) => geometry::sweep_box(
+                                relative_start,
+                                end,
+                                h,
+                                collider.pose(body).rotation,
+                                target_half,
+                                &target_pose,
+                            ),
+                            _ => None,
+                        };
+                        if let Some((t, n)) = impact
+                            && t < closest
                             && (end - relative_start).dot(n) < -1e-7
                         {
                             closest = t;

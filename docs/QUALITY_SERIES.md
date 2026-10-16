@@ -18,8 +18,8 @@ platform checks are recorded only when actually performed.
 | 8 | Navigation meshes and traversal links | [PR 31](https://github.com/nearbycoder/ferravex/pull/31), merged |
 | 9 | Vehicle and flight controllers | [PR 32](https://github.com/nearbycoder/ferravex/pull/32), merged |
 | 10 | Racing AI | [PR 33](https://github.com/nearbycoder/ferravex/pull/33), merged |
-| 11 | Richer physics materials | Implemented; locally validated |
-| 12 | Fast-body collision robustness | Pending |
+| 11 | Richer physics materials | [PR 34](https://github.com/nearbycoder/ferravex/pull/34), merged |
+| 12 | Fast-body collision robustness | Implemented; locally validated |
 | 13 | Breakable mechanisms | Pending |
 | 14 | Camera anticipation and authored zones | Pending |
 | 15 | Procedural contact animation | Pending |
@@ -193,3 +193,15 @@ static grip and light rolling resistance; course record rules advance to 3.
 Local real-body tests verify static holding versus sliding, rolling energy loss,
 invalid edit rollback, existing contact/cache/allocation suites and all four marble
 course completions. Strict Clippy and Wasm checks pass.
+
+## 12. Fast boxes
+
+CCD-enabled box/box pairs now use a bounded separating-axis translation sweep,
+including compound child poses, rotated boxes and relative target translation.
+Initial overlaps prevent further inward tunneling while ordinary contacts resolve
+the overlap. Sensors and collision layers retain their filters. Siege Foundry's
+already-CCD-enabled debris automatically uses the new path. Orientation is frozen
+within each of at most eight substeps; this is not universal rotational CCD and
+adds no unsupported capsule/cylinder contact pairs. Local 3000-unit/s thin rotated
+wall, moving kinematic wall and sensor tests pass, alongside the full existing
+physics/cache/allocation and demolition suites, strict Clippy and Wasm checks.
