@@ -48,6 +48,7 @@ pub enum Phase {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WinReason {
+    Forfeit,
     Elimination,
     TimeExpired,
     Explosion,
@@ -265,6 +266,51 @@ impl TacticalMatch {
         };
         game.emit(Event::RoundStarted(1));
         Ok(game)
+    }
+    /// Remove a disconnected player's live contribution without inventing a killer.
+    /// Stable roster slots remain dead until a later authority roster reset.
+    pub fn disconnect(&mut self, id: PlayerId) -> Result<(), RuleError> {
+        let i = self.index(id)?;
+        self.players[i].health = 0;
+        if self.bomb == Bomb::Carried(id) {
+            self.bomb = Bomb::Dropped(self.players[i].position);
+        }
+        if self.channel.is_some_and(|c| c.player == id) {
+            self.channel = None;
+        }
+        if matches!(self.phase, Phase::Live | Phase::Planted) {
+            self.check_elimination();
+        }
+        Ok(())
+    }
+    /// Authority-only disconnect forfeit. A client action cannot invoke this.
+    /// Ends the match immediately so disconnected roster slots cannot resurrect
+    /// on the next round and prevent elimination indefinitely.
+    pub fn forfeit(&mut self, team: Team) {
+        if self.phase == Phase::Finished {
+            return;
+        }
+        for player in &mut self.players {
+            if player.team == team {
+                player.health = 0;
+            }
+        }
+        if let Bomb::Carried(id) = self.bomb
+            && let Some(player) = self.player(id)
+                && !player.alive() {
+                    self.bomb = Bomb::Dropped(player.position);
+                }
+        let winner = team.other();
+        self.channel = None;
+        self.score[winner.index()] = self.config.rounds_to_win;
+        self.phase = Phase::Finished;
+        self.remaining = 0.;
+        self.last_winner = Some(winner);
+        self.emit(Event::RoundWon {
+            team: winner,
+            reason: WinReason::Forfeit,
+        });
+        self.emit(Event::MatchWon(winner));
     }
     pub fn phase(&self) -> Phase {
         self.phase

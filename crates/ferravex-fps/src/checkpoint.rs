@@ -103,9 +103,9 @@ fn player_valid(p: &Player) -> bool {
         && (0.0..=0.5).contains(&p.jump.coyote)
         && p.jump.buffer.is_finite()
         && (0.0..=0.5).contains(&p.jump.buffer)
-        && p.fire_cooldown <= FIRE_INTERVAL_TICKS
-        && p.reload_ticks <= RELOAD_TICKS
-        && p.respawn_ticks <= RESPAWN_TICKS
+        && p.fire_cooldown <= 4096
+        && p.reload_ticks <= 4096
+        && p.respawn_ticks <= 4096
 }
 impl Match {
     fn write_arena(&self, w: &mut Writer<'_>) -> Result<(), CheckpointError> {

@@ -399,7 +399,7 @@ async fn game() {
         }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(c) = client.as_ref() {
-            remote = c.interpolated_players(c.interpolation_alpha());
+            remote = c.rendered_players();
             if !c.is_connected() {
                 error = "Connecting to server...".into();
             } else if error == "Connecting to server..." {

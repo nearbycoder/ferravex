@@ -31,3 +31,10 @@ unsupported platforms or features are complete.
 
 Performance checks: [PERFORMANCE.md](PERFORMANCE.md). Raw reports and baselines
 live in ignored `target/perf`, so they do not inflate the engine distribution.
+
+After all twenty merges, make a dedicated polish pass across all fifteen demos:
+review lighting, shadows and shaders visually; expose selectable shader looks;
+profile and improve lower-end quality/performance; and give Strike additional
+work on map presentation, controls, combat feedback and multiplayer usability.
+Validate locally and continue skipping GitHub CI. Hardware-specific claims must
+state what was actually measured; iOS SDK/device testing remains excluded.
