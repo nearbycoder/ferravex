@@ -49,6 +49,7 @@ struct Game {
     jump_down: bool,
     springs: [ferravex_play::gameplay::platforms::LaunchPad; 3],
     spring_flight: bool,
+    crumbles: [ferravex_play::gameplay::platforms::CrumblePlatform; 2],
     elapsed: f32,
     trial: ferravex_play::gameplay::trial::Trial<3>,
     respawn_flash: f32,
@@ -67,6 +68,8 @@ impl Game {
                 Rect::new(770.0, 435.0, 130.0, 18.0),
                 Rect::new(1350.0, 430.0, 120.0, 18.0),
                 Rect::new(2010.0, 430.0, 120.0, 18.0),
+                Rect::new(380., 330., 110., 18.),
+                Rect::new(1640., 315., 110., 18.),
             ],
             hazards: vec![
                 Rect::new(350.0, 542.0, 44.0, 18.0),
@@ -85,6 +88,8 @@ impl Game {
                 (1880.0, 470.0),
                 (2070.0, 390.0),
                 (2430.0, 520.0),
+                (425., 300.),
+                (1695., 285.),
             ]
             .into_iter()
             .map(|(x, y)| (vec2(x, y), false))
@@ -100,6 +105,8 @@ impl Game {
             jump_down: false,
             springs: [ferravex_play::gameplay::platforms::LaunchPad::new(780., 0.25).unwrap(); 3],
             spring_flight: false,
+            crumbles: [ferravex_play::gameplay::platforms::CrumblePlatform::new(0.65, 3.).unwrap();
+                2],
             elapsed: 0.0,
             trial: {
                 let mut t = ferravex_play::gameplay::trial::Trial::new([12., 18., 30.]).unwrap();
@@ -141,6 +148,12 @@ impl Game {
         self.trial.advance(dt).unwrap();
         self.score.advance(dt).unwrap();
         self.respawn_flash = (self.respawn_flash - dt).max(0.0);
+        for (mechanism, surface) in self.crumbles.iter_mut().zip(&self.platforms[8..10]) {
+            let contact = self.motor.grounded
+                && (-self.motor.position.y - surface.y).abs() < 1.
+                && (self.motor.position.x - surface.center().x).abs() < surface.w * 0.5;
+            mechanism.step(dt, contact).unwrap();
+        }
         // A side platform moves before the motor, so standing passengers inherit its pose.
         self.platforms[5].x = 770.0 + (self.elapsed * 1.2).sin() * 28.0;
         let jump_edge = input.jump && !self.jump_down;
@@ -148,7 +161,7 @@ impl Game {
         let result = self
             .motor
             .step(
-                &EmberTerrain(&self.platforms),
+                &EmberTerrain(&self.platforms, self.crumbles.map(|c| !c.solid())),
                 CharacterShape::Box2 { half: PLAYER * 0.5 },
                 CharacterSettings {
                     speed: SPEED,
@@ -234,7 +247,7 @@ impl Game {
                     .add(ferravex_play::gameplay::inventory::Stack {
                         item: 1,
                         amount: 1,
-                        limit: 10,
+                        limit: 32,
                     })
                     .unwrap();
             }
@@ -277,15 +290,17 @@ impl Game {
 fn feet(position: Vec2) -> Vec3 {
     vec3(position.x + PLAYER.x * 0.5, -position.y - PLAYER.y, 0.)
 }
-struct EmberTerrain<'a>(&'a [Rect]);
+struct EmberTerrain<'a>(&'a [Rect], [bool; 2]);
 impl EmberTerrain<'_> {
     fn obstacle_at(&self, i: usize) -> Obstacle {
         let p = self.0[i];
-        Obstacle::cuboid(
+        let mut obstacle = Obstacle::cuboid(
             i as u64,
             vec3(p.x + p.w * 0.5, -p.y - p.h * 0.5, 0.),
             vec3(p.w * 0.5, p.h * 0.5, 1.),
-        )
+        );
+        obstacle.sensor = (8..10).contains(&i) && self.1[i - 8];
+        obstacle
     }
 }
 impl Terrain for EmberTerrain<'_> {
@@ -385,8 +400,23 @@ fn world(game: &Game, camera: f32, time: f32, motion: &EmberAnimation) {
         let y = 675.0 - ((time * 25.0 + i as f32 * 39.0) % 180.0);
         draw_circle(x, y, 1.5, Color::new(1.0, 0.52, 0.22, 0.45));
     }
-    for p in &game.platforms {
+    for (index, p) in game.platforms.iter().enumerate() {
+        if index >= 8 && !game.crumbles[index - 8].solid() {
+            continue;
+        }
         let x = p.x - camera;
+        if index >= 8 {
+            let warning = game.crumbles[index - 8].phase()
+                == ferravex_play::gameplay::platforms::PlatformPhase::Warning;
+            draw_rectangle_lines(
+                x - 2.,
+                p.y - 2.,
+                p.w + 4.,
+                p.h + 4.,
+                2.,
+                if warning { ORANGE } else { GREEN },
+            );
+        }
         draw_rectangle(x, p.y, p.w, p.h, Color::from_hex(0x383c32));
         draw_rectangle(x, p.y, p.w, 7.0, Color::from_hex(0x8d8962));
         draw_rectangle(x, p.y + 7.0, p.w, 8.0, Color::from_hex(0x545942));
@@ -1044,5 +1074,32 @@ mod spring_route_tests {
         assert!(g.motor.velocity.y > 750.);
         g.update(Input::default(), 1. / 120.);
         assert!(g.motor.velocity.y > 700.);
+    }
+}
+
+#[cfg(test)]
+mod crumble_route_tests {
+    use super::*;
+    #[test]
+    fn bonus_platforms_really_stop_supporting_the_player_then_regrow() {
+        let mut g = Game::new();
+        g.motor = Character::new(feet(vec2(410., 290.)));
+        g.update(Input::default(), 1. / 120.);
+        assert!(g.motor.grounded);
+        for _ in 0..90 {
+            g.update(
+                Input {
+                    jump_held: true,
+                    ..Input::default()
+                },
+                1. / 120.,
+            );
+        }
+        assert!(!g.crumbles[0].solid());
+        assert!(g.position().y > 290.);
+        for _ in 0..400 {
+            g.update(Input::default(), 1. / 120.);
+        }
+        assert!(g.crumbles[0].solid());
     }
 }
