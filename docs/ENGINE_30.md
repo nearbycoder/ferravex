@@ -20,7 +20,7 @@ The APIs live in `ferravex_engine` and are also available through `ferravex`. Ea
 - [x] 12. Bound engine event queues with explicit overflow policies.
 - [x] 13. Publish double-buffered events at explicit frame boundaries.
 - [x] 14. Schedule and cancel deterministic tick-delayed work.
-- [ ] 15. Resolve stable system dependencies and reject cycles.
+- [x] 15. Resolve stable system dependencies and reject cycles.
 - [ ] 16. Buffer bounded world mutations until a synchronization point.
 - [ ] 17. Reuse bounded object slots while rejecting stale handles.
 - [ ] 18. Track dirty engine indices with bounded dense bit sets.
