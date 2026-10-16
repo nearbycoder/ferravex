@@ -44,3 +44,5 @@ pub mod projectile;
 pub mod spawn;
 
 pub mod waves;
+
+pub mod interaction;
