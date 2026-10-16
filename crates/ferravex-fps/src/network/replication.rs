@@ -384,8 +384,7 @@ mod tests {
     fn real_udp_clock_delta_lost_baseline_full_recovery_and_unknown_ack() {
         let mut server = GameServer::bind("127.0.0.1:0").unwrap();
         let mut client = GameClient::connect(server.local_addr().unwrap()).unwrap();
-        server.poll().unwrap();
-        client.poll().unwrap();
+        connect_test_clients(&mut server, &mut [&mut client]);
         server.poll().unwrap();
         client.poll().unwrap();
         assert!(client.round_trip_seconds().is_some());
@@ -451,8 +450,7 @@ mod tests {
         let mut server = GameServer::with_arena("127.0.0.1:0", arena.clone()).unwrap();
         server.game.spawn_player(1);
         let mut client = GameClient::with_arena(server.local_addr().unwrap(), arena).unwrap();
-        server.poll().unwrap();
-        client.poll().unwrap();
+        connect_test_clients(&mut server, &mut [&mut client]);
         for _ in 0..15 {
             server
                 .tick_with_local(&[(
@@ -516,8 +514,7 @@ mod life_tests {
     fn interpolation_uses_latest_roster_and_never_blends_different_lives() {
         let mut server = GameServer::bind("127.0.0.1:0").unwrap();
         let mut client = GameClient::connect(server.local_addr().unwrap()).unwrap();
-        server.poll().unwrap();
-        client.poll().unwrap();
+        connect_test_clients(&mut server, &mut [&mut client]);
         let session = client.session.unwrap();
         let mut apply = |tick, epoch, x: Option<f32>| {
             let mut players = vec![Player::new(0, Vec3::ZERO).snapshot()];

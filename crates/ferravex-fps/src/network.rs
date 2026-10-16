@@ -758,6 +758,31 @@ impl GameClient {
     }
 }
 
+// Complete real transport setup before measuring gameplay/security behavior.
+// Loopback packets may miss the small per-poll delivery window on a busy host.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+fn connect_test_clients(server: &mut GameServer, clients: &mut [&mut GameClient]) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let tick = server.game.tick;
+    while clients.iter().any(|client| !client.is_connected()) {
+        for client in clients.iter_mut() {
+            client.hello().unwrap();
+        }
+        server.poll().unwrap();
+        for client in clients.iter_mut() {
+            client.poll().unwrap();
+        }
+        assert!(
+            clients.iter().all(|client| client.is_connected()) || Instant::now() < deadline,
+            "loopback handshake did not complete"
+        );
+    }
+    assert_eq!(
+        server.game.tick, tick,
+        "handshake must not advance simulation"
+    );
+}
+
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
@@ -769,8 +794,7 @@ mod tests {
         };
         let mut server = GameServer::with_arena("127.0.0.1:0", arena.clone()).unwrap();
         let mut client = GameClient::with_arena(server.local_addr().unwrap(), arena).unwrap();
-        server.poll().unwrap();
-        client.poll().unwrap();
+        connect_test_clients(&mut server, &mut [&mut client]);
         assert!(client.is_connected());
         for sequence in 0..90 {
             client
@@ -802,8 +826,7 @@ mod tests {
         };
         let mut server = GameServer::with_arena("127.0.0.1:0", arena.clone()).unwrap();
         let mut client = GameClient::with_arena(server.local_addr().unwrap(), arena).unwrap();
-        server.poll().unwrap();
-        client.poll().unwrap();
+        connect_test_clients(&mut server, &mut [&mut client]);
         for _ in 0..200 {
             client
                 .tick(InputFrame {
@@ -836,8 +859,7 @@ mod tests {
         };
         let mut server = GameServer::with_arena("127.0.0.1:0", arena.clone()).unwrap();
         let mut client = GameClient::with_arena(server.local_addr().unwrap(), arena).unwrap();
-        server.poll().unwrap();
-        client.poll().unwrap();
+        connect_test_clients(&mut server, &mut [&mut client]);
         let mut buffer = [0; MAX_PACKET_BYTES + 1];
         for sequence in 0..30 {
             client
@@ -905,9 +927,7 @@ mod tests {
             GameClient::with_arena(server.local_addr().unwrap(), arena.clone()).unwrap();
         let mut second =
             GameClient::with_arena(server.local_addr().unwrap(), arena.clone()).unwrap();
-        server.poll().unwrap();
-        first.poll().unwrap();
-        second.poll().unwrap();
+        connect_test_clients(&mut server, &mut [&mut first, &mut second]);
         assert_eq!(first.player_id(), Some(0));
         assert_eq!(second.player_id(), Some(1));
         assert_ne!(first.session, second.session);
@@ -945,8 +965,7 @@ mod tests {
         assert_eq!(server.peer_count(), 1);
         assert!(server.game.player(1).is_none());
         let mut replacement = GameClient::with_arena(server.local_addr().unwrap(), arena).unwrap();
-        server.poll().unwrap();
-        replacement.poll().unwrap();
+        connect_test_clients(&mut server, &mut [&mut replacement]);
         assert_eq!(replacement.player_id(), Some(1));
         assert_eq!(replacement.local_player().unwrap().health, 100);
         assert_ne!(replacement.session, second.session);
@@ -956,8 +975,7 @@ mod tests {
     fn reconnect_preserves_authority_state_and_hello_replies_are_throttled() {
         let mut server = GameServer::bind("127.0.0.1:0").unwrap();
         let mut client = GameClient::connect(server.local_addr().unwrap()).unwrap();
-        server.poll().unwrap();
-        client.poll().unwrap();
+        connect_test_clients(&mut server, &mut [&mut client]);
         let player = server.game.player_mut(0).unwrap();
         player.health = 34;
         player.ammo = 7;
@@ -993,8 +1011,7 @@ mod tests {
         };
         let mut server = GameServer::with_arena("127.0.0.1:0", arena.clone()).unwrap();
         let mut client = GameClient::with_arena(server.local_addr().unwrap(), arena).unwrap();
-        server.poll().unwrap();
-        client.poll().unwrap();
+        connect_test_clients(&mut server, &mut [&mut client]);
         let mut buffer = [0; MAX_PACKET_BYTES + 1];
         for tick in 0..300 {
             client
@@ -1076,8 +1093,7 @@ mod tests {
         };
         let mut server = GameServer::with_arena("127.0.0.1:0", arena.clone()).unwrap();
         let mut client = GameClient::with_arena(server.local_addr().unwrap(), arena).unwrap();
-        server.poll().unwrap();
-        client.poll().unwrap();
+        connect_test_clients(&mut server, &mut [&mut client]);
         server.game.spawn_player(1);
         client
             .tick(InputFrame {
@@ -1130,8 +1146,7 @@ mod tests {
     fn reliable_event_sessions_reset_on_reconnect_and_reject_old_ack_and_packet() {
         let mut server = GameServer::bind("127.0.0.1:0").unwrap();
         let mut client = GameClient::connect(server.local_addr().unwrap()).unwrap();
-        server.poll().unwrap();
-        client.poll().unwrap();
+        connect_test_clients(&mut server, &mut [&mut client]);
         let old_session = server.peers[0].session;
         let old_packet = encode_server(&ServerPacket::ReliableEvent {
             session: old_session,
@@ -1195,8 +1210,7 @@ mod tests {
     fn reliable_backpressure_never_acks_unstored_events_and_server_is_bounded() {
         let mut server = GameServer::bind("127.0.0.1:0").unwrap();
         let mut client = GameClient::connect(server.local_addr().unwrap()).unwrap();
-        server.poll().unwrap();
-        client.poll().unwrap();
+        connect_test_clients(&mut server, &mut [&mut client]);
         let event = NetworkEvent::decode(&event_payload(0)).unwrap();
         client.delivered_events.resize(MAX_DELIVERED_EVENTS, event);
         server.peers[0].events.queue(&event_payload(1)).unwrap();

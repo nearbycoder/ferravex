@@ -355,9 +355,7 @@ mod tests {
             .unwrap();
         let mut a = GameClient::with_arena(server.local_addr().unwrap(), arena.clone()).unwrap();
         let mut b = GameClient::with_arena(server.local_addr().unwrap(), arena).unwrap();
-        server.poll().unwrap();
-        a.poll().unwrap();
-        b.poll().unwrap();
+        connect_test_clients(&mut server, &mut [&mut a, &mut b]);
         server.tick().unwrap();
         a.poll().unwrap();
         b.poll().unwrap();
