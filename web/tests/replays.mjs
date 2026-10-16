@@ -13,3 +13,7 @@ for(let i=0;i<400;i++)r.frame();assert.equal(r.e.ferravex_replay_tick(),BigInt(t
 const oldTick=r.e.ferravex_replay_tick();ptr=r.e.ferravex_replay_buffer(3);new Uint8Array(r.e.memory.buffer,ptr,3).set([1,2,3]);r.e.ferravex_replay_submit(3);r.frame();assert.match(r.message(),/Import rejected/);assert.equal(r.e.ferravex_replay_tick(),oldTick,'bad import retains playback');
 r.command(2);r.command(32);for(let i=0;i<10;i++)r.frame();
 console.log(`Strike actual-Wasm record, durable reload, ${ticks}-tick verified playback, seeking, bounded import/export and rejected-import preservation passed (${bytes.length} bytes)`);
+
+if(process.argv[2]){
+ const bytes=fs.readFileSync(process.argv[2]);assert.ok(bytes.length<=8*1024*1024);const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.length),ticks=view.getUint32(40,true);assert.ok(ticks>0&&ticks<=19200);const end=view.getBigUint64(56+(ticks-1)*32,true),r=runtime();r.key(0xff0d);const ptr=r.e.ferravex_replay_buffer(bytes.length);new Uint8Array(r.e.memory.buffer,ptr,bytes.length).set(bytes);r.e.ferravex_replay_submit(bytes.length);r.frame();for(let i=0;i<ticks*2;i++)r.frame();assert.equal(r.e.ferravex_replay_tick(),end,r.message());assert.ok(!r.message().includes('stopped'),r.message());console.log(`Native authority recording replays in actual Wasm: ${ticks} verified ticks`);
+}

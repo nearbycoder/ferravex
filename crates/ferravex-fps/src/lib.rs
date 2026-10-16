@@ -341,8 +341,8 @@ impl Default for Match {
 
 /// World-space unit look direction. Yaw 0 faces -Z and positive pitch looks up.
 pub fn forward(yaw: f32, pitch: f32) -> Vec3 {
-    let (sy, cy) = yaw.sin_cos();
-    let (sp, cp) = pitch.sin_cos();
+    let (sy, cy) = ferravex_math::deterministic::sin_cos(yaw);
+    let (sp, cp) = ferravex_math::deterministic::sin_cos(pitch);
     Vec3::new(sy * cp, sp, -cy * cp)
 }
 
@@ -394,8 +394,9 @@ pub fn try_move_player(
     arena: &Arena,
 ) -> Result<(), CharacterError> {
     let input = input.sanitized();
-    let forward = Vec3::new(input.yaw.sin(), 0., -input.yaw.cos());
-    let right = Vec3::new(input.yaw.cos(), 0., input.yaw.sin());
+    let (sin, cos) = ferravex_math::deterministic::sin_cos(input.yaw);
+    let forward = Vec3::new(sin, 0., -cos);
+    let right = Vec3::new(cos, 0., sin);
     let mut motor = Character::new(player.position);
     motor.velocity = player.velocity;
     motor.grounded = player.grounded;

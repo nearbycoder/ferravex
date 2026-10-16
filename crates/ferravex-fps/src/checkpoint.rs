@@ -171,7 +171,7 @@ impl Match {
                 h = (h ^ u64::from(*v)).wrapping_mul(0x100000001b3);
             }
         };
-        emit(b"strike-rules-1-64hz");
+        emit(b"strike-rules-2-64hz-deterministic-aim");
         self.write_arena(&mut Writer(&mut emit))?;
         Ok(h)
     }

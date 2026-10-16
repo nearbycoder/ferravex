@@ -66,7 +66,10 @@ effects on seeks; fast-forward must not play audio or award achievements.
 Strike uses a separate playback `Match`; its live practice authority and AI freeze.
 It records the sanitized commands of every player rather than rerunning bot
 perception during playback. Complete FXMC0001 checkpoints include arena, players,
-weapon/jump/respawn timers, rewind poses and life generations. The state hash uses
+weapon/jump/respawn timers, rewind poses and life generations. Shooter movement
+and aiming use `ferravex_math::deterministic::sin_cos`: a shared fixed polynomial
+avoids native/Wasm libm differences. A native-recorded 640-tick practice clip
+passes actual Wasm playback and per-tick state hashes on this host. The state hash uses
 the same canonical body without allocating. Accepted shot/hit/kill/respawn events
 are compared against newly simulated output. Replay camera, effects, and HUD use
 the playback match. Seeks advance at most 64 ticks per rendered frame and suppress
