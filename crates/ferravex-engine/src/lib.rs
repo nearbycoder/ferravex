@@ -50,3 +50,6 @@ pub mod events;
 
 /// See [`frame_events`] for the system contract and examples.
 pub mod frame_events;
+
+/// See [`scheduler`] for the system contract and examples.
+pub mod scheduler;
