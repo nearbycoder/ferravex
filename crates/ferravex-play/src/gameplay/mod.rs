@@ -22,3 +22,5 @@ pub mod combo;
 pub mod progression;
 
 pub mod loot;
+
+pub mod pity;
