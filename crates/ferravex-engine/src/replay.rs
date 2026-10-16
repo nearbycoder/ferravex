@@ -68,6 +68,22 @@ impl Replay {
         self.frames.truncate(keep);
         removed
     }
+    /// Earliest tick with different state hashes or missing coverage. Inputs are
+    /// intentionally ignored: hashes are supplied by the simulation host.
+    pub fn first_divergence(&self, other: &Self) -> Option<u64> {
+        for (a, b) in self.frames.iter().zip(&other.frames) {
+            if a.tick != b.tick {
+                return Some(a.tick.min(b.tick));
+            }
+            if a.state_hash != b.state_hash {
+                return Some(a.tick);
+            }
+        }
+        self.frames
+            .get(other.frames.len())
+            .or_else(|| other.frames.get(self.frames.len()))
+            .map(|f| f.tick)
+    }
     pub fn frames(&self) -> &[Frame] {
         &self.frames
     }
@@ -269,5 +285,35 @@ mod slices_tests {
             state_hash: 0
         }));
         assert_eq!(r.truncate_from(0), 2);
+    }
+}
+
+#[cfg(test)]
+mod divergence_tests {
+    use super::*;
+    #[test]
+    fn finds_hash_tick_and_length_mismatch_symmetrically() {
+        let make = |rows: &[(u64, u64)]| {
+            let mut r = Replay::default();
+            for &(tick, state_hash) in rows {
+                r.record(Frame {
+                    tick,
+                    state_hash,
+                    input: InputFrame::default(),
+                });
+            }
+            r
+        };
+        let a = make(&[(1, 7), (3, 8)]);
+        assert_eq!(a.first_divergence(&make(&[(1, 7), (3, 8)])), None);
+        for (b, tick) in [
+            (make(&[(1, 7), (3, 9)]), 3),
+            (make(&[(1, 7), (2, 8)]), 2),
+            (make(&[(1, 7)]), 3),
+            (Replay::default(), 1),
+        ] {
+            assert_eq!(a.first_divergence(&b), Some(tick));
+            assert_eq!(b.first_divergence(&a), Some(tick));
+        }
     }
 }
