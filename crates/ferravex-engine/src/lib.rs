@@ -47,3 +47,6 @@ pub use ferravex_play::gameplay;
 
 /// See [`events`] for the system contract and examples.
 pub mod events;
+
+/// See [`frame_events`] for the system contract and examples.
+pub mod frame_events;
