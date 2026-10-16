@@ -76,6 +76,26 @@ impl Bundle {
         *self = next;
         Ok(())
     }
+    /// Copy a directory's contents with the directory prefix stripped.
+    /// Empty prefix selects the complete bundle. Payload allocations are shared.
+    pub fn subtree(&self, directory: &str) -> Result<Self, AssetError> {
+        if directory.is_empty() {
+            return Ok(self.clone());
+        }
+        if !valid_path(directory) {
+            return Err(AssetError::Path);
+        }
+        let prefix = format!("{directory}/");
+        let mut result = Self::default();
+        for (name, bytes) in self.files.range(prefix.clone()..) {
+            let Some(relative) = name.strip_prefix(&prefix) else {
+                break;
+            };
+            result.bytes += bytes.len();
+            result.files.insert(relative.into(), bytes.clone());
+        }
+        Ok(result)
+    }
     pub fn get(&self, path: &str) -> Option<Arc<[u8]>> {
         self.files.get(path).cloned()
     }
@@ -406,5 +426,27 @@ mod transactions_tests {
         assert!(b.get("a").is_none());
         assert_eq!(b.decoded_bytes(), 2);
         assert_eq!(&*b.get("b").unwrap(), b"ok");
+    }
+}
+
+#[cfg(test)]
+mod subtrees_tests {
+    use super::*;
+    #[test]
+    fn directory_boundaries_and_nested_names_are_preserved() {
+        let mut b = Bundle::default();
+        for name in ["tex/a", "tex/nested/b", "texture/c", "tex"] {
+            b.insert(name, b"x").unwrap();
+        }
+        let sub = b.subtree("tex").unwrap();
+        assert_eq!(sub.names().collect::<Vec<_>>(), ["a", "nested/b"]);
+        assert_eq!(sub.decoded_bytes(), 2);
+        assert!(Arc::ptr_eq(
+            &b.get("tex/a").unwrap(),
+            &sub.get("a").unwrap()
+        ));
+        assert_eq!(b.subtree("").unwrap().encode(), b.encode());
+        assert!(b.subtree("absent").unwrap().is_empty());
+        assert!(b.subtree("../").is_err());
     }
 }
