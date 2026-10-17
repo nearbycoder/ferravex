@@ -66,5 +66,7 @@ export function bindPlayer(canvas,game,getExports,body,isOpen){
  const connection=document.createElement('p');connection.setAttribute('role','status');section.insertBefore(connection,feedback);
  const online=()=>{connection.textContent=navigator.onLine===false?'Offline. This loaded game can keep running; multiplayer and new downloads may be unavailable.':'Online. No connection is required for this loaded single-player session.';};
  window.addEventListener('online',online);window.addEventListener('offline',online);online();
+ const guide=document.createElement('details'),summary=document.createElement('summary'),instructions=document.createElement('p');summary.textContent='Game guide';instructions.textContent='Use Controls to inspect the current keyboard, touch and gamepad bindings.';guide.append(summary,instructions);section.insertBefore(guide,feedback);
+ let guideRequested=false;guide.addEventListener('toggle',async()=>{if(!guide.open||guideRequested)return;guideRequested=true;try{const response=await fetch(new URL('./games.json',import.meta.url));if(!response.ok)throw Error();const games=await response.json(),entry=games.find(entry=>entry.id===game);if(!entry)throw Error();canvas.setAttribute('aria-label',entry.title+' game canvas');instructions.textContent=entry.description+' '+entry.controls+' Controls lists your current custom bindings.';}catch{guideRequested=false;instructions.textContent='Guide unavailable. Use Controls to inspect or remap current bindings.';}});
  return player;
 }
