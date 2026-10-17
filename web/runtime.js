@@ -126,6 +126,7 @@ try {
   canvas.dataset.effectVertices=String(exports.ferravex_effect_vertex_count?.()||0);
   canvas.dataset.skinnedDrawCalls=String(retained.skinnedDrawCalls);canvas.dataset.skinJoints=String(exports.ferravex_skin_joint_count?.()||0);
   canvas.dataset.materialError=retained.lastError;materialTools?.update();contentTools?.update();replayTools?.update();multiplayerTools?.update();
+  details.player?.frame(time);
   if(exports.ferravex_take_graphics_reset?.()){const extension=recoveryExtension;if(extension){autoRestore=true;recoveryExtension?.loseContext();}}
   if(running)graphics.schedule(loop);else {graphics.stop();audio.dispose();}
  };

@@ -26,7 +26,7 @@ function render(timestamp){
  engine.orbit_controls_frame(dt,Math.max(1,Math.round(rect.width)),Math.max(1,Math.round(rect.height)));
  audio.sync();details.ready();details.update();const panel=input.syncPanel();controlsButton.setAttribute('aria-pressed',String(panel));
  if(memoryBuffer!==engine.memory.buffer){memoryBuffer=engine.memory.buffer;image=new ImageData(new Uint8ClampedArray(memoryBuffer,engine.pixels(),engine.width()*engine.height()*4),engine.width(),engine.height());}
- ctx.putImageData(image,0,0);drawInput2d(ctx,engine,canvas.width,canvas.height);
+ ctx.putImageData(image,0,0);drawInput2d(ctx,engine,canvas.width,canvas.height);details.player?.frame(timestamp);
  const paused=!!engine.orbit_paused();pauseButton.textContent=paused?'Resume':'Pause';
  const descriptions=['Ready. Launch to play.','Playing.','First sector cleared.','Both sectors cleared. Launch to retry.','Game over. Launch to retry.'];
  const description=`${paused?'Paused.':descriptions[engine.status()]} Score ${engine.score()}. ${engine.lives()} lives.`;
