@@ -58,3 +58,6 @@ win.emit('keydown',{code:'Semicolon'});win.emit('keyup',{code:'Semicolon'});asse
  let prevented=false;c.emit('selectstart',{preventDefault(){prevented=true;}});assert.ok(prevented,'canvas selection is blocked');
  prevented=false;c.emit('touchmove',{preventDefault(){prevented=true;}});assert.ok(prevented,'canvas touch moves cannot scroll or select the surrounding page');
 }
+
+// Browser shortcuts retain their defaults and never move the player.
+for(const modifier of ['ctrlKey','metaKey','altKey']){const count=calls.length;win.emit('keydown',{code:'KeyW',[modifier]:true,preventDefault(){assert.fail('browser shortcut consumed');}});assert.equal(calls.length,count);}
