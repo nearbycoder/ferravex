@@ -6,3 +6,7 @@ const host={fetch:async()=>{fetched++;return response;},wasm:{instantiateStreami
 assert.equal(await loadWasm('game.wasm',imports,host),'fallback');assert.equal(fetched,1);assert.equal(streamed,1);assert.equal(buffered,1);
 host.wasm.instantiateStreaming=async()=> 'streamed';assert.equal(await loadWasm('game.wasm',imports,host),'streamed');assert.equal(buffered,1);
 await assert.rejects(loadWasm('missing',imports,{...host,fetch:async()=>({ok:false,status:404})}),/404/);
+
+let aborted=false;await assert.rejects(loadWasm('hung',imports,{...host,timeoutMs:5,fetch:(_url,{signal})=>new Promise(()=>{signal.addEventListener('abort',()=>aborted=true);})}),/timed out/);assert.equal(aborted,true);
+// A stalled body is bounded as well as the initial HTTP request.
+await assert.rejects(loadWasm('body',imports,{...host,timeoutMs:5,fetch:async()=>({...response,arrayBuffer:()=>new Promise(()=>{})}),wasm:{instantiate(){}}}),/timed out/);
