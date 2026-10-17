@@ -17,6 +17,8 @@ export function bindInput(canvas,game,getExports,isPlaying=()=>false,host={windo
  const viewportChanged=()=>{reset();getExports()?.ferravex_focus(focused?1:0);};
  win.addEventListener('resize',viewportChanged);win.addEventListener('orientationchange',viewportChanged);
  win.visualViewport?.addEventListener('resize',viewportChanged);
+ win.addEventListener('pagehide',()=>{focused=false;reset();});
+ win.addEventListener('pageshow',()=>{focused=!doc.hidden;getExports()?.ferravex_focus(focused?1:0);});
  win.addEventListener('blur',()=>{focused=false;reset();});
  win.addEventListener('focus',()=>{focused=true;getExports()?.ferravex_focus(1);});
  doc.addEventListener('visibilitychange',()=>{if(doc.hidden){focused=false;reset();}else{focused=true;getExports()?.ferravex_focus(1);}});
