@@ -41,8 +41,9 @@ export function bindInput(canvas,game,getExports,isPlaying=()=>false,host={windo
   if(e.pointerType==='touch'){exports.ferravex_touch_pointer(x,y);if(e.buttons)exports.ferravex_touch(e.pointerId,1,x,y);}
   else exports.ferravex_pointer(x,y,e.movementX,e.movementY);
  });
- const release=(e,cancel)=>{pointers.delete(e.pointerId);const [x,y]=coords(e),exports=getExports();if(!exports)return;
+ const release=(e,cancel)=>{const pointer=pointers.get(e.pointerId);if(cancel||!e.buttons)pointers.delete(e.pointerId);else if(pointer)pointer.button=e.buttons&1?0:e.buttons&2?2:1;const [x,y]=coords(e),exports=getExports();if(!exports)return;
   if(e.pointerType==='touch'){if(exports.ferravex_touch_mouse())exports.ferravex_touch_button(e.button+1,0);exports.ferravex_touch(e.pointerId,cancel?3:2,x,y);}
+  else if(cancel){for(let button=1;button<=5;button++)exports.ferravex_button(button,0);}
   else exports.ferravex_button(e.button+1,0);
  };
  canvas.addEventListener('pointerup',e=>release(e,false));canvas.addEventListener('pointercancel',e=>release(e,true));canvas.addEventListener('contextmenu',e=>e.preventDefault());

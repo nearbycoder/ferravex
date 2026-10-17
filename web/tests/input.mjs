@@ -68,3 +68,5 @@ for(const event of [{isComposing:true},{keyCode:229}]){const count=calls.length;
 gamepads=[{connected:true,axes:[.5],buttons:[{value:1}]}];input.poll();win.emit('blur');const asleep=calls.length;input.poll();assert.equal(calls.length,asleep);win.emit('focus');const awake=calls.length;input.poll();assert.ok(calls.slice(awake).some(c=>c[0]==='pad_axis'&&c[3]===.5));assert.ok(calls.slice(awake).some(c=>c[0]==='pad_button'&&c[3]===1));
 
 win.emit('keydown',{code:'KeyW'});win.emit('pagehide');assert.deepEqual(calls.at(-1),['blur']);doc.hidden=false;win.emit('pageshow');assert.deepEqual(calls.at(-1),['focus',1]);
+
+canvas.emit('pointerdown',{pointerType:'mouse',pointerId:77,clientX:20,clientY:30,button:0});canvas.emit('pointerup',{pointerType:'mouse',pointerId:77,clientX:20,clientY:30,button:0,buttons:2});const chord=calls.length;canvas.emit('lostpointercapture',{pointerId:77});assert.ok(calls.slice(chord).some(c=>c[0]==='button'&&c[1]===3&&c[2]===0),'capture loss clears remaining mouse chord buttons');
