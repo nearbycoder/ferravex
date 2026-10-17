@@ -80,5 +80,8 @@ export function bindPlayer(canvas,game,getExports,body,isOpen){
  const applyPreferences=value=>{for(const [key,setting] of Object.entries(validatePlayerPreferences(value))){preferenceFields[key].value=setting;preferenceFields[key].dispatchEvent(new Event('change'));}};
  let stored={};try{stored=readPlayerPreferences(localStorage,preferenceKey);}catch{}applyPreferences(stored);
  for(const field of Object.values(preferenceFields))field.addEventListener('change',savePreferences);
+ addButton('Export player settings',()=>{const blob=new Blob([JSON.stringify({version:1,settings:currentPreferences()},null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=game+'-player-settings.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);message('Player settings exported. Game progress and bindings are separate.');});
+ const upload=document.createElement('input');upload.type='file';upload.accept='.json,application/json';upload.hidden=true;section.append(upload);
+ addButton('Import player settings',()=>upload.click());upload.addEventListener('change',async()=>{const file=upload.files?.[0];if(!file)return;try{if(file.size>4096)throw Error('Settings file is too large.');const value=JSON.parse(await file.text());if(value.version!==1)throw Error('Unsupported settings version.');const settings=validatePlayerPreferences(value.settings);applyPreferences(settings);savePreferences();message('Player settings imported.');}catch(error){message(error.message||'Invalid settings file.');}finally{upload.value='';}});
  return player;
 }
