@@ -40,3 +40,7 @@ The animated foreground weapon does not cast or receive world shadows and stays 
 near walls. Dockyard uses the shared sun shadow instead of overlapping baked shadow quads.
 Use Controls → Devices → Visual style to compare palettes, and Graphics quality for Low
 (no dynamic shadows), Medium or High. See [visual presets](../../docs/VISUALS.md).
+
+## Browser player update
+
+Open **Details → Player tools** for screenshots, clean sharing links, frame limits, session timing, screen wake lock, accessibility preferences and settings backups. All shared player upgrades apply to this example. Read the [player guide](../../docs/PLAYER_GUIDE.md) for behavior and browser limits.

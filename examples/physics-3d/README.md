@@ -15,3 +15,7 @@ Drag with the left mouse button or use arrows to orbit the camera; use the wheel
 This sandbox has no win condition. Check stacking, angular response, ball contacts, body limits, reset/pause and camera behavior. Its solver is a bounded original implementation with documented shape, joint and CCD limits; see the `ferravex-physics` README rather than assuming production physics coverage.
 
 Press F, the gamepad left shoulder or PULSE for a mass-normalized radial kick, with a 0.65-second cooldown. Pulses wake bodies and pass through the normal physics solver.
+
+## Browser player update
+
+Open **Details → Player tools** for screenshots, clean sharing links, frame limits, session timing, screen wake lock, accessibility preferences and settings backups. All shared player upgrades apply to this example. Read the [player guide](../../docs/PLAYER_GUIDE.md) for behavior and browser limits.

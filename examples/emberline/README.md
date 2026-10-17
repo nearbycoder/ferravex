@@ -34,3 +34,7 @@ Green springboards on three raised side platforms launch the player into optiona
 Two high bonus platforms carry additional embers. Real contact gives a 0.65-second warning before collision disappears; the platforms regrow after three seconds. The shared `CrumblePlatform` exposes solid/warning/absent phases to hosts.
 
 The mill and furnace lanterns now form an ordered checkpoint route through shared respawn anchors. Earlier lanterns cannot move progress backward. Death restores temporary platforms and movement state while preserving earned embers, score and trial time.
+
+## Browser player update
+
+Open **Details → Player tools** for screenshots, clean sharing links, frame limits, session timing, screen wake lock, accessibility preferences and settings backups. All shared player upgrades apply to this example. Read the [player guide](../../docs/PLAYER_GUIDE.md) for behavior and browser limits.

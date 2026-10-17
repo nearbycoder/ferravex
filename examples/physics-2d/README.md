@@ -15,3 +15,7 @@ Click inside the scene to add the selected shape. Press 1 to select balls and 2 
 This sandbox has no win condition. Validate contacts, visible rotations, stable resting bodies, spawn limits and pause/reset. It does not establish general physics accuracy: supported shapes, joints and CCD limits are documented in the physics crate README. See the `ferravex-physics` README for the solver's precise scope.
 
 Press F, the gamepad left shoulder or PULSE for a mass-normalized radial kick, with a 0.65-second cooldown. Pulses wake bodies and pass through the normal physics solver.
+
+## Browser player update
+
+Open **Details → Player tools** for screenshots, clean sharing links, frame limits, session timing, screen wake lock, accessibility preferences and settings backups. All shared player upgrades apply to this example. Read the [player guide](../../docs/PLAYER_GUIDE.md) for behavior and browser limits.

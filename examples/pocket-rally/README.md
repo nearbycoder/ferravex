@@ -49,3 +49,7 @@ game logic; they do not expand the common engine API prematurely.
 Best laps are session-only; there is no disk storage, multiplayer, gamepad, or
 sound in this example. Browser builds share identical Rust simulation; the native
 smoke flags are intentionally unavailable in browser builds.
+
+## Browser player update
+
+Open **Details → Player tools** for screenshots, clean sharing links, frame limits, session timing, screen wake lock, accessibility preferences and settings backups. All shared player upgrades apply to this example. Read the [player guide](../../docs/PLAYER_GUIDE.md) for behavior and browser limits.

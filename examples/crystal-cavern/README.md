@@ -30,3 +30,7 @@ cargo run -p crystal-cavern -- --autoplay --smoke-frames 6000 --screenshot /tmp/
 Autoplay navigates the map with movement, turning and interaction inputs through the same simulation as a player. The headless completion test verifies the whole expedition, alongside collision, gate prerequisites, interaction visibility and restart tests.
 
 The crystal material can be edited in the browser with `?material-tools`. Native `FERRAVEX_CRYSTAL_SHADER=/path/to/crystal.frag` polls a fragment-hook file; failed replacements keep the last valid program. See the [material guide](../../docs/MATERIALS.md).
+
+## Browser player update
+
+Open **Details → Player tools** for screenshots, clean sharing links, frame limits, session timing, screen wake lock, accessibility preferences and settings backups. All shared player upgrades apply to this example. Read the [player guide](../../docs/PLAYER_GUIDE.md) for behavior and browser limits.

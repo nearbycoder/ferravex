@@ -68,3 +68,7 @@ choices save per game. See [visual settings](../../docs/VISUALS.md).
 
 Native Linux and browser build paths are implemented. Touch input is provided
 but has not been tested on a physical mobile device.
+
+## Browser player update
+
+Open **Details → Player tools** for screenshots, clean sharing links, frame limits, session timing, screen wake lock, accessibility preferences and settings backups. All shared player upgrades apply to this example. Read the [player guide](../../docs/PLAYER_GUIDE.md) for behavior and browser limits.

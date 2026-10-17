@@ -31,3 +31,7 @@ cargo run --release -p orchard-guard -- --autoplay --smoke-frames 420 --screensh
 ```
 
 `--autoplay` executes the same purchases, upgrades, wave launches, and combat rules as human play. The complete-match test checks a four-wave win, entity bounds, both tower types and upgrades; separate tests cover failed purchases and a defenseless loss. Native smoke flags use a deterministic render timestep; browser launches are interactive.
+
+## Browser player update
+
+Open **Details → Player tools** for screenshots, clean sharing links, frame limits, session timing, screen wake lock, accessibility preferences and settings backups. All shared player upgrades apply to this example. Read the [player guide](../../docs/PLAYER_GUIDE.md) for behavior and browser limits.

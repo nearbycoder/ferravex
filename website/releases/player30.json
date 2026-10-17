@@ -227,7 +227,7 @@
     "id": 29,
     "title": "Document every player tool and its browser contracts",
     "detail": "Explain controls, storage, settings transfer, performance limits, capture behavior and browser support in a dedicated guide.",
-    "url": null,
+    "url": "https://github.com/nearbycoder/ferravex/pull/142",
     "category": "Website and docs",
     "scope": "Website and documentation"
   },
@@ -235,7 +235,7 @@
     "id": 30,
     "title": "Expose the update on every game page and improve discovery",
     "detail": "Search games by title, genre and controls, combine dimension filters, and link every example to the shared upgrade guide.",
-    "url": null,
+    "url": "https://github.com/nearbycoder/ferravex/pull/143",
     "category": "Website and docs",
     "scope": "Website and documentation"
   }
