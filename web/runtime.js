@@ -79,6 +79,7 @@ try {
  status.textContent='';if(controlsButton)controlsButton.disabled=false;const mpButton=document.querySelector('[data-multiplayer]');if(mpButton)mpButton.disabled=false;canvas.focus();
  const loop=time=>{
   if(!graphics.active())return;
+  if(details.player?.shouldRender(time)===false){graphics.schedule(loop);return;}
   const cpuStarted=performance.now();
   const r=canvas.getBoundingClientRect(),size=framebufferSize(r.width,r.height,devicePixelRatio||1,exports.ferravex_resolution(),maxFramebufferDimension,exports.ferravex_adaptive_scale?.()??1),dpr=size.scale;
   const w=size.width,h=size.height;

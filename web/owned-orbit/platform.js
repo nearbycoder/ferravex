@@ -20,6 +20,7 @@ controlsButton.addEventListener('click',()=>{input.openSettings();canvas.focus()
 window.addEventListener('blur',()=>setPaused(true));
 document.addEventListener('visibilitychange',()=>{previous=0;if(document.hidden)setPaused(true);});
 function render(timestamp){
+ if(details.player?.shouldRender(timestamp)===false){requestAnimationFrame(render);return;}
  const cpuStarted=performance.now();
  const dt=previous?Math.min((timestamp-previous)/1000,.05):0;previous=timestamp;
  const rect=canvas.getBoundingClientRect();input.poll();
