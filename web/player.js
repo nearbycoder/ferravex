@@ -1,3 +1,9 @@
+export function readPlayerPreferences(storage,key){try{const raw=storage.getItem(key);if(!raw||raw.length>4096)return {};return validatePlayerPreferences(JSON.parse(raw));}catch{return {};}}
+export function validatePlayerPreferences(value){
+ if(!value||typeof value!=='object'||Array.isArray(value))throw Error('Expected player settings');
+ const allowed={hud:['0','1'],cap:['0','30','60'],contrast:['0','1'],text:['0','1'],motion:['0','1','2']},out={};
+ for(const [key,values] of Object.entries(allowed)){if(value[key]===undefined)continue;if(!values.includes(value[key]))throw Error('Invalid '+key+' setting');out[key]=value[key];}return out;
+}
 export class FrameGate{
  limit=0;next=null;
  accept(time){if(!this.limit)return true;const interval=1000/this.limit;if(this.next!==null&&time+.1<this.next)return false;this.next=this.next===null||time-this.next>interval?time+interval:this.next+interval;return true;}
@@ -68,5 +74,11 @@ export function bindPlayer(canvas,game,getExports,body,isOpen){
  window.addEventListener('online',online);window.addEventListener('offline',online);online();
  const guide=document.createElement('details'),summary=document.createElement('summary'),instructions=document.createElement('p');summary.textContent='Game guide';instructions.textContent='Use Controls to inspect the current keyboard, touch and gamepad bindings.';guide.append(summary,instructions);section.insertBefore(guide,feedback);
  let guideRequested=false;guide.addEventListener('toggle',async()=>{if(!guide.open||guideRequested)return;guideRequested=true;try{const response=await fetch(new URL('./games.json',import.meta.url));if(!response.ok)throw Error();const games=await response.json(),entry=games.find(entry=>entry.id===game);if(!entry)throw Error();canvas.setAttribute('aria-label',entry.title+' game canvas');instructions.textContent=entry.description+' '+entry.controls+' Controls lists your current custom bindings.';}catch{guideRequested=false;instructions.textContent='Guide unavailable. Use Controls to inspect or remap current bindings.';}});
+ const preferenceKey='ferravex.player.v1.'+game,preferenceFields={hud:hudSelect,cap:capSelect,contrast:contrastSelect,text:textSelect,motion:motionSelect};
+ const currentPreferences=()=>Object.fromEntries(Object.entries(preferenceFields).map(([key,field])=>[key,field.value]));
+ const savePreferences=()=>{try{localStorage.setItem(preferenceKey,JSON.stringify(currentPreferences()));}catch{message('Player settings apply to this session; storage is unavailable.');}};
+ const applyPreferences=value=>{for(const [key,setting] of Object.entries(validatePlayerPreferences(value))){preferenceFields[key].value=setting;preferenceFields[key].dispatchEvent(new Event('change'));}};
+ let stored={};try{stored=readPlayerPreferences(localStorage,preferenceKey);}catch{}applyPreferences(stored);
+ for(const field of Object.values(preferenceFields))field.addEventListener('change',savePreferences);
  return player;
 }
