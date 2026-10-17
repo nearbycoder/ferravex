@@ -63,3 +63,6 @@ win.emit('keydown',{code:'Semicolon'});win.emit('keyup',{code:'Semicolon'});asse
 for(const modifier of ['ctrlKey','metaKey','altKey']){const count=calls.length;win.emit('keydown',{code:'KeyW',[modifier]:true,preventDefault(){assert.fail('browser shortcut consumed');}});assert.equal(calls.length,count);}
 
 for(const event of [{isComposing:true},{keyCode:229}]){const count=calls.length;win.emit('keydown',{code:'Space',...event});assert.equal(calls.length,count,'IME composition must not launch or jump');}
+
+// A steady stick must be resent after Rust clears its input on focus loss.
+gamepads=[{connected:true,axes:[.5],buttons:[{value:1}]}];input.poll();win.emit('blur');const asleep=calls.length;input.poll();assert.equal(calls.length,asleep);win.emit('focus');const awake=calls.length;input.poll();assert.ok(calls.slice(awake).some(c=>c[0]==='pad_axis'&&c[3]===.5));assert.ok(calls.slice(awake).some(c=>c[0]==='pad_button'&&c[3]===1));
