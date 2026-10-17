@@ -56,5 +56,7 @@ export function bindPlayer(canvas,game,getExports,body,isOpen){
  const gate=new FrameGate();player.shouldRender=time=>!document.hidden&&gate.accept(time);
  document.addEventListener('visibilitychange',()=>{gate.next=null;clock.previous=null;sampleStart=null;sampleFrames=0;});
  const capSelect=addSelect('Frame rate limit',[[0,'Display refresh'],[60,'60 FPS'],[30,'30 FPS']],value=>gate.set(value));
+ const contrastSelect=addSelect('Player contrast',[[0,'Standard'],[1,'High contrast']],value=>document.body.classList.toggle('ferravex-high-contrast',value==='1'));
+ style.textContent+='body.ferravex-high-contrast button,body.ferravex-high-contrast select,body.ferravex-high-contrast dialog,body.ferravex-high-contrast nav{background:#000!important;color:#fff!important;border-color:#fff!important}body.ferravex-high-contrast dialog p,body.ferravex-high-contrast dialog label{color:#fff!important}body.ferravex-high-contrast :focus-visible{outline:3px solid #ffed00!important}';
  return player;
 }
