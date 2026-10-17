@@ -12,3 +12,10 @@ export async function loadWasm(url,imports,host={fetch:(...args)=>fetch(...args)
  return host.wasm.instantiate(await response.arrayBuffer(),imports);
  })()]);}finally{clearTimeout(timer);}
 }
+
+export function showLoadError(error,target){
+ target.textContent=error instanceof Error?error.message:'The game could not start.';
+ const retry=document.createElement('button');retry.type='button';retry.textContent='Retry game';
+ retry.style.cssText='display:block;margin:12px auto;padding:10px 16px;pointer-events:auto;cursor:pointer';
+ retry.addEventListener('click',()=>location.reload());target.append(retry);
+}

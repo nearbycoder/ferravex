@@ -1,4 +1,4 @@
-import {loadWasm} from '../loader.js';
+import {loadWasm,showLoadError} from '../loader.js';
 // Original CPU raster stays in Rust; the shared action host handles every device.
 import {bindDetails,framebufferSize} from '../details.js';
 import {configureVisuals} from '../visuals.js';
@@ -41,4 +41,4 @@ try {
  const result=await loadWasm('./owned_orbit.wasm',imports);
  engine=result.instance.exports;engine.init();configureVisuals(engine,location.search);notice.hidden=true;controlsButton.disabled=false;
  requestAnimationFrame(render);
-}catch(error){noticeTitle.textContent='COULD NOT START';noticeMessage.textContent=error instanceof Error?error.message:'Unable to load the Rust game.';}
+}catch(error){noticeTitle.textContent='COULD NOT START';showLoadError(error,noticeMessage);}

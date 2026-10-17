@@ -1,4 +1,4 @@
-import {loadWasm} from './loader.js';
+import {loadWasm,showLoadError} from './loader.js';
 // Original Ferravex browser platform: WebGL2, DOM input, direct Rust/Wasm ABI.
 import {RetainedRenderer,GpuTimer} from './retained.js';
 import {SpriteRenderer} from './effects.js';
@@ -10,7 +10,7 @@ import {bindGraphicsLifecycle} from './lifecycle.js';
 const canvas = document.querySelector('canvas');
 const status = document.querySelector('[role=status]');
 const gl = canvas.getContext('webgl2', {alpha:false, antialias:true, depth:true});
-if (!gl) throw new Error('WebGL2 is required');
+if (!gl) {showLoadError(new Error('WebGL2 is required. Try a browser with hardware graphics enabled.'),status);throw new Error('WebGL2 is required');}
 let recoveryExtension=gl.getExtension('WEBGL_lose_context');
 const shader = (type,source) => {const s=gl.createShader(type);gl.shaderSource(s,source);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(s));return s;};
 let program,buffer,retained,spriteEffects,gpuTimer,maxFramebufferDimension,lastGpuFrame=0;
@@ -130,4 +130,4 @@ try {
   if(running)graphics.schedule(loop);else {graphics.stop();audio.dispose();}
  };
  graphics.schedule(loop);
-} catch(error) {status.textContent=error.message;console.error(error);}
+} catch(error) {showLoadError(error,status);console.error(error);}
