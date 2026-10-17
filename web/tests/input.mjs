@@ -66,3 +66,5 @@ for(const event of [{isComposing:true},{keyCode:229}]){const count=calls.length;
 
 // A steady stick must be resent after Rust clears its input on focus loss.
 gamepads=[{connected:true,axes:[.5],buttons:[{value:1}]}];input.poll();win.emit('blur');const asleep=calls.length;input.poll();assert.equal(calls.length,asleep);win.emit('focus');const awake=calls.length;input.poll();assert.ok(calls.slice(awake).some(c=>c[0]==='pad_axis'&&c[3]===.5));assert.ok(calls.slice(awake).some(c=>c[0]==='pad_button'&&c[3]===1));
+
+win.emit('keydown',{code:'KeyW'});win.emit('pagehide');assert.deepEqual(calls.at(-1),['blur']);doc.hidden=false;win.emit('pageshow');assert.deepEqual(calls.at(-1),['focus',1]);
