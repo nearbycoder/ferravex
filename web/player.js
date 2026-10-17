@@ -63,5 +63,8 @@ export function bindPlayer(canvas,game,getExports,body,isOpen){
  const motionSelect=addSelect('Player UI motion',[[0,'System preference'],[1,'Reduced'],[2,'Standard']],value=>document.body.classList.toggle('ferravex-reduced-motion',value==='1'||value==='0'&&matchMedia('(prefers-reduced-motion:reduce)').matches));
  const motion=matchMedia('(prefers-reduced-motion:reduce)');motion.addEventListener('change',()=>motionSelect.dispatchEvent(new Event('change')));motionSelect.dispatchEvent(new Event('change'));
  style.textContent+='body.ferravex-reduced-motion :is(dialog,nav,button,select,a){animation:none!important;transition:none!important;scroll-behavior:auto!important}@media(prefers-reduced-motion:reduce){body.ferravex-game :is(dialog,nav,button,select,a){animation:none;transition:none;scroll-behavior:auto}}';
+ const connection=document.createElement('p');connection.setAttribute('role','status');section.insertBefore(connection,feedback);
+ const online=()=>{connection.textContent=navigator.onLine===false?'Offline. This loaded game can keep running; multiplayer and new downloads may be unavailable.':'Online. No connection is required for this loaded single-player session.';};
+ window.addEventListener('online',online);window.addEventListener('offline',online);online();
  return player;
 }
