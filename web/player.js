@@ -53,7 +53,8 @@ export function bindPlayer(canvas,game,getExports,body,isOpen){
  const hudSelect=addSelect('Performance overlay',[[0,'Off'],[1,'On']],value=>{hud.hidden=value!=='1';});
  let sampleStart=null,sampleFrames=0;
  callbacks.push(time=>{if(sampleStart===null)sampleStart=time;sampleFrames++;if(time-sampleStart<500)return;const fps=sampleFrames*1000/(time-sampleStart);sampleStart=time;sampleFrames=0;if(!hud.hidden)hud.textContent=`${fps.toFixed(0)} FPS · ${canvas.width} × ${canvas.height}`+(canvas.dataset.drawCalls?`\n${canvas.dataset.drawCalls} draws · ${canvas.dataset.vertices??'—'} vertices`:'');});
- const gate=new FrameGate();player.shouldRender=time=>gate.accept(time);
+ const gate=new FrameGate();player.shouldRender=time=>!document.hidden&&gate.accept(time);
+ document.addEventListener('visibilitychange',()=>{gate.next=null;clock.previous=null;sampleStart=null;sampleFrames=0;});
  const capSelect=addSelect('Frame rate limit',[[0,'Display refresh'],[60,'60 FPS'],[30,'30 FPS']],value=>gate.set(value));
  return player;
 }

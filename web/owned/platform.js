@@ -57,6 +57,7 @@ function render(){
  return status;
 }
 function setPlaying(value){playing=value;$('menu').hidden=value;$('hud').hidden=!value;$('crosshair').hidden=!value||view!==1;if(value)$('tools').hidden=true;}
+document.addEventListener('visibilitychange',()=>{previous=0;});
 let peerElapsed=0;
 const peer=new PeerLink({receive:bytes=>{new Uint8Array(wasm.memory.buffer,wasm.ferravex_peer_in(),bytes.length).set(bytes);return Boolean(wasm.ferravex_peer_receive(bytes.length));},connected:mode=>wasm.ferravex_peer_mode(mode),disconnected:()=>{if(wasm)wasm.ferravex_peer_mode(0);},status:text=>$('peerStatus').textContent=text});
 async function pair(action){try{$('peerStatus').textContent='Gathering local connection candidates…';const output=await action();if(output)$('peerToken').value=output;$('peerStatus').textContent=output?'Copy this token directly to your teammate.':'Answer accepted; connecting…';}catch(error){$('peerStatus').textContent=error.message;}}
