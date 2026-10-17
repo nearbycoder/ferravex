@@ -13,7 +13,7 @@ export function bindInput(canvas,game,getExports,isPlaying=()=>false,host={windo
  const now=host.now??(()=>Date.now());
  const pads=Array.from({length:4},()=>({connected:false,axes:new Float32Array(16),buttons:new Float32Array(32)}));
  const coords=e=>{const r=canvas.getBoundingClientRect();return [e.clientX-r.left,e.clientY-r.top];};
- const reset=()=>{held.clear();pointers.clear();getExports()?.ferravex_blur();};
+ const reset=()=>{held.clear();pointers.clear();for(const pad of pads){pad.axes.fill(NaN);pad.buttons.fill(NaN);}getExports()?.ferravex_blur();};
  const viewportChanged=()=>{reset();getExports()?.ferravex_focus(focused?1:0);};
  win.addEventListener('resize',viewportChanged);win.addEventListener('orientationchange',viewportChanged);
  win.visualViewport?.addEventListener('resize',viewportChanged);
@@ -66,7 +66,7 @@ export function bindInput(canvas,game,getExports,isPlaying=()=>false,host={windo
   },
  };
  function poll(){
-  const exports=getExports();if(!exports)return;let found=[];try{found=host.navigator.getGamepads?.()??[];}catch{}
+  const exports=getExports();if(!exports||!focused)return;let found=[];try{found=host.navigator.getGamepads?.()??[];}catch{}
   for(let i=0;i<4;i++){
    const pad=found[i],connected=!!pad&&pad.connected!==false,old=pads[i];
    if(connected!==old.connected){old.connected=connected;old.axes.fill(0);old.buttons.fill(0);exports.ferravex_pad_connected(i,connected?1:0);}
