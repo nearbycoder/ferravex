@@ -61,3 +61,5 @@ win.emit('keydown',{code:'Semicolon'});win.emit('keyup',{code:'Semicolon'});asse
 
 // Browser shortcuts retain their defaults and never move the player.
 for(const modifier of ['ctrlKey','metaKey','altKey']){const count=calls.length;win.emit('keydown',{code:'KeyW',[modifier]:true,preventDefault(){assert.fail('browser shortcut consumed');}});assert.equal(calls.length,count);}
+
+for(const event of [{isComposing:true},{keyCode:229}]){const count=calls.length;win.emit('keydown',{code:'Space',...event});assert.equal(calls.length,count,'IME composition must not launch or jump');}
