@@ -58,5 +58,7 @@ export function bindPlayer(canvas,game,getExports,body,isOpen){
  const capSelect=addSelect('Frame rate limit',[[0,'Display refresh'],[60,'60 FPS'],[30,'30 FPS']],value=>gate.set(value));
  const contrastSelect=addSelect('Player contrast',[[0,'Standard'],[1,'High contrast']],value=>document.body.classList.toggle('ferravex-high-contrast',value==='1'));
  style.textContent+='body.ferravex-high-contrast button,body.ferravex-high-contrast select,body.ferravex-high-contrast dialog,body.ferravex-high-contrast nav{background:#000!important;color:#fff!important;border-color:#fff!important}body.ferravex-high-contrast dialog p,body.ferravex-high-contrast dialog label{color:#fff!important}body.ferravex-high-contrast :focus-visible{outline:3px solid #ffed00!important}';
+ const textSelect=addSelect('Player text size',[[0,'Standard'],[1,'Large']],value=>document.body.classList.toggle('ferravex-large-text',value==='1'));
+ style.textContent+='body.ferravex-large-text .ferravex-details-dialog{width:min(540px,calc(100vw - 24px));font-size:18px}body.ferravex-large-text .ferravex-details-dialog label,body.ferravex-large-text .ferravex-details-dialog select,body.ferravex-large-text .ferravex-details-dialog button{font-size:18px;min-height:48px}body.ferravex-large-text .ferravex-details-dialog p{font-size:16px}';
  return player;
 }
