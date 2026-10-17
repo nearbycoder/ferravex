@@ -49,6 +49,7 @@ const controlsButton=document.querySelector('[data-controls]');
 const details=bindDetails(canvas,game,()=>exports);
 const audio=bindAudio(canvas,()=>exports,{button:document.querySelector('[data-audio]')});
 controlsButton?.addEventListener('click',()=>{inputPlatform.openSettings();canvas.focus();});
+document.addEventListener('visibilitychange',()=>{last=0;});
 let autoRestore=false;
 const graphics=bindGraphicsLifecycle(canvas,{
  restore(){initializeGraphics();last=0;delete canvas.dataset.gpuUs;delete canvas.dataset.gpuFrame;delete canvas.dataset.gpuDisjoint;canvas.dataset.graphicsRestores=String(++restores);},
