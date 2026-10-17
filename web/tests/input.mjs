@@ -65,8 +65,12 @@ for(const modifier of ['ctrlKey','metaKey','altKey']){const count=calls.length;w
 for(const event of [{isComposing:true},{keyCode:229}]){const count=calls.length;win.emit('keydown',{code:'Space',...event});assert.equal(calls.length,count,'IME composition must not launch or jump');}
 
 // A steady stick must be resent after Rust clears its input on focus loss.
-gamepads=[{connected:true,axes:[.5],buttons:[{value:1}]}];input.poll();win.emit('blur');const asleep=calls.length;input.poll();assert.equal(calls.length,asleep);win.emit('focus');const awake=calls.length;input.poll();assert.ok(calls.slice(awake).some(c=>c[0]==='pad_axis'&&c[3]===.5));assert.ok(calls.slice(awake).some(c=>c[0]==='pad_button'&&c[3]===1));
-
+{
+ const w=new Target(),d=new Target(),c=new Target(),events=[];
+ const e={ferravex_blur(){},ferravex_focus(){},ferravex_pad_connected(){},ferravex_pad_axis:(...args)=>events.push(['axis',...args]),ferravex_pad_button:(...args)=>events.push(['button',...args])};
+ const bridge=bindInput(c,'pad-refocus',()=>e,()=>false,{...host,window:w,document:d,navigator:{getGamepads:()=>[{connected:true,axes:[.5],buttons:[{value:1}]}]}});
+ bridge.poll();w.emit('blur');const asleep=events.length;bridge.poll();assert.equal(events.length,asleep);w.emit('focus');bridge.poll();assert.ok(events.slice(asleep).some(c=>c[0]==='axis'&&c[3]===.5));assert.ok(events.slice(asleep).some(c=>c[0]==='button'&&c[3]===1));
+}
 win.emit('keydown',{code:'KeyW'});win.emit('pagehide');assert.deepEqual(calls.at(-1),['blur']);doc.hidden=false;win.emit('pageshow');assert.deepEqual(calls.at(-1),['focus',1]);
 
 canvas.emit('pointerdown',{pointerType:'mouse',pointerId:77,clientX:20,clientY:30,button:0});canvas.emit('pointerup',{pointerType:'mouse',pointerId:77,clientX:20,clientY:30,button:0,buttons:2});const chord=calls.length;canvas.emit('lostpointercapture',{pointerId:77});assert.ok(calls.slice(chord).some(c=>c[0]==='button'&&c[1]===3&&c[2]===0),'capture loss clears remaining mouse chord buttons');
