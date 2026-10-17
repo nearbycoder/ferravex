@@ -34,3 +34,7 @@ cargo run -p sky-courier -- --autoplay --smoke-frames 3000 --screenshot /tmp/sky
 Autoplay steers through the normal turn/climb/slow inputs; it does not teleport, grant immunity, or change the timer. The fixed simulation runs at 120 Hz with bounded catch-up. Tests cover ordered progression, a complete delivery, crash recovery and failure, timeout and restart, slow-flight delivery, and swept beacon capture.
 
 This is an arcade flight slice, not an aerodynamic simulator. Collision volumes conservatively approximate island terrain; decorative houses and trees do not have separate colliders. The delivery is a low flyover rather than a wheel-contact landing. There is no audio, networking, or saved progress. The restored runtime implements Linux and WebAssembly hosts; rerun rendering and input checks against the current build. Native Windows/macOS/iOS hosts are not implemented.
+
+## Browser player update
+
+Open **Details → Player tools** for screenshots, clean sharing links, frame limits, session timing, screen wake lock, accessibility preferences and settings backups. All shared player upgrades apply to this example. Read the [player guide](../../docs/PLAYER_GUIDE.md) for behavior and browser limits.

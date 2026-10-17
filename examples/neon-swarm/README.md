@@ -33,3 +33,7 @@ A 20-point shield absorbs confirmed damage before health. Four seconds without a
 The pulse weapon fires twelve-shot energy cells, then automatically reloads for 0.65 seconds. The HUD shows cell count and reload countdown. Energy is unlimited; timing shots and using cover during recharge create the combat rhythm.
 
 Dash taps made up to 150 ms before readiness are buffered and execute once when the charge returns. Holding a dash input does not queue repeated activations.
+
+## Browser player update
+
+Open **Details → Player tools** for screenshots, clean sharing links, frame limits, session timing, screen wake lock, accessibility preferences and settings backups. All shared player upgrades apply to this example. Read the [player guide](../../docs/PLAYER_GUIDE.md) for behavior and browser limits.

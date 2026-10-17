@@ -31,3 +31,7 @@ The three dots represent balls remaining, including the ball in play. A ball ret
 Headless tests cover gated launch, contact-only scoring/debounce, three-ball drain/game-over, physical flipper momentum transfer, and a 60-second autoplay simulation. Rerun these tests against the recovered solver; historical scores and drain counts are not a validation result for this implementation.
 
 This is a single-table arcade slice. It has procedural game audio and local records, but no multiball, tilt/nudge or networking. Powered contacts are capped at 34 m/s. Touch controls are implemented but device hardware has not been tested. The recovered version uses the original rotational solver, including ball contacts against motor-driven capsule flippers. See `crates/ferravex-physics/README.md` for unsupported shape pairs and bounded CCD behavior.
+
+## Browser player update
+
+Open **Details → Player tools** for screenshots, clean sharing links, frame limits, session timing, screen wake lock, accessibility preferences and settings backups. All shared player upgrades apply to this example. Read the [player guide](../../docs/PLAYER_GUIDE.md) for behavior and browser limits.

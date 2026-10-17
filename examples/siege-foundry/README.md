@@ -21,3 +21,7 @@ Rust-red blocks count when they fall, rotate far enough, or move out of their or
 Tests exercise an untouched stable stack, shot cooldown and ammunition exhaustion, CCD configuration, the final-shot grace period, zero-tick input buffering, and an autoplay run that actually knocks down every target through normal ballistic contacts. Autoplay only aims and fires; it never moves targets or awards points directly.
 
 The range is a small single-player example. Blocks topple as rigid pieces rather than fracturing, and the arc preview ignores contact deflections. No audio, persistent high scores, or network mode is included. The restored renderer has Linux and WebAssembly hosts. Browser pointer/touch forwarding uses original platform bindings; physical touch devices remain unverified. Solver behavior and complete demolition must be revalidated after recovery.
+
+## Browser player update
+
+Open **Details → Player tools** for screenshots, clean sharing links, frame limits, session timing, screen wake lock, accessibility preferences and settings backups. All shared player upgrades apply to this example. Read the [player guide](../../docs/PLAYER_GUIDE.md) for behavior and browser limits.
