@@ -54,6 +54,7 @@ DOCS = [
 SOURCE_LINKS = {str((ROOT / source).resolve()):f'/docs/{slug}/' for slug,_,_,source in DOCS}
 SOURCE_LINKS[str((ROOT/'README.md').resolve())]='/docs/getting-started/'
 GAMES = [dict(g,play='/play/'+g['host']+'/') for g in json.loads((ROOT/'examples/catalog.json').read_text())]
+UPDATES=json.loads((ROOT/'website/releases/player30.json').read_text())
 SEARCH=[]
 
 def write(path,text):
@@ -128,7 +129,7 @@ def sidebar(current):
   out.append(f'<a href="/docs/{slug}/"'+(' aria-current="page"' if current==slug else '')+'>'+esc(title)+'</a>')
  return ''.join(out)+'</aside>'
 def layout(title,body,url='/',description='An original Rust engine for compact 2D and 3D games.',section=''):
- nav=''.join(f'<a href="{href}" class="{cls}"'+(' aria-current="page"' if section==label else '')+f'>{label}</a>' for href,label,cls in [('/docs/getting-started/','Docs',''),('/examples/','Examples',''),('/api/ferravex/index.html','API','api-nav')])
+ nav=''.join(f'<a href="{href}" class="{cls}"'+(' aria-current="page"' if section==label else '')+f'>{label}</a>' for href,label,cls in [('/updates/','Updates',''),('/docs/getting-started/','Docs',''),('/examples/','Examples',''),('/api/ferravex/index.html','API','api-nav')])
  return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>{esc(title)} · Ferravex</title><meta name="description" content="{esc(description)}"><link rel="canonical" href="{BASE}{url}"><meta property="og:title" content="{esc(title)} · Ferravex"><meta property="og:description" content="{esc(description)}"><meta property="og:image" content="{BASE}/assets/owned-courtyard.png"><meta property="og:type" content="website"><link rel="icon" href="/favicon.ico"><link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png"><link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png"><link rel="stylesheet" href="/site.css"><link rel="stylesheet" href="/search.css"><script src="/site.js" defer></script><script type="module" src="/site-search.js"></script></head><body><a class="skip" href="#main">Skip to content</a><header class="header"><div class="header-inner"><a class="brand" href="/" aria-label="Ferravex home"><img class="brand-mark" src="/favicon-32.png" alt="" width="28" height="28" aria-hidden="true">ferravex</a><nav aria-label="Main navigation">{nav}</nav><div class="header-actions"><button class="search-trigger" data-qikbar-open aria-label="Search Ferravex"><span>Search site</span><kbd data-command-key>Ctrl K</kbd></button><button class="theme-toggle" id="theme-toggle" aria-label="Switch color theme">Theme</button><a href="{REPO}">GitHub</a></div></div></header>{body}<footer class="footer"><div class="container"><span>Ferravex. Original engine systems, built in Rust.</span><span><a href="{REPO}">Source</a><a href="{REPO}/blob/main/LICENSE">MIT license</a><a href="/docs/status/">Implementation status</a></span></div></footer></body></html>'''
 def meta(game):return f'<div class="meta"><span>{esc(game["dimension"])} / {esc(game["genre"])}</span><span class="owned">First-party engine</span></div>'
 def tile(game):
@@ -143,6 +144,16 @@ def home():
  <section class="section docs-paths"><div><div class="eyebrow">Read it. Build it.</div><h2>The code is yours to explore.</h2><p>First-party Rust systems, browser standards and no third-party runtime crates. Follow a guide or go straight to the implementation.</p></div><div class="docs-link-grid"><a href="/docs/player-guide/"><strong>Player guide</strong><span>Every new tool, setting and browser limit</span></a><a href="/docs/getting-started/"><strong>Build your first game</strong><span>Set up the workspace and run a simulation</span></a><a href="/docs/architecture/"><strong>Engine architecture</strong><span>Physics, input, rendering and gameplay</span></a><a href="/api/ferravex/index.html"><strong>Rust API reference</strong><span>Browse the types and source</span></a></div></section>
  <aside class="roadmap-note"><div><strong>A compact engine with a visible implementation.</strong><p>These updates improve the browser player. Game rules and native hosts retain their documented behavior. See the platform guide for tested targets and remaining runtime work.</p></div><a class="text-link" href="/docs/platforms/">Platform status</a></aside></main>'''
  write(OUT/'index.html',layout('More play. More control.',body))
+def updates():
+ categories=list(dict.fromkeys(row['category'] for row in UPDATES))
+ options='<option value="all">All categories</option>'+''.join(f'<option value="{esc(category)}">{esc(category)}</option>' for category in categories)
+ cards=[]
+ for row in UPDATES:
+  implementation=f'<a class="text-link" href="{esc(row["url"])}">Implementation PR →</a>' if row.get('url') else ''
+  cards.append(f'<article class="update-card" id="feature-{row["id"]}" data-update-category="{esc(row["category"])}"><span class="upgrade-number">{row["id"]:02d} / {esc(row["category"])}</span><h2>{esc(row["title"])}</h2><p>{esc(row["detail"])}</p><p class="mono">{esc(row["scope"])}</p><div class="button-row"><a class="text-link" href="/docs/player-guide/">Player guide</a>{implementation}</div></article>')
+ body=f'<main id="main" class="container"><div class="page-heading"><div class="eyebrow">The player update</div><h1>Every improvement.<br>One place.</h1><p>Explore 26 shared browser player improvements and four website and documentation upgrades. All fifteen games receive the shared player features.</p></div><div class="release-filters"><label>Find an improvement<input type="search" id="updates-query" placeholder="Screenshots, frame rate, controls…"></label><label>Category<select id="updates-category">{options}</select></label></div><p id="updates-count" role="status">30 improvements</p><div class="updates-grid">'+''.join(cards)+'</div><p id="updates-empty" hidden>No improvements match. Try another search or category.</p></main>'
+ write(OUT/'updates/index.html',layout('The player update',body,'/updates/',section='Updates'))
+
 def pages():
  for slug,title,group,source in DOCS:
   text=(ROOT/source).read_text();body,toc=markdown(text,source);toc_html='<aside class="toc" aria-label="On this page"><strong>On this page</strong>'+''.join(f'<a href="#{key}">{esc(t)}</a>' for t,key in toc)+'</aside>'
@@ -199,12 +210,12 @@ def main():
   content=content.replace('</head>','<link rel="stylesheet" href="/search.css"><script type="module" src="/site-search.js"></script></head>',1)
   content=content.replace('<body', '<body data-ferravex-api',1)
   page.write_text(content)
- home();pages()
+ home();updates();pages()
  corpus=build_index(OUT,DOCS,GAMES,ROOT)
  write(OUT/'search.json',json.dumps(corpus,separators=(',',':')))
  print(f'Indexed {len(corpus)} pages, guide sections and API symbols')
  write(OUT/'404.html',layout('Page not found','<main id="main" class="container page-heading"><h1>This path is uncharted.</h1><p>The page could not be found.</p><a class="button" href="/">Back home</a></main>'))
- urls=['/','/docs/','/examples/']+[f'/docs/{slug}/' for slug,*_ in DOCS]+[f'/examples/{g["id"]}/' for g in GAMES]
+ urls=['/','/updates/','/docs/','/examples/']+[f'/docs/{slug}/' for slug,*_ in DOCS]+[f'/examples/{g["id"]}/' for g in GAMES]
  write(OUT/'sitemap.xml','<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'+''.join(f'<url><loc>{BASE}{u}</loc></url>' for u in urls)+'</urlset>')
  write(OUT/'robots.txt',f'User-agent: *\nAllow: /\nSitemap: {BASE}/sitemap.xml\n')
  manifest={}
