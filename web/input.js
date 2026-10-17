@@ -20,7 +20,7 @@ export function bindInput(canvas,game,getExports,isPlaying=()=>false,host={windo
  win.addEventListener('blur',()=>{focused=false;reset();});
  win.addEventListener('focus',()=>{focused=true;getExports()?.ferravex_focus(1);});
  doc.addEventListener('visibilitychange',()=>{if(doc.hidden){focused=false;reset();}else{focused=true;getExports()?.ferravex_focus(1);}});
- win.addEventListener('keydown',e=>{if(editing(e)||e.ctrlKey||e.metaKey||e.altKey)return;const code=keyCode(e),exports=getExports();if(code&&exports){e.preventDefault();if(e.repeat)return;if(code===0xff1b)lastEscape=now();held.add(code);exports.ferravex_key(code,1);}});
+ win.addEventListener('keydown',e=>{if(e.isComposing||e.keyCode===229||editing(e)||e.ctrlKey||e.metaKey||e.altKey)return;const code=keyCode(e),exports=getExports();if(code&&exports){e.preventDefault();if(e.repeat)return;if(code===0xff1b)lastEscape=now();held.add(code);exports.ferravex_key(code,1);}});
  // A key pressed on canvas must still release after focus moves into an editor.
  win.addEventListener('keyup',e=>{const code=keyCode(e),exports=getExports();if(code&&exports&&(!editing(e)||held.has(code))){held.delete(code);exports.ferravex_key(code,0);e.preventDefault();}});
  canvas.addEventListener('pointerdown',e=>{
