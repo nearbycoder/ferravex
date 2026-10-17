@@ -1,3 +1,10 @@
+// Shared links contain presentation choices only; no autoplay, tools or peer address.
+export function playerLink(href,look,quality){
+ const url=new URL(href);url.search='';url.hash='';
+ const looks=['authored','warm','cool','ink'],qualities=['low','medium','high'];
+ if(looks[look])url.searchParams.set('look',looks[look]);if(qualities[quality])url.searchParams.set('quality',qualities[quality]);
+ return url.href;
+}
 // Shared player enhancements for all fifteen browser hosts. No external packages.
 export function bindPlayer(canvas,game,getExports,body,isOpen){
  const title=game.split('-').map(word=>word[0].toUpperCase()+word.slice(1)).join(' ');
@@ -16,5 +23,6 @@ export function bindPlayer(canvas,game,getExports,body,isOpen){
  let capture=false;
  addButton('Save screenshot',()=>{capture=true;message('Capturing the next rendered frame…');});
  callbacks.push(()=>{if(!capture)return;capture=false;try{canvas.toBlob(blob=>{if(!blob){message('Screenshot unavailable.');return;}const url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=game+'-'+Date.now()+'.png';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);message('Screenshot saved.');},'image/png');}catch{message('Screenshot unavailable in this browser.');}});
+ addButton('Copy game link',async()=>{const e=getExports(),url=playerLink(location.href,e?.ferravex_visual_look?.(),e?.ferravex_visual_quality?.());try{await navigator.clipboard.writeText(url);message('Game link copied with its current style and quality.');}catch{let field=section.querySelector('[data-share-link]');if(!field){field=document.createElement('input');field.dataset.shareLink='';field.readOnly=true;field.setAttribute('aria-label','Game link to copy');section.append(field);}field.value=url;field.focus();field.select();message('Select and copy the game link.');}});
  return player;
 }
