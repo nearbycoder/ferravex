@@ -6,3 +6,5 @@ let resolve,hidden=false,releases=0;const lock=createWakeLock({hidden:()=>hidden
 const pending=lock.set(true);await Promise.resolve();await Promise.resolve();const cancelled=lock.set(false);resolve({release:async()=>{releases++;}});await pending;await cancelled;assert.equal(releases,1,'late wake lock must be released after disable');assert.equal(lock.enabled,false);
 
 const {SessionClock,duration}=await import('../player.js');const clock=new SessionClock();clock.sample(0,true);clock.sample(1000,true);clock.sample(2000,false);clock.sample(10000,true);assert.equal(clock.seconds,1);clock.sample(11000,true);assert.equal(clock.seconds,2);assert.equal(duration(125),'2:05');clock.reset();assert.equal(clock.seconds,0);
+
+const {FrameGate}=await import('../player.js');const gate=new FrameGate();gate.set(30);let rendered=0;for(let i=0;i<120;i++)rendered+=gate.accept(i*1000/120);assert.equal(rendered,30);gate.set(60);assert.equal(gate.accept(0),true);gate.set(-1);assert.equal(gate.limit,0);

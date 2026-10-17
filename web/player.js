@@ -1,3 +1,8 @@
+export class FrameGate{
+ limit=0;next=null;
+ accept(time){if(!this.limit)return true;const interval=1000/this.limit;if(this.next!==null&&time+.1<this.next)return false;this.next=this.next===null||time-this.next>interval?time+interval:this.next+interval;return true;}
+ set(value){this.limit=[0,30,60].includes(Number(value))?Number(value):0;this.next=null;}
+}
 export class SessionClock{
  seconds=0;previous=null;
  sample(time,active){if(this.previous!==null&&active&&this.active)this.seconds+=Math.max(0,Math.min(1,(time-this.previous)/1000));this.previous=time;this.active=active;return this.seconds;}
@@ -48,5 +53,7 @@ export function bindPlayer(canvas,game,getExports,body,isOpen){
  const hudSelect=addSelect('Performance overlay',[[0,'Off'],[1,'On']],value=>{hud.hidden=value!=='1';});
  let sampleStart=null,sampleFrames=0;
  callbacks.push(time=>{if(sampleStart===null)sampleStart=time;sampleFrames++;if(time-sampleStart<500)return;const fps=sampleFrames*1000/(time-sampleStart);sampleStart=time;sampleFrames=0;if(!hud.hidden)hud.textContent=`${fps.toFixed(0)} FPS · ${canvas.width} × ${canvas.height}`+(canvas.dataset.drawCalls?`\n${canvas.dataset.drawCalls} draws · ${canvas.dataset.vertices??'—'} vertices`:'');});
+ const gate=new FrameGate();player.shouldRender=time=>gate.accept(time);
+ const capSelect=addSelect('Frame rate limit',[[0,'Display refresh'],[60,'60 FPS'],[30,'30 FPS']],value=>gate.set(value));
  return player;
 }
