@@ -1,3 +1,4 @@
+import {loadWasm} from './loader.js';
 // Original Ferravex browser platform: WebGL2, DOM input, direct Rust/Wasm ABI.
 import {RetainedRenderer,GpuTimer} from './retained.js';
 import {SpriteRenderer} from './effects.js';
@@ -64,8 +65,7 @@ if(new URLSearchParams(location.search).has('graphics-tools')){
 
 try {
  const imports={env:{...inputPlatform.imports,ferravex_set_playing:value=>{playing=!!value;if(!playing&&document.pointerLockElement)document.exitPointerLock();}}};
- const response=await fetch(`${game.replaceAll('-','_')}.wasm`);if(!response.ok)throw new Error(`Game download failed (${response.status})`);
- const {instance}=await WebAssembly.instantiate(await response.arrayBuffer(),imports);exports=instance.exports;
+ const {instance}=await loadWasm(`${game.replaceAll('-','_')}.wasm`,imports);exports=instance.exports;
  exports.ferravex_init();
  configureVisuals(exports,location.search);
  exports.ferravex_autoplay(new URLSearchParams(location.search).has('autoplay')?1:0);
