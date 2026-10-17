@@ -44,5 +44,9 @@ export function bindPlayer(canvas,game,getExports,body,isOpen){
  const clock=new SessionClock(),session=document.createElement('p');session.textContent='Active session 0:00';section.insertBefore(session,feedback);
  callbacks.push(time=>{const seconds=clock.sample(time,!document.hidden&&document.hasFocus()&&!isOpen()&&!getExports()?.ferravex_controls_open?.());const text='Active session '+duration(seconds);if(session.textContent!==text)session.textContent=text;});
  addButton('Reset session timer',()=>{clock.reset();session.textContent='Active session 0:00';});
+ const hud=document.createElement('output');hud.className='ferravex-player-hud';hud.hidden=true;hud.style.cssText='position:fixed;left:10px;bottom:8px;z-index:15;pointer-events:none;background:#071016df;color:#fff;padding:5px 8px;font:12px/1.5 monospace;white-space:pre-line';document.body.append(hud);
+ const hudSelect=addSelect('Performance overlay',[[0,'Off'],[1,'On']],value=>{hud.hidden=value!=='1';});
+ let sampleStart=null,sampleFrames=0;
+ callbacks.push(time=>{if(sampleStart===null)sampleStart=time;sampleFrames++;if(time-sampleStart<500)return;const fps=sampleFrames*1000/(time-sampleStart);sampleStart=time;sampleFrames=0;if(!hud.hidden)hud.textContent=`${fps.toFixed(0)} FPS · ${canvas.width} × ${canvas.height}`+(canvas.dataset.drawCalls?`\n${canvas.dataset.drawCalls} draws · ${canvas.dataset.vertices??'—'} vertices`:'');});
  return player;
 }
