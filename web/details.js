@@ -1,4 +1,5 @@
 // One accessible, first-party presentation panel for every game host.
+import {bindPlayer} from './player.js';
 import {bindFullscreen} from './fullscreen.js';
 export function framebufferSize(width,height,deviceRatio,resolution,maxDimension=8192,adaptive=1) {
  const baseDensity=[Math.min(Math.max(Number.isFinite(deviceRatio)?deviceRatio:1,1),3),.75,1,1.5,2,3][resolution]??1;
@@ -51,6 +52,7 @@ export function bindDetails(canvas,game,getExports) {
  button.addEventListener('click',()=>{getExports()?.ferravex_blur();getExports()?.ferravex_focus(1);getExports()?.ferravex_details_open(1);if(document.pointerLockElement)document.exitPointerLock();sync();dialog.showModal();button.setAttribute('aria-expanded','true');close.focus();});
  close.addEventListener('click',dismiss);dialog.addEventListener('cancel',event=>{event.preventDefault();dismiss();});dialog.addEventListener('keydown',event=>{event.stopPropagation();});
  reset.addEventListener('click',()=>{for(const field of fields)getExports()?.ferravex_details_set(field,0);sync();});
+ const player=bindPlayer(canvas,game,getExports,body,()=>dialog.open);
  bindFullscreen(canvas,game,getExports);
- return {ready(){if(button.disabled)button.disabled=false;},update(){if(dialog.open)sync();},isOpen(){return dialog.open;}};
+ return {player,ready(){if(button.disabled)button.disabled=false;},update(){if(dialog.open)sync();},isOpen(){return dialog.open;}};
 }
