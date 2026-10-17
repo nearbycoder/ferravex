@@ -1,3 +1,9 @@
+export class SessionClock{
+ seconds=0;previous=null;
+ sample(time,active){if(this.previous!==null&&active&&this.active)this.seconds+=Math.max(0,Math.min(1,(time-this.previous)/1000));this.previous=time;this.active=active;return this.seconds;}
+ reset(){this.seconds=0;this.previous=null;}
+}
+export function duration(seconds){const n=Math.floor(seconds);return `${Math.floor(n/60)}:${String(n%60).padStart(2,'0')}`;}
 export function createWakeLock(host){
  let enabled=false,sentinel=null,epoch=0;
  const release=()=>{const old=sentinel;sentinel=null;return Promise.resolve(old?.release()).catch(()=>{});};
@@ -35,5 +41,8 @@ export function bindPlayer(canvas,game,getExports,body,isOpen){
  wakeButton.disabled=!navigator.wakeLock;
  document.addEventListener('visibilitychange',()=>wake.visibility().catch(()=>message('Screen wake lock could not be restored.')));
  window.addEventListener('pagehide',()=>wake.set(false));
+ const clock=new SessionClock(),session=document.createElement('p');session.textContent='Active session 0:00';section.insertBefore(session,feedback);
+ callbacks.push(time=>{const seconds=clock.sample(time,!document.hidden&&document.hasFocus()&&!isOpen()&&!getExports()?.ferravex_controls_open?.());const text='Active session '+duration(seconds);if(session.textContent!==text)session.textContent=text;});
+ addButton('Reset session timer',()=>{clock.reset();session.textContent='Active session 0:00';});
  return player;
 }
