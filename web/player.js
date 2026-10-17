@@ -1,3 +1,9 @@
+export function createWakeLock(host){
+ let enabled=false,sentinel=null,epoch=0;
+ const release=()=>{const old=sentinel;sentinel=null;return Promise.resolve(old?.release()).catch(()=>{});};
+ async function acquire(){const token=++epoch;if(!enabled||host.hidden())return;const next=await host.request();if(token!==epoch||!enabled||host.hidden()){await next.release();return;}sentinel=next;next.addEventListener?.('release',()=>{if(sentinel===next)sentinel=null;});}
+ return {get enabled(){return enabled;},async set(value){enabled=value;++epoch;await release();if(value)try{await acquire();}catch(error){enabled=false;throw error;}},async visibility(){++epoch;await release();if(enabled)await acquire();}};
+}
 // Shared links contain presentation choices only; no autoplay, tools or peer address.
 export function playerLink(href,look,quality){
  const url=new URL(href);url.search='';url.hash='';
@@ -24,5 +30,10 @@ export function bindPlayer(canvas,game,getExports,body,isOpen){
  addButton('Save screenshot',()=>{capture=true;message('Capturing the next rendered frame…');});
  callbacks.push(()=>{if(!capture)return;capture=false;try{canvas.toBlob(blob=>{if(!blob){message('Screenshot unavailable.');return;}const url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=game+'-'+Date.now()+'.png';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);message('Screenshot saved.');},'image/png');}catch{message('Screenshot unavailable in this browser.');}});
  addButton('Copy game link',async()=>{const e=getExports(),url=playerLink(location.href,e?.ferravex_visual_look?.(),e?.ferravex_visual_quality?.());try{await navigator.clipboard.writeText(url);message('Game link copied with its current style and quality.');}catch{let field=section.querySelector('[data-share-link]');if(!field){field=document.createElement('input');field.dataset.shareLink='';field.readOnly=true;field.setAttribute('aria-label','Game link to copy');section.append(field);}field.value=url;field.focus();field.select();message('Select and copy the game link.');}});
+ const wake=createWakeLock({hidden:()=>document.hidden,request:()=>navigator.wakeLock.request('screen')});
+ const wakeButton=addButton('Keep screen awake',async()=>{try{await wake.set(!wake.enabled);wakeButton.textContent=wake.enabled?'Allow screen sleep':'Keep screen awake';message(wake.enabled?'Screen stays awake while this game is visible.':'Screen sleep allowed.');}catch{wakeButton.textContent='Keep screen awake';message('Screen wake lock is unavailable or was denied.');}});
+ wakeButton.disabled=!navigator.wakeLock;
+ document.addEventListener('visibilitychange',()=>wake.visibility().catch(()=>message('Screen wake lock could not be restored.')));
+ window.addEventListener('pagehide',()=>wake.set(false));
  return player;
 }
