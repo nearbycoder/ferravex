@@ -120,6 +120,9 @@ def build_index(root, docs, games, repository):
         entry('Documentation', '/docs/', 'Pages', 'guides tutorials getting started architecture', 'Guides and engine systems', 'book'),
         entry('Rust API reference', '/api/ferravex/index.html', 'Pages', 'API crates Rust reference types functions methods', 'Browse the public Rust API', 'code'),
     ]
+    import json
+    for update in json.loads((repository / 'website/releases/player30.json').read_text()):
+        rows.append(entry(update['title'], f"/updates/#feature-{update['id']}", 'Pages', update['detail'], update['category'], 'file-text'))
     for slug, title, group, source in docs:
         url = f'/docs/{slug}/'
         parser = ContentParser()

@@ -8,3 +8,7 @@ for(const button of document.querySelectorAll('[data-filter]'))button.addEventLi
 for(const button of document.querySelectorAll('[data-launch]'))button.addEventListener('click',()=>{const player=button.closest('.player'),frame=document.createElement('iframe');frame.src=player.dataset.game;frame.title=player.dataset.title;frame.allow='autoplay; fullscreen; gamepad';frame.allowFullscreen=true;frame.addEventListener('load',()=>frame.focus(),{once:true});player.replaceChildren(frame);});
 
 if(document.querySelector('.player'))import('/play/fullscreen.js').then(({bindPlayerExpansion})=>bindPlayerExpansion());
+
+const updateQuery=document.getElementById('updates-query'),updateCategory=document.getElementById('updates-category');
+function filterUpdates(){if(!updateQuery||!updateCategory)return;const query=updateQuery.value.trim().toLowerCase();let count=0;for(const card of document.querySelectorAll('[data-update-category]')){const show=(!query||card.textContent.toLowerCase().includes(query))&&(updateCategory.value==='all'||card.dataset.updateCategory===updateCategory.value);card.hidden=!show;if(show)count++;}document.getElementById('updates-count').textContent=`${count} improvement${count===1?'':'s'}`;document.getElementById('updates-empty').hidden=count!==0;}
+updateQuery?.addEventListener('input',filterUpdates);updateCategory?.addEventListener('change',filterUpdates);

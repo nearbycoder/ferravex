@@ -1,0 +1,242 @@
+[
+  {
+    "id": 1,
+    "title": "Label and focus every game canvas accessibly",
+    "detail": "Give every game a keyboard focus target, an accessible name, linked control instructions and a visible focus ring through the shared Details adapter.",
+    "url": "https://github.com/nearbycoder/ferravex/pull/114",
+    "category": "Input",
+    "scope": "All 15 browser examples"
+  },
+  {
+    "id": 2,
+    "title": "Preserve browser keyboard shortcuts in every game",
+    "detail": "Let Ctrl, Command and Alt shortcuts reach the browser without generating gameplay actions, while still releasing keys that were held before modifiers changed.",
+    "url": "https://github.com/nearbycoder/ferravex/pull/115",
+    "category": "Input",
+    "scope": "All 15 browser examples"
+  },
+  {
+    "id": 3,
+    "title": "Ignore IME composition when routing gameplay keys",
+    "detail": "Prevent text composition and legacy IME key events from triggering jump, fire or launch actions in browser games.",
+    "url": "https://github.com/nearbycoder/ferravex/pull/116",
+    "category": "Input",
+    "scope": "All 15 browser examples"
+  },
+  {
+    "id": 4,
+    "title": "Resynchronize gamepads after focus changes",
+    "detail": "Stop sampling controllers while unfocused and invalidate cached channel values when input resets so steady held inputs are correctly resubmitted on return.",
+    "url": "https://github.com/nearbycoder/ferravex/pull/117",
+    "category": "Input",
+    "scope": "All 15 browser examples"
+  },
+  {
+    "id": 5,
+    "title": "Release gameplay input during page lifecycle transitions",
+    "detail": "Clear held input on pagehide and restore focus on pageshow, including back-forward cache restores that do not necessarily generate a window blur.",
+    "url": "https://github.com/nearbycoder/ferravex/pull/118",
+    "category": "Input",
+    "scope": "All 15 browser examples"
+  },
+  {
+    "id": 6,
+    "title": "Release mouse button chords on capture loss",
+    "detail": "Neutralize all mouse buttons when capture is cancelled, retaining pointer bookkeeping while another chord button remains held.",
+    "url": "https://github.com/nearbycoder/ferravex/pull/119",
+    "category": "Input",
+    "scope": "All 15 browser examples"
+  },
+  {
+    "id": 7,
+    "title": "Stream Wasm compilation across all game hosts",
+    "detail": "Use one streaming compiler with a single-download byte fallback when a server serves Wasm with an incompatible MIME type.",
+    "url": "https://github.com/nearbycoder/ferravex/pull/120",
+    "category": "Loading",
+    "scope": "All 15 browser examples"
+  },
+  {
+    "id": 8,
+    "title": "Bound game downloads and compilation waits",
+    "detail": "Time out stalled downloads and bodies, abort network work, and provide a clear retryable error instead of leaving the loading screen indefinitely.",
+    "url": "https://github.com/nearbycoder/ferravex/pull/121",
+    "category": "Loading",
+    "scope": "All 15 browser examples"
+  },
+  {
+    "id": 9,
+    "title": "Offer visible recovery when a game cannot start",
+    "detail": "Show a Retry game control on all startup failures, including missing graphics support and Courtyard shader download errors.",
+    "url": "https://github.com/nearbycoder/ferravex/pull/122",
+    "category": "Loading",
+    "scope": "All 15 browser examples"
+  },
+  {
+    "id": 10,
+    "title": "Capture screenshots from the next rendered game frame",
+    "detail": "Save PNG captures immediately after each host draws so WebGL captures contain the current game rather than a discarded framebuffer.",
+    "url": "https://github.com/nearbycoder/ferravex/pull/123",
+    "category": "Player tools",
+    "scope": "All 15 browser examples"
+  },
+  {
+    "id": 11,
+    "title": "Share clean game links with presentation settings",
+    "detail": "Copy a game URL with the current palette and quality while excluding autoplay, debug tools, fragments and multiplayer connection addresses.",
+    "url": "https://github.com/nearbycoder/ferravex/pull/124",
+    "category": "Player tools",
+    "scope": "All 15 browser examples"
+  },
+  {
+    "id": 12,
+    "title": "Keep the screen awake during visible play",
+    "detail": "Offer an explicit screen wake lock with unsupported-browser feedback, hidden-tab release and safe cancellation of late lock requests.",
+    "url": "https://github.com/nearbycoder/ferravex/pull/125",
+    "category": "Player tools",
+    "scope": "All 15 browser examples"
+  },
+  {
+    "id": 13,
+    "title": "Track active session time in every game",
+    "detail": "Show a resettable active-session timer that excludes hidden tabs, unfocused windows and open settings panels.",
+    "url": "https://github.com/nearbycoder/ferravex/pull/126",
+    "category": "Player tools",
+    "scope": "All 15 browser examples"
+  },
+  {
+    "id": 14,
+    "title": "Add an optional live performance overlay",
+    "detail": "Show measured rendered FPS, framebuffer dimensions and available draw statistics without announcing changing metrics to screen readers.",
+    "url": "https://github.com/nearbycoder/ferravex/pull/127",
+    "category": "Performance",
+    "scope": "All 15 browser examples"
+  },
+  {
+    "id": 15,
+    "title": "Limit rendering to save power across all hosts",
+    "detail": "Offer display-refresh, 60 FPS and 30 FPS rendering limits while allowing each simulation to receive elapsed time through its existing clock.",
+    "url": "https://github.com/nearbycoder/ferravex/pull/128",
+    "category": "Performance",
+    "scope": "All 15 browser examples"
+  },
+  {
+    "id": 16,
+    "title": "Suspend hidden game rendering and reset resume clocks",
+    "detail": "Skip rendering and simulation submission in hidden documents and reset host delta clocks before the first frame after visibility returns.",
+    "url": "https://github.com/nearbycoder/ferravex/pull/129",
+    "category": "Performance",
+    "scope": "All 15 browser examples"
+  },
+  {
+    "id": 17,
+    "title": "Offer high contrast player controls",
+    "detail": "Add a high contrast host UI option with bright borders and focus indicators in the shared player panel.",
+    "url": "https://github.com/nearbycoder/ferravex/pull/130",
+    "category": "Accessibility",
+    "scope": "All 15 browser examples"
+  },
+  {
+    "id": 18,
+    "title": "Offer larger text and targets in player settings",
+    "detail": "Make shared player settings easier to read and operate with an optional larger text layout and larger controls.",
+    "url": "https://github.com/nearbycoder/ferravex/pull/131",
+    "category": "Accessibility",
+    "scope": "All 15 browser examples"
+  },
+  {
+    "id": 19,
+    "title": "Respect reduced motion preferences in player UI",
+    "detail": "Provide system, reduced and standard motion choices for the browser player chrome; game animation and camera behavior retain their authored rules.",
+    "url": "https://github.com/nearbycoder/ferravex/pull/132",
+    "category": "Accessibility",
+    "scope": "All 15 browser examples"
+  },
+  {
+    "id": 20,
+    "title": "Explain offline connectivity in each game",
+    "detail": "Show connection changes and explain which loaded single-player actions continue offline and which network operations need a connection.",
+    "url": "https://github.com/nearbycoder/ferravex/pull/133",
+    "category": "Player tools",
+    "scope": "All 15 browser examples"
+  },
+  {
+    "id": 21,
+    "title": "Show catalog controls and objectives inside every game",
+    "detail": "Load the game guide on demand from the catalog and keep custom Controls bindings authoritative.",
+    "url": "https://github.com/nearbycoder/ferravex/pull/134",
+    "category": "Player tools",
+    "scope": "All 15 browser examples"
+  },
+  {
+    "id": 22,
+    "title": "Remember player preferences separately for each game",
+    "detail": "Persist validated overlay, frame cap, contrast, text and UI motion preferences with safe session-only behavior when storage is unavailable.",
+    "url": "https://github.com/nearbycoder/ferravex/pull/135",
+    "category": "Player tools",
+    "scope": "All 15 browser examples"
+  },
+  {
+    "id": 23,
+    "title": "Back up and restore validated player settings",
+    "detail": "Export versioned JSON and import bounded validated player settings without touching gameplay saves or custom bindings.",
+    "url": "https://github.com/nearbycoder/ferravex/pull/136",
+    "category": "Player tools",
+    "scope": "All 15 browser examples"
+  },
+  {
+    "id": 24,
+    "title": "Reset player settings without clearing game progress",
+    "detail": "Restore default browser player settings through an explicit reset action while retaining game saves and custom controls.",
+    "url": "https://github.com/nearbycoder/ferravex/pull/137",
+    "category": "Player tools",
+    "scope": "All 15 browser examples"
+  },
+  {
+    "id": 25,
+    "title": "Apply quick performance presets across the catalog",
+    "detail": "Offer battery saver, balanced and sharp settings that combine existing lighting and resolution controls with the new frame cap.",
+    "url": "https://github.com/nearbycoder/ferravex/pull/138",
+    "category": "Performance",
+    "scope": "All 15 browser examples"
+  },
+  {
+    "id": 26,
+    "title": "Copy focused support diagnostics from every game",
+    "detail": "Copy game ID, viewport, framebuffer and player settings for bug reports without copying peer addresses, URL queries or saved game data.",
+    "url": "https://github.com/nearbycoder/ferravex/pull/139",
+    "category": "Performance",
+    "scope": "All 15 browser examples"
+  },
+  {
+    "id": 27,
+    "title": "Rework the homepage around games and the player update",
+    "detail": "Replace the generic engine landing page with gameplay-led visuals, explicit upgrade highlights and direct paths into player and developer documentation.",
+    "url": "https://github.com/nearbycoder/ferravex/pull/140",
+    "category": "Website and docs",
+    "scope": "Website and documentation"
+  },
+  {
+    "id": 28,
+    "title": "Explore all 30 changes in a searchable release catalog",
+    "detail": "Filter the complete release by category, inspect individual improvements and follow their implementation PRs.",
+    "url": null,
+    "category": "Website and docs",
+    "scope": "Website and documentation"
+  },
+  {
+    "id": 29,
+    "title": "Document every player tool and its browser contracts",
+    "detail": "Explain controls, storage, settings transfer, performance limits, capture behavior and browser support in a dedicated guide.",
+    "url": null,
+    "category": "Website and docs",
+    "scope": "Website and documentation"
+  },
+  {
+    "id": 30,
+    "title": "Expose the update on every game page and improve discovery",
+    "detail": "Search games by title, genre and controls, combine dimension filters, and link every example to the shared upgrade guide.",
+    "url": null,
+    "category": "Website and docs",
+    "scope": "Website and documentation"
+  }
+]
