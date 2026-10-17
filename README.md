@@ -2,7 +2,7 @@
 
 An original Rust foundation for compact 2D and 3D games. The workspace uses only first-party crates and Rust std: math, ECS, physics, rendering, gameplay, input, audio, assets, replay and netcode are implemented here. Browser and operating-system APIs form the platform boundary. See the [dependency policy](DEPENDENCIES.md).
 
-**This recovery is local work.** The restored games, renderer and documentation described here have not been pushed or deployed. Build from this checkout; an existing public site or GitHub revision may show an earlier version. Validation of the recovered catalog is in progress; commands below describe how to check it, not a completed device certification.
+Build from this checkout for the current game catalog and browser player tools. Website publication is separate from merging source changes; a deployed site may show an earlier revision. Platform validation limits are documented in [Platforms](docs/PLATFORMS.md).
 
 ## Play and build locally
 
@@ -74,3 +74,7 @@ MIT. Engine/game source and authored assets are first-party. Build toolchains, o
 ## Compose gameplay quickly
 
 [Gameplay recipes](docs/GAMEPLAY_RECIPES.md) map reusable reward, weapon, encounter, interaction, platform and trial rules to their host contracts. Run `cargo run -p ferravex-play --example gameplay_recipe --offline --locked` for a small survival/crafting composition. The [40-feature series](docs/GAMEPLAY_40.md) applies the rules to Neon Swarm, Emberline and Orbit Breaker.
+
+## The player update
+
+All fifteen browser examples share the new player tools: frame limits, screenshots, clean sharing, wake lock, active session timing, accessibility preferences and settings backups. Read the [player guide](docs/PLAYER_GUIDE.md) for controls and browser limits. The [30-change catalog](website/releases/player30.json) links each improvement to its individual PR.

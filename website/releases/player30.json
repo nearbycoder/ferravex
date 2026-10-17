@@ -219,7 +219,7 @@
     "id": 28,
     "title": "Explore all 30 changes in a searchable release catalog",
     "detail": "Filter the complete release by category, inspect individual improvements and follow their implementation PRs.",
-    "url": null,
+    "url": "https://github.com/nearbycoder/ferravex/pull/141",
     "category": "Website and docs",
     "scope": "Website and documentation"
   },

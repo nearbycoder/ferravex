@@ -11,6 +11,7 @@ REPO = 'https://github.com/nearbycoder/ferravex'
 BASE = 'https://ferravex.com'
 DOCS = [
  ('getting-started','Getting started','Start here','website/content/getting-started.md'),
+ ('player-guide','Browser player guide','Start here','docs/PLAYER_GUIDE.md'),
  ('first-game','Your first simulation','Start here','website/content/first-game.md'),
  ('architecture','Architecture','Engine','docs/ARCHITECTURE.md'),
  ('math','Math','Engine','crates/ferravex-math/README.md'),

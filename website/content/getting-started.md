@@ -66,3 +66,7 @@ python3 scripts/audit-owned.py
 ```
 
 This checks Cargo's complete resolved workspace across all features and platforms. There are no optional external backends. See the [dependency policy](/docs/dependencies/) and [implementation status](/docs/status/) for the exact boundaries.
+
+## Browser player tools
+
+Every example includes Details and Controls. The [browser player guide](../../docs/PLAYER_GUIDE.md) explains screenshots, frame limits, accessibility options, settings backups and the limits of browser APIs.
