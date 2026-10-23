@@ -140,6 +140,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "mini-golf"
+version = "0.1.0"
+dependencies = [
+ "ferravex-core",
+ "ferravex-math",
+ "ferravex-play",
+ "ferravex-render",
+]
+
+[[package]]
+name = "mini-golf-2d"
+version = "0.1.0"
+dependencies = [
+ "ferravex-core",
+ "ferravex-render",
+ "mini-golf",
+]
+
+[[package]]
+name = "mini-golf-3d"
+version = "0.1.0"
+dependencies = [
+ "ferravex-core",
+ "ferravex-render",
+ "mini-golf",
+]
+
+[[package]]
 name = "neon-swarm"
 version = "0.1.0"
 dependencies = [

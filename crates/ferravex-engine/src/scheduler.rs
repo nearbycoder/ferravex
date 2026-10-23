@@ -1,12 +1,12 @@
 //! Bounded tick deadlines with deterministic FIFO ties and explicit work limits.
 //! IDs belong to their scheduler; tick values are monotonic absolute host ticks.
 //!
-//! [`TickScheduler::drain_ready_iter`] processes tasks without allocating an output
-//! collection. [`TickScheduler::drain_ready_into`] reuses a caller's buffer without
+//! [`TickScheduler::drain_ready_iter`](crate::scheduler::TickScheduler::drain_ready_iter) processes tasks without allocating an output
+//! collection. [`TickScheduler::drain_ready_into`](crate::scheduler::TickScheduler::drain_ready_into) reuses a caller's buffer without
 //! growing it. Both leave excess ready work queued. The tree may release internal
 //! storage while draining; scheduling and rescheduling may allocate tree nodes.
 //!
-//! Owner scopes are opt-in via [`TickScheduler::with_scope_capacity`]. Cancelling
+//! Owner scopes are opt-in via [`TickScheduler::with_scope_capacity`](crate::scheduler::TickScheduler::with_scope_capacity). Cancelling
 //! a scope invalidates its handle and removes only its queued jobs. A handle is
 //! tied to its issuing scheduler even after that scheduler is moved or dropped.
 //! Dropping a handle does not cancel anything; the host owns lifecycle decisions.

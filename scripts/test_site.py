@@ -89,7 +89,7 @@ class SiteTests(unittest.TestCase):
         self.assertTrue((root / 'index.html').is_file(), 'Build the documentation site first')
         pages = [root / 'index.html', *root.glob('docs/**/*.html'), *root.glob('examples/**/*.html')]
         self.assertEqual({p.parent.name for p in (root / 'examples').glob('*/index.html')}, {g['id'] for g in json.loads((ROOT / 'examples/catalog.json').read_text())})
-        self.assertEqual(len(list((root / 'play').rglob('*.wasm'))), 15)
+        self.assertEqual(len(list((root / 'play').rglob('*.wasm'))), len(json.loads((ROOT / 'examples/catalog.json').read_text())))
         self.assertFalse((root / 'third-party').exists())
         self.assertTrue((root / 'api/ferravex_physics').exists())
         self.assertTrue((root / 'play/runtime.js').exists())
@@ -103,6 +103,27 @@ class SiteTests(unittest.TestCase):
                 if path.is_dir():
                     path = path / 'index.html'
                 self.assertTrue(path.is_file(), f'{page.relative_to(root)}: {value}')
+
+    def test_example_goals_and_learning_paths(self):
+        root = ROOT / 'dist/site'
+        for game in json.loads((ROOT / 'examples/catalog.json').read_text()):
+            with self.subTest(game=game['id']):
+                page = (root / 'examples' / game['id'] / 'index.html').read_text()
+                self.assertIn('Your objective', page)
+                self.assertIn('Default controls', page)
+                self.assertIn('Open full player', page)
+                self.assertIn('class="play-brief"', page)
+                self.assertLess(page.index('Your objective'), page.index('data-launch'))
+                self.assertRegex(page, r'href="/docs/[a-z-]+/">Explore:')
+
+    def test_current_workflows_are_in_navigation_and_search(self):
+        root = ROOT / 'dist/site'
+        self.assertIn('A playground for the engine.', (root / 'play/index.html').read_text())
+        for slug in ('engine-workflows', 'responsive-games'):
+            url = '/docs/' + slug + '/'
+            for path in ('index.html', 'docs/index.html', 'docs/getting-started/index.html'):
+                self.assertIn(url, (root / path).read_text())
+            self.assertIn(url, (root / 'search.json').read_text())
 
     def test_content_build_rejects_retired_modules_and_api_cache(self):
         output = ROOT / 'dist/site/index.html'

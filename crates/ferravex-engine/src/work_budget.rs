@@ -1,6 +1,6 @@
 //! Deterministic shared work quotas for AI, streaming and incremental rebuilds.
 //! Units are host-defined work items, not inferred CPU time. Requests never partially
-//! consume unless the caller explicitly uses [`WorkBudget::grant_up_to`].
+//! consume unless the caller explicitly uses [`WorkBudget::grant_up_to`](crate::work_budget::WorkBudget::grant_up_to).
 //!
 //! A reservation prepays a checked `items * cost_per_item` in call order. Refund
 //! unused units explicitly; the budget does not queue requests or track individual

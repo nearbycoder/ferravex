@@ -14,11 +14,13 @@ use islands::Islands;
 use joints::{JointPhase, JointRow};
 
 /// Maximum logical outer-step impact records. Recording is disabled by default.
-/// See [`World::set_impact_settings`] for preparation and a runnable recipe.
+/// Call `set_impact_settings` through the dimensional `PhysicsWorld`; its
+/// method documentation includes preparation and a runnable recipe.
 pub const MAX_IMPACT_RECORDS: usize = 65536;
 
 /// Observation thresholds only; these never change solver tolerances or impulses.
-/// See [`World::set_impact_settings`] for an example using inferred defaults.
+/// The dimensional `PhysicsWorld::set_impact_settings` method documents an
+/// example using inferred defaults.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ImpactSettings {
     /// First qualifying pairs in substep/solver order are retained, up to this
@@ -44,7 +46,8 @@ impl Default for ImpactSettings {
 }
 /// One canonical generational collider pair's strongest accepted point solve in
 /// the latest outer step, including contacts absent from the final cache.
-/// See [`World::impacts`] and [`World::set_impact_settings`].
+/// Read these through the dimensional world's `impacts` method after opting
+/// in with `set_impact_settings`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ImpactRecord {
     pub collider1: ColliderHandle,
@@ -104,7 +107,8 @@ pub enum ContactEvent {
     Stopped(ColliderHandle, ColliderHandle),
 }
 /// A copied, current sleep snapshot for a live body; no solver state is exposed
-/// for mutation. See [`World::sleep_state`] for a handle-checked example.
+/// for mutation. The dimensional world's `sleep_state` method includes a
+/// handle-checked example.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BodySleepState {
     /// Only dynamic bodies participate in sleeping and sleep counters.
@@ -119,7 +123,8 @@ pub struct BodySleepState {
 }
 /// Current dynamic-body counts, each bounded by the world's 4096-body limit.
 /// This is an allocation-free snapshot, not a cumulative event history or the
-/// last-step island report. See [`World::sleep_stats`] for an example.
+/// last-step island report. See the dimensional world's `sleep_stats` method
+/// for an example.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SleepStats {
     pub awake_bodies: usize,

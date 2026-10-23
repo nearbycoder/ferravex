@@ -3,8 +3,8 @@
 //! [`App`](crate::app::App) owns a [`Game`](crate::app::Game) and a [`GameSession`](crate::session::GameSession). The host injects elapsed seconds
 //! into [`App::frame`](crate::app::App::frame); no window, executor, renderer, or wall clock is required.
 //! Existing async renderer games can continue using `ferravex_render::game!`.
-//! Hosts needing timing and execution details can use [`App::frame_report`]
-//! instead, or inspect [`App::last_frame_report`] after either method, even on error.
+//! Hosts needing timing and execution details can use [`App::frame_report`](crate::app::App::frame_report)
+//! instead, or inspect [`App::last_frame_report`](crate::app::App::last_frame_report) after either method, even on error.
 //!
 //! ```
 //! use ferravex_core::session::GameSession;
@@ -53,7 +53,7 @@
 //!
 //! The session clock schedules its whole frame before update hooks run. Its tick
 //! therefore includes scheduled updates skipped by an early stop/error. The
-//! [`AppFrameReport`] distinguishes scheduled updates from executed hooks. A stopped
+//! [`AppFrameReport`](crate::app::AppFrameReport) distinguishes scheduled updates from executed hooks. A stopped
 //! app cannot resume; create a new app for another lifecycle. Session restart/reset
 //! between frames affects simulation timing only and never repeats startup.
 

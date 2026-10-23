@@ -1,14 +1,14 @@
 //! Reproducible shuffled index cycles for nonrepeating engine variants.
 //!
-//! Each cycle is a permutation of `0..count`. [`ShuffleBag::new`] retains the
+//! Each cycle is a permutation of `0..count`. [`ShuffleBag::new`](crate::shuffle::ShuffleBag::new) retains the
 //! original seeded sequence, including possible repeats across cycle boundaries.
-//! Opt into [`BoundaryPolicy::AvoidImmediateRepeat`] to exclude those repeats
+//! Opt into [`BoundaryPolicy::AvoidImmediateRepeat`](crate::shuffle::BoundaryPolicy::AvoidImmediateRepeat) to exclude those repeats
 //! when there are at least two items. Each allowed permutation is equally likely;
 //! a two-item bag necessarily alternates forever after its random first choice.
 //! An empty bag always returns `None`; a singleton always returns `Some(0)`.
 //!
 //! Cycles are shuffled lazily on their first draw. Inspection never consumes
-//! randomness. [`ShuffleBag::reset`] restores the original seed and index order,
+//! randomness. [`ShuffleBag::reset`](crate::shuffle::ShuffleBag::reset) restores the original seed and index order,
 //! discards any unfinished cycle, and clears progress and boundary history.
 //!
 //! ```

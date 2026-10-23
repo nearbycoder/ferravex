@@ -1,7 +1,7 @@
 //! Bounded monotonic tick snapshots. Hosts own state and interpolation semantics.
 //! Failed inserts preserve history; rolling eviction removes only the oldest state.
 //!
-//! Use [`SnapshotRing::bracket_checked`] for presentation queries with an explicit
+//! Use [`SnapshotRing::bracket_checked`](crate::snapshots::SnapshotRing::bracket_checked) for presentation queries with an explicit
 //! outcome when the requested time is outside retained history. It borrows states
 //! without allocating, interpolating game data, or silently extrapolating.
 //!

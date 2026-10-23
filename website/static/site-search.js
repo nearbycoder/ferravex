@@ -13,7 +13,7 @@ function loadIndex() {
   return indexPromise;
 }
 
-const sections = ['Best matches', 'Pages', 'Documentation', 'Examples', 'API reference'];
+const sections = ['Best matches', 'Pages', 'Features', 'Documentation', 'Examples', 'API reference'];
 const sources = sections.map(section => ({
   id: section.toLowerCase().replaceAll(' ', '-'), title: section,
   minQueryLength: 1, debounce: 60, limit: section === 'API reference' ? 8 : 6,
@@ -51,7 +51,8 @@ const colors = (light = false) => ({
 
 const quickLinks = [
     {href:'/docs/getting-started/',title:'Getting started',subtitle:'Build your first Ferravex project',icon:'book',section:'Start here'},
-    {href:'/examples/',title:'Explore the examples',subtitle:'Fifteen playable 2D and 3D games',icon:'grid',section:'Start here'},
+    {href:'/features/',title:'Explore engine features',subtitle:'Systems, guides and playable examples',icon:'grid',section:'Start here'},
+    {href:'/examples/',title:'Explore the examples',subtitle:'Playable 2D and 3D games and labs',icon:'grid',section:'Start here'},
     {href:'/api/ferravex/index.html',title:'Rust API reference',subtitle:'Types, functions and methods',icon:'code',section:'Start here'},
     {href:'/docs/architecture/',title:'Engine architecture',subtitle:'How the engine systems fit together',icon:'layers',section:'Start here'},
   ];

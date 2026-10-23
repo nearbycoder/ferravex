@@ -1,6 +1,6 @@
 //! Bounded FIFO engine events. Capacity counts events, not their owned payload bytes.
 //! Overflow is explicit; retained events preserve send order.
-//! [`EventQueue::try_send_batch`] admits a whole batch only when every event fits,
+//! [`EventQueue::try_send_batch`](crate::events::EventQueue::try_send_batch) admits a whole batch only when every event fits,
 //! preserving queued events and the caller's batch on capacity rejection.
 //!
 //! Iteration and draining allocate no storage and do not clone events. A limited

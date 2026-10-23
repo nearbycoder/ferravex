@@ -4,13 +4,13 @@
 //! another pool, since pool identity is not stored or checked. Removing a value
 //! invalidates its handle; exhausted generations permanently retire a slot.
 //!
-//! [`Pool::capacity`] is the configured slot limit, while [`Pool::available`]
+//! [`Pool::capacity`](crate::pool::Pool::capacity) is the configured slot limit, while [`Pool::available`](crate::pool::Pool::available)
 //! counts slots that can still accept values, excluding retired slots. Storage
 //! grows lazily: insertion can grow the slot vector, and removal (including
-//! [`Pool::retain`] and [`Pool::clear`]) can grow the reusable-index vector.
+//! [`Pool::retain`](crate::pool::Pool::retain) and [`Pool::clear`](crate::pool::Pool::clear)) can grow the reusable-index vector.
 //! Neither vector is shrunk on removal, so subsequent reuse within their warmed
 //! capacities does not allocate pool storage. Iteration allocates no storage.
-//! Selected mutable access through [`Pool::get2_mut`] or [`Pool::get_many_mut`]
+//! Selected mutable access through [`Pool::get2_mut`](crate::pool::Pool::get2_mut) or [`Pool::get_many_mut`](crate::pool::Pool::get_many_mut)
 //! also allocates no storage, even before the reusable-index vector is warmed.
 
 /// A generation-checked reference to a value in its originating [`Pool`].

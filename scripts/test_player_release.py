@@ -11,13 +11,16 @@ class PlayerReleaseTests(unittest.TestCase):
   for row in rows:self.assertRegex(row['url'],r'^https://github.com/nearbycoder/ferravex/pull/[0-9]+$')
  def test_published_coverage(self):
   site=ROOT/'dist/site'
-  release=(site/'updates/index.html').read_text()
-  for n in range(1,31):self.assertIn(f'id="feature-{n}"',release)
+  release=(site/'features/index.html').read_text()
+  for feature in json.loads((ROOT/'website/features.json').read_text()):self.assertIn(f'id="{feature["id"]}"',release)
+  self.assertNotIn('/updates/',release)
+  self.assertIn('url=/features/',(site/'updates/index.html').read_text())
   self.assertTrue((site/'docs/player-guide/index.html').is_file())
   for game in json.loads((ROOT/'examples/catalog.json').read_text()):
    page=(site/f"examples/{game['id']}/index.html").read_text()
    self.assertIn('/docs/player-guide/',page)
-   self.assertIn('/updates/',page)
+   self.assertIn('/features/',page)
+   self.assertNotIn('/updates/',page)
   self.assertTrue((site/'play/player.js').is_file())
   self.assertTrue((site/'play/loader.js').is_file())
 if __name__=='__main__':unittest.main()

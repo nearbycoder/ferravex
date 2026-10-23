@@ -12,6 +12,8 @@ BASE = 'https://ferravex.com'
 DOCS = [
  ('getting-started','Getting started','Start here','website/content/getting-started.md'),
  ('quickstart','Facade quickstart','Start here','docs/QUICKSTART.md'),
+ ('engine-workflows','Build with the current engine','Start here','docs/ENGINE_WORKFLOWS.md'),
+ ('responsive-games','Design for different screens','Start here','docs/RESPONSIVE_GAMES.md'),
  ('agent-guide','Coding-agent guide','Start here','docs/AGENT_GUIDE.md'),
  ('api-migration','API migration cookbook','Start here','docs/MIGRATION_50.md'),
  ('player-guide','Browser player guide','Start here','docs/PLAYER_GUIDE.md'),
@@ -50,6 +52,7 @@ DOCS = [
  ('rigid-bodies','Rotational rigid bodies','Engine','crates/ferravex-physics/README.md'),
  ('quality-series','Shared game-quality systems','Engine','docs/QUALITY_SERIES.md'),
  ('gameplay','Scenes, animation and gameplay','Engine','crates/ferravex-play/README.md'),
+ ('mini-golf','Copper Greens: twelve-hole golf','Examples','examples/shared/mini-golf/README.md'),
  ('gameplay-recipes','Compose game loops','Engine','docs/GAMEPLAY_RECIPES.md'),
  ('gameplay-series','Forty gameplay improvements','Engine','docs/GAMEPLAY_40.md'),
  ('systems','Input, audio, assets and replay','Engine','crates/ferravex-engine/README.md'),
@@ -71,7 +74,72 @@ DOCS = [
 SOURCE_LINKS = {str((ROOT / source).resolve()):f'/docs/{slug}/' for slug,_,_,source in DOCS}
 SOURCE_LINKS[str((ROOT/'README.md').resolve())]='/docs/getting-started/'
 GAMES = [dict(g,play='/play/'+g['host']+'/') for g in json.loads((ROOT/'examples/catalog.json').read_text())]
-UPDATES=json.loads((ROOT/'website/releases/player30.json').read_text())
+GAME_GUIDES = {'owned-lab': ('Complete the four offline training drills. Use the overview or first-person '
+               'view to find targets; connected peer sessions continue while local menus are '
+               'open.',
+               'networking',
+               'FPS simulation and authority'),
+ 'owned-orbit': ('Keep the ball in play, clear the panels and aim for a precise run. Wait for '
+                 'the serve to charge, then launch; watch the readable status below the canvas '
+                 'on narrow screens.',
+                 'gameplay-recipes',
+                 'Gameplay loops and scoring'),
+ 'emberline': ('Reach the end of the course. Time jumps across moving platforms, collect '
+               'optional embers and use checkpoints after a missed landing.',
+               'characters',
+               'Character controllers'),
+ 'neon-swarm': ('Survive the incoming drone waves. Move around cover, aim and fire, and save '
+                'your dash for an escape.',
+                'ai',
+                'AI and navigation'),
+ 'pocket-rally': ('Finish three laps through the ordered gates. Brake for tighter turns and '
+                  'compare your finish with your best run and ghost.',
+                  'replays',
+                  'Replays, records and ghosts'),
+ 'salvage-pinball': ('Launch each ball and keep it in play with the flippers. Build your score '
+                     'before all three balls drain.',
+                     'rigid-bodies',
+                     'Rigid bodies and collision'),
+ 'orchard-guard': ('Protect the orchard through every wave. Select a plot, spend coins on '
+                   'towers or upgrades, then start the next wave when ready.',
+                   'gameplay',
+                   'Gameplay and progression'),
+ 'marble-run': ('Collect every crystal, then reach the finish. Choose one of four courses, '
+                'brake on corners and recover to an earned checkpoint after a fall.',
+                'cameras',
+                'Camera rigs and presentation'),
+ 'dune-skimmer': ('Complete three laps through every gate in order. Follow the next-gate cue '
+                  'and manage boost, traction and recovery penalties.',
+                  'gameplay-recipes',
+                  'Vehicle and race loops'),
+ 'crystal-cavern': ('Explore the cavern, recover the crystals and open the seals to reach '
+                    'daylight. Approach an altar and interact to learn what it still needs.',
+                    'scenes',
+                    'Scenes and authoring'),
+ 'siege-foundry': ('Knock down every marked target before your eight shots run out. Aim at the '
+                   'supports and let the structure settle after each shot.',
+                   'joints-and-compounds',
+                   'Joints and compound structures'),
+ 'sky-courier': ('Fly through all five delivery gates before time expires. Slow for tight '
+                 'turns; impacts cost hull and time, and recovery returns you to safety.',
+                 'cameras',
+                 'Camera and flight presentation'),
+ 'strike': ('Start an offline practice against bots. Move, aim, fire and reload; inspect '
+            'recordings with the optional replay tools. Multiplayer uses its own authority '
+            'clock.',
+            'networking',
+            'FPS simulation and prediction'),
+ 'mini-golf-2d': ('Putt through twelve distinct holes. Use the flag, power meter and scorecard; practice any hole or complete the full round.', 'mini-golf', 'The Copper Greens course'),
+ 'mini-golf-3d': ('Read the raised greens and time the moving gates. Both views share the same twelve-hole course, penalties and scorecard.', 'mini-golf', 'The Copper Greens course'),
+ 'physics-2d': ('Experiment with shapes, contacts and sleep. Pause to place or inspect a body, '
+                'then single-step to see how the scene responds.',
+                'rigid-bodies',
+                'Rigid-body authoring'),
+ 'physics-3d': ('Explore the stack and articulated mechanisms. Orbit the camera, drop shapes, '
+                'inspect bodies and compare pause, single-step and wake behavior.',
+                'joints-and-compounds',
+                'Mechanisms and world joint frames')}
+FEATURES=json.loads((ROOT/'website/features.json').read_text())
 SEARCH=[]
 
 def validate_docs(docs=None,root=None):
@@ -155,56 +223,69 @@ def markdown(text,source):
  return '\n'.join(out),toc
 
 def sidebar(current):
- out=['<aside class="sidebar" id="docs-navigation" aria-label="Documentation navigation">'];last=None
- for slug,title,group,_ in DOCS:
-  if group!=last:out.append('<h2>'+esc(group)+'</h2>');last=group
-  out.append(f'<a href="/docs/{slug}/"'+(' aria-current="page"' if current==slug else '')+'>'+esc(title)+'</a>')
+ out=['<aside class="sidebar" id="docs-navigation" aria-label="Documentation navigation">']
+ groups={}
+ for slug,title,group,_ in DOCS:groups.setdefault(group,[]).append((slug,title))
+ for group,guides in groups.items():
+  opened=group=='Start here' or any(slug==current for slug,_ in guides)
+  out.append('<details class="nav-group"'+(' open' if opened else '')+'><summary>'+esc(group)+'</summary>')
+  for slug,title in guides:
+   out.append(f'<a href="/docs/{slug}/"'+(' aria-current="page"' if current==slug else '')+'>'+esc(title)+'</a>')
+  out.append('</details>')
  return ''.join(out)+'</aside>'
 def documentation_index():
  groups={}
  for slug,title,group,_ in DOCS:groups.setdefault(group,[]).append((slug,title))
  sections=''.join('<section><h2>'+esc(group)+'</h2><ul>'+''.join(f'<li><a href="/docs/{slug}/">{esc(title)}</a></li>' for slug,title in guides)+'</ul></section>' for group,guides in groups.items())
- return '<main id="main" class="container prose"><h1>Documentation</h1><p>Start with the setup and first simulation, then choose a focused guide. The Journey200 ledger records implementation and validation status; a guide is not a platform verification claim.</p><p><a class="button" href="/docs/getting-started/">Start building</a></p>'+sections+'</main>'
+ paths=''.join(f'<a class="path-card" href="{url}"><span class="eyebrow">{label}</span><h2>{title}</h2><p>{detail}</p><span class="card-arrow" aria-hidden="true">↗</span></a>' for url,label,title,detail in [('/docs/getting-started/','01 / Start','Run your first game','Set up the checkout, generate a project and find your first fixed update.'),('/docs/engine-workflows/','02 / Compose','Choose the right API','Connect timing, entities, physics, responsive UI and multiplayer.'),('/docs/agent-guide/','03 / Collaborate','Give an agent context','Find real symbols, preserve boundaries and verify the result.')])
+ return '<main id="main" class="container docs-index"><div class="page-heading"><div class="eyebrow">The field guide</div><h1>From first tick<br>to finished game.</h1><p>Runnable examples, practical recipes and the source behind every system. Choose a starting point, then go deeper.</p></div><div class="path-grid">'+paths+'</div><div class="docs-directory">'+sections+'</div></main>'
 def layout(title,body,url='/',description='An original Rust engine for compact 2D and 3D games.',section=''):
- nav=''.join(f'<a href="{href}" class="{cls}"'+(' aria-current="page"' if section==label else '')+f'>{label}</a>' for href,label,cls in [('/updates/','Updates',''),('/docs/getting-started/','Docs',''),('/examples/','Examples',''),('/api/ferravex/index.html','API','api-nav')])
- return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>{esc(title)} · Ferravex</title><meta name="description" content="{esc(description)}"><link rel="canonical" href="{BASE}{url}"><meta property="og:title" content="{esc(title)} · Ferravex"><meta property="og:description" content="{esc(description)}"><meta property="og:image" content="{BASE}/assets/owned-courtyard.png"><meta property="og:type" content="website"><link rel="icon" href="/favicon.ico"><link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png"><link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png"><link rel="stylesheet" href="/site.css"><link rel="stylesheet" href="/search.css"><script src="/site.js" defer></script><script type="module" src="/site-search.js"></script></head><body><a class="skip" href="#main">Skip to content</a><header class="header"><div class="header-inner"><a class="brand" href="/" aria-label="Ferravex home"><img class="brand-mark" src="/favicon-32.png" alt="" width="28" height="28" aria-hidden="true">ferravex</a><nav aria-label="Main navigation">{nav}</nav><div class="header-actions"><button class="search-trigger" data-qikbar-open aria-label="Search Ferravex"><span>Search site</span><kbd data-command-key>Ctrl K</kbd></button><button class="theme-toggle" id="theme-toggle" aria-label="Switch color theme">Theme</button><a href="{REPO}">GitHub</a></div></div></header>{body}<footer class="footer"><div class="container"><span>Ferravex. Original engine systems, built in Rust.</span><span><a href="{REPO}">Source</a><a href="{REPO}/blob/main/LICENSE">MIT license</a><a href="/docs/status/">Implementation status</a></span></div></footer></body></html>'''
+ nav=''.join(f'<a href="{href}" class="{cls}"'+(' aria-current="page"' if section==label else '')+f'>{label}</a>' for href,label,cls in [('/features/','Features',''),('/docs/','Docs',''),('/examples/','Examples',''),('/api/ferravex/index.html','API','api-nav')])
+ return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="theme-color" content="#f6f5ef"><script>try{{const t=localStorage.getItem("ferravex-theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}}catch{{}}</script><title>{esc(title)} · Ferravex</title><meta name="description" content="{esc(description)}"><link rel="canonical" href="{BASE}{url}"><meta property="og:title" content="{esc(title)} · Ferravex"><meta property="og:description" content="{esc(description)}"><meta property="og:image" content="{BASE}/assets/owned-courtyard.png"><meta property="og:type" content="website"><link rel="icon" href="/favicon.ico"><link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png"><link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png"><link rel="stylesheet" href="/site.css"><link rel="stylesheet" href="/search.css"><script src="/site.js" defer></script><script type="module" src="/site-search.js"></script></head><body><a class="skip" href="#main">Skip to content</a><header class="header"><div class="header-inner"><a class="brand" href="/" translate="no" aria-label="Ferravex home"><img class="brand-mark" src="/favicon-32.png" alt="" width="28" height="28" aria-hidden="true">ferravex</a><nav aria-label="Main navigation">{nav}</nav><div class="header-actions"><button class="search-trigger" type="button" data-qikbar-open aria-label="Search Ferravex"><span>Search site</span><kbd data-command-key>Ctrl K</kbd></button><button class="theme-toggle" type="button" id="theme-toggle" aria-label="Switch color theme">Theme</button><a href="{REPO}">GitHub</a></div></div></header>{body}<footer class="footer"><div class="container"><span>Ferravex. Original engine systems, built in Rust.</span><span><a href="{REPO}">Source</a><a href="{REPO}/blob/main/LICENSE">MIT license</a><a href="/docs/status/">Implementation status</a></span></div></footer></body></html>'''
 def meta(game):return f'<div class="meta"><span>{esc(game["dimension"])} / {esc(game["genre"])}</span><span class="owned">First-party engine</span></div>'
 def tile(game):
  search=' '.join(game[key] for key in ('title','genre','description','controls'))
  return f'<article class="example-tile" data-dimension="{game["dimension"]}" data-search="{esc(search)}"><a href="/examples/{game["id"]}/"><img src="/assets/{game["image"]}" alt="{esc(game["title"])} gameplay" width="960" height="600" loading="lazy"><h2>{esc(game["title"])}</h2></a>{meta(game)}<p>{esc(game["description"])}</p></article>'
 def home():
- cards=''.join(tile(g) for g in GAMES[:6])
+ featured=['mini-golf-3d','mini-golf-2d','crystal-cavern','pocket-rally','orchard-guard','sky-courier']
+ cards=''.join(tile(next(g for g in GAMES if g['id']==key)) for key in featured)
+ capabilities=[('01','A steady foundation','Fixed ticks, interpolation history, typed resources and prepared entity composition.','/docs/engine-workflows/#run-rules-on-fixed-ticks'),('02','A world that responds','Rigid bodies, checked teleports, compound mechanisms, character clearance and impact reports.','/docs/rigid-bodies/'),('03','UI that has room to breathe','Wrapped text, measured rows, content-driven cards and shared draw-and-hit geometry.','/docs/responsive-games/'),('04','Authority you can follow','Supplied-time server and client drivers, bounded local datagrams and explicit replication outcomes.','/docs/networking/'),('05','Feedback with intent','Accepted-event cues, independent motion and flash preferences, camera transitions and audio control.','/docs/journey-200-presentation/'),('06','An agent-friendly workspace','Local API search, runnable guide examples, structured diagnostics and a first-party dependency graph.','/docs/agent-guide/')]
+ features=''.join(f'<a class="capability-card" href="{url}"><span class="upgrade-number">{n} / Engine</span><h3>{title}</h3><p>{detail}</p><span class="card-arrow" aria-hidden="true">↗</span></a>' for n,title,detail,url in capabilities)
  body=f'''<main id="main" class="container release-home">
- <section class="hero"><div><div class="eyebrow">Ferravex / The player update</div><h1>More play.<br><span>More control.</span></h1><p>Fifteen original games. One shared Rust foundation. New tools to capture a moment, tune performance and make the player your own.</p><div class="button-row"><a class="button" href="/examples/">Find your next game</a><a class="text-link" href="/updates/">Explore all 30 changes</a></div></div><a class="hero-image" href="/examples/neon-swarm/" aria-label="Play Neon Swarm"><img src="/assets/neon-swarm.png" alt="Neon Swarm arena gameplay" width="960" height="600" fetchpriority="high"><span class="hero-caption">Neon Swarm / Arena survival</span></a></section>
- <section class="release-strip" aria-label="Update scope"><strong>30 improvements</strong><span>Across all 15 browser examples</span><a href="/docs/player-guide/">Read the player guide →</a></section>
- <section class="section"><div class="eyebrow">New in every browser game</div><h2>A player that fits you.</h2><div class="upgrade-grid"><article><span class="upgrade-number">01 / Play</span><h3>Keep the moment.</h3><p>Save a fresh PNG, copy a clean game link and track active session time. Keep your screen awake when you choose.</p></article><article><span class="upgrade-number">02 / Tune</span><h3>Choose your pace.</h3><p>Limit rendering to 30 or 60 FPS, pick a quick performance preset and inspect the live performance overlay.</p></article><article><span class="upgrade-number">03 / Make it yours</span><h3>Find your comfort.</h3><p>High contrast controls, larger settings text and UI motion preferences. Back up your choices and carry them to another browser.</p></article></div></section>
- <section class="section"><div class="section-heading"><div><div class="eyebrow">Built to be played</div><h2>Start somewhere unexpected.</h2></div><a class="text-link" href="/examples/">All fifteen games and labs →</a></div><div class="example-grid">{cards}</div></section>
- <section class="section docs-paths"><div><div class="eyebrow">Read it. Build it.</div><h2>The code is yours to explore.</h2><p>First-party Rust systems, browser standards and no third-party runtime crates. Follow a guide or go straight to the implementation.</p></div><div class="docs-link-grid"><a href="/docs/player-guide/"><strong>Player guide</strong><span>Every new tool, setting and browser limit</span></a><a href="/docs/getting-started/"><strong>Build your first game</strong><span>Set up the workspace and run a simulation</span></a><a href="/docs/architecture/"><strong>Engine architecture</strong><span>Physics, input, rendering and gameplay</span></a><a href="/api/ferravex/index.html"><strong>Rust API reference</strong><span>Browse the types and source</span></a></div></section>
- <aside class="roadmap-note"><div><strong>A compact engine with a visible implementation.</strong><p>These updates improve the browser player. Game rules and native hosts retain their documented behavior. See the platform guide for tested targets and remaining runtime work.</p></div><a class="text-link" href="/docs/platforms/">Platform status</a></aside></main>'''
- write(OUT/'index.html',layout('More play. More control.',body))
-def updates():
- categories=list(dict.fromkeys(row['category'] for row in UPDATES))
- options='<option value="all">All categories</option>'+''.join(f'<option value="{esc(category)}">{esc(category)}</option>' for category in categories)
+ <section class="hero"><div class="hero-copy"><div class="eyebrow">A first-party Rust game engine</div><h1>Make something<br><span>worth playing.</span></h1><p class="hero-lead">Small enough to understand.<br>Deep enough to make it yours.</p><p>Build 2D and 3D games with inspectable systems, fixed-step simulation and a shared browser player. Follow the code from the first input to the final frame.</p><div class="button-row"><a class="button" href="/docs/getting-started/">Start building <span aria-hidden="true">↗</span></a><a class="button secondary" href="/examples/">Play the examples</a></div><div class="hero-tags"><span>Rust + std</span><span>2D &amp; 3D</span><span>Open source / MIT</span></div></div><div class="showcase"><div class="showcase-bar"><span><i aria-hidden="true"></i> The playground</span><span>01 / {len(GAMES)}</span></div><a class="showcase-image" href="/examples/marble-run/" aria-label="Explore Marble Run"><img src="/assets/marble-run.png" alt="Marble Run: a rolling course built from ramps, rails and checkpoints" width="960" height="600" fetchpriority="high"><span class="showcase-play" aria-hidden="true">↗</span></a><div class="showcase-caption"><div><span class="eyebrow">Physics / camera / checkpoints</span><h2>Find your line.</h2><p>Marble Run. Four courses. One more try.</p></div><a href="/play/marble-run/" class="text-link">Play now ↗</a></div><div class="showcase-code"><span>one tick at a time</span><code>for tick in session.advance_batch(dt).ticks() {{<br>&nbsp; update_world(tick.dt);<br>}}</code></div></div></section>
+ <div class="release-strip" aria-label="Engine at a glance"><span><strong>{len(GAMES)}</strong> playable examples</span><span><strong>0</strong> external Cargo packages</span><span>Every system has source.</span><a href="/docs/engine-workflows/">Explore the engine ↗</a></div>
+ <section class="section"><div class="section-heading"><div><div class="eyebrow">Build / learn / play</div><h2>A good place to start.</h2></div><p>Pick a path. Keep the same foundation.</p></div><div class="path-grid"><a class="path-card" href="/docs/getting-started/"><span class="eyebrow">For the builder</span><h3>Your first game.</h3><p>Generate a project, run it locally and make the next change.</p><span class="card-arrow" aria-hidden="true">↗</span></a><a class="path-card" href="/docs/agent-guide/"><span class="eyebrow">For you and your agent</span><h3>Less guesswork.</h3><p>Find actual APIs, use checked recipes and verify what you ship.</p><span class="card-arrow" aria-hidden="true">↗</span></a><a class="path-card" href="/examples/"><span class="eyebrow">For the curious</span><h3>Try the whole thing.</h3><p>Racing, flight, platforming, puzzles and a pair of physics labs.</p><span class="card-arrow" aria-hidden="true">↗</span></a></div></section>
+ <section class="section"><div class="section-heading"><div><div class="eyebrow">Inside the engine</div><h2>Useful parts.<br>Better together.</h2></div><a class="text-link" href="/docs/engine-workflows/">Choose your workflow ↗</a></div><div class="capability-grid">{features}</div></section>
+ <section class="section"><div class="section-heading"><div><div class="eyebrow">Made with Ferravex</div><h2>The best documentation<br>is something you can play.</h2></div><a class="text-link" href="/examples/">All {len(GAMES)} games &amp; labs ↗</a></div><div class="example-grid">{cards}</div></section>
+ <section class="section docs-paths"><div><div class="eyebrow">From idea to implementation</div><h2>Take the next step.</h2><p>Start with a small working loop. Add only the systems your game needs. The guides connect public APIs to real example code, with explicit errors and bounded work.</p><a class="button" href="/docs/">Open the field guide ↗</a></div><div class="docs-link-grid"><a href="/docs/responsive-games/"><strong>Design for different screens</strong><span>Keep the world fitted and the controls readable.</span></a><a href="/docs/journey-200-debugging/"><strong>Understand what happened</strong><span>Inspect accepted events, saves and replay mismatches.</span></a><a href="/docs/player-guide/"><strong>Make the player yours</strong><span>Bindings, visual preferences and recovery tools.</span></a><a href="/api/ferravex/index.html"><strong>Go straight to the API</strong><span>Types, signatures, examples and source.</span></a></div></section>
+ <aside class="roadmap-note"><div><strong>Built in the open. Clear about what ships.</strong><p>The current release includes 83 Journey400 implementations. The remaining 117 tasks are deferred; platform and device verification limits are recorded alongside the code.</p></div><a class="text-link" href="/docs/release-status/">Release status ↗</a></aside></main>'''
+ write(OUT/'index.html',layout('Make something worth playing',body))
+def features():
  cards=[]
- for row in UPDATES:
-  implementation=f'<a class="text-link" href="{esc(row["url"])}">Implementation PR →</a>' if row.get('url') else ''
-  cards.append(f'<article class="update-card" id="feature-{row["id"]}" data-update-category="{esc(row["category"])}"><span class="upgrade-number">{row["id"]:02d} / {esc(row["category"])}</span><h2>{esc(row["title"])}</h2><p>{esc(row["detail"])}</p><p class="mono">{esc(row["scope"])}</p><div class="button-row"><a class="text-link" href="/docs/player-guide/">Player guide</a>{implementation}</div></article>')
- body=f'<main id="main" class="container"><div class="page-heading"><div class="eyebrow">The player update</div><h1>Every improvement.<br>One place.</h1><p>Explore 26 shared browser player improvements and four website and documentation upgrades. All fifteen games receive the shared player features.</p></div><div class="release-filters"><label>Find an improvement<input type="search" id="updates-query" placeholder="Screenshots, frame rate, controls…"></label><label>Category<select id="updates-category">{options}</select></label></div><p id="updates-count" role="status">30 improvements</p><div class="updates-grid">'+''.join(cards)+'</div><p id="updates-empty" hidden>No improvements match. Try another search or category.</p></main>'
- write(OUT/'updates/index.html',layout('The player update',body,'/updates/',section='Updates'))
+ for feature in FEATURES:
+  items=''.join('<li>'+esc(item)+'</li>' for item in feature['items'])
+  cards.append(f'<article class="feature-card" id="{feature["id"]}"><span class="eyebrow">{esc(feature["label"])}</span><h2>{esc(feature["title"])}</h2><p>{esc(feature["detail"])}</p><ul>{items}</ul><div class="button-row"><a class="text-link" href="/docs/{feature["guide"]}/">Read the guide ↗</a><a class="text-link" href="/examples/{feature["example"]}/">See it in a game ↗</a></div></article>')
+ body='<main id="main" class="container"><div class="page-heading"><div class="eyebrow">Inside Ferravex</div><h1>Good games.<br>Useful building blocks.</h1><p>From the first fixed tick to a finished scorecard. Explore the engine systems you can use today, with guides and playable examples beside them.</p><div class="button-row"><a class="button" href="/docs/getting-started/">Start building ↗</a><a class="text-link" href="/examples/mini-golf-3d/">Play twelve greens ↗</a></div></div><section class="golf-feature"><div><span class="eyebrow">Copper Greens / 12 holes / 2 views</span><h2>Find your next line.</h2><p>Bank around stone, cross the canal, read a raised green and time the windmill. A shared course and scorecard in two dimensions and three.</p><div class="button-row"><a class="button" href="/examples/mini-golf-2d/">Play 2D</a><a class="button secondary" href="/examples/mini-golf-3d/">Play 3D</a></div></div><img src="/assets/mini-golf-3d.png" alt="Copper Greens: a miniature golf course in three dimensions" width="960" height="600"></section><div class="features-grid">'+''.join(cards)+'</div><aside class="roadmap-note"><p>Platform and verification limits are documented alongside the implementation. Deferred work is not presented as a shipped feature.</p><a class="text-link" href="/docs/release-status/">Release scope ↗</a></aside></main>'
+ write(OUT/'features/index.html',layout('Features',body,'/features/',section='Features'))
+ # Retain old inbound links without publishing a second navigation section.
+ write(OUT/'updates/index.html','<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/features/"><title>Features · Ferravex</title><link rel="canonical" href="'+BASE+'/features/"></head><body><p><a href="/features/">Explore Ferravex features</a></p></body></html>')
 
 def pages(docs=None):
  """Render guides and catalog pages; a subset supports isolated content checks."""
  for slug,title,group,source in DOCS if docs is None else docs:
-  text=(ROOT/source).read_text();body,toc=markdown(text,source);toc_html='<aside class="toc" aria-label="On this page"><strong>On this page</strong>'+''.join(f'<a href="#{key}">{esc(t)}</a>' for t,key in toc)+'</aside>'
-  content=f'<main id="main" class="docs-layout">{sidebar(slug)}<article class="prose"><button class="menu-toggle" aria-controls="docs-navigation" aria-expanded="false">Browse documentation</button>{body}<div class="edit-source"><a href="{REPO}/blob/main/{source}">View this page source on GitHub</a></div></article>{toc_html}</main>'
+  text=(ROOT/source).read_text(encoding="utf-8");body,toc=markdown(text,source);toc_html='<aside class="toc" aria-label="On this page"><strong>On this page</strong>'+''.join(f'<a href="#{key}">{esc(t)}</a>' for t,key in toc)+'</aside>'
+  content=f'<main id="main" class="docs-layout"><button class="menu-toggle" type="button" aria-controls="docs-navigation" aria-expanded="false">Browse documentation</button>{sidebar(slug)}<article class="prose">{body}<div class="edit-source"><a href="{REPO}/blob/main/{source}">View this page source on GitHub</a></div></article>{toc_html}</main>'
   write(OUT/f'docs/{slug}/index.html',layout(title,content,f'/docs/{slug}/',section='Docs'));SEARCH.append(dict(title=title,url=f'/docs/{slug}/',type=group,text=re.sub(r'[`#*|]',' ',text)[:24000]))
  write(OUT/'docs/index.html',layout('Documentation',documentation_index(),'/docs/',section='Docs'))
  filters=''.join(f'<button data-filter="{key}" aria-pressed="{str(key=="all").lower()}">{label}</button>' for key,label in [('all','All examples'),('2D','2D'),('3D','3D')])
- body=f'<main id="main" class="container"><div class="page-heading"><h1>A playground for the engine.</h1><p>Fifteen original examples, in 2D and 3D. Every example includes playable code, controls and a clear view of the systems behind it.</p></div><label class="game-search">Find a game<input id="game-query" type="search" placeholder="Title, genre or controls…"></label><div class="filters" role="group" aria-label="Filter examples">{filters}</div><p id="filter-status" class="mono" role="status">{len(GAMES)} examples</p><div class="example-grid">'+''.join(map(tile,GAMES))+'</div><p id="games-empty" hidden>No games match. Try another search or dimension.</p></main>'
+ body=f'<main id="main" class="container"><div class="page-heading"><h1>A playground for the engine.</h1><p>{len(GAMES)} original examples, in 2D and 3D. Every example includes playable code, controls and a clear view of the systems behind it.</p></div><label class="game-search">Find a game<input id="game-query" name="q" type="search" autocomplete="off" placeholder="Title, genre or controls…"></label><div class="filters" role="group" aria-label="Filter examples">{filters}</div><p id="filter-status" class="mono" role="status">{len(GAMES)} examples</p><div class="example-grid">'+''.join(map(tile,GAMES))+'</div><p id="games-empty" hidden>No games match. Try another search or dimension.</p></main>'
  write(OUT/'examples/index.html',layout('Examples',body,'/examples/',section='Examples'))
+ # Relative All games links from standalone hosts land on the branded gallery.
+ write(OUT/'play/index.html',layout('Examples',body,'/examples/',section='Examples'))
  for g in GAMES:
+  objective, guide_slug, guide_title = GAME_GUIDES[g['id']]
   engine='First-party Rust engine. Browser standards only; no third-party runtime packages.'
-  body=f'''<main id="main" class="container"><a class="example-back" href="/examples/">Back to all examples</a><div class="page-heading example-title"><div><h1>{esc(g['title'])}</h1>{meta(g)}</div><div class="button-row"><a class="button secondary" href="{g['play']}" target="_blank" rel="noopener">Open game</a><a class="text-link" href="/api/src/{g['id'].replace('-', '_')}/lib.rs.html">Source code</a></div></div><div class="player" data-game="{g['play']}" data-title="{esc(g['title'])}"><img src="/assets/{g['image']}" alt="{esc(g['title'])} gameplay preview" width="960" height="600"><div class="launch"><button class="button" data-launch>Play {esc(g['title'])}</button><p>Loads the game when you are ready.</p></div></div><p class="mono" style="font-size:12px">{esc(g['controls'])}</p><aside class="game-updates"><strong>Updated with the shared browser player</strong><p>Save screenshots, share clean links, limit frame rate and customize player controls. All 26 shared improvements are available in Details.</p><a class="text-link" href="/docs/player-guide/">Player tools and settings</a> · <a class="text-link" href="/updates/">All 30 changes and implementation PRs</a></aside><section class="example-info"><div><h2>About this example</h2><p>{esc(g['description'])}</p><p>{engine}</p><p>Compare palettes: <a href="{g['play']}?look=warm" target="_blank" rel="noopener">Warm</a> · <a href="{g['play']}?look=cool" target="_blank" rel="noopener">Cool</a> · <a href="{g['play']}?look=ink" target="_blank" rel="noopener">Ink</a>. <a href="/docs/visuals/">Style and performance settings</a></p></div><div><h2>Run it locally</h2><pre><code>cargo run --release -p {g['id']}</code></pre><p>The restored games have an original Linux window and GPU host. Courtyard and Orbit Breaker also offer headless PNG export. All examples are playable in the browser.</p><a class="text-link" href="/docs/getting-started/">Setup instructions</a></div></section></main>'''
+  body=f'''<main id="main" class="container"><a class="example-back" href="/examples/">Back to all examples</a><div class="page-heading example-title"><div><h1>{esc(g['title'])}</h1>{meta(g)}</div><div class="button-row"><a class="button" href="{g['play']}">Open full player ↗</a><a class="text-link" href="/api/src/{g['id'].replace('-', '_')}/lib.rs.html">Source code</a></div></div><section class="play-brief"><div><span class="eyebrow">Your objective</span><p>{esc(objective)}</p></div><a class="text-link" href="/docs/{guide_slug}/">Explore: {esc(guide_title)} ↗</a></section><div class="player" data-game="{g['play']}" data-title="{esc(g['title'])}"><img src="/assets/{g['image']}" alt="{esc(g['title'])} gameplay preview" width="960" height="600"><div class="launch"><button class="button" data-launch>Play {esc(g['title'])}</button><p>Play here, or use Open full player for more room.</p></div></div><p class="default-controls"><strong>Default controls</strong> {esc(g['controls'])}</p><aside class="player-features"><strong>Your player, your controls.</strong><p>Controls shows the current bindings; the summary above lists defaults. Use Details for visual preferences, frame caps and diagnostics. Motion and reduced flash are independent settings.</p><a class="text-link" href="/docs/player-guide/">Player tools and settings</a> · <a class="text-link" href="/features/">Engine features</a></aside><section class="example-info"><div><h2>About this example</h2><p>{esc(g['description'])}</p><p>{engine}</p><p>Compare palettes: <a href="{g['play']}?look=warm" target="_blank" rel="noopener">Warm</a> · <a href="{g['play']}?look=cool" target="_blank" rel="noopener">Cool</a> · <a href="{g['play']}?look=ink" target="_blank" rel="noopener">Ink</a>. <a href="/docs/visuals/">Style and performance settings</a></p></div><div><h2>Run it locally</h2><pre><code>cargo run --release -p {g['id']}</code></pre><p>The shared renderer has Linux, Windows and macOS host source; interactive device verification varies by platform. Courtyard and Orbit Breaker also offer headless PNG export. All {len(GAMES)} examples have browser builds.</p><a class="text-link" href="/docs/getting-started/">Setup instructions</a></div></section></main>'''
 
   write(OUT/f'examples/{g["id"]}/index.html',layout(g['title'],body,f'/examples/{g["id"]}/',g['description'],'Examples'));SEARCH.append(dict(title=g['title'],url=f'/examples/{g["id"]}/',type='Example',text=g['description']+' '+g['genre']+' '+g['controls']))
 
@@ -314,12 +395,12 @@ def main():
   content=content.replace('</head>','<link rel="stylesheet" href="/search.css"><script type="module" src="/site-search.js"></script></head>',1)
   content=content.replace('<body', '<body data-ferravex-api',1)
   page.write_text(content)
- home();updates();pages()
+ home();features();pages()
  corpus=build_index(OUT,DOCS,GAMES,ROOT)
  write(OUT/'search.json',json.dumps(corpus,separators=(',',':')))
  print(f'Indexed {len(corpus)} pages, guide sections and API symbols')
  write(OUT/'404.html',layout('Page not found','<main id="main" class="container page-heading"><h1>This path is uncharted.</h1><p>The page could not be found.</p><a class="button" href="/">Back home</a></main>'))
- urls=['/','/updates/','/docs/','/examples/']+[f'/docs/{slug}/' for slug,*_ in DOCS]+[f'/examples/{g["id"]}/' for g in GAMES]
+ urls=['/','/features/','/docs/','/examples/']+[f'/docs/{slug}/' for slug,*_ in DOCS]+[f'/examples/{g["id"]}/' for g in GAMES]
  write(OUT/'sitemap.xml','<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'+''.join(f'<url><loc>{BASE}{u}</loc></url>' for u in urls)+'</urlset>')
  write(OUT/'robots.txt',f'User-agent: *\nAllow: /\nSitemap: {BASE}/sitemap.xml\n')
  manifest={}

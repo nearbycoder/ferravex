@@ -11,8 +11,8 @@
 //! commands stay queued. There is no rollback or automatic retry. A lazy drain only
 //! removes commands actually yielded; dropping it leaves the rest queued.
 //!
-//! [`FallibleCommandBuffer`] adds typed domain errors with an explicit
-//! [`CommandFailurePolicy`]. Its error callback receives the caller-supplied
+//! [`FallibleCommandBuffer`](crate::commands::FallibleCommandBuffer) adds typed domain errors with an explicit
+//! [`CommandFailurePolicy`](crate::commands::CommandFailurePolicy). Its error callback receives the caller-supplied
 //! command ID and owned error without an intermediate error collection.
 //!
 //! ```

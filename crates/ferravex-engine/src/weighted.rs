@@ -6,10 +6,10 @@
 //! An empty slice, more than 4096 entries, an all-zero slice, or a total above
 //! `u64::MAX` is invalid.
 //!
-//! [`WeightedTable`] is already a prepared distribution: build it once for
-//! repeated allocation-free draws. [`try_sample`] validates and selects directly
+//! [`WeightedTable`](crate::weighted::WeightedTable) is already a prepared distribution: build it once for
+//! repeated allocation-free draws. [`try_sample`](crate::weighted::try_sample) validates and selects directly
 //! from a slice without allocating, useful for occasional or changing weights.
-//! Both use the same [`Random::below`] rejection sampler and preserve the original
+//! Both use the same [`Random::below`](crate::random::Random::below) rejection sampler and preserve the original
 //! table's ticket mapping and stream consumption, including single-entry tables.
 //! Invalid weights consume no random draws. Neither API normalizes weights;
 //! scaling even equivalent ratios can change the seeded sequence.

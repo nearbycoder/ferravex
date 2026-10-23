@@ -2,9 +2,9 @@
 //! Tags are case-sensitive ASCII segments separated by dots. A stored child
 //! satisfies its parent query; `render.mesh` never matches `render.meshes`.
 //!
-//! [`TagPredicate`] combines required (all), optional alternatives (any), and
+//! [`TagPredicate`](crate::tags::TagPredicate) combines required (all), optional alternatives (any), and
 //! excluded (none) queries. Build and validate a predicate once, then match
-//! existing [`TagSet`] values without allocating:
+//! existing [`TagSet`](crate::tags::TagSet) values without allocating:
 //!
 //! ```
 //! use ferravex_engine::tags::{TagError, TagPredicate, TagSet};

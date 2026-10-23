@@ -5,8 +5,8 @@
 //! Use [`SystemOrder::before_checked`](crate::system_order::SystemOrder::before_checked) for transactional dependency edits and
 //! [`SystemOrder::inspect`](crate::system_order::SystemOrder::inspect) to explain the resulting order. Legacy [`SystemOrder::before`](crate::system_order::SystemOrder::before)
 //! still permits cycles until resolution.
-//! [`SystemOrder::resolve_layers`] groups systems by dependency depth, while
-//! [`SystemOrder::inspect_layers`] also explains each system's direct prerequisites.
+//! [`SystemOrder::resolve_layers`](crate::system_order::SystemOrder::resolve_layers) groups systems by dependency depth, while
+//! [`SystemOrder::inspect_layers`](crate::system_order::SystemOrder::inspect_layers) also explains each system's direct prerequisites.
 //! Layers describe ordering constraints only; they neither execute systems nor
 //! establish whether systems may safely run concurrently.
 //!

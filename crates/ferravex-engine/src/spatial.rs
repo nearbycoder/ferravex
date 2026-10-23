@@ -1,8 +1,8 @@
 //! Bounded point buckets for engine interest, selection and proximity queries.
 //! IDs are host-owned u64 values. Queries visit at most 4096 cells; an oversized
 //! query returns an error instead of partial results. This is not a physics broadphase.
-//! Use [`SpatialGrid::query_into`] to reuse caller storage and report omitted matches.
-//! [`SpatialGrid::query_radius_into`] and [`SpatialGrid::query_nearest_into`]
+//! Use [`SpatialGrid::query_into`](crate::spatial::SpatialGrid::query_into) to reuse caller storage and report omitted matches.
+//! [`SpatialGrid::query_radius_into`](crate::spatial::SpatialGrid::query_radius_into) and [`SpatialGrid::query_nearest_into`](crate::spatial::SpatialGrid::query_nearest_into)
 //! return stored positions ranked by squared distance, then ID, without allocating.
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};

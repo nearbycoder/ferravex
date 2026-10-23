@@ -56,6 +56,7 @@ PYTHON_TESTS = {
 }
 # Explicit source-guide scope: link checks never compile or execute snippets.
 DOC_CHECK_PATHS = (
+    "docs/ENGINE_WORKFLOWS.md", "docs/RESPONSIVE_GAMES.md",
     "docs/QUICKSTART.md", "docs/AGENT_GUIDE.md", "docs/MIGRATION_50.md",
     "docs/VALIDATION_50.md", "docs/JOURNEY_200.md",
     "docs/MIGRATION_200.md", "docs/JOURNEY_200_GAMEPLAY.md",
@@ -65,6 +66,7 @@ DOC_CHECK_PATHS = (
     "AGENTS.md", "CONTRIBUTING.md", "DEPENDENCIES.md", "README.md",
 )
 GUIDE_EXAMPLE_PATHS = (
+    "docs/ENGINE_WORKFLOWS.md",
     "docs/QUICKSTART.md", "docs/MIGRATION_200.md", "docs/AGENT_GUIDE.md",
     "docs/JOURNEY_200_GAMEPLAY.md", "docs/JOURNEY_200_PRESENTATION.md",
     "docs/JOURNEY_200_DEBUGGING.md", "docs/JOURNEY_200_PERFORMANCE.md",

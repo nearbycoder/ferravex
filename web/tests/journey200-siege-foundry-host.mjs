@@ -391,3 +391,8 @@ test('the local guard does not intercept earlier dialog or fullscreen Escape han
   assert.equal(h.key('keydown', 'Escape').defaultPrevented, true);
   assert.deepEqual(h.calls, [], 'fullscreen capture owns Escape before game or page listeners');
 });
+
+test('the range precedes long instructions and has a direct help route', () => {
+  assert.ok(html.indexOf('<canvas') < html.indexOf('<header class="range-intro">'));
+  assert.match(html, /class="range-help-link" href="#range-help"/);
+});

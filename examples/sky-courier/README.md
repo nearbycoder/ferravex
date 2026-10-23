@@ -1,6 +1,6 @@
 # Sky Courier
 
-Restored locally with first-party Ferravex APIs. Native play currently uses Linux X11/GLX; browser play uses the shared WebGL2 host. This recovery has not been published, and prior backend test results must be rechecked.
+A first-party Ferravex example with a shared WebGL2 browser host and native renderer entry point. See [platform support and verification](../../docs/PLATFORMS.md) for the OS libraries and device checks that apply.
 
 A small 3D coastal flight game built with Ferravex. Pilot a low-poly floatplane through five ordered amber navigation rings, then slow down and fly low over the marked island landing pad to deliver the north coast mail before the 90-second window closes. All geometry is procedural and cached at startup; no external assets are required.
 
