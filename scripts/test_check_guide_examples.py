@@ -162,7 +162,7 @@ class GuideTests(unittest.TestCase):
         self.assertIn("--locked", build)
         self.assertIn("--lib", build)
         self.assertNotIn("--workspace", build)
-        self.assertEqual(report["commands"]["build"]["env"], {"RUSTC": "/tools/rustc"})
+        self.assertEqual(report["commands"]["build"]["env"], {"RUSTC": os.path.abspath("/tools/rustc")})
         compiled = report["examples"][0]["compile"]["argv"]
         self.assertEqual(compiled[compiled.index("--target") + 1], self.host)
         self.assertIn("dependency=" + str(self.deps), compiled)

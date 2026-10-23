@@ -307,7 +307,7 @@ class CliTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="ferravex serve cli ")
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
         (self.root / "index.html").write_bytes(b"index")
 
     def invoke(self, *args):
@@ -390,8 +390,13 @@ class CliTests(unittest.TestCase):
             listener.listen()
             status, _, errors = self.invoke("--port", str(listener.getsockname()[1]))
         self.assertEqual(status, 2)
-        self.assertIn("port already in use", errors)
-        self.assertIn("another --port", errors)
+        if os.name == "nt" and "10013" in errors:
+            # Windows may report access denied for an exclusively bound port.
+            self.assertIn("permission denied", errors)
+            self.assertIn("unprivileged --port", errors)
+        else:
+            self.assertIn("port already in use", errors)
+            self.assertIn("another --port", errors)
         self.assertNotIn("Traceback", errors)
 
     def test_resolution_and_bind_permissions_are_actionable(self):

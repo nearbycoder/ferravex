@@ -5,6 +5,7 @@ from html.parser import HTMLParser
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -44,29 +45,29 @@ class GenerationTests(ScaffoldFixture, unittest.TestCase):
             with self.subTest(template=template):
                 name = "moon-" + template
                 output = self.generate(name, template)
-                manifest = tomllib.loads((output / "Cargo.toml").read_text())
+                manifest = tomllib.loads((output / "Cargo.toml").read_text(encoding="utf-8"))
                 self.assertEqual(manifest["package"]["name"], name)
                 self.assertEqual(manifest["package"]["edition"], "2024")
                 self.assertIn("workspace", manifest)
                 self.assertEqual(set(manifest["dependencies"]), {"ferravex"})
                 self.assertEqual(Path(manifest["dependencies"]["ferravex"]["path"]), ROOT / "crates/ferravex")
                 self.assertEqual(manifest["lib"]["crate-type"], ["rlib", "cdylib"])
-                self.assertIn(name.replace("-", "_") + "::run()", (output / "src/main.rs").read_text())
-                self.assertIn("ferravex::render::game!", (output / "src/lib.rs").read_text())
-                rules = (output / "src/game.rs").read_text()
+                self.assertIn(name.replace("-", "_") + "::run()", (output / "src/main.rs").read_text(encoding="utf-8"))
+                self.assertIn("ferravex::render::game!", (output / "src/lib.rs").read_text(encoding="utf-8"))
+                rules = (output / "src/game.rs").read_text(encoding="utf-8")
                 self.assertIn("pub const TICK_RATE_HZ: f64 = 60.0;", rules)
                 self.assertIn("GameSession::new(Self::TICK_RATE_HZ, 8, autoplay)", rules)
-                self.assertIn("Camera" + template.upper(), (output / "src/lib.rs").read_text())
+                self.assertIn("Camera" + template.upper(), (output / "src/lib.rs").read_text(encoding="utf-8"))
                 for path in output.rglob("*"):
                     if path.is_file():
-                        self.assertIsNone(generator.TOKEN.search(path.read_text()), str(path))
+                        self.assertIsNone(generator.TOKEN.search(path.read_text(encoding="utf-8")), str(path))
                         self.assertNotEqual(path.suffix, ".in")
                 for path in ("README.md", "AGENTS.md", ".gitignore", "ferravex.json", "scripts/build-web.py", "web/index.html"):
                     self.assertTrue((output / path).is_file(), path)
 
     def test_lock_is_exact_first_party_dependency_closure(self):
         output = self.generate()
-        packages = tomllib.loads((output / "Cargo.lock").read_text())["package"]
+        packages = tomllib.loads((output / "Cargo.lock").read_text(encoding="utf-8"))["package"]
         by_name = {p["name"]: p for p in packages}
         reached = set()
 
@@ -85,18 +86,19 @@ class GenerationTests(ScaffoldFixture, unittest.TestCase):
         self.assertNotIn("ferravex-bench", by_name)
 
     def test_paths_with_spaces_quotes_backslashes_unicode_and_tokens_round_trip(self):
-        engine = self.root / 'engine space "quote" \\ slash \' café @@NAME@@'
+        suffix = ' space "quote" \\ slash' if os.name != "nt" else " space 'quote'"
+        engine = self.root / ("engine" + suffix + " café @@NAME@@")
         (engine / "crates/ferravex").mkdir(parents=True)
         shutil.copyfile(ROOT / "crates/ferravex/Cargo.toml", engine / "crates/ferravex/Cargo.toml")
         shutil.copyfile(ROOT / "Cargo.lock", engine / "Cargo.lock")
         shutil.copytree(ROOT / "templates", engine / "templates")
         before = {p.relative_to(engine): p.read_bytes() for p in engine.rglob("*") if p.is_file()}
-        destination = self.root / 'game "quoted" \' café \\ $(do-not-run)'
+        destination = self.root / ("game" + suffix + " café $(do-not-run)")
         with patch.object(subprocess, "run", side_effect=AssertionError("generator must not run commands")):
             output = generator.generate("star_field", destination, "3d", engine_root=engine)
-        manifest = tomllib.loads((output / "Cargo.toml").read_text())
+        manifest = tomllib.loads((output / "Cargo.toml").read_text(encoding="utf-8"))
         self.assertEqual(manifest["dependencies"]["ferravex"]["path"], (engine / "crates/ferravex").as_posix())
-        self.assertEqual(json.loads((output / "ferravex.json").read_text())["engine_root"], engine.as_posix())
+        self.assertEqual(json.loads((output / "ferravex.json").read_text(encoding="utf-8"))["engine_root"], engine.as_posix())
         after = {p.relative_to(engine): p.read_bytes() for p in engine.rglob("*") if p.is_file()}
         self.assertEqual(before, after)
 
@@ -116,8 +118,8 @@ class GenerationTests(ScaffoldFixture, unittest.TestCase):
             with self.subTest(destination=destination), self.assertRaisesRegex(ValueError, "overwrite"):
                 self.generate(destination=destination)
         self.assertEqual(list(empty.iterdir()), [])
-        self.assertEqual((occupied / "keep.txt").read_text(), "keep me")
-        self.assertEqual(file.read_text(), "keep file")
+        self.assertEqual((occupied / "keep.txt").read_text(encoding="utf-8"), "keep me")
+        self.assertEqual(file.read_text(encoding="utf-8"), "keep file")
         self.assertTrue(link.is_symlink())
         self.assertTrue(dangling.is_symlink())
 
@@ -148,7 +150,7 @@ class GenerationTests(ScaffoldFixture, unittest.TestCase):
         with patch.object(Path, "open", failing_open), self.assertRaisesRegex(OSError, "disk failure"):
             self.generate(destination=destination)
         self.assertFalse(destination.exists())
-        self.assertEqual(sentinel.read_text(), "keep")
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
 
     def test_cli_default_destination_and_failure_exit_codes(self):
         command = [sys.executable, "-B", str(ROOT / "scripts/new-game.py"), "cli-game"]
@@ -186,7 +188,7 @@ class CustomizationTests(ScaffoldFixture, unittest.TestCase):
             with self.subTest(template=template):
                 name = "manifest-" + template
                 output = self.generate(name, template)
-                manifest = json.loads((output / "ferravex.json").read_text())
+                manifest = json.loads((output / "ferravex.json").read_text(encoding="utf-8"))
                 self.assertEqual(manifest["schema_version"], 1)
                 self.assertEqual(manifest["engine_root"], ROOT.as_posix())
                 self.assertEqual(manifest["package"], name)
@@ -208,12 +210,12 @@ class CustomizationTests(ScaffoldFixture, unittest.TestCase):
                 with self.subTest(template=template, rate=rate):
                     name = f"rate-{template}-{str(rate).replace('.', '-')}"
                     output = self.generate(name, template, tick_rate=rate)
-                    manifest = json.loads((output / "ferravex.json").read_text())
+                    manifest = json.loads((output / "ferravex.json").read_text(encoding="utf-8"))
                     self.assertEqual(manifest["tick_rate"], rate)
-                    rules = (output / "src/game.rs").read_text()
+                    rules = (output / "src/game.rs").read_text(encoding="utf-8")
                     self.assertIn(f"pub const TICK_RATE_HZ: f64 = {float(rate)!r};", rules)
                     self.assertIn("let frame = game.advance(1.0 / Game::TICK_RATE_HZ, Vec2::X);", rules)
-                    self.assertIn(f"generated rate is {float(rate)!r} Hz", (output / "README.md").read_text())
+                    self.assertIn(f"generated rate is {float(rate)!r} Hz", (output / "README.md").read_text(encoding="utf-8"))
 
     def test_titles_are_literal_data_in_rust_json_and_html_without_changing_ids(self):
         class Page(HTMLParser):
@@ -241,20 +243,20 @@ class CustomizationTests(ScaffoldFixture, unittest.TestCase):
             with self.subTest(template=template):
                 name = "title-" + template
                 output = self.generate(name, template, window_title=title)
-                manifest = json.loads((output / "ferravex.json").read_text())
+                manifest = json.loads((output / "ferravex.json").read_text(encoding="utf-8"))
                 self.assertEqual(manifest["window_title"], title)
-                game = tomllib.loads((output / "Cargo.toml").read_text())
+                game = tomllib.loads((output / "Cargo.toml").read_text(encoding="utf-8"))
                 self.assertEqual(game["package"]["name"], name)
-                library = (output / "src/lib.rs").read_text()
+                library = (output / "src/lib.rs").read_text(encoding="utf-8")
                 literal = re.search(r"render::window_conf\((.*)\)", library)[1]
                 self.assertEqual(json.loads(literal), title)
                 self.assertEqual(library.count(literal), 2)  # Window and in-game header.
                 self.assertIn(f'PlayerInput::preset("{name}", Preset::Explore)', library)
-                guide = json.loads((output / "web/games.json").read_text())
+                guide = json.loads((output / "web/games.json").read_text(encoding="utf-8"))
                 self.assertEqual(guide[0]["id"], name)
                 self.assertEqual(guide[0]["title"], title)
                 page = Page()
-                page.feed((output / "web/index.html").read_text())
+                page.feed((output / "web/index.html").read_text(encoding="utf-8"))
                 self.assertEqual(page.title, title + " · Ferravex")
                 self.assertEqual([attrs for tag, attrs in page.elements if tag == "script"],
                                  [{"type": "module", "src": "./runtime.js"}])
@@ -279,7 +281,7 @@ class CustomizationTests(ScaffoldFixture, unittest.TestCase):
     def test_title_length_boundary_preserves_unicode_and_spaces(self):
         title = " " + "🌙" * 118 + " "
         output = self.generate(window_title=title)
-        self.assertEqual(json.loads((output / "ferravex.json").read_text())["window_title"], title)
+        self.assertEqual(json.loads((output / "ferravex.json").read_text(encoding="utf-8"))["window_title"], title)
 
     def test_cli_customization_and_invalid_option_errors(self):
         command = [sys.executable, "-B", str(ROOT / "scripts/new-game.py")]
@@ -287,7 +289,7 @@ class CustomizationTests(ScaffoldFixture, unittest.TestCase):
         result = subprocess.run(command + ["cli-options", "--template", "3d", "--tick-rate", "59.94",
                                            "--window-title", title], cwd=self.root, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        manifest = json.loads((self.root / "cli-options/ferravex.json").read_text())
+        manifest = json.loads((self.root / "cli-options/ferravex.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["tick_rate"], 59.94)
         self.assertEqual(manifest["window_title"], title)
         self.assertEqual(manifest["template"], "3D")
@@ -318,7 +320,7 @@ class CustomizationTests(ScaffoldFixture, unittest.TestCase):
 
         with patch.object(Path, "mkdir", raced_mkdir), self.assertRaises(FileExistsError):
             self.generate(destination=destination, tick_rate=120, window_title="Racing game")
-        self.assertEqual((destination / "keep.txt").read_text(), "created by another caller")
+        self.assertEqual((destination / "keep.txt").read_text(encoding="utf-8"), "created by another caller")
         self.assertEqual(len(list(destination.iterdir())), 1)
 
     def test_manifest_write_failure_removes_partial_generation(self):
@@ -370,14 +372,14 @@ class WebBuildTests(ScaffoldFixture, unittest.TestCase):
         self.assertNotIn("shell", kwargs)
         staged = output / "target/web"
         self.assertEqual((staged / wasm.name).read_bytes(), wasm.read_bytes())
-        self.assertIn('data-game="moon-garden"', (staged / "index.html").read_text())
-        guide = json.loads((staged / "games.json").read_text())
+        self.assertIn('data-game="moon-garden"', (staged / "index.html").read_text(encoding="utf-8"))
+        guide = json.loads((staged / "games.json").read_text(encoding="utf-8"))
         self.assertEqual(guide[0]["id"], "moon-garden")
         self.assertEqual(guide[0]["title"], 'Moon "Garden" & stars')
         self.assertIn("3D", guide[0]["description"])
         self.assertIn("Escape", guide[0]["controls"])
         for path in staged.glob("*.js"):
-            for reference in re.findall(r"['\"](\./[^'\"]+\.js)['\"]", path.read_text()):
+            for reference in re.findall(r"['\"](\./[^'\"]+\.js)['\"]", path.read_text(encoding="utf-8")):
                 self.assertTrue((path.parent / reference).is_file(), f"{path.name}: {reference}")
         for name in ("retained-shader.js", "effects-shader.js", "audio-worklet.js", "runtime.js", "input.js"):
             self.assertTrue((staged / name).is_file(), name)

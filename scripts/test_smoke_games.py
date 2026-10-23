@@ -55,6 +55,65 @@ class CaptureTests(unittest.TestCase):
     background = bytes([10, 20, 30, 255])
     palette = [bytes([50, 60, 70, 255]), bytes([90, 100, 110, 255]), bytes([150, 160, 170, 255])]
 
+    def test_windows_stat_and_fstat_ctimes_have_separate_stable_baselines(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'artifact.bin'
+            path.write_bytes(b'unchanged artifact')
+            actual_fstat = os.fstat
+
+            def handle_stat(fd):
+                from types import SimpleNamespace
+                info = actual_fstat(fd)
+                return SimpleNamespace(**{key: getattr(info, key) for key in
+                    ('st_dev', 'st_ino', 'st_mode', 'st_size', 'st_mtime_ns')},
+                    st_ctime_ns=info.st_ctime_ns + 100)
+
+            with patch.object(smoke.sys, 'platform', 'win32'), \
+                    patch.object(smoke.os, 'fstat', side_effect=handle_stat):
+                result = smoke._artifact(path)
+            self.assertEqual(result['status'], 'present', result)
+            self.assertEqual(result['sha256'], hashlib.sha256(path.read_bytes()).hexdigest())
+
+    def test_windows_handle_changes_still_reject_artifacts(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'artifact.bin'
+            path.write_bytes(b'original artifact')
+            actual_fstat = os.fstat
+            for field in ('st_ctime_ns', 'st_mtime_ns', 'st_size', 'st_ino'):
+                calls = 0
+
+                def changing_stat(fd):
+                    nonlocal calls
+                    calls += 1
+                    info = actual_fstat(fd)
+                    values = {key: getattr(info, key) for key in
+                        ('st_dev', 'st_ino', 'st_mode', 'st_size', 'st_mtime_ns', 'st_ctime_ns')}
+                    if calls == 2:
+                        values[field] += 1
+                    return SimpleNamespace(**values)
+
+                with self.subTest(field=field), patch.object(smoke.sys, 'platform', 'win32'), \
+                        patch.object(smoke.os, 'fstat', side_effect=changing_stat):
+                    result = smoke._artifact(path)
+                    self.assertEqual(result['status'], 'unavailable', result)
+                    self.assertIn('changed while hashing', result['error'])
+
+    def test_windows_path_replacement_after_hashing_is_rejected(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'artifact.bin'
+            path.write_bytes(b'original artifact')
+            original = path.lstat()
+            values = {key: getattr(original, key) for key in
+                ('st_dev', 'st_ino', 'st_mode', 'st_size', 'st_mtime_ns', 'st_ctime_ns')}
+            values['st_ino'] += 1
+            with patch.object(smoke.sys, 'platform', 'win32'), \
+                    patch.object(Path, 'lstat', side_effect=[original, SimpleNamespace(**values)]):
+                result = smoke._artifact(path, reject_symlink=True)
+            self.assertEqual(result['status'], 'unavailable', result)
+            self.assertIn('changed while hashing', result['error'])
+
     def test_accepts_small_authored_palette_with_substantial_geometry(self):
         samples = [self.background] * 800 + [self.palette[i % 3] for i in range(200)]
         result = smoke.validate_samples(iter(samples))

@@ -213,9 +213,9 @@ class IndexTests(unittest.TestCase):
     def test_current_source_change_addition_deletion_and_reset(self):
         self.save_index()
         source = self.root / "crates/demo/src/lib.rs"
-        source.write_text(SOURCE + "// change\n")
+        self.write("crates/demo/src/lib.rs", SOURCE + "// change\n")
         self.assert_code("stale_index", self.search, "Rig3")
-        source.write_text(SOURCE)
+        self.write("crates/demo/src/lib.rs", SOURCE)
         self.assertEqual(self.search("Rig3")["total_matches"], 1)
         added = self.write("crates/demo/src/new.rs", "// not registered; still a build input change\n")
         self.assert_code("stale_index", self.search, "Rig3")
@@ -229,13 +229,13 @@ class IndexTests(unittest.TestCase):
         for relative in ("Cargo.lock", "crates/demo/Cargo.toml", ".cargo/config.toml", "docs/new.md"):
             with self.subTest(relative=relative):
                 path = self.root / relative
-                previous = path.read_text() if path.exists() else None
-                self.write(relative, (previous or "") + "\n# added\n")
+                previous = path.read_bytes() if path.exists() else None
+                self.write(relative, (previous or b"").decode("utf-8") + "\n# added\n")
                 self.assert_code("stale_index", self.search, "Rig3")
                 if previous is None:
                     path.unlink()
                 else:
-                    path.write_text(previous)
+                    path.write_bytes(previous)
         self.assertEqual(self.search("Rig3")["total_matches"], 1)
 
     def test_old_artifacts_and_embedded_old_source_are_rejected(self):

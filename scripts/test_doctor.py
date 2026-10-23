@@ -63,7 +63,7 @@ class DoctorTests(unittest.TestCase):
             self.addCleanup(patcher.stop)
 
     def which(self, name):
-        return f"/mock/bin/{name}" if name in self.available else None
+        return os.path.abspath(f"/mock/bin/{name}") if name in self.available else None
 
     def run_query(self, command, **options):
         self.calls.append((command, options))
@@ -226,7 +226,7 @@ class DoctorTests(unittest.TestCase):
         self.assertFalse(report["ok"])
         self.assertIn("XWayland", self.check(report, "native.display")["detail"])
         self.assertEqual(self.check(report, "native.glx")["status"], "unverified")
-        self.assertNotIn(["/mock/bin/glxinfo", "-B"], [command for command, _ in self.calls])
+        self.assertNotIn([os.path.abspath("/mock/bin/glxinfo"), "-B"], [command for command, _ in self.calls])
 
     def test_display_variable_does_not_mask_glx_connection_failure(self):
         self.outputs[("glxinfo", "-B")] = subprocess.CompletedProcess(
@@ -410,7 +410,7 @@ class ProvenanceTests(unittest.TestCase):
             self.assertEqual(check["version"], versions.get(check["id"]))
             if check["probe"]:
                 probe = check["probe"]
-                self.assertEqual(check["executable"], f"/mock/bin/{check['command'][0]}")
+                self.assertEqual(check["executable"], os.path.abspath(f"/mock/bin/{check['command'][0]}"))
                 self.assertEqual(probe["command"], [check["executable"], *check["command"][1:]])
                 self.assertTrue(probe["attempted"])
                 self.assertIsNone(probe["failure"])
@@ -434,7 +434,7 @@ class ProvenanceTests(unittest.TestCase):
         self.assertEqual(missing["probe"]["command"], [])
         broken = self.check(report, "rust.compiler")
         self.assertEqual(broken["status"], "error")
-        self.assertEqual(broken["executable"], "/mock/bin/rustc")
+        self.assertEqual(broken["executable"], os.path.abspath("/mock/bin/rustc"))
         self.assertEqual(broken["probe"]["failure"], "execution_error")
         self.assertTrue(broken["probe"]["attempted"])
         self.assertIsNone(broken["probe"]["returncode"])
@@ -469,7 +469,7 @@ class ProvenanceTests(unittest.TestCase):
         check = self.check(doctor.collect_report("web"), "python")
         self.assertEqual(check["status"], "too_old")
         self.assertEqual(check["version"], "3.10.15")
-        self.assertEqual(check["executable"], "/mock/bin/python3")
+        self.assertEqual(check["executable"], os.path.abspath("/mock/bin/python3"))
         self.assertIsNone(check["probe"]["failure"])
         self.assertEqual(check["probe"]["stderr"], "Python 3.10.15")
 
@@ -500,15 +500,15 @@ class ProvenanceTests(unittest.TestCase):
                 check = self.check(doctor.collect_report("native"), "native.opengl")
                 self.assertEqual(check["status"], "error")
                 self.assertIn("single library path", check["detail"])
-                self.assertEqual(check["executable"], "/mock/bin/cc")
+                self.assertEqual(check["executable"], os.path.abspath("/mock/bin/cc"))
                 self.assertEqual(check["probe"]["returncode"], 0)
                 self.assertIsNone(check["probe"]["failure"])
 
     def test_wasm_uses_the_compiler_that_passed_the_version_check(self):
-        with patch.object(doctor.shutil, "which", side_effect=["/first/rustc", "/other/rustc"]):
+        with patch.object(doctor.shutil, "which", side_effect=[os.path.abspath("/first/rustc"), "/other/rustc"]):
             rust = doctor._tool("rust.compiler", "Rust", "rustc", True, "", 1)
             check = doctor._wasm_check(True, rust, 1)
-        self.assertEqual(rust["executable"], "/first/rustc")
+        self.assertEqual(rust["executable"], os.path.abspath("/first/rustc"))
         self.assertEqual(check["executable"], rust["executable"])
         self.assertEqual(check["probe"]["command"][0], rust["executable"])
 
@@ -519,7 +519,7 @@ class ProvenanceTests(unittest.TestCase):
             check = self.check(report, check_id)
             self.assertEqual(check["status"], "unverified")
             self.assertFalse(check["required"])
-            self.assertEqual(check["executable"], f"/mock/bin/{executable}")
+            self.assertEqual(check["executable"], os.path.abspath(f"/mock/bin/{executable}"))
             self.assertIsNone(check["probe"])
             self.assertIsNone(check["version"])
 
@@ -534,7 +534,7 @@ class ProvenanceTests(unittest.TestCase):
             self.outputs[("xcrun", "--no-cache", "--sdk", "macosx", "--show-sdk-path")] = str(self.root)
             check = self.check(doctor.collect_report("native"), "native.sdk")
             self.assertEqual(check["status"], "missing")  # Frameworks absent, query usable.
-            self.assertEqual(check["executable"], "/mock/bin/xcrun")
+            self.assertEqual(check["executable"], os.path.abspath("/mock/bin/xcrun"))
             self.assertIsNone(check["probe"]["failure"])
             self.assertEqual(check["probe"]["returncode"], 0)
 
@@ -545,14 +545,14 @@ class ProvenanceTests(unittest.TestCase):
         self.assertTrue(report["ok"])
         check = self.check(report, "native.linker")
         self.assertEqual(check["status"], "unverified")
-        self.assertEqual(check["executable"], "/mock/bin/link.exe")
+        self.assertEqual(check["executable"], os.path.abspath("/mock/bin/link.exe"))
         self.assertIsNone(check["probe"])
         self.assertIsNone(check["version"])
 
     def test_human_report_includes_provenance_and_failure_kind(self):
         self.outputs[("node", "--version")] = subprocess.TimeoutExpired([], 1)
         output = doctor.render_human(doctor.collect_report("web"))
-        self.assertIn("Executable: /mock/bin/node", output)
+        self.assertIn("Executable: " + os.path.abspath("/mock/bin/node"), output)
         self.assertIn("Version: 1.88.0", output)
         self.assertIn("Probe failure: timeout", output)
         self.assertIn("Doctor interpreter:", output)

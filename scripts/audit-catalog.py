@@ -533,7 +533,7 @@ def _module_sources(root, entries, directory):
             index += 1
 
     def visit(path):
-        relative = str(path.relative_to(root))
+        relative = path.relative_to(root).as_posix()
         checked = _file(root, relative, directory)
         if checked in visited:
             return

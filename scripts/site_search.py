@@ -151,12 +151,12 @@ def build_index(root, docs, games, repository):
         entry('Rust API reference', '/api/ferravex/index.html', 'Pages', 'API crates Rust reference types functions methods', 'Browse the public Rust API', 'code'),
     ]
     import json
-    for update in json.loads((repository / 'website/releases/player30.json').read_text()):
+    for update in json.loads((repository / 'website/releases/player30.json').read_text(encoding="utf-8")):
         rows.append(entry(update['title'], f"/updates/#feature-{update['id']}", 'Pages', update['detail'], update['category'], 'file-text'))
     for slug, title, group, source in docs:
         url = f'/docs/{slug}/'
         parser = ContentParser()
-        parser.feed((root / url.lstrip('/') / 'index.html').read_text())
+        parser.feed((root / url.lstrip('/') / 'index.html').read_text(encoding="utf-8"))
         text = compact(''.join(parser.text))
         rows.append(entry(title, url, 'Documentation', text, group, 'book'))
         for heading in parser.headings:
@@ -166,7 +166,7 @@ def build_index(root, docs, games, repository):
                                   ''.join(heading['body']), title, 'hash'))
     for game in games:
         source = repository / game['source']
-        text = source.read_text() if source.is_file() else ''
+        text = source.read_text(encoding="utf-8") if source.is_file() else ''
         rows.append(entry(game['title'], f'/examples/{game["id"]}/', 'Examples',
                           f'{game["description"]} {game["controls"]} {text}',
                           f'{game["dimension"]} · {game["genre"]}', 'grid'))
@@ -175,7 +175,7 @@ def build_index(root, docs, games, repository):
         if relative.parts[0] in ('src', 'static.files', 'trait.impl', 'type.impl') or path.name in ('all.html', 'help.html', 'settings.html'):
             continue
         parser = ContentParser(api=True)
-        parser.feed(path.read_text())
+        parser.feed(path.read_text(encoding="utf-8"))
         if not parser.title or not parser.has_main:
             continue
         # Re-export mirrors have no defining source in this crate. Keep the
@@ -185,7 +185,7 @@ def build_index(root, docs, games, repository):
             continue
         title = compact(''.join(parser.title)).removesuffix(' - Rust')
         name, _, context = title.partition(' in ')
-        url = '/api/' + quote(str(relative), safe='/._-')
+        url = '/api/' + quote(relative.as_posix(), safe='/._-')
         if path.name == 'index.html':
             url = url.removesuffix('index.html')
         kind = path.name.split('.')[0] if path.name != 'index.html' else 'module'

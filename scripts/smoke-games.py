@@ -158,6 +158,14 @@ def _file_identity(info):
             "size_bytes": info.st_size, "mtime_ns": info.st_mtime_ns, "ctime_ns": info.st_ctime_ns}
 
 
+def _same_stat_views(path_identity, handle_identity):
+    # CPython on Windows reports creation time through stat(path), but change
+    # time through fstat(fd). Compare each API's ctime against its own baseline.
+    # Cross-API identity, mode, size and modification time must still agree.
+    return all(value == handle_identity[key] for key, value in path_identity.items()
+               if key != "ctime_ns" or sys.platform != "win32")
+
+
 def _artifact(path, *, reject_symlink=False):
     """Snapshot a stable regular file with bounded-memory hashing, or explain why not."""
     result = {"path": str(path), "freshness": "unverified"}
@@ -169,13 +177,14 @@ def _artifact(path, *, reject_symlink=False):
         result.update(identity)
         digest = hashlib.sha256()
         with path.open("rb") as stream:
-            if _file_identity(os.fstat(stream.fileno())) != identity:
+            opened = _file_identity(os.fstat(stream.fileno()))
+            if not _same_stat_views(identity, opened):
                 raise ValueError("artifact changed before hashing")
             for block in iter(lambda: stream.read(1024 * 1024), b""):
                 digest.update(block)
             after = _file_identity(os.fstat(stream.fileno()))
         current = _file_identity(path.lstat() if reject_symlink else path.stat())
-        if after != identity or current != identity:
+        if after != opened or current != identity:
             raise ValueError("artifact changed while hashing")
         result.update(status="present", sha256=digest.hexdigest())
     except FileNotFoundError as error:

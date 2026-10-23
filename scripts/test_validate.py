@@ -248,8 +248,8 @@ class ExecutionTests(unittest.TestCase):
             directory = Path(row["artifact_directory"])
             self.assertTrue(directory.is_dir())
             self.assertFalse((directory / "results").exists())
-            self.assertEqual(row["command"][2], str(directory / "results"))
-            self.assertEqual(row["command"][4], str(directory / "cargo"))
+            self.assertEqual(Path(row["command"][2]), directory / "results")
+            self.assertEqual(Path(row["command"][4]), directory / "cargo")
         self.assertEqual(self.run.call_args.args[0], tuple(second["command"]))
 
     def test_failure_blocks_consumers_but_independent_checks_still_run(self):
