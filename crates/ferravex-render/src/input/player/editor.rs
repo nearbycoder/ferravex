@@ -617,27 +617,17 @@ impl PlayerInput {
                 crate::set_default_camera();
                 let w = screen_width();
                 let h = screen_height();
-                let compact = w < 520.;
-                let label = if compact {
-                    "Pause to resume / F2 controls"
-                } else {
-                    "Paused / Pause action to resume / F2 controls"
-                };
-                let size = if compact { 12 } else { 16 };
-                let label = fit(label, (w - 24.).max(0.), size);
-                let width = measure_text(&label, None, size, 1.).width;
-                draw_rectangle(0., h * 0.5 - 30., w, 60., Color::new(0.02, 0.04, 0.05, 0.9));
-                if compact {
-                    let title_width = measure_text("PAUSED", None, 16, 1.).width;
-                    draw_text("PAUSED", (w - title_width) * 0.5, h * 0.5 - 5., 16., WHITE);
-                }
-                draw_text(
-                    &label,
-                    (w - width) * 0.5,
-                    h * 0.5 + if compact { 17. } else { 6. },
-                    size as f32,
-                    WHITE,
+                let label = "PAUSED";
+                let width = measure_text(label, None, 16, 1.).width;
+                let badge_width = (w - 24.).clamp(1., 160.);
+                draw_rectangle(
+                    (w - badge_width) * 0.5,
+                    h * 0.5 - 20.,
+                    badge_width,
+                    40.,
+                    Color::new(0.02, 0.04, 0.05, 0.9),
                 );
+                draw_text(label, (w - width) * 0.5, h * 0.5 + 6., 16., WHITE);
             }
             return;
         }

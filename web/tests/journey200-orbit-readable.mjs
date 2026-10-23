@@ -28,7 +28,7 @@ for(const width of [320,390,640]){
  const f=await fixture(width);f.set(copy);f.render();
  assert.equal(f.nodes.get('#game-state').textContent,copy.split('\n')[0]);
  assert.equal(f.nodes.get('#orbit-readable').textContent,copy.slice(copy.indexOf('\n')+1));
- assert.equal(f.nodes.get('#orbit-readable').hidden,width>=480);
+ assert.equal(f.nodes.get('#orbit-readable').hidden,false,'full details stay available in the on-demand disclosure at every width');
  assert.equal(f.frames,1,'DOM presentation does not add simulation frames');
  assert.equal(f.nodes.get('#game').dataset.orbitStatusTextError,'');
  f.set('Ready. Sector 1 of 2. Score 0. 3 lives remaining. Launch: K.\nPanels: 35 remaining; 0 cleared.');f.render();

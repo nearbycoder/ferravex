@@ -80,8 +80,8 @@ function runtime(w,h,autoplay=false,config=configurations[0]) {
   function menu(expectedTitle,expectedDetail,summary=null) {
     const q=quads(),p=q.find(v=>same(panel,v.color)&&v.h>220);
     assert.ok(p,'actual inactive menu is painted');
-    assert.ok(p.y>=92&&p.x>=7.99&&p.x+p.w<=w-7.99&&p.y+p.h<=h-7.99,'menu is inside canvas below progress');
-    const narrow=w-16<600,titleH=narrow?40:28,detailH=narrow?112:64,summaryH=narrow?84:56,confirmH=narrow?42:28;
+    assert.ok(p.y>=7.99&&p.x>=7.99&&p.x+p.w<=w-7.99&&p.y+p.h<=h-7.99,'compact menu is contained in the actual viewport');
+    const narrow=w-16<600,titleH=28,detailH=40,summaryH=36;
     const rect=(y,height)=>({x:p.x+12,y,w:p.w-24,h:height});let y=p.y+16;
     const result={};result.title=glyphs(q,cream,rect(y,titleH),expectedTitle,narrow?20:24,'title');y+=titleH+8;
     result.detail=glyphs(q,cream,rect(y,detailH),expectedDetail,16,'detail');y+=detailH+8;
@@ -89,41 +89,34 @@ function runtime(w,h,autoplay=false,config=configurations[0]) {
     else {const area=q.filter(v=>same(amber,v.color)&&v.y>=y-.02&&v.y+v.h<=y+summaryH+.02).reduce((n,v)=>n+v.w*v.h,0);assert.ok(area>100);result.summary=Math.round(area*100)/100;}
     y+=summaryH+12;
     const button=q.find(v=>same(amber,v.color)&&Math.abs(v.y-y)<.02&&v.w>200&&v.h>40);assert.ok(button&&button.h>=47.99,'48px actual painted target');
-    y+=60;result.confirm=glyphs(q,cream,rect(y,confirmH),`Confirm: ${config.confirm} / or select the button`,14,'confirm');y+=confirmH+8;
-    result.help=glyphs(q,cream,rect(y,28),'Controls / F2: bindings\nFlight guide below',14,'help');
     return result;
   }
   function guidance(text) {
     const q=quads(),width=Math.min(w-16,960),x=(w-width)/2;
-    return glyphs(q,cream,{x:x+12,y:130,w:width-24,h:42},text,14,'delivery guidance');
+    return glyphs(q,cream,{x:x+12,y:94,w:width-24,h:42},text,14,'delivery guidance');
   }
   function matchesGuidance(text) {
     const width=Math.min(w-16,960),x=(w-width)/2;
-    const area=quads().filter(v=>same(cream,v.color)&&v.x>=x+11.99&&v.x+v.w<=x+width-11.99&&v.y>=129.99&&v.y+v.h<=172.01).reduce((n,v)=>n+v.w*v.h,0);
+    const area=quads().filter(v=>same(cream,v.color)&&v.x>=x+11.99&&v.x+v.w<=x+width-11.99&&v.y>=93.99&&v.y+v.h<=136.01).reduce((n,v)=>n+v.w*v.h,0);
     return Math.abs(area-expectedArea(text,14))<.2;
   }
   function footer() {
-    const q=quads(),narrow=w-16<600,p=q.find(v=>same(panel,v.color)&&Math.abs(v.h-(narrow?190:124))<.02);
-    assert.ok(p,'playing footer painted');
-    const bar=p.y+(narrow?46:30),columnWidth=narrow?p.w:p.w/2;
-    const entries=[['Turn',config.data?'PageUp PageDown':'A / Left D / Right'],['Climb','W / Up S / Down'],['Boost',config.name==='default'?'Space':config.name==='long + Unbound'?'Unbound':'Backspace'],['Slow',config.slow],['Pause','Esc'],['Retry','R']];
-    for(let i=0;i<entries.length;i++) {
-      const [label,binding]=entries[i],row=narrow?i:Math.floor(i/2),column=narrow?0:i%2;
-      const rect={x:p.x+12+column*columnWidth,y:bar+9+row*(narrow?18:20),w:columnWidth-24,h:18};
-      const text=label+': '+binding;
-      glyphs(q,cream,rect,text.length*10.5<=rect.w?text:label+': Open Controls',14,`footer ${label}`);
-    }
-    glyphs(q,cream,{x:p.x+12,y:p.y+p.h-18,w:p.w-24,h:16},'Controls / F2: bindings',14,'footer help');
+    const q=quads(),narrow=w-16<600,p=q.find(v=>same(panel,v.color)&&Math.abs(v.h-58)<.02);
+    assert.ok(p,'compact playing footer painted');
+    assert.ok(p.h<h*.2,'telemetry does not consume the playfield');
+    glyphs(q,amber,{x:narrow?p.x+12:p.x+p.w/2,y:p.y+(narrow?26:8),w:narrow?p.w-24:p.w/2-12,h:18},
+      'CRUISE / BOOST 100%',14,'current flight mode');
+
   }
   frame();return {e,frame,key,quads,menu,guidance,matchesGuidance,footer};
 }
-const ready=['NORTH COAST MAIL RUN','Clear five amber gates in order. Pass the cross at 16 m altitude and at most 18 m/s. You have 90s; three impacts end the run.'];
-const paused=['FLIGHT PAUSED','Flight and timer are frozen. Close Controls, return focus to the game, then resume here or use your Pause binding.'];
-const won=['MAIL DELIVERED','All five gates cleared. The north coast is connected again. Fly again to start a fresh mail run.'];
-const lost=['AIRCRAFT GROUNDED','Hull exhausted. Use smaller turns and watch the altitude guidance. Retry restores the aircraft and all 90 seconds.'];
-const timeout=['DELIVERY WINDOW CLOSED','Time ran out. Impacts cost five seconds. Clear gates in order, then slow to 18 m/s before crossing the pad at 16 m altitude.'];
-const summary='Each impact costs 5s. Recover at the last gate (or start). Release held flight controls after starting or retrying.';
-const sizes=[[1280,560],[390,600],[320,600]];
+const ready=['SKY COURIER','5 GATES / 1 DELIVERY'];
+const paused=['FLIGHT PAUSED',''];
+const won=['MAIL DELIVERED',''];
+const lost=['AIRCRAFT GROUNDED','3 IMPACTS'];
+const timeout=['TIME UP',''];
+const summary='90 seconds / 3 hull';
+const sizes=[[1280,560],[390,600],[320,600],[320,480],[844,390]];
 for(const config of configurations) {
   let reference;
   for(const [w,h] of sizes) {
@@ -132,7 +125,7 @@ for(const config of configurations) {
     // Menu pause cannot consume countdown time. Compare every render vertex.
     const before=r.quads();for(let i=0;i<30;i++)r.frame();assert.deepEqual(r.quads(),before,'paused render and UI remain frozen');
     const pilot=runtime(w,h,true,config);let slow=false,speed=false,done=false;
-    const slowText=`SLOW DOWN: ${config.slow}\nAt most 18 m/s (35 kt)`,speedText='SPEED READY\nCross the pad at 16 m altitude';
+    const slowText=`SLOW DOWN: ${config.slow}\nAt most 18 m/s (35 kt)`,speedText='SPEED READY / 16m';
     for(let i=0;i<2800;i++) {
       pilot.frame();
       if(i%10===0&&!slow&&pilot.matchesGuidance(slowText)){pilot.guidance(slowText);slow=true;}

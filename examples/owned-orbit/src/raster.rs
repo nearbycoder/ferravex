@@ -239,7 +239,6 @@ impl Canvas {
             );
         }
         self.text(&format!("{:02} PANELS", g.remaining()), 104, 679, 1, MUTED);
-        self.text_fit_center(&presentation.hints.movement, 699, 1, 564, MUTED);
         if g.ball_save > 0. && g.phase == Phase::Playing {
             self.text("BALL SAVE", 270, 679, 1, CYAN);
         }
@@ -260,10 +259,7 @@ impl Canvas {
                 };
                 self.overlay(
                     &title,
-                    &format!(
-                        "SERVE CHARGE {:03}% / FULL CHARGE PIERCES ARMOR",
-                        (g.serve_charge.power() * 100.) as u32
-                    ),
+                    &format!("CHARGE {:03}%", (g.serve_charge.power() * 100.) as u32),
                     &format!("{} TO LAUNCH", presentation.hints.launch),
                 );
                 self.rect(180, 472, 280, 3, LINE);
@@ -291,8 +287,8 @@ impl Canvas {
             }
             Phase::Playing => {
                 let message = match g.feedback() {
-                    Some(Feedback::Launched) => "LAUNCHED / OPENING BALL SAVE ACTIVE",
-                    Some(Feedback::BallSaved) => "BALL SAVED / KEEP THE VOLLEY GOING",
+                    Some(Feedback::Launched) => "",
+                    Some(Feedback::BallSaved) => "BALL SAVED",
                     _ => "",
                 };
                 self.text_center(message, 553, 1, CYAN);
@@ -321,13 +317,6 @@ impl Canvas {
                     g.sector, g.score, g.lives
                 ),
                 &format!("{} TO RESUME", presentation.hints.pause),
-            );
-            self.text_fit_center(
-                &format!("{} TO RESTART / F2 CONTROLS", presentation.hints.restart),
-                519,
-                1,
-                408,
-                MUTED,
             );
         }
     }

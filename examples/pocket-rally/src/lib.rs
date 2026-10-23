@@ -23,7 +23,7 @@ mod sim;
 use ferravex_play::particles::{RibbonFacing, Trail, TrailConfig, TrailSample};
 use ferravex_render::effects::{EffectStyle, draw_ribbon};
 use ferravex_render::{demo::Demo, prelude::*};
-use presentation::{hint, lap_comparison, text_width};
+use presentation::{lap_comparison, text_width};
 use session::{Notice, RaceSession};
 use sim::{Controls, LAPS, Pose, Race, RoadCue, Track};
 
@@ -498,77 +498,51 @@ async fn game() {
         car(race.car.pose, false);
         set_default_camera();
         let width = screen_width();
-        let compact = width < 540.;
-        let margin = if compact { 16. } else { 26. };
+        let margin = 16.;
         let right = width - margin;
-        draw_rectangle(0., 0., width, 94., Color::new(0.12, 0.19, 0.17, 0.88));
-        text(
-            "POCKET RALLY",
-            margin,
-            32.,
-            if compact { 20. } else { 25. },
-            CREAM,
-        );
-        if width > 660. {
-            text(
-                "VALLE VERDE",
-                width * 0.45,
-                32.,
-                13.,
-                Color::new(0.96, 0.92, 0.81, 0.68),
-            );
-        }
+        draw_rectangle(0., 0., width, 80., Color::new(0.12, 0.19, 0.17, 0.78));
         text(
             &format!("LAP {} / {LAPS}", (race.laps + 1).min(LAPS)),
             margin,
-            60.,
-            if compact { 17. } else { 20. },
-            CREAM,
-        );
-        text(
-            &format!("GATES {} / 16", race.checkpoints_passed()),
-            margin,
-            82.,
-            if compact { 13. } else { 16. },
+            28.,
+            16.,
             CREAM,
         );
         text_right(
             &format!(
-                "LAP  {}",
-                time(if race.finished() {
-                    race.last_lap.unwrap_or(0.)
-                } else {
-                    race.lap_time
-                })
-            ),
-            right,
-            60.,
-            if compact { 14. } else { 17. },
-            CREAM,
-        );
-        text_right(
-            &format!("RACE {}", time(race.total_time)),
-            right,
-            82.,
-            if compact { 14. } else { 17. },
-            CREAM,
-        );
-        let unit_width = measure_text("KM/H", None, 12, 1.).width;
-        text_right(
-            &format!(
-                "{:03}",
+                "{:03} KM/H",
                 if race.finished() {
                     0
                 } else {
                     (race.car.velocity.length() * 0.48) as u32
                 }
             ),
-            right - unit_width - 10.,
-            30.,
-            if compact { 21. } else { 25. },
+            right - 64.,
+            28.,
+            16.,
             CREAM,
         );
-        text_right("KM/H", right, 30., 12., CREAM);
+        text(
+            &format!("LAP {}", time(race.lap_time)),
+            margin,
+            51.,
+            14.,
+            CREAM,
+        );
+        text(
+            &format!("GATES {} / 16", race.checkpoints_passed()),
+            margin,
+            72.,
+            13.,
+            CREAM,
+        );
+        text_right(
+            &format!("RACE {}", time(race.total_time)),
+            right,
+            72.,
+            14.,
+            CREAM,
+        );
         if !race.finished() {
             let mut detail = None;
             let road_cue = track.road_cue(&race.car);
@@ -592,7 +566,7 @@ async fn game() {
             } else if demo.autoplay && race.driver_reversing() {
                 "AUTO RECOVERY - REVERSING".to_owned()
             } else if session.countdown() > 0 {
-                "THREE LAPS / FOLLOW GATE ARROWS".to_owned()
+                "".to_owned()
             } else if road_cue == RoadCue::WrongWay {
                 "WRONG WAY - FOLLOW GATE ARROWS".to_owned()
             } else if race.next_gate == 0 {
@@ -613,23 +587,25 @@ async fn game() {
                         .map_or(0., |label| text_width(label, font as f32)),
                 )
                 .min((width - 40.).max(1.));
-            draw_rectangle(
-                (width - message_width) / 2. - 10.,
-                99.,
-                message_width + 20.,
-                if detail.is_some() { 46. } else { 25. },
-                INK,
-            );
-            text_centered(
-                &message,
-                width / 2.,
-                117.,
-                font as f32,
-                message_width,
-                CREAM,
-            );
-            if let Some(detail) = detail {
-                text_centered(&detail, width / 2., 138., font as f32, message_width, CREAM);
+            if !message.is_empty() {
+                draw_rectangle(
+                    (width - message_width) / 2. - 10.,
+                    99.,
+                    message_width + 20.,
+                    if detail.is_some() { 46. } else { 25. },
+                    INK,
+                );
+                text_centered(
+                    &message,
+                    width / 2.,
+                    117.,
+                    font as f32,
+                    message_width,
+                    CREAM,
+                );
+                if let Some(detail) = detail {
+                    text_centered(&detail, width / 2., 138., font as f32, message_width, CREAM);
+                }
             }
         }
         if let Some(best) = race.best_time {
@@ -659,39 +635,6 @@ async fn game() {
                 );
                 text_centered(label, x, h - 59., 16., rect.w - 6., CREAM);
             }
-        } else if race.total_time < 6. {
-            let steer =
-                if player_input.current_device() == ferravex_render::input::HintDevice::Gamepad {
-                    format!("{} steer", hint(&player_input, "move_x"))
-                } else {
-                    format!(
-                        "{} left / {} right",
-                        hint(&player_input, "move_left"),
-                        hint(&player_input, "move_right")
-                    )
-                };
-            for (y, label) in [
-                (h - 94., steer),
-                (
-                    h - 74.,
-                    format!(
-                        "{} gas / {} reverse / {} handbrake",
-                        hint(&player_input, "move_forward"),
-                        hint(&player_input, "move_back"),
-                        hint(&player_input, "brake")
-                    ),
-                ),
-                (
-                    h - 54.,
-                    format!(
-                        "{} pause / {} restart",
-                        hint(&player_input, "pause"),
-                        hint(&player_input, "restart")
-                    ),
-                ),
-            ] {
-                text_centered(&label, width / 2., y, 13., (width - 32.).max(1.), CREAM);
-            }
         }
         if session.countdown() > 0 && !session.clock.is_paused() {
             let cx = width / 2.;
@@ -711,14 +654,6 @@ async fn game() {
                 cx,
                 cy + 15.,
                 32.,
-                content_width,
-                CREAM,
-            );
-            text_centered(
-                &format!("Hold {} for gas", hint(&player_input, "move_forward")),
-                cx,
-                cy + 47.,
-                17.,
                 content_width,
                 CREAM,
             );

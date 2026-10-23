@@ -41,12 +41,6 @@ pub(crate) fn touch_layout(width: f32, height: f32) -> [Control; 4] {
     })
 }
 
-/// A compact current-device binding, with the complete list in Controls. Reading
-/// hints never consumes actions. Oversized mappings have an explicit fallback.
-pub(crate) fn hint(input: &PlayerInput, name: &str) -> String {
-    hint_for(input, name, input.current_device())
-}
-
 fn hint_for(input: &PlayerInput, name: &str, device: HintDevice) -> String {
     let mut buffer = [0; 256];
     let Ok(label) = input.format_hint_for(name, Some(device), &mut buffer) else {
@@ -272,13 +266,13 @@ mod tests {
                 vec![binding(KeyCode::Space as u16)],
             )
             .unwrap();
-        assert_eq!(hint(&input, "brake"), "Space");
+        assert_eq!(hint_for(&input, "brake", input.current_device()), "Space");
         input
             .rebind("brake", vec![binding(KeyCode::H as u16)])
             .unwrap();
-        assert_eq!(hint(&input, "brake"), "H");
+        assert_eq!(hint_for(&input, "brake", input.current_device()), "H");
         input.rebind("brake", vec![]).unwrap();
-        assert_eq!(hint(&input, "brake"), "Unbound");
+        assert_eq!(hint_for(&input, "brake", input.current_device()), "Unbound");
     }
 
     #[test]
@@ -296,7 +290,10 @@ mod tests {
             )
             .unwrap();
         assert_eq!(hint_for(&input, "move_forward", HintDevice::Touch), "GAS");
-        assert_eq!(hint(&input, "move_forward"), "W");
+        assert_eq!(
+            hint_for(&input, "move_forward", input.current_device()),
+            "W"
+        );
         for (channel, label) in TOUCH_BUTTONS {
             input
                 .rebind(

@@ -922,11 +922,20 @@ class SmokeTests(unittest.TestCase):
         (self.root / 'examples').mkdir()
         (self.root / 'examples/catalog.json').write_text('[{"id":"emberline"}]')
         self.binary('emberline')
-        with patch.object(smoke, 'ROOT', self.root), patch.object(smoke.subprocess, 'run', self.runner), patch.dict(smoke.os.environ, {}, clear=True), patch.object(smoke.sys, 'platform', 'linux'), contextlib.redirect_stdout(io.StringIO()) as stdout:
+        run_smoke = smoke.run_smoke
+
+        def linux_smoke(*args, **kwargs):
+            # Simulate display policy without changing the real filesystem's
+            # platform-specific stat/fstat provenance rules on Windows.
+            return run_smoke(*args, platform='linux', **kwargs)
+
+        with patch.object(smoke, 'ROOT', self.root), patch.object(smoke.subprocess, 'run', self.runner), patch.dict(smoke.os.environ, {}, clear=True), patch.object(smoke, 'run_smoke', side_effect=linux_smoke), contextlib.redirect_stdout(io.StringIO()) as stdout:
             code = smoke.main(['--profile', 'debug', '--json', '--output', str(self.args.output)])
         report = json.loads(stdout.getvalue())
         self.assertEqual(code, 1)
         self.assertEqual(report['summary']['blocked'], 1)
+        self.assertEqual(report['environment']['platform'], 'linux')
+        self.assertIn('DISPLAY is unset', report['results'][0]['environment_limitation'])
         self.assertEqual(report, json.loads((self.args.output / 'smoke-results.json').read_text()))
         self.assertEqual(self.runner.call_count, 1)  # Metadata only; no game launch.
 

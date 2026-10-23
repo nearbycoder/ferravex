@@ -75,6 +75,45 @@ fn custom_pause_screen_keeps_controls_editor_without_a_second_banner() {
     assert!(p.paused());
     assert!(crate::read(|s| !s.vertices.is_empty()));
 }
+#[test]
+fn default_pause_badge_stays_compact_without_a_second_instruction_row() {
+    for (width, height) in [(320., 480.), (844., 390.), (1280., 800.)] {
+        let mut input = player();
+        crate::edit(|s| {
+            s.w = width as u32;
+            s.h = height as u32;
+        });
+        input.set_paused(true);
+        input.draw_settings();
+        assert!(input.paused());
+        crate::read(|s| {
+            assert!(
+                s.vertices.len() < 1500,
+                "only a small badge and its title are needed"
+            );
+            let background = &s.vertices[..6];
+            let min_x = background
+                .iter()
+                .map(|v| v[0])
+                .fold(f32::INFINITY, f32::min);
+            let max_x = background
+                .iter()
+                .map(|v| v[0])
+                .fold(f32::NEG_INFINITY, f32::max);
+            let min_y = background
+                .iter()
+                .map(|v| v[1])
+                .fold(f32::INFINITY, f32::min);
+            let max_y = background
+                .iter()
+                .map(|v| v[1])
+                .fold(f32::NEG_INFINITY, f32::max);
+            assert!((max_x - min_x) * width * 0.5 <= 160.1);
+            assert!((max_y - min_y) * height * 0.5 <= 40.1);
+        });
+    }
+}
+
 fn pad_connected(connected: bool) {
     crate::edit(|s| s.input.pad_connected(0, connected));
 }

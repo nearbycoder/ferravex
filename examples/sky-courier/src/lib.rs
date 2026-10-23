@@ -524,6 +524,7 @@ fn control_hint<'a>(player: &PlayerInput, action: &str, buffer: &'a mut [u8]) ->
         _ => "Open Controls",
     }
 }
+#[cfg(test)]
 fn movement_hint<'a>(
     player: &PlayerInput,
     actions: [&str; 3],

@@ -228,10 +228,12 @@ async fn game() {
             };
             let _ = records.attempt("sector-07", RECORD_RULES, game.score.total(), time);
         }
-        if screen.compact {
-            screen.hud(&mut hud_ui, game, &player_input);
-        } else {
-            draw_hud(&mut hud_ui, game, started, &player_input);
+        if started && !paused && game.phase == Phase::Playing {
+            if screen.compact {
+                screen.hud(&mut hud_ui, game, &player_input);
+            } else {
+                draw_hud(&mut hud_ui, game, started, &player_input);
+            }
         }
         if started && !paused && game.phase == Phase::Playing && !touch_mode && !demo.autoplay {
             draw_circle_lines(mouse.x, mouse.y, 7.0, 1.2, CYAN);
@@ -251,7 +253,7 @@ async fn game() {
                 Color::new(0.4, 0.8, 0.75, 0.25),
             );
             draw_circle_lines(1100.0, 610.0, 40.0, 1.4, Color::new(0.4, 0.8, 0.75, 0.4));
-            label("TOUCH 7", 1069.0, 616.0, 14, CYAN);
+            label("DASH", 1069.0, 616.0, 14, CYAN);
         }
         if !started {
             overlay(
@@ -259,24 +261,11 @@ async fn game() {
                 &screen,
                 &player_input,
                 "NEON SWARM",
-                "Clear three waves. Amber rings warn of attacks; dash to evade.",
+                "CLEAR THREE WAVES",
                 "START",
             );
         } else if paused {
-            let mut binding = [0; 128];
-            let restart = hint(&player_input, "restart", &mut binding);
-            overlay(
-                &mut hud_ui,
-                &screen,
-                &player_input,
-                "PAUSED",
-                &if screen.compact {
-                    "Run frozen. Resume when ready.".to_owned()
-                } else {
-                    format!("Run frozen. Resume when ready. Restart: {restart}")
-                },
-                "RESUME",
-            );
+            overlay(&mut hud_ui, &screen, &player_input, "PAUSED", "", "RESUME");
         } else if game.phase != Phase::Playing {
             let won = game.phase == Phase::Won;
             overlay(
@@ -328,19 +317,6 @@ async fn game() {
                 154.0,
                 22,
                 Color::new(CYAN.r, CYAN.g, CYAN.b, alpha),
-            );
-        }
-        if !screen.compact && !run.session.is_playing() {
-            let mut binding = [0; 128];
-            let confirm = hint(&player_input, "confirm", &mut binding);
-            hud_label(
-                &mut hud_ui,
-                [280., 551.],
-                720.,
-                15.,
-                MUTED,
-                Align::Center,
-                format_args!("CONFIRM: {confirm} / CONTROLS: F2"),
             );
         }
         hud_ui.finish_player(
@@ -737,7 +713,7 @@ fn hud_label(
     )
     .unwrap();
 }
-fn draw_hud(ui: &mut Ui, game: &Game, started: bool, input: &PlayerInput) {
+fn draw_hud(ui: &mut Ui, game: &Game, started: bool, _input: &PlayerInput) {
     hud_label(
         ui,
         [72., 57.],
@@ -879,74 +855,6 @@ fn draw_hud(ui: &mut Ui, game: &Game, started: bool, input: &PlayerInput) {
         CYAN,
     )
     .unwrap();
-    // Binding text comes from the sampled profile, including unbound/remapped
-    // inputs. Each column has bounded text; Controls retains the full mapping.
-    for (column, action, title) in [
-        (0., "fire", "FIRE"),
-        (1., "boost", "DASH"),
-        (2., "pause", "PAUSE"),
-    ] {
-        let mut binding = [0; 128];
-        let binding = hint(input, action, &mut binding);
-        ui.label(
-            UiRect {
-                min: [265. + column * 265., 734.75],
-                size: [255., 14.],
-            },
-            &format!("{title}: {binding}"),
-            TextStyle {
-                size: 14.,
-                color: MUTED,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    }
-    let mut binding = [0; 128];
-    let movement = if input.current_device() == ferravex_render::input::HintDevice::KeyboardMouse {
-        format!(
-            "MOVE: {} / {} / {} / {}",
-            hint(input, "move_forward", &mut [0; 128]),
-            hint(input, "move_left", &mut [0; 128]),
-            hint(input, "move_back", &mut [0; 128]),
-            hint(input, "move_right", &mut [0; 128])
-        )
-    } else {
-        format!(
-            "MOVE X: {} / Y: {}",
-            hint(input, "move_x", &mut binding),
-            hint(input, "move_y", &mut [0; 128])
-        )
-    };
-    ui.label(
-        UiRect {
-            min: [265., 759.625],
-            size: [790., 13.],
-        },
-        &movement,
-        TextStyle {
-            size: 13.,
-            color: MUTED,
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    hud_label(
-        ui,
-        [73., 793.],
-        1135.,
-        13.,
-        MUTED,
-        Align::Left,
-        format_args!(
-            "{} / F2: CONTROLS",
-            if input.touch_active() {
-                "TOUCH ACTIVE: AUTO AIM / FIRE AT NEAREST DRONE"
-            } else {
-                "AIM: POINTER / MAPPED AIM AXES"
-            }
-        ),
-    );
     let progress = match game.progression.next_cost() {
         Some(cost) => format!(
             "LV {} / XP {}/{} / DMG {}",
@@ -1026,8 +934,8 @@ fn overlay(
     }
     ui.panel(
         UiRect {
-            min: [0., 100.],
-            size: [1280., 626.],
+            min: [370., 304.],
+            size: [540., 240.],
         },
         Color::new(0.025, 0.055, 0.07, 0.82),
     )
@@ -1042,18 +950,18 @@ fn overlay(
     .unwrap();
     hud_label(
         ui,
-        [80., 386.],
-        1120.,
-        52.,
+        [390., 352.],
+        500.,
+        32.,
         PAPER,
         Align::Center,
         format_args!("{title}"),
     );
     hud_label(
         ui,
-        [80., 430.],
-        1120.,
-        21.,
+        [390., 412.],
+        500.,
+        16.,
         MUTED,
         Align::Center,
         format_args!("{detail}"),

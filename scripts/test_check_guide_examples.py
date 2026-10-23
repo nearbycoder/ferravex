@@ -298,7 +298,9 @@ class GuideTests(unittest.TestCase):
 
     def test_command_failure_timeout_missing_tool_and_bounded_logs(self):
         cases = [("failure", "import sys; print('failed', file=sys.stderr); sys.exit(7)", 5, "failed"),
-                 ("timeout", "import time; print('started', flush=True); time.sleep(20)", .2, "timeout"),
+                 # The deadline includes interpreter startup, which can take
+                 # more than 200 ms on a cold/loaded macOS CI runner.
+                 ("timeout", "import time; print('started', flush=True); time.sleep(20)", 5, "timeout"),
                  ("large", "print('x' * 100)", 5, "passed")]
         with patch.object(runner, "MAX_LOG_BYTES", 16):
             for name, body, timeout, expected in cases:

@@ -437,11 +437,6 @@ fn draw_hud(race: &Race, input: &PlayerInput, waiting_for_controls: bool) {
     let h = screen_height();
     let margin = (w * 0.035).clamp(18.0, 44.0);
     let compact = w < 600.;
-    if compact {
-        centered("DUNE SKIMMER", 28., 20, PALE);
-    } else {
-        label("DUNE SKIMMER", margin, 39., 22., PALE);
-    }
     if race.finished {
         let panel_w = (w - 32.0).clamp(1.0, 360.0);
         let panel = Rect::new((w - panel_w) * 0.5, h * 0.5 - 130.0, panel_w, 265.0);
@@ -476,12 +471,6 @@ fn draw_hud(race: &Race, input: &PlayerInput, waiting_for_controls: bool) {
             16,
             PALE,
         );
-        centered(
-            "IMPACTS SCRUB SPEED / NO TIME ADDED",
-            h * 0.5 + 62.,
-            12,
-            PALE,
-        );
         let mut retry_buffer = [0; 256];
         let mut confirm_buffer = [0; 256];
         let retry = binding_hint(input, "restart", &mut retry_buffer);
@@ -492,23 +481,26 @@ fn draw_hud(race: &Race, input: &PlayerInput, waiting_for_controls: bool) {
             15,
             TEAL,
         );
-        centered("OR CLICK / TAP THE GAME", h * 0.5 + 115., 12, PALE);
         return;
     }
     label(
-        &format!("LAP {:02} / 03", (race.laps + 1).min(LAPS)),
+        &format!("LAP {}/3", (race.laps + 1).min(LAPS)),
         margin,
-        if compact { 54. } else { 66.0 },
+        if compact { 28. } else { 66.0 },
         if compact { 14. } else { 18.0 },
         WHITE,
     );
     let timer = time_label(race.elapsed);
-    let width = measure_text(&timer, None, 28, 1.0).width;
+    let width = measure_text(&timer, None, 20, 1.0).width;
     label(
         &timer,
-        (w - width) * 0.5,
-        if compact { 108.0 } else { 42.0 },
+        if compact {
+            w - 80. - width
+        } else {
+            (w - width) * 0.5
+        },
         28.0,
+        20.0,
         WHITE,
     );
     let completed = race.gates_completed();
@@ -519,26 +511,24 @@ fn draw_hud(race: &Race, input: &PlayerInput, waiting_for_controls: bool) {
         // Reuse the next-gate row before driving starts. A separate center cue
         // would overlap boost telemetry at the 352px minimum in touch mode.
         let text = if race.countdown > 0. {
-            format!("THREE LAPS / {}", race.countdown.ceil() as u32)
+            format!("{}", race.countdown.ceil() as u32)
         } else {
             "GO".to_owned()
         };
         centered(&text, SHORT_START_ROW.0, SHORT_START_ROW.1, TEAL);
     } else if compact {
-        centered(&next, 77., 14, TEAL);
+        centered(&next, 54., 14, TEAL);
     } else {
-        label(&next, w - margin - text_width(&next, 14), 39., 14., TEAL);
+        label(
+            &next,
+            w - margin - 64. - text_width(&next, 14),
+            39.,
+            14.,
+            TEAL,
+        );
     }
-    let earned = format!("RACE {completed:02} / {total}");
-    label(
-        &earned,
-        w - margin - text_width(&earned, 14),
-        if compact { 54. } else { 66. },
-        14.,
-        PALE,
-    );
     let progress_y = if compact {
-        145.0
+        if short_start { 100. } else { 68. }
     } else if race.recovery_count > 0 {
         109.0
     } else {
@@ -568,21 +558,18 @@ fn draw_hud(race: &Race, input: &PlayerInput, waiting_for_controls: bool) {
     label(&speed, margin, bottom, speed_size as f32, WHITE);
     label("KM/H", margin + speed_width + 7., bottom, 13.0, PALE);
     let (traction, traction_color) = match race.traction() {
-        Traction::Track => ("ON TRACK", PALE),
+        Traction::Track => ("", PALE),
         Traction::Sliding => ("SLIDING", ORANGE),
         Traction::Reversing => ("REVERSING", PALE),
         Traction::Sand => ("LOOSE SAND", ORANGE),
     };
     label(traction, margin, bottom + 25., 13., traction_color);
     let bar_w = (w * 0.38).min(170.0);
-    let mut boost_buffer = [0; 256];
-    let boost_binding = binding_hint(input, "boost", &mut boost_buffer);
     let cooling_hint = format!("COOL {:.1}s >25%", race.cooling_seconds());
-    let ready_hint = format!("HOLD {boost_binding}");
     let (boost_label, boost_hint, boost_color) = match race.boost_status() {
-        BoostStatus::Countdown => ("BOOST ON GO", "HOLD TO USE", PALE),
-        BoostStatus::Ready => ("BOOST READY", ready_hint.as_str(), TEAL),
-        BoostStatus::Active => ("BOOST ACTIVE", "RELEASE TO COOL", ORANGE),
+        BoostStatus::Countdown => ("BOOST", "", PALE),
+        BoostStatus::Ready => ("BOOST", "", TEAL),
+        BoostStatus::Active => ("BOOSTING", "", ORANGE),
         BoostStatus::Overheated => ("OVERHEATED", cooling_hint.as_str(), ORANGE),
         BoostStatus::Sand => ("BOOST BLOCKED", "RETURN TO TRACK", PALE),
         BoostStatus::Finished => ("TRIAL COMPLETE", "", TEAL),
@@ -610,7 +597,7 @@ fn draw_hud(race: &Race, input: &PlayerInput, waiting_for_controls: bool) {
     );
     draw_rectangle(w - margin - bar_w * 0.75, bottom - 19.0, 2.0, 10.0, PALE);
     label(
-        &format!("ENERGY {:03}%", (race.boost * 100.0) as u32),
+        &format!("{:03}%", (race.boost * 100.0) as u32),
         w - margin - bar_w,
         bottom + 8.0,
         13.0,
@@ -628,13 +615,12 @@ fn draw_hud(race: &Race, input: &PlayerInput, waiting_for_controls: bool) {
             // Short landscape canvases also need a single line; the compact
             // portrait case uses the next-gate row above instead.
             centered(
-                &format!("THREE LAPS / {}", race.countdown.ceil() as u32),
+                &format!("{}", race.countdown.ceil() as u32),
                 progress_y + 27.,
                 22,
                 WHITE,
             );
         } else {
-            centered("THREE LAPS THROUGH THE RUINS", h * 0.34, 20, PALE);
             centered(
                 &format!("{}", race.countdown.ceil() as u32),
                 h * 0.48,
@@ -663,36 +649,6 @@ fn draw_hud(race: &Race, input: &PlayerInput, waiting_for_controls: bool) {
             16,
             PALE,
         );
-    } else if !touch_mode && !race.finished {
-        let mut forward_buffer = [0; 256];
-        let mut pause_buffer = [0; 256];
-        let mut restart_buffer = [0; 256];
-        let forward = binding_hint(input, "move_forward", &mut forward_buffer);
-        let pause = binding_hint(input, "pause", &mut pause_buffer);
-        let restart = binding_hint(input, "restart", &mut restart_buffer);
-        if w < 600. {
-            centered(
-                &format!("DRIVE {forward}  /  BOOST {boost_binding}"),
-                h - 27.,
-                13,
-                PALE,
-            );
-            centered(
-                &format!("PAUSE {pause}  /  RETRY {restart}  /  F2 CONTROLS"),
-                h - 10.,
-                13,
-                PALE,
-            );
-        } else {
-            centered(
-                &format!(
-                    "DRIVE {forward}  /  BOOST {boost_binding}  /  PAUSE {pause}  /  RETRY {restart}"
-                ),
-                h - 19.,
-                14,
-                PALE,
-            );
-        }
     }
     if race.recovery_timer > 0.0 && !race.finished {
         centered(

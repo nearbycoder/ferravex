@@ -1,6 +1,29 @@
 # The browser player guide
 
-All seventeen games and labs share browser tools for controls, presentation and recovery. Open **Details** in any game, then scroll to **Player tools**. These tools run in the browser adapter; native hosts and simulation rules retain their documented behavior. See the [game catalog](../examples/catalog.json) and [Copper Greens guide](../examples/shared/mini-golf/README.md).
+All seventeen games and labs share browser tools for controls, presentation and recovery. Open **Game menu → Settings**, then scroll to **Player tools**. These tools run in the browser adapter; native hosts and simulation rules retain their documented behavior. See the [game catalog](../examples/catalog.json) and [Copper Greens guide](../examples/shared/mini-golf/README.md).
+
+## A game-first screen
+
+The small **Game menu** button opens Controls, Settings, Sound and How to play.
+Instructions and diagnostics are available on demand instead of filling the
+playfield. Games retain their scores, objectives and actionable touch controls.
+Ready and pause screens show their main action and relevant results, without
+repeating the key list or explaining that time is paused. Evergreen mechanics
+and display notes live in **How to play**. The regular page also uses the single
+menu, so Fullscreen is available there without a second toolbar button.
+
+**Fullscreen** gives the app the entire browser viewport: website navigation,
+guides and scroll rails stay outside it. The menu button remains in the top
+corner; **Game menu → Exit fullscreen** returns to the page. Browsers that deny
+native fullscreen use the same app layout in an expanded player; browser chrome
+may remain visible. Orbit Breaker's portrait playfield is centered without
+stretching its physics or pointer coordinates.
+
+While fullscreen, Shift+Tab from the canvas reaches the game menu instead of hidden
+page controls. The Controls editor retains its own internal Tab navigation.
+Opening the game menu suppresses local gameplay input; connected matches and
+replays retain their existing progression rules. Closing it preserves an
+independent manual pause.
 
 ## Controls and focus
 

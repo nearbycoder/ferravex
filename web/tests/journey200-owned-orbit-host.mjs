@@ -20,7 +20,7 @@ const inline = scripts.filter(([, attrs]) => !attributes(attrs).src);
 const plain = source => source.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
 const paragraph = id => plain(html.match(new RegExp(`<p id="${id}"[^>]*>([\\s\\S]*?)<\\/p>`))[1]);
 
-test('canvas has a real game title, visible instructions and live phase feedback', () => {
+test('canvas has a real title, short introduction, on-demand instructions and live phase feedback', () => {
   const ids = elements.filter(element => element.attrs.id).map(element => element.attrs.id);
   assert.equal(ids.length, new Set(ids).size);
   assert.match(html, /<html lang="en">/);
@@ -40,12 +40,14 @@ test('canvas has a real game title, visible instructions and live phase feedback
     const element = withId(id);
     assert.equal(element.tag, 'p');
     assert.ok(!('hidden' in element.attrs) && !('aria-hidden' in element.attrs));
-    assert.ok(html.indexOf(`id="${id}"`) < html.indexOf('<details'), 'instructions are outside collapsed help');
+    if (['orbit-description', 'game-state'].includes(id)) assert.ok(html.indexOf(`id="${id}"`) < html.indexOf('<details'), 'the short introduction and live state stay outside collapsed help');
   }
   assert.match(paragraph('orbit-description'), /paddle.*two debris fields.*three lives/);
   assert.match(paragraph('orbit-keys'), /Default keys:.*A.*Left arrow.*D.*Right arrow.*Space.*Enter.*Escape.*R/);
   assert.match(paragraph('orbit-keys'), /Controls.*F2.*remap current bindings/);
   assert.match(paragraph('orbit-navigation'), /Shift \+ Tab.*How to play.*does not pause/);
+  assert.ok(html.indexOf('id="orbit-keys"')>html.indexOf('id="orbit-help"'), 'keyboard notes stay inside collapsed help');
+  assert.ok(html.indexOf('id="orbit-navigation"')>html.indexOf('id="orbit-help"'), 'navigation notes stay inside collapsed help');
   for (const id of ['notice', 'game-state']) {
     assert.equal(withId(id).attrs['aria-live'], 'polite');
     assert.equal(withId(id).attrs['aria-atomic'], 'true');
@@ -56,7 +58,7 @@ test('canvas has a real game title, visible instructions and live phase feedback
 });
 
 test('help documents the existing controls, remapping, retry and separate menu exits', () => {
-  const help = plain(html.slice(html.indexOf('<details'), html.indexOf('</details>')));
+  const help = plain(html.slice(html.indexOf('<details id="orbit-help"'), html.indexOf('</details>', html.indexOf('<details id="orbit-help"'))));
   assert.match(help, /Saved remaps take precedence.*current bindings/);
   assert.match(help, /retry readies a fresh run; release, then press again to launch/);
   assert.match(help, /Restart clears the score, restores three lives.*separate press to launch/);
@@ -132,7 +134,8 @@ test('layout preserves narrow-screen help, wrapping controls, visible focus and 
   assert.match(css, /#orbit-toolbar>button\{font-size:1rem\}/, 'retain readable labels over shared narrow-screen toolbar styles');
   assert.match(css, /\.help\{[^}]*position:static[^}]*width:100%/);
   assert.match(css, /@media\(max-width:480px\)[\s\S]*grid-template-columns:minmax\(0,1fr\)/);
-  assert.doesNotMatch(css, /details\{display:none|text-overflow:ellipsis|white-space:nowrap|overflow:hidden|outline:none/);
+  assert.match(css, /#game-state\{[^}]*clip-path:inset\(50%\)/, 'duplicate visual status remains available to assistive technology');
+  assert.doesNotMatch(css.replace(/#game-state\{[^}]*\}/, ''), /details\{display:none|text-overflow:ellipsis|white-space:nowrap|overflow:hidden|outline:none/);
   assert.match(css, /#game:focus-visible\{[^}]*outline:3px solid[^}]*!important[^}]*outline-offset:-4px/);
   assert.match(css, /button:focus-visible,a:focus-visible,summary:focus-visible\{[^}]*outline:3px solid/);
   assert.match(css, /forced-colors:active/);
@@ -154,7 +157,7 @@ function fixture() {
     constructor(tag, attrs = {}) {
       this.tag = tag; this.attributes = new Map(Object.entries(attrs)); this.handlers = new Map();
       this.parent = null; this.hidden = 'hidden' in attrs; this.disabled = 'disabled' in attrs;
-      this.open = false; this.textContent = ''; this.writes = 0; this.dataset = {};
+      this.open = false; this.textContent = ''; this.writes = 0; this.dataset = {}; this.style = {};
       this.width = Number(attrs.width); this.height = Number(attrs.height);
     }
     addEventListener(type, handler) {
@@ -167,7 +170,7 @@ function fixture() {
     closest(selector) { return selector.split(',').includes(this.tag) ? this : null; }
     focus() { document.activeElement = this; }
     getBoundingClientRect() { return {left: 0, top: 0, width: 320, height: 360}; }
-    getContext() { return {putImageData() {}}; }
+    getContext() { return {putImageData() {},fillRect: (...args) => { this.headerClear = args; }}; }
   }
   const window = new Element('window'), document = new Element('document');
   document.parent = window; document.hidden = false; document.hasFocus = () => true;
@@ -179,6 +182,7 @@ function fixture() {
   document.querySelector = selector => nodes.get(selector);
   for (const node of nodes.values()) node.parent = document;
   const canvas = nodes.get('#game'), summary = nodes.get('#orbit-help-summary'), help = nodes.get('#orbit-help');
+  canvas.parentElement = new Element('div');
   const link = new Element('a'), select = new Element('select');
   link.parent = document; select.parent = document; summary.parent = help;
   canvas.focus();
@@ -317,6 +321,9 @@ test('custom boot, framebuffer, controls overlay, phase feedback and frame sched
   assert.equal(f.overlays.length, 2);
   assert.deepEqual(f.overlays[0].slice(1), [f.engine, 640, 720]);
   assert.match(f.nodes.get('#game-state').textContent, /Ready.*Sector 1 of 2.*3 lives remaining/);
+  assert.deepEqual(f.canvas.headerClear, [0, 0, 640, 104], 'readable narrow score replaces only the bitmap metadata band');
+  assert.equal(f.nodes.get('#orbit-compact-hud').hidden, false);
+  assert.equal(f.nodes.get('#orbit-compact-hud').style.height, '52px');
   assert.deepEqual(f.calls, []);
   f.send(f.nodes.get('#pause'), 'click');
   assert.equal(f.document.activeElement, f.canvas);

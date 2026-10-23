@@ -20,8 +20,10 @@ use ferravex_physics::d3::{
     ColliderBuilder, PhysicsWorld, RigidBodyBuilder, RigidBodyHandle, Vector,
 };
 use ferravex_render::audio::{Cue, GameAudio, Surface};
+#[cfg(test)]
+use ferravex_render::input::HintDevice;
 use ferravex_render::input::{
-    HintDevice, PlayerInput, Preset,
+    PlayerInput, Preset,
     touch::{Control, Output, Region},
 };
 use ferravex_render::{
@@ -736,6 +738,7 @@ fn fitted_label(text: &str, rect: Rect, size: u16, centered: bool) {
     );
 }
 
+#[cfg(test)]
 fn action_hint<'a>(input: &PlayerInput, action: &str, buffer: &'a mut [u8]) -> &'a str {
     if input.current_device() == HintDevice::Touch {
         // The preset's Touch 2/confirm channels are not installed here: this
@@ -747,7 +750,6 @@ fn action_hint<'a>(input: &PlayerInput, action: &str, buffer: &'a mut [u8]) -> &
 }
 
 struct HudLayout {
-    compact: bool,
     scene: Rect,
     panel: Rect,
     fire: Rect,
@@ -757,14 +759,12 @@ struct HudLayout {
 
 impl HudLayout {
     fn new(w: f32, h: f32) -> Self {
-        let compact = w < 700.0;
-        let height = if compact { 196.0 } else { 148.0 };
+        let height = 116.0;
         let panel = Rect::new(16.0, h - height - 16.0, w - 32.0, height);
         let width = (panel.w - 48.0) / 3.0;
         let y = panel.y + panel.h - 54.0;
         Self {
-            compact,
-            scene: Rect::new(16.0, 96.0, w - 32.0, (panel.y - 104.0).max(1.0)),
+            scene: Rect::new(16.0, 56.0, w - 32.0, (panel.y - 64.0).max(1.0)),
             panel,
             fire: Rect::new(32.0, y, width, 44.0),
             rebuild: Rect::new(40.0 + width, y, width, 44.0),
@@ -779,58 +779,25 @@ fn draw_hud(foundry: &Foundry, layout: &HudLayout, input: &PlayerInput) {
     let w = screen_width();
     let state = foundry.session.state();
     let panel_color = Color::new(0.10, 0.14, 0.13, 0.94);
-    draw_rectangle(16.0, 16.0, w - 32.0, 72.0, panel_color);
-    fitted_label(
-        "SIEGE FOUNDRY",
-        Rect::new(28.0, 43.0, w - 120.0, 24.0),
-        18,
-        false,
-    );
-    fitted_label(
-        "Topple 6 targets",
-        Rect::new(28.0, 69.0, w - 56.0, 20.0),
-        16,
-        false,
-    );
-    label(
-        &format!("{} / {}", game.score(), GOAL),
-        w - 88.0,
-        43.0,
-        16.0,
-        PAPER,
-    );
+    if state != SessionState::Ready {
+        draw_rectangle(16.0, 12.0, (w - 96.0).min(280.0), 32.0, panel_color);
+        label(
+            &format!("TARGETS {} / {}", game.score(), GOAL),
+            28.0,
+            34.0,
+            16.0,
+            PAPER,
+        );
+    }
     let panel = layout.panel;
     draw_rectangle(panel.x, panel.y, panel.w, panel.h, panel_color);
-    let aim = format!(
-        "YAW {:+.0} / ELEV {:.1}",
-        game.yaw.to_degrees(),
-        game.elevation.to_degrees()
-    );
-    let power = format!("POWER {SPEED:.0} m/s - fixed");
-    fitted_label(
-        &aim,
-        Rect::new(28.0, panel.y + 25.0, panel.w - 24.0, 20.0),
-        16,
-        false,
-    );
-    label(
-        &power,
-        if layout.compact { 28.0 } else { 330.0 },
-        panel.y + if layout.compact { 48.0 } else { 25.0 },
-        16.0,
-        PAPER,
-    );
-    let ammo_y = panel.y + if layout.compact { 74.0 } else { 51.0 };
-    let ammo_label = format!("AMMO {} / {AMMO}", game.ammo);
-    label(&ammo_label, 28.0, ammo_y, 16.0, PAPER);
-    let ammo_start = 28. + measure_text(&ammo_label, None, 16, 1.).width + 15.;
-    for i in 0..AMMO {
-        let x = ammo_start + f32::from(i) * 16.0;
-        draw_circle(
-            x,
-            ammo_y - 6.0,
-            5.0,
-            if i < game.ammo { PAPER } else { STEEL },
+    if state != SessionState::Ready {
+        label(
+            &format!("SHOTS {} / {AMMO}", game.ammo),
+            28.0,
+            panel.y + 24.0,
+            16.0,
+            PAPER,
         );
     }
     let feedback = &foundry.feedback;
@@ -845,36 +812,14 @@ fn draw_hud(foundry: &Foundry, layout: &HudLayout, input: &PlayerInput) {
     } else if game.cooldown > 0.0 {
         format!("RELOADING {:.1}s", game.cooldown)
     } else {
-        "Aim low at supports.".into()
+        "".into()
     };
     fitted_label(
         &status,
-        Rect::new(
-            28.0,
-            panel.y + if layout.compact { 103.0 } else { 77.0 },
-            panel.w - 24.0,
-            20.0,
-        ),
+        Rect::new(28.0, panel.y + 48.0, panel.w - 24.0, 20.0),
         16,
         false,
     );
-    let mut hint_buffer = [0; 512];
-    let fire_hint = format!("FIRE: {}", action_hint(input, "fire", &mut hint_buffer));
-    if layout.compact {
-        fitted_label(
-            &fire_hint,
-            Rect::new(28.0, panel.y + 126.0, panel.w - 24.0, 20.0),
-            16,
-            false,
-        );
-    } else if w >= 900.0 {
-        fitted_label(
-            &fire_hint,
-            Rect::new(400.0, panel.y + 77.0, w - 428.0, 20.0),
-            16,
-            false,
-        );
-    }
     let fire_title = match state {
         SessionState::Ready => "START",
         SessionState::Won => "AGAIN",
@@ -917,43 +862,23 @@ fn draw_hud(foundry: &Foundry, layout: &HudLayout, input: &PlayerInput) {
             PAPER,
         );
     }
-    let (title, detail, action, button) = match state {
-        SessionState::Ready => (
-            "DEMOLITION RANGE",
-            "6 targets. 8 shots.",
-            "confirm",
-            "START",
-        ),
-        SessionState::Paused => (
-            "RANGE PAUSED",
-            "Shots + debris frozen.",
-            "pause",
-            if controls_open {
-                "CLOSE CONTROLS"
-            } else {
-                "RESUME"
-            },
-        ),
-        SessionState::Won => ("FOUNDRY CLEARED", "All 6 targets down.", "confirm", "AGAIN"),
-        SessionState::Lost => ("OUT OF SHOTS", "Break the supports.", "confirm", "RETRY"),
+    let (title, detail) = match state {
+        SessionState::Ready => ("DEMOLITION RANGE", "6 targets. 8 shots."),
+        SessionState::Paused => ("RANGE PAUSED", ""),
+        SessionState::Won => ("FOUNDRY CLEARED", ""),
+        SessionState::Lost => ("OUT OF SHOTS", ""),
         SessionState::Playing => return,
-    };
-    let prompt = if controls_open {
-        "Close Controls first.".to_owned()
-    } else {
-        format!(
-            "{button} / {}",
-            action_hint(input, action, &mut hint_buffer)
-        )
     };
     let panel_width = (w - 32.0).min(430.0);
     let y = 104.0;
-    draw_rectangle((w - panel_width) * 0.5, y, panel_width, 112.0, panel_color);
-    for (text, offset, size) in [
-        (title, 30.0, 20),
-        (detail, 61.0, 16),
-        (prompt.as_str(), 90.0, 16),
-    ] {
+    draw_rectangle(
+        (w - panel_width) * 0.5,
+        y,
+        panel_width,
+        if detail.is_empty() { 56. } else { 82. },
+        panel_color,
+    );
+    for (text, offset, size) in [(title, 30.0, 20), (detail, 61.0, 16)] {
         fitted_label(
             text,
             Rect::new(

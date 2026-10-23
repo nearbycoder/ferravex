@@ -16,12 +16,14 @@ Drag from the ball toward the target and release to putt. Distance controls powe
 a tap changes aim without shooting. You can instead use the on-screen angle and
 power buttons followed by PUTT. Keyboard defaults are arrows or WASD to aim and
 change power, Space to putt, P/Escape to pause, C for the scorecard, and R to return
-to the previous safe lie for one penalty stroke. Controls / F2 shows saved bindings
-and supports keyboard/controller remapping. Tab leaves the canvas for page tools.
+to the previous safe lie for one penalty stroke. Game menu → Controls (or F2) shows saved bindings and supports keyboard/controller
+remapping. In fullscreen, Shift+Tab reaches the game menu.
 
-The course-top / shot-controls navigation rail keeps both ends reachable on short
-screens without taking a gesture away from gameplay. Canvas text uses fixed
-logical pixel sizes; the world fits the space reserved between HUD regions.
+The compact HUD shows hole, par and shots; a thin meter and five shot controls
+sit below the course. Play, Practice and Card are short on-demand menus. Use the
+browser Game menu for help, current bindings and settings. Fullscreen fills the
+viewport with the app, without the website toolbar or a navigation rail. The
+course projection and pointer mapping use the same reserved scene region.
 
 ## Twelve greens
 
@@ -41,9 +43,9 @@ logical pixel sizes; the world fits the space reserved between HUD regions.
 | 12 | Copper Cup | 4 | Combine bridge placement, sand and a moving gate. |
 
 Water adds one penalty and returns to the last safe lie. The cup captures a ball
-only within its radius and below its speed limit. At twelve strokes, a hole is
-picked up and marked on the card. Pause also offers an explicit pickup. Completing
-all twelve holes records the full-round best locally when storage is available.
+only within its radius and below its speed limit. The card and pause menu offer
+**Take 12**, conceding the hole at its stroke limit. At twelve strokes, a hole is
+automatically picked up and marked on the card. Completing all twelve holes records the full-round best locally when storage is available.
 Practice can start at any hole and never replaces that record. Restart clears the
 current card and retains the saved best. Opening Controls/Details or losing focus
 suspends this local game; the paused ball and obstacles retain their state.

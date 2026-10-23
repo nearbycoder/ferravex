@@ -85,13 +85,16 @@ class Target {
 }
 class Element extends Target {
  constructor(doc,tag){super();this.ownerDocument=doc;this.tagName=tag;this.children=[];this.parentElement=null;this.dataset={};this.style={};this.attributes=new Map();this.classes=new Set();this.focusCalls=[];this.classList={add:c=>this.classes.add(c),remove:c=>this.classes.delete(c),contains:c=>this.classes.has(c),toggle:(c,active)=>active?this.classes.add(c):this.classes.delete(c)};}
+ click(){if(!this.disabled)this.emit('click');}
+ showModal(){this.open=true;}
+ close(){this.open=false;}
  get isConnected(){return this===this.ownerDocument.documentElement||Boolean(this.parentElement?.isConnected);}
  set className(value){this.classes=new Set(value.split(' '));}
  get className(){return [...this.classes].join(' ');}
  append(...elements){for(const element of elements){element.remove();element.parentElement=this;this.children.push(element);}}
  remove(){if(!this.parentElement)return;const parent=this.parentElement;parent.children.splice(parent.children.indexOf(this),1);this.parentElement=null;if(this.contains(this.ownerDocument.activeElement))this.ownerDocument.activeElement=this.ownerDocument.body;}
  contains(element){return element===this||this.children.some(child=>child.contains(element));}
- insertAdjacentElement(position,element){assert.equal(position,'beforebegin');element.parentElement=this.parentElement;this.parentElement.children.splice(this.parentElement.children.indexOf(this),0,element);}
+ insertAdjacentElement(position,element){assert.equal(position,'beforebegin');element.remove();element.parentElement=this.parentElement;this.parentElement.children.splice(this.parentElement.children.indexOf(this),0,element);}
  setAttribute(name,value){this.attributes.set(name,String(value));}
  getAttribute(name){return this.attributes.get(name)??null;}
  closest(selector){for(let element=this;element;element=element.parentElement){if(selector==='.player'&&element.classList.contains('player'))return element;if(selector==='[hidden],[inert]'&&(element.hidden||element.inert))return element;}return null;}
@@ -102,7 +105,14 @@ function dom(){
  doc.createElement=tag=>new Element(doc,tag);doc.documentElement=doc.createElement('html');doc.head=doc.createElement('head');doc.body=doc.createElement('body');doc.documentElement.append(doc.head,doc.body);doc.activeElement=doc.body;
  const all=()=>{const result=[];const visit=element=>{result.push(element);element.children.forEach(visit);};visit(doc.documentElement);return result;};
  doc.querySelectorAll=selector=>{assert.equal(selector,'.player iframe');return all().filter(element=>element.tagName==='iframe'&&element.closest('.player'));};
- doc.querySelector=selector=>selector==='dialog[open]'?all().find(element=>element.tagName==='dialog'&&element.open)??null:all().find(element=>element.classList.contains('ferravex-details-trigger')||element.id==='controls'||element.attributes.has('data-controls'))??null;
+ doc.querySelector=selector=>all().find(element=>selector.split(',').some(part=>{
+  if(part==='dialog[open]')return element.tagName==='dialog'&&element.open;
+  if(part.startsWith('.'))return element.classList.contains(part.slice(1));
+  if(part.startsWith('#'))return element.id===part.slice(1);
+  if(part==='[data-controls]')return element.attributes.has('data-controls');
+  if(part==='[data-audio]')return element.attributes.has('data-audio');
+  return false;
+ }))??null;
  doc.hasFocus=()=>true;doc.fullscreenElement=null;
  win.MutationObserver=class {
   constructor(callback){this.callback=callback;observers.push(this);}
@@ -114,10 +124,11 @@ function dom(){
  const mutate=()=>{for(const observer of observers)if(observer.active)observer.callback([]);};
  return {doc,win,observers,mutate};
 }
-async function host(run,{embedded=false,controls=true,mobile=false}={}){
+async function host(run,{embedded=false,controls=true,mobile=false,nested=false}={}){
  const h=dom(),{doc,win}=h,timers=new Map();let timerId=0;
  h.calls=[];h.messages=[];
- h.canvas=doc.createElement('canvas');doc.body.append(h.canvas);
+ const paints=[];win.requestAnimationFrame=callback=>paints.push(callback);h.paint=()=>{const current=paints.splice(0);for(const callback of current)callback();};
+ h.canvas=doc.createElement('canvas');h.stage=nested?doc.createElement('main'):h.canvas;if(nested){doc.body.append(h.stage);h.stage.append(h.canvas);}else doc.body.append(h.canvas);
  h.controls=doc.createElement('button');h.controls.id='controls';if(controls)doc.body.append(h.controls);
  doc.documentElement.requestFullscreen=options=>{h.calls.push(['request',doc.activeElement,options]);doc.fullscreenElement=doc.documentElement;doc.emit('fullscreenchange');return Promise.resolve();};
  doc.exitFullscreen=()=>{h.calls.push('exit');doc.fullscreenElement=null;doc.emit('fullscreenchange');return Promise.resolve();};
@@ -128,7 +139,7 @@ async function host(run,{embedded=false,controls=true,mobile=false}={}){
  h.tick=delay=>{for(const [id,timer] of [...timers])if(timer.delay===delay){timers.delete(id);timer.callback();}};h.timers=timers;
  h.reply=(data,fields={})=>win.emit('message',{source:win.parent,origin:win.location.origin,data:{type:'ferravex:expanded',...data},...fields});
  try{
-  h.session=bindFullscreen(h.canvas,'marble-run',()=>({ferravex_blur:()=>h.calls.push('blur'),ferravex_focus:value=>h.calls.push(['focus',value])}));
+  h.exports={ferravex_blur:()=>h.calls.push('blur'),ferravex_focus:value=>h.calls.push(['focus',value]),ferravex_details_open:value=>h.calls.push(['details',value]),ferravex_controls_open:()=>h.controlsOpen,ferravex_key:(...values)=>h.calls.push(['key',...values])};h.session=bindFullscreen(h.canvas,'marble-run',()=>h.exports);
   h.button=doc.body.children.find(element=>element.classList.contains('ferravex-fullscreen-trigger'));
   h.note=doc.body.children.find(element=>element.classList.contains('ferravex-screen-note'));
   await run(h);
@@ -317,7 +328,7 @@ await test('retry after rejected entry clears old feedback and keeps resources b
   h.reply({id:h.messages.at(-1).data.id,ok:false});await entry;assert.equal(h.win.count('message'),0);assert.equal(h.timers.size,1);
  }
  const entry=h.session.toggle();assert.equal(h.note.hidden,true);h.reply({id:h.messages.at(-1).data.id,ok:true});await entry;
- assert.equal(h.session.mode,'expanded');assert.match(h.note.textContent,/Expanded player/);
+ assert.equal(h.session.mode,'expanded');assert.equal(h.note.hidden,true,'successful expansion does not add a display note');
  const exit=h.session.toggle();h.reply({id:h.messages.at(-1).data.id,ok:true});await exit;assert.equal(h.timers.size,0);
 },{embedded:true}));
 
@@ -352,3 +363,47 @@ await test('parent cleanup preserves focus when its document is inactive',()=>{
  const h=parentFixture();h.send();h.doc.hasFocus=()=>false;const calls=h.opener.focusCalls.length;
  h.expansion.dispose();assert.equal(h.opener.focusCalls.length,calls);assert.equal(h.doc.documentElement.style.overflow,'clip');
 });
+
+await test('one game menu gates gameplay, releases pointer capture and resumes without changing manual pause',()=>host(async h=>{
+ const trigger=h.doc.querySelector('.ferravex-game-menu-trigger');
+ const dialog=h.doc.body.children.find(e=>e.classList.contains('ferravex-game-menu'));
+ h.doc.pointerLockElement=h.canvas;h.doc.exitPointerLock=()=>{h.doc.pointerLockElement=null;};
+ trigger.click();assert.equal(dialog.open,true);assert.equal(h.doc.pointerLockElement,null);
+ assert.deepEqual(h.calls.at(-1),['details',1]);assert.equal(trigger.getAttribute('aria-expanded'),'true');
+ const event=dialog.emit('cancel');assert.equal(event.defaultPrevented,true);assert.equal(dialog.open,false);
+ assert.deepEqual(h.calls.at(-1),['details',0]);assert.equal(h.doc.activeElement,h.canvas);
+ trigger.click();dialog.children.find(e=>e.textContent==='Back to game').click();assert.equal(dialog.open,false);
+ assert.equal(h.doc.activeElement,h.canvas);
+}));
+await test('menu proxies preserve the real Controls owner and transfer input once',()=>host(async h=>{
+ const trigger=h.doc.querySelector('.ferravex-game-menu-trigger');
+ const dialog=h.doc.body.children.find(e=>e.classList.contains('ferravex-game-menu'));
+ let opens=0;h.controls.addEventListener('click',()=>{opens++;h.controlsOpen=true;});
+ h.controls.disabled=true;trigger.click();let proxy=dialog.children.find(e=>e.textContent==='Controls');assert.equal(proxy.disabled,true);proxy.click();assert.equal(opens,0);
+ dialog.emit('cancel');h.controls.disabled=false;trigger.click();h.controlsOpen=true;proxy.click();assert.equal(opens,0,'the modal gate still owns this frame');h.paint();h.controlsOpen=false;h.paint();assert.equal(opens,1);assert.equal(dialog.open,false);
+ assert.equal(h.doc.activeElement,h.canvas);assert.deepEqual(h.calls.filter(c=>Array.isArray(c)&&c[0]==='details'),[['details',1],['details',0],['details',1],['details',0]]);
+ trigger.click();proxy.click();trigger.click();h.paint();h.paint();assert.equal(opens,1,'a reopened menu cancels the pending transfer');dialog.emit('cancel');
+ trigger.click();proxy.click();h.paint();h.paint();assert.equal(opens,1,'an existing editor is not toggled closed');
+ trigger.click();proxy.click();h.session.dispose();h.paint();h.paint();assert.equal(opens,1,'disposal cancels the pending transfer');
+}));
+await test('nested app owns fullscreen and keyboard navigation stays in the visible app',()=>host(async h=>{
+ const trigger=h.doc.querySelector('.ferravex-game-menu-trigger');assert.ok(h.stage.classList.contains('ferravex-game-stage'));const guide=h.doc.createElement('footer');h.doc.body.append(guide);
+ h.button.focus();await h.session.toggle();assert.equal(trigger.parentElement,h.doc.body);assert.equal(guide.inert,true,'off-stage guides leave the fullscreen focus tree');
+ let event=h.win.emit('keydown',{key:'Tab',target:h.canvas,shiftKey:true});assert.equal(event.defaultPrevented,true);assert.equal(h.doc.activeElement,trigger);
+ event=h.win.emit('keydown',{key:'Tab',target:trigger});assert.equal(event.defaultPrevented,true);assert.equal(h.doc.activeElement,h.canvas);
+ event=h.win.emit('keydown',{key:'Tab',target:h.canvas});assert.equal(event.defaultPrevented,false,'plain Tab retains gameplay/UI bindings');
+ h.controlsOpen=true;event=h.win.emit('keydown',{key:'Tab',target:h.canvas});assert.equal(event.defaultPrevented,true,'fullscreen bypasses inline page-only Tab handlers for Controls');
+ event=h.win.emit('keydown',{key:'Tab',target:h.canvas,shiftKey:true});assert.equal(event.defaultPrevented,true,'Controls also retains reverse navigation without a hidden menu target');
+ assert.deepEqual(h.calls.filter(c=>Array.isArray(c)&&c[0]==='key'),[['key',0xff09,1],['key',0xff09,0],['key',0xff09,1],['key',0xff09,0]]);
+ event=h.win.emit('keydown',{key:'Tab',target:h.canvas,ctrlKey:true});assert.equal(event.defaultPrevented,false,'browser modifier shortcuts remain native');
+ h.session.dispose();assert.equal(guide.inert,false);assert.equal(h.stage.classList.contains('ferravex-game-stage'),false);assert.equal(trigger.isConnected,false);assert.equal(h.controls.classList.contains('ferravex-menu-original'),false);
+},{nested:true}));
+
+await test('engine input failures do not strand the browser fullscreen menu or Exit',()=>host(async h=>{
+ h.exports.ferravex_blur=()=>{throw Error('engine failure');};
+ h.button.focus();await h.session.toggle();assert.equal(h.session.mode,'native');
+ assert.equal(h.canvas.dataset.fullscreenInputError,'Input reset unavailable');
+ const trigger=h.doc.querySelector('.ferravex-game-menu-trigger');trigger.click();
+ const dialog=h.doc.querySelector('dialog[open]');assert.ok(dialog);assert.equal(h.canvas.dataset.menuInputError,'Game input unavailable');
+ dialog.children.find(e=>e.textContent==='Exit fullscreen').click();await flush();assert.equal(h.session.mode,'inline');assert.equal(dialog.open,false);
+}));

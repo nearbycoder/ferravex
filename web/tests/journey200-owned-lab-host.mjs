@@ -40,7 +40,9 @@ test('canvas name, descriptions, landmarks and fallback identify the actual game
   assert.equal(canvas.role, undefined);
   assert.equal(canvas['aria-hidden'], undefined);
   assert.deepEqual(canvas['aria-describedby'].split(' '), descriptionIds);
-  for (const id of descriptionIds) assert.ok(text(id).length > 150, `${id} has useful visible instructions`);
+  for (const id of descriptionIds) assert.ok(text(id).length > 0, `${id} has linked instructions`);
+  assert.equal(text('courtyard-intro'), 'Move, aim and complete four training drills.');
+  assert.match(markup, /<details class="courtyard-guide"><summary>How to play<\/summary>/, 'long instructions are available on demand');
   assert.match(text('game'), /JavaScript, WebAssembly and WebGL2/);
   assert.equal(tags('noscript').length, 1);
   assert.match(tags('meta').find(meta => meta.name === 'viewport').content, /width=device-width/);

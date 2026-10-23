@@ -743,16 +743,6 @@ async fn game() {
         material.end();
         set_default_camera();
         let compact = screen_width() < 560.;
-        text(
-            courses::COURSES[course].name,
-            if compact { 16. } else { 27. },
-            if compact { 29. } else { 39. },
-            if compact { 20. } else { 26. },
-            INK,
-        );
-        if screen_width() > 620. {
-            text(courses::COURSES[course].challenge, 28., 60., 12., INK);
-        }
         let status = format!(
             "{} / {}     {:02}:{:04.1}",
             game.gems(),
@@ -773,7 +763,7 @@ async fn game() {
         } else {
             screen_width() - status_width - 120.
         };
-        let status_y = if compact { 55. } else { 39. };
+        let status_y = if compact { 72. } else { 39. };
         text(&status, status_x, status_y, status_size as f32, INK);
         draw_poly(status_x - 16., status_y - 8., 4, 6., 0., GOLD);
         if !trial.picker && !game.finished {
@@ -790,14 +780,16 @@ async fn game() {
                     available,
                     12,
                 );
-                text(&label, x, if compact { 76. } else { 80. }, size, INK);
+                text(&label, x, if compact { 94. } else { 80. }, size, INK);
             }
             if screen_height() >= 300. {
                 let x = if compact { 16. } else { 28. };
-                let y = if compact { 96. } else { 100. };
+                let y = if compact { 116. } else { 100. };
                 let available = screen_width() - x - if touch_mode { 114. } else { 16. };
                 let (goal, size, _) = hud::fitted(&hud::goal(&game), available, 12);
-                text(&goal, x, y, size, INK);
+                if overview {
+                    text(&goal, x, y, size, INK);
+                }
                 if let Some(split) = records.split_label(&game) {
                     let (split, size, _) = hud::fitted(&split, available, 12);
                     text(&split, x, y + 20., size, INK);
@@ -864,13 +856,15 @@ async fn game() {
                 14.,
                 CREAM,
             );
-        } else if game.elapsed < 10.
-            && !trial.picker
-            && !game.finished
-            && trial.countdown().is_none()
-            && screen_height() >= 240.
-        {
-            hud::controls(&player_input);
+        }
+        if overview && !touch_mode && screen_width() > 620. {
+            text(
+                courses::COURSES[course].challenge,
+                28.,
+                screen_height() - 32.,
+                12.,
+                INK,
+            );
         }
         if ferravex_render::content::reload_state().status
             == ferravex_render::content::ReloadStatus::Rejected

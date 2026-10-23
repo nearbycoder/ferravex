@@ -94,7 +94,7 @@ function refreshTraining(){
  trainingText('objective',objective);trainingText('menu-objective',objective);
  const state=wasm?.ferravex_training_state()??0;
  trainingText('play',connected?'Return to live match':state===0?'Enter training':'Resume training');
- trainingText('menu-status',connected?'Match stays live · your movement and fire controls are released.':state===0?`Ready · ${pauseReason||'enter training to start the clock.'}`:`Training paused · ${pauseReason||'your progress is saved until reset.'}`);
+ trainingText('menu-status',connected?'Match stays live while this menu is open.':pauseReason);
  trainingText('capture-status',connected?'LIVE · Escape releases controls; the match continues':view===2?'Overview · movement controls stay active · Escape pauses':document.pointerLockElement===canvas?'Mouse captured · Escape releases and pauses training':'Click the scene to capture the mouse · touch and controller controls are ready');
  trainingText('pause',connected?'Release controls / menu':'Pause / menu');
  $('reset').disabled=connected;

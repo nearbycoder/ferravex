@@ -38,7 +38,7 @@ fn narrow_inspector_reserves_complete_fixed_size_fields_and_readable_buttons() {
                 .width;
             let size = 17. * ((button.w - 12.) / advance).min(1.);
             assert!(size >= 14., "{width}: {label} at {size}");
-            assert!(button.y >= panel.y + 168.);
+            assert!(button.y >= panel.y + 44.);
             assert!(button.y + button.h <= panel.y + panel.h);
         }
         assert!(scene_rect(width, panel).h >= 190.);
@@ -82,9 +82,9 @@ fn narrow_world_and_scene_input_share_reserved_band_without_changing_pose_or_dep
         let height = 640.;
         let (panel, _) = footer_layout(width, height);
         let scene = scene_rect(width, panel);
-        assert_eq!(scene.y, 126.);
+        assert_eq!(scene.y, 44.);
         assert_eq!(scene.y + scene.h, panel.y);
-        assert!(!scene.contains(vec2(20., 100.)));
+        assert!(!scene.contains(vec2(20., 30.)));
         assert!(!scene.contains(vec2(20., panel.y + 1.)));
         let fitted = SceneCamera { camera, scene };
         assert!(fitted.depth());

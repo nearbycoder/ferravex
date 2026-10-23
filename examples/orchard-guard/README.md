@@ -56,4 +56,13 @@ cargo run --release -p orchard-guard -- --autoplay --smoke-frames 420 --screensh
 
 ## Browser player update
 
-Open **Details → Player tools** for screenshots, clean sharing links, frame limits, session timing, screen wake lock, accessibility preferences and settings backups. All shared player upgrades apply to this example. Read the [player guide](../../docs/PLAYER_GUIDE.md) for behavior and browser limits.
+Open **Game menu → Settings → Player tools** for screenshots, clean sharing links, frame limits, session timing, screen wake lock, accessibility preferences and settings backups. All shared player upgrades apply to this example. Read the [player guide](../../docs/PLAYER_GUIDE.md) for behavior and browser limits.
+
+## Compact browser controls
+
+On narrow screens, tap **Plot** to open the numbered plot palette, or select a
+plot on the board. The palette closes after selection. Prices remain on the
+build/upgrade buttons; the wave, pause and restart actions share one row.
+Default instructions and expanded wave-stat paragraphs are omitted from the
+playfield. The shared game menu provides help and remapping. Fullscreen uses the
+actual viewport, with the board and action dock fitting together.

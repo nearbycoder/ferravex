@@ -19,24 +19,24 @@ function runtime(id,w=320,h=640,auto=false){
  const status=()=>JSON.parse(new TextDecoder().decode(new Uint8Array(e.memory.buffer,e.golf_status_v1(),e.golf_status_v1_len())));
  const key=k=>{e.ferravex_key(k,1);e.ferravex_key(k,0);frame();frame();};
  const click=(x,y)=>{e.ferravex_pointer(x,y,0,0);e.ferravex_button(1,1);frame();e.ferravex_button(1,0);frame();frame();};
- const glyphs=()=>{const v=new Float32Array(e.memory.buffer,e.ferravex_vertices(),e.ferravex_vertex_count()*8);assert.ok(v.every(Number.isFinite));let found=false,count=0;for(let at=0;at<v.length;at+=8){const x=(v[at]+1)*w/2,y=(1-v[at+1])*h/2;const dark=Math.abs(v[at+4]-27/255)<1e-5&&Math.abs(v[at+5]-51/255)<1e-5;if(dark&&y>99&&y<130&&x>=11&&x<=w/2)found=true;const paper=Math.abs(v[at+4]-246/255)<1e-5&&Math.abs(v[at+5]-239/255)<1e-5;if(found&&paper)count++;}assert.ok(found);return count;};
+ const glyphs=()=>{const v=new Float32Array(e.memory.buffer,e.ferravex_vertices(),e.ferravex_vertex_count()*8);assert.ok(v.every(Number.isFinite));let found=false,count=0;for(let at=0;at<v.length;at+=8){const x=(v[at]+1)*w/2,y=(1-v[at+1])*h/2;const dark=Math.abs(v[at+4]-27/255)<1e-5&&Math.abs(v[at+5]-51/255)<1e-5;if(dark&&Math.abs(y-(h-212)/2)<0.01&&Math.abs(x-(w-Math.min(w-32,420))/2)<0.01)found=true;const paper=Math.abs(v[at+4]-246/255)<1e-5&&Math.abs(v[at+5]-239/255)<1e-5;if(found&&paper)count++;}assert.ok(found);return count;};
  frame();return{e,frame,key,browserKey,hold,click,status,glyphs,playing:()=>playing,hash:createHash('sha256').update(b).digest('hex')};
 }
 for(const id of ['mini-golf-2d','mini-golf-3d']){
  const menu=[];
- for(const [w,h]of [[1280,720],[390,640],[320,640]]){
+ for(const [w,h]of [[1280,720],[390,640],[320,640],[320,480],[844,390],[400,300]]){
   const r=runtime(id,w,h);menu.push(r.glyphs());assert.equal(r.status().strokes,0);r.key(0xff0d);assert.equal(r.status().strokes,0,'start does not putt');r.key(32);assert.equal(r.status().strokes,1);for(let i=0;i<240;i++)r.frame();assert.equal(r.status().phase,'Holed','default first putt earns the cup');
   r.key(0xff0d);assert.equal(r.status().hole,2);assert.equal(r.status().scores[0],1);
   r.browserKey('KeyP');const before=r.status();for(let i=0;i<40;i++)r.frame();assert.deepEqual(r.status(),before,'manual pause holds rules');r.key(0xffbf);assert.equal(r.e.ferravex_controls_open(),1);r.key(0xff1b);assert.equal(r.e.ferravex_controls_open(),0);for(let i=0;i<10;i++)r.frame();assert.deepEqual(r.status(),before,'Controls preserves manual pause');
   r.browserKey('KeyP');r.browserKey('KeyC');r.key(0xff0d);assert.equal(r.status().hole,2,'card return does not reset the hole');
   // All twelve practice buttons remain real UI, including the last row.
-  r.browserKey('KeyP');const by=h-69;r.click(w/2-60,by-52+22); // Pause > Practice
-  const tw=Math.min(w-24,610)-36,tx=(w-Math.min(w-24,610))/2+18;
-  r.click(tx+tw*.75,101+103+5*46+21);
+  r.browserKey('KeyP');const by=(h-264)/2;r.click(w/2-60,by+152+22); // Pause > Practice
+  const tw=Math.min(w-32,420)-32,tx=(w-Math.min(w-32,420))/2+16,cw=(tw-18)/4;
+  r.click(tx+3*(cw+6)+cw/2,(h-268)/2+54+2*50+22);
   assert.equal(r.status().hole,12);assert.equal(r.status().practice,true);
   console.log(`${id} ${w}x${h}: putt, cup, progression, pause, Controls, card and practice passed`);
  }
- assert.deepEqual(menu,[menu[0],menu[0],menu[0]],`${id}: all welcome-menu glyphs survive narrow wrapping`);
+ assert.ok(menu.every(n=>n===menu[0]),`${id}: all welcome-menu glyphs survive narrow wrapping`);
  {
   const r=runtime(id);r.browserKey('Enter');const power=r.status().power;r.hold('KeyW',24);assert.ok(r.status().power>power+0.1,'real browser W binding changes power');r.hold('KeyA',10);
   // Real touch journal. The owner alone supplies aim and release; cancellation

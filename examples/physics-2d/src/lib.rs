@@ -10,8 +10,8 @@
 //! ```no_run
 //! physics_2d::run();
 //! ```
+use ferravex_core::FrameStep;
 use ferravex_core::session::GameSession;
-use ferravex_core::{FrameStats, FrameStep};
 use ferravex_physics::d2::{
     self, ColliderBuilder, JointBuilder, PhysicsWorld, QueryOptions, QueryReport, RayHit,
     RigidBodyBuilder, RigidBodyHandle,
@@ -353,6 +353,7 @@ impl Inspection {
     fn body(&self, sandbox: &Sandbox) -> Option<RigidBodyHandle> {
         self.hits
             .iter()
+            .take(self.report.written)
             .flatten()
             .filter_map(|hit| hit.body)
             .find(|handle| sandbox.bodies.iter().any(|body| body.handle == *handle))
@@ -489,14 +490,13 @@ impl Lab {
         let state = if sleep.sleeping {
             "ASLEEP"
         } else if sleep.wake_requested {
-            "WAKE PENDING"
+            "WAKING"
         } else {
             "AWAKE"
         };
         format!(
-            "#{} {shape} {state} / quiet {:.2}s / speed {:.2} / {contacts} contacts",
+            "#{} {shape} {state} / v{:.1} / {contacts} contacts",
             index + 1,
-            sleep.quiet_time,
             rigid.linvel().length()
         )
     }
@@ -631,6 +631,7 @@ fn window_conf() -> Conf {
     ferravex_render::window_conf("Ferravex / 2D physics laboratory")
 }
 
+#[cfg(test)]
 fn action_hint(input: &PlayerInput, action: &str) -> String {
     let mut buffer = [0; 512];
     input
@@ -665,12 +666,10 @@ async fn game() {
     let mut lab = Lab::new();
     let mut sound = GameAudio::new();
     let mut pulse_visual = PulseVisual::default();
-    let mut stats = FrameStats::<90>::default();
     let mut player_input = PlayerInput::preset("physics-2d", Preset::Lab2);
     register_lab_actions(&mut player_input);
     loop {
         ui::warm_up_font();
-        stats.record(get_frame_time());
         // Editing and manual stepping remain available while the session pauses.
         // Controls/Details and focus still suspend all sandbox input and time.
         player_input.sample(true);
@@ -682,7 +681,7 @@ async fn game() {
         if !active {
             lab.pending = LabCommands::default();
         }
-        let layout = presentation::LabLayout::new(screen_width(), screen_height());
+        let layout = presentation::LabLayout::compact(screen_width(), screen_height());
         let narrow = layout.narrow;
         let footer_height = layout.footer_height;
         let footer_y = layout.footer_y;
@@ -766,7 +765,6 @@ async fn game() {
         });
         if reset {
             pulse_visual.ring = None;
-            stats.clear();
         }
         if lab.pulsed {
             pulse_visual.accepted_pulse(lab.sandbox.pulse_center);
@@ -945,27 +943,7 @@ async fn game() {
             );
         }
         ferravex_render::set_world_colors(false);
-        if narrow {
-            presentation::narrow_header(
-                [
-                    &action_hint(&player_input, "drop"),
-                    &action_hint(&player_input, "pause"),
-                    &action_hint(&player_input, "inspect"),
-                ],
-                screen_width(),
-            );
-        } else {
-            let hints = format!(
-                "{}: drop / {}: pause / {}: step / {}: pulse / {}: inspect / {}: reset",
-                action_hint(&player_input, "drop"),
-                action_hint(&player_input, "pause"),
-                action_hint(&player_input, "step"),
-                action_hint(&player_input, "pulse"),
-                action_hint(&player_input, "inspect"),
-                action_hint(&player_input, "restart")
-            );
-            ui::header("2D RIGID BODIES", "Gravity, in two dimensions.", &hints);
-        }
+        draw_text("PHYSICS 2D", 16., 29., 18., ui::INK);
         ui::panel(Rect::new(
             16.,
             footer_y,
@@ -1002,7 +980,7 @@ async fn game() {
                 },
             );
         }
-        let sleep = sandbox.physics.sleep_stats();
+
         let state = if !active {
             "SUSPENDED"
         } else if lab.session.is_paused() {
@@ -1010,112 +988,32 @@ async fn game() {
         } else {
             "RUNNING"
         };
-        let shape = if lab.ball { "BALL" } else { "CRATE" };
-        let status_y = footer_y + 72.;
-        let label = |text: &str, slot: usize, color: Color| {
-            if narrow {
-                presentation::wrapped_label(
-                    text,
-                    28.,
-                    presentation::slot_y(footer_y, screen_width(), slot),
-                    screen_width() - 56.,
-                    color,
-                );
+        let status_y = footer_y
+            + if screen_width() < 360. {
+                164.
+            } else if narrow {
+                120.
             } else {
-                fitted_label(
-                    text,
-                    28.,
-                    status_y + slot as f32 * 21.,
-                    screen_width() - 56.,
-                    color,
-                );
-            }
-        };
-        let hint = |action| {
-            let hint = action_hint(&player_input, action);
-            if narrow {
-                presentation::bounded_hint(&hint, 144.).to_owned()
-            } else {
-                hint
-            }
-        };
-        label(
-            &format!(
-                "{state} / {shape} / {} of {MAX_BODIES} bodies / {} awake / {} asleep",
-                sandbox.bodies.len(),
-                sleep.awake_bodies,
-                sleep.sleeping_bodies
-            ),
-            0,
+                76.
+            };
+        // Controls are visible; repeating their keyboard bindings and a paragraph
+        // of per-frame engine diagnostics adds no interaction affordance.
+        fitted_label(
+            &format!("{state} / {} BODIES", sandbox.bodies.len()),
+            28.,
+            status_y,
+            screen_width() - 56.,
             ui::INK,
         );
-        let pulse_status = if sandbox.pulse_time > 0. {
-            format!("pulse {:.2}s", sandbox.pulse_time)
-        } else {
-            "pulse ready".into()
-        };
-        let settings = if narrow {
-            format!("120 Hz / tick {} / {pulse_status}", lab.session.tick())
-        } else {
-            format!(
-                "120 Hz / tick {} / {pulse_status} / {:.1} ms mean / {:.1} ms p95",
-                lab.session.tick(),
-                stats.mean_ms(),
-                stats.percentile_ms(95.).unwrap_or(0.)
-            )
-        };
-        label(&settings, 1, ui::MUTED);
-        let idle_hint = if lab.session.is_paused() {
-            format!(
-                "Drops stay still. {} / STEP advances one tick.",
-                hint("step")
-            )
-        } else {
-            format!(
-                "{}: place / {}: inspect at cursor",
-                hint("primary"),
-                hint("inspect")
-            )
-        };
-        label(
-            if lab.feedback_time > 0. {
-                lab.feedback
-            } else {
-                &idle_hint
-            },
-            2,
-            ui::AMBER,
-        );
-        let query_status = match &inspection {
-            Some(Ok(query)) => format!(
-                "query {} / {} collider hits{}",
-                query.report.written,
-                query.report.total,
-                if query.report.is_truncated() {
-                    " (truncated)"
-                } else {
-                    ""
-                }
-            ),
-            Some(Err(_)) => "query invalid".into(),
-            None => "query: move cursor into scene".into(),
-        };
-        let starts = sandbox
-            .physics
-            .contact_events()
-            .iter()
-            .filter(|event| matches!(event, ContactEvent::Started(..)))
-            .count();
-        let stops = sandbox.physics.contact_events().len() - starts;
-        label(
-            &format!(
-                "Last tick: {} pairs / +{starts} -{stops} / {query_status}",
-                sandbox.physics.contacts().count()
-            ),
-            3,
-            ui::MUTED,
-        );
-        label(&lab.selected_label(), 4, ui::INK);
+        if lab.selected.is_some() {
+            let selected = lab.selected_label();
+            for (row, line) in presentation::label_lines(&selected, screen_width() - 56.)
+                .take(2)
+                .enumerate()
+            {
+                draw_text(line, 28., status_y + 24. + row as f32 * 18., 16., ui::INK);
+            }
+        }
         if player_input.gameplay_active() && player_input.cursor_is_virtual() {
             draw_circle_lines(pointer.x, pointer.y, 5., 1.3, WHITE);
         }

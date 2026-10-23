@@ -122,14 +122,12 @@ fn menu_text_blocks_keep_all_lines_at_readable_sizes_and_clear_actions_and_foote
                         copy.iter()
                             .any(|text| text == menu_explanation(mode, played))
                     );
-                    if long {
-                        assert!(copy.iter().any(|text| text == "Reload: Unbound"));
-                        assert!(copy.iter().any(|text| text == "Menu: Q"));
-                        assert!(!copy.iter().any(|text| text == "Menu: Esc"));
-                        if w == 320. {
-                            assert!(copy.iter().any(|text| text == "Fire: see Controls (F2)"));
-                        }
-                    }
+                    assert!(
+                        !copy
+                            .iter()
+                            .any(|text| text.starts_with("Reload:") || text.contains("F2: move")),
+                        "binding lists belong in the on-demand Controls editor"
+                    );
                     let mut ui = Ui::new();
                     host_frame(0., w as u32, h as u32, || {
                         ui.begin(

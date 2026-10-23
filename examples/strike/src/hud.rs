@@ -331,8 +331,8 @@ fn menu_explanation(mode: crate::host::Mode, has_played: bool) -> &'static str {
     match mode {
         Mode::Network => "Match continues in menus.\nYou remain vulnerable.",
         Mode::Replay => "Replay continues in menus.\nUse Pause replay to pause.",
-        Mode::Practice if has_played => "Practice paused.\nResume when you are ready.",
-        Mode::Practice => "Train against five bots.\nRespawns are automatic.",
+        Mode::Practice if has_played => "",
+        Mode::Practice => "5 BOTS",
     }
 }
 
@@ -361,8 +361,8 @@ fn menu_items(
     height: f32,
     mode: crate::host::Mode,
     has_played: bool,
-    touch: bool,
-    input: &PlayerInput,
+    _touch: bool,
+    _input: &PlayerInput,
     mut emit: impl FnMut(MenuItem<'_>),
 ) {
     use crate::host::Mode;
@@ -388,7 +388,7 @@ fn menu_items(
     } else {
         100.
     };
-    let content_height = title + 232. + secondary_height;
+    let content_height = title + 100. + secondary_height;
     // Leave a separate bottom band for the existing recording/replay status.
     let top = ((h - 150. - content_height) * 0.5).max(12.);
     let rect = |x: f32, y: f32, width: f32, height: f32| UiRect {
@@ -480,49 +480,7 @@ fn menu_items(
                 false,
             ));
         }
-        y += 44.;
     }
-    y += 4.;
-    for (action, label) in [
-        ("fire", "Fire"),
-        ("jump", "Jump"),
-        ("reload", "Reload"),
-        ("roster", "Players"),
-        ("pause", "Menu"),
-    ] {
-        let mut buffer = [0; 64];
-        let key = menu_binding(input, action, label, content_width, &mut buffer);
-        emit(MenuItem::Text(
-            rect(0., y, content_width, 14.),
-            format_args!("{label}: {key}"),
-            14. * scale,
-            MUTED,
-        ));
-        y += 14.;
-    }
-    y += 4.;
-    emit(MenuItem::Text(
-        rect(0., y, content_width, 28.),
-        format_args!("F2: move / aim / bindings\nTab/arrows + Enter: select"),
-        14. * scale,
-        MUTED,
-    ));
-    y += 32.;
-    emit(MenuItem::Text(
-        rect(0., y, content_width, 28.),
-        format_args!(
-            "{}",
-            if touch {
-                "Left move / right swipe aim\nTouch layout: F2 Controls."
-            } else if cfg!(target_arch = "wasm32") {
-                "Start or resume, then click\nthe view to capture mouse."
-            } else {
-                "Start or resume to capture\nthe mouse for aiming."
-            }
-        ),
-        14. * scale,
-        INK,
-    ));
 }
 
 pub fn menu(

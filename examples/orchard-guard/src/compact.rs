@@ -22,31 +22,33 @@ pub(super) struct Layout {
 
 impl Layout {
     pub fn new(screen: Vec2) -> Self {
-        let board = Rect::new(0., 48., screen.x, (screen.x * 590. / 1200.).min(200.));
         let width = (screen.x - 2. * MARGIN).max(1.);
+        let board = Rect::new(0., 48., screen.x, (screen.y - 200.).max(60.));
+        let dock = screen.y - 144.;
         let column = (width - 3. * GAP) / 4.;
-        let y = board.y + board.h + GAP;
+        // Plot choices are an on-demand palette, not a second copy of the board.
         let plots = std::array::from_fn(|i| {
             Rect::new(
                 MARGIN + (i % 4) as f32 * (column + GAP),
-                y + (i / 4) as f32 * (44. + GAP),
+                dock - 108. + (i / 4) as f32 * 50.,
                 column,
                 44.,
             )
         });
-        let detail = Rect::new(MARGIN, y + 100., width, 64.);
-        let pair = |y, height| {
-            let half = (width - GAP) * 0.5;
-            [
-                Rect::new(MARGIN, y, half, height),
-                Rect::new(MARGIN + half + GAP, y, half, height),
-            ]
-        };
-        let build = pair(detail.y + detail.h + GAP, 48.);
-        let wave = Rect::new(MARGIN, build[0].y + 54., width, 44.);
-        let menu = pair(wave.y + 50., 44.);
-        let preview = Rect::new(MARGIN, menu[0].y + 50., width, 48.);
-        let notice = Rect::new(MARGIN, preview.y + 54., width, 48.);
+        let detail = Rect::new(108., dock + 4., (width - 100.).max(1.), 38.);
+        let half = (width - GAP) * 0.5;
+        let build = [
+            Rect::new(MARGIN, dock + 46., half, 44.),
+            Rect::new(MARGIN + half + GAP, dock + 46., half, 44.),
+        ];
+        let third = (width - 2. * GAP) / 3.;
+        let wave = Rect::new(MARGIN, dock + 96., third, 44.);
+        let menu = [
+            Rect::new(MARGIN + third + GAP, dock + 96., third, 44.),
+            Rect::new(MARGIN + 2. * (third + GAP), dock + 96., third, 44.),
+        ];
+        let preview = Rect::new(MARGIN, 52., width - 64., 18.);
+        let notice = Rect::new(MARGIN, 76., width, 36.);
         Self {
             screen,
             board,
@@ -130,18 +132,17 @@ pub(super) fn hud(
     layout: Layout,
     campaign: &Campaign,
     save_error: bool,
-    input: &PlayerInput,
+    _input: &PlayerInput,
+    picker: bool,
 ) {
     let g = &campaign.game;
+    if campaign.session.is_paused() || g.outcome != Outcome::Playing {
+        return;
+    }
     ui.panel(area(Rect::new(0., 0., layout.screen.x, 48.)), CREAM)
         .unwrap();
     ui.panel(
-        area(Rect::new(
-            0.,
-            layout.board.y + layout.board.h,
-            layout.screen.x,
-            (layout.screen.y - layout.board.y - layout.board.h).max(0.),
-        )),
+        area(Rect::new(0., layout.screen.y - 148., layout.screen.x, 148.)),
         CREAM,
     )
     .unwrap();
@@ -177,66 +178,41 @@ pub(super) fn hud(
         )
         .unwrap();
     }
-    for (i, rect) in layout.plots.into_iter().enumerate() {
-        control(
-            ui,
-            PLOT_ID + i as u64,
-            rect,
-            &(i + 1).to_string(),
-            g.outcome == Outcome::Playing && !campaign.session.is_paused(),
-            g.selected == i,
-        );
+    if picker {
+        ui.panel(
+            area(Rect::new(0., layout.plots[0].y - 8., layout.screen.x, 108.)),
+            CREAM,
+        )
+        .unwrap();
+        for (i, rect) in layout.plots.into_iter().enumerate() {
+            control(
+                ui,
+                PLOT_ID + i as u64,
+                rect,
+                &(i + 1).to_string(),
+                g.outcome == Outcome::Playing && !campaign.session.is_paused(),
+                g.selected == i,
+            );
+        }
     }
+    control(
+        ui,
+        9,
+        Rect::new(MARGIN, layout.screen.y - 140., 92., 44.),
+        &format!("PLOT {}", g.selected + 1),
+        true,
+        picker,
+    );
     let detail = if let Some(tower) = g.towers[g.selected] {
-        let next = Tower {
-            level: (tower.level + 1).min(2),
-            ..tower
-        };
         format!(
-            "PLOT {}: {} L{}\n{:.0} DMG / {:.0} RANGE / {:.2}S\nNEXT: {:.0} DMG / {:.0}R / {:.2}S\n{}",
-            g.selected + 1,
+            "{} L{}\n{:.0} DMG / {:.0}R",
             tower.kind.name(),
             tower.level + 1,
             tower.damage(),
-            tower.range(),
-            tower.reload(),
-            next.damage(),
-            next.range(),
-            next.reload(),
-            availability(
-                g.upgrade_status(g.selected),
-                if tower.kind == Kind::Frost {
-                    "SLOWS TO 45% SPEED"
-                } else {
-                    "TARGETS NEAREST EXIT"
-                }
-            )
+            tower.range()
         )
     } else {
-        let seed = Tower::planted(Kind::Seed);
-        let frost = Tower::planted(Kind::Frost);
-        let funds = match (
-            g.build_status(g.selected, Kind::Seed),
-            g.build_status(g.selected, Kind::Frost),
-        ) {
-            (
-                Err(ActionError::Funds { missing: seed }),
-                Err(ActionError::Funds { missing: frost }),
-            ) => format!("NEED {seed} SEED / {frost} FROST COINS"),
-            (_, Err(ActionError::Funds { missing })) => format!("FROST NEEDS {missing} MORE COINS"),
-            _ => "FROST SLOWS TO 45% SPEED".into(),
-        };
-        format!(
-            "EMPTY PLOT {}\nSEED {:.0} DMG / {:.0}R / {:.2}S\nFROST {:.0} DMG / {:.0}R / {:.2}S\n{}",
-            g.selected + 1,
-            seed.damage(),
-            seed.range(),
-            seed.reload(),
-            frost.damage(),
-            frost.range(),
-            frost.reload(),
-            funds
-        )
+        "EMPTY PLOT\nChoose a tower".into()
     };
     text(ui, layout.detail, &detail, INK);
     if let Some(tower) = g.towers[g.selected] {
@@ -244,29 +220,27 @@ pub(super) fn hud(
         control(
             ui,
             3,
-            Rect::new(layout.build[0].x, layout.build[0].y, layout.detail.w, 48.),
+            Rect::new(
+                layout.build[0].x,
+                layout.build[0].y,
+                layout.screen.x - 16.,
+                44.,
+            ),
             &if tower.level == 2 {
                 "FULLY GROWN".into()
             } else {
-                format!(
-                    "UPGRADE / {} COINS [{}]",
-                    tower.upgrade_cost(),
-                    hint(input, "upgrade")
-                )
+                format!("UPGRADE {} COINS", tower.upgrade_cost())
             },
             status.is_ok(),
             false,
         );
     } else {
-        for (i, kind, action, name) in [
-            (0, Kind::Seed, "select_one", "SEED"),
-            (1, Kind::Frost, "select_two", "FROST"),
-        ] {
+        for (i, kind, name) in [(0, Kind::Seed, "SEED"), (1, Kind::Frost, "FROST")] {
             control(
                 ui,
                 i as u64 + 1,
                 layout.build[i],
-                &format!("{name} {} [{}]", kind.price(), hint(input, action)),
+                &format!("{name} {}", kind.price()),
                 g.build_status(g.selected, kind).is_ok(),
                 false,
             );
@@ -277,9 +251,9 @@ pub(super) fn hud(
         4,
         layout.wave,
         &if g.active {
-            format!("{} PESTS LEFT", g.pests.len() + usize::from(g.remaining))
+            format!("{} LEFT", g.pests.len() + usize::from(g.remaining))
         } else {
-            format!("SEND WAVE {} [{}]", g.wave + 1, hint(input, "wave"))
+            format!("WAVE {}", g.wave + 1)
         },
         g.wave_status().is_ok(),
         false,
@@ -293,41 +267,25 @@ pub(super) fn hud(
         false,
     );
     control(ui, 5, layout.menu[1], "RESTART", true, false);
-    let preview = if let Some(next) = g.next_wave() {
-        format!(
-            "NEXT: {} PESTS / {} RUNNERS\nHEALTH {:.0}/{:.0} SPEED {:.0}/{:.0}\nEVERY {:.2}S / +{} COINS",
-            next.spec.count,
-            next.fast_count,
-            next.spec.hp,
-            next.spec.hp * next.spec.fast_factor,
-            next.spec.speed,
-            next.spec.fast_speed,
-            next.spec.interval,
-            next.spec.reward
-        )
-    } else {
-        format!(
-            "{} ON PATH / {} ARRIVING\nBuild and upgrade during waves.",
-            g.pests.len(),
-            g.remaining
-        )
-    };
-    text(ui, layout.preview, &preview, GREEN);
-    let message = if save_error {
-        "Save unavailable. Keep this window open."
-    } else {
-        campaign
-            .notice()
-            .unwrap_or(if g.towers.iter().all(Option::is_none) {
-                "Choose a plot, then plant a tower before sending a wave."
-            } else {
-                "Select plots above. Seed hits hard; Frost slows pests."
-            })
-    };
-    text(ui, layout.notice, message, INK);
+    if !g.active
+        && let Some(next) = g.next_wave()
+    {
+        text(
+            ui,
+            layout.preview,
+            &format!("NEXT: {} PESTS", next.spec.count),
+            GREEN,
+        );
+    }
+    if save_error {
+        text(ui, layout.notice, "SAVE UNAVAILABLE", CREAM);
+    } else if let Some(message) = campaign.notice() {
+        ui.panel(area(layout.notice), GREEN).unwrap();
+        text(ui, layout.notice, notice_text(message), CREAM);
+    }
 }
 
-pub(super) fn overlay(ui: &mut Ui, layout: Layout, campaign: &Campaign, input: &PlayerInput) {
+pub(super) fn overlay(ui: &mut Ui, layout: Layout, campaign: &Campaign, _input: &PlayerInput) {
     let g = &campaign.game;
     let paused = campaign.session.is_paused();
     if !paused && g.outcome == Outcome::Playing {
@@ -341,9 +299,9 @@ pub(super) fn overlay(ui: &mut Ui, layout: Layout, campaign: &Campaign, input: &
     .unwrap();
     let card = Rect::new(
         8.,
-        ((layout.screen.y - 284.) * 0.5).max(0.),
+        ((layout.screen.y - 220.) * 0.5).max(0.),
         layout.screen.x - 16.,
-        284.,
+        220.,
     );
     ui.panel(area(card), CREAM).unwrap();
     let line = |y, height| Rect::new(card.x + 8., card.y + y, card.w - 16., height);
@@ -371,36 +329,10 @@ pub(super) fn overlay(ui: &mut Ui, layout: Layout, campaign: &Campaign, input: &
         ),
         GREEN,
     );
-    text(
-        ui,
-        line(88., 56.),
-        if paused {
-            "Pests, reloads and the harvest clock are frozen."
-        } else if g.outcome == Outcome::Won {
-            "Every wave cleared. Plant again for a fresh run."
-        } else {
-            "Cover bends and mix Seed and Frost towers. Try a new planting plan."
-        },
-        INK,
-    );
     if paused {
-        control(
-            ui,
-            7,
-            line(156., 44.),
-            &format!("RESUME [{}]", hint(input, "pause")),
-            true,
-            false,
-        );
+        control(ui, 7, line(100., 44.), "RESUME", true, false);
     }
-    control(
-        ui,
-        8,
-        line(210., 44.),
-        &format!("PLANT AGAIN [{}]", hint(input, "restart")),
-        true,
-        false,
-    );
+    control(ui, 8, line(154., 44.), "PLANT AGAIN", true, false);
 }
 
 #[cfg(test)]
@@ -409,7 +341,15 @@ mod tests {
 
     #[test]
     fn portrait_controls_remain_readable_and_contained() {
-        for (width, height) in [(320., 734.), (390., 769.), (540., 776.), (899., 776.)] {
+        for (width, height) in [
+            (320., 480.),
+            (390., 568.),
+            (844., 390.),
+            (320., 734.),
+            (390., 769.),
+            (540., 776.),
+            (899., 776.),
+        ] {
             let layout = Layout::new(vec2(width, height));
             for rect in layout
                 .plots
@@ -427,8 +367,11 @@ mod tests {
                 );
             }
             assert!(layout.notice.y + layout.notice.h <= height);
-            assert!(layout.plots[0].y >= layout.board.y + layout.board.h);
-            for label in ["SEED 60 [1]", "FROST 80 [2]"] {
+            assert!(
+                layout.plots[0].y > layout.board.y,
+                "palette overlays the board only on demand"
+            );
+            for label in ["SEED 60", "FROST 80"] {
                 assert!(
                     label.len() as f32 * FONT * 0.75 <= layout.build[0].w - 16.,
                     "{label} at {width}"
@@ -453,7 +396,7 @@ mod tests {
             input::host_frame(0., 320, 734, || {
                 input.sample(true);
                 ui.begin(Viewport::responsive([320., 734.], [0.; 4]).unwrap());
-                hud(ui, layout, campaign, false, input);
+                hud(ui, layout, campaign, false, input, true);
                 overlay(ui, layout, campaign, input);
                 ui.finish_player(input, true);
                 let action = hud_action(ui, campaign.game.level.plots.len());
@@ -522,7 +465,7 @@ mod tests {
             assert!(layout.pointer(vec2(100., 20.)).is_none());
             assert!(
                 layout
-                    .pointer(vec2(100., layout.plots[0].y + 22.))
+                    .pointer(vec2(100., layout.build[0].y + 22.))
                     .is_none()
             );
         }
