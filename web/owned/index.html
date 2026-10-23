@@ -81,6 +81,15 @@
       #training { top: 8px; padding: 6px 10px; }
       #capture-status { display: none; }
     }
+    #menu{display:grid;align-content:center;justify-items:center;padding:24px;background:#101c22c9}
+    #menu[hidden]{display:none}
+    #menu>p,#menu>h1,#menu>.row,#menu>details{width:min(100%,420px)}
+    #menu h1{font-size:32px;margin:0 0 8px}
+    #menu-objective,#menu-status:empty,#capture-status{display:none}
+    .courtyard-guide{margin-top:16px}.courtyard-guide summary{cursor:pointer;min-height:44px;padding:10px 0}
+    #training{background:#101c22b0;border:0;padding:6px 10px;max-width:calc(100% - 88px);font-size:13px}
+    #menu>.row{display:grid;grid-template-columns:1fr 1fr}
+    #menu>.row>button:first-child{grid-column:1/-1}
   </style>
 </head>
 <body class="courtyard-host">
@@ -105,9 +114,9 @@
       <p id="capture-status" role="status" aria-atomic="true"></p>
     </section>
     <section id="menu" aria-labelledby="courtyard-title" tabindex="-1">
-      <div class="eyebrow">Original Rust engine · no third-party runtime libraries</div>
+
       <h1 id="courtyard-title">Courtyard</h1>
-      <p id="courtyard-intro">Learn movement and aim against moving operators in a stone courtyard. Complete four drills, then keep practicing: move five meters, fire a shot, finish a reload and hit an operator. The operators do not shoot back in offline training.</p>
+      <p id="courtyard-intro">Move, aim and complete four training drills.</p>
       <p id="menu-status" role="status" aria-atomic="true">Preparing training…</p>
       <p id="menu-objective">Move five meters · Fire a shot · Finish a reload · Hit an operator</p>
       <div class="row">
@@ -115,7 +124,7 @@
         <button id="overview" class="secondary" type="button" disabled>2D overview</button>
         <button id="edit" class="secondary" type="button" disabled aria-controls="tools" aria-expanded="false">Scene tools</button>
       </div>
-      <p id="courtyard-keyboard">Use <kbd>Tab</kbd> and <kbd>Shift</kbd> + <kbd>Tab</kbd> to reach page controls; <kbd>Enter</kbd> or <kbd>Space</kbd> activates a focused button. Choose <strong>Enter / Resume training</strong> to focus the canvas and capture the mouse. <strong>2D overview</strong> starts without mouse capture; movement stays active. With the canvas focused, <kbd>Enter</kbd> starts or resumes the first-person view. Click the scene if mouse capture is needed.</p>
+      <details class="courtyard-guide"><summary>How to play</summary><p id="courtyard-keyboard">Use <kbd>Tab</kbd> and <kbd>Shift</kbd> + <kbd>Tab</kbd> to reach page controls; <kbd>Enter</kbd> or <kbd>Space</kbd> activates a focused button. Choose <strong>Enter / Resume training</strong> to focus the canvas and capture the mouse. <strong>2D overview</strong> starts without mouse capture; movement stays active. With the canvas focused, <kbd>Enter</kbd> starts or resumes the first-person view. Click the scene if mouse capture is needed.</p>
       <h2>Default keyboard and mouse controls</h2>
       <p id="courtyard-remapping">Saved or remapped bindings may differ from these defaults and the drill hints. Open <strong>Controls</strong> or press <kbd>F2</kbd> with the canvas focused to inspect or change bindings. <kbd>Tab</kbd> is reserved for page navigation here. In Controls, use <kbd>Up</kbd> / <kbd>Down</kbd> and <kbd>Enter</kbd> to select a binding. <kbd>Escape</kbd> cancels an active remap; otherwise it closes Controls. <kbd>F2</kbd> also closes Controls.</p>
       <dl class="courtyard-bindings" aria-describedby="courtyard-remapping">
@@ -128,7 +137,7 @@
       </dl>
       <p id="courtyard-session">Release mouse capture with <kbd>Escape</kbd> before navigating the page. Leaving the canvas for a page control, switching away from the window, or opening Controls releases gameplay input. Offline training keeps its progress and waits for an explicit resume. Connected matches stay live while your local controls are released. Closing Controls does not resume training. On short screens, scroll beside the scene using the labelled strip; keyboard users can focus that strip and use arrow keys. Moving focus out of the scene pauses offline training.</p>
       <p><strong>Scene tools</strong> opens the scene, shader, replay and LAN tools. <kbd>Escape</kbd> or <strong>Close</strong> returns to this menu. <strong>Details → Player tools</strong> contains presentation and accessibility settings, screenshots and settings backups. Close Details with <kbd>Escape</kbd> or <strong>Done</strong> to return focus to the canvas. Fullscreen may consume the first Escape to exit.</p>
-      <noscript><p>JavaScript is required to load Courtyard. You can still read this guide and return to <a href="../">all games</a>.</p></noscript>
+      </details><noscript><p>JavaScript is required to load Courtyard. You can still read this guide and return to <a href="../">all games</a>.</p></noscript>
     </section>
     <aside id="tools" hidden aria-labelledby="courtyard-tools-title">
       <h2 id="courtyard-tools-title">Scene tools</h2>

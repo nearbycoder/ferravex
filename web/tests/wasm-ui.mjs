@@ -118,17 +118,45 @@ for(const width of [1280,390,320]){
   }
   return out;
  };
- const hud=findPanel(.88),countdown=findPanel(.94);
- const header=runs(hud+48,countdown).filter(r=>r.top<94);
- assert.equal(header.length,7,'title, lap, gates, two timers, speed and unit are rendered');
+ const hud=findPanel(.78),countdown=findPanel(.94);
+ const header=runs(hud+48,countdown).filter(r=>r.top<80);
+ assert.equal(header.length,5,'lap, speed, lap time, gates and race time are rendered');
  for(const r of header)assert.ok(r.left>=8&&r.right<=width-8,`rally HUD stays inside ${width}px viewport: ${JSON.stringify(r)}`);
- const [title,lap,gates,lapTime,raceTime,speed,unit]=header;
- assert.ok(unit.left-speed.right>=8,'speed and KM/H have a visible gap');
- assert.ok(speed.left-title.right>=8,'title and speed remain separate');
- assert.ok(lapTime.left-lap.right>=8&&raceTime.left-gates.right>=8,'timers remain separate from lap and gate progress');
+ const [lap,speed,lapTime,gates,raceTime]=header;
+ assert.ok(speed.left-lap.right>=8,'lap and speed stay separate');
+ assert.ok(speed.right<=width-72,'the fullscreen menu corner stays clear');
+ assert.ok(raceTime.left-gates.right>=8,'race time remains separate from gate progress');
  const [left,top]=point(countdown),[right,bottom]=point(countdown+40);
  const labels=runs(countdown+48,v.length);
  assert.equal(labels.length,3,'ready, countdown number and starting instruction are rendered');
  for(const r of labels)assert.ok(r.left>=left+10&&r.right<=right-10&&r.top>=top+10&&r.bottom<=bottom-10,`countdown text stays inside its panel at ${width}px: ${JSON.stringify(r)}`);
  console.log(`pocket-rally actual glyph bounds, speed spacing and countdown panel passed at ${width}x${height}`);
+}
+
+// Actual Dune glyph cells: compact lap and timer must leave each other and the
+// host's 44px menu corner clear, rather than merely keeping their anchor points.
+for(const [width,height] of [[320,480],[390,844],[844,390]]){
+ const {e,frame}=runtime('dune-skimmer');frame(width,height);
+ const v=new Float32Array(e.memory.buffer,e.ferravex_vertices(),e.ferravex_vertex_count()*8);
+ const bounds=(color,size,maxY=32)=>{
+  const points=[];
+  for(let at=0;at+48<=v.length;at+=48){
+   if(!color.every((c,n)=>Math.abs(v[at+4+n]-c)<1e-5))continue;
+   const q=Array.from({length:6},(_,i)=>[(v[at+i*8]+1)*width/2,(1-v[at+i*8+1])*height/2]);
+   const ys=q.map(p=>p[1]),xs=q.map(p=>p[0]);
+   if(Math.max(...ys)>maxY||Math.min(...ys)<0||Math.abs(Math.max(...ys)-Math.min(...ys)-size/8)>.01)continue;
+   points.push(...q);
+  }
+  assert.ok(points.length>20,'real header bitmap glyphs exist');
+  return {left:Math.min(...points.map(p=>p[0])),right:Math.max(...points.map(p=>p[0]))};
+ };
+ if(width<600){
+  const lap=bounds([1,1,1,1],14),timer=bounds([1,1,1,1],20);
+  assert.ok(lap.right+8<=timer.left,`lap and timer overlap at ${width}: ${JSON.stringify({lap,timer})}`);
+  assert.ok(timer.right<=width-72,'timer clears the fullscreen menu');
+ }else{
+  const gate=bounds([56/255,159/255,151/255,1],14,52);
+  assert.ok(gate.right<=width-72,'gate counter clears the fullscreen menu');
+ }
+ console.log(`dune-skimmer compact lap/timer spacing passed at ${width}x${height}`);
 }

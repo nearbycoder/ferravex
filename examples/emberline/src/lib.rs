@@ -935,9 +935,6 @@ async fn game() {
             hud.draw(&game, &player_input);
         } else {
             let collected = game.embers.iter().filter(|(_, found)| *found).count();
-            let left = ControlHint::new(&player_input, "move_left");
-            let right = ControlHint::new(&player_input, "move_right");
-            let axis = ControlHint::new(&player_input, "move_x");
             let jump = ControlHint::new(&player_input, "jump");
             let pause = ControlHint::new(&player_input, "pause");
             let restart = ControlHint::new(&player_input, "restart");
@@ -988,8 +985,8 @@ async fn game() {
             );
             let ember_count = format!("{collected} / {}", game.embers.len());
             let ember_count_x = WIDTH - 32. - measure_text(&ember_count, None, 23, 1.).width;
-            diamond(vec2(ember_count_x - 20., 38.0), 8.0, ORANGE);
-            label(&ember_count, ember_count_x, 45.0, 23.0, CREAM);
+            diamond(vec2(ember_count_x - 20., 70.0), 8.0, ORANGE);
+            label(&ember_count, ember_count_x, 77.0, 23.0, CREAM);
             if game.ember_inventory.count(1) >= 3 {
                 label(
                     if game.air_jump_used {
@@ -1003,32 +1000,7 @@ async fn game() {
                     GREEN,
                 );
             }
-            if game.elapsed < 7.0 && !touch_mode && game.session.is_playing() {
-                let movement_hint = if axis.text() == "Unbound" {
-                    format!("LEFT {}   RIGHT {}", left.text(), right.text())
-                } else {
-                    format!(
-                        "LEFT {}   RIGHT {}   AXIS {}",
-                        left.text(),
-                        right.text(),
-                        axis.text()
-                    )
-                };
-                fitted_centered_label(&movement_hint, WIDTH * 0.5, 652., WIDTH - 68., 15., CREAM);
-                fitted_centered_label(
-                    &format!(
-                        "JUMP {} TAP / HOLD   PAUSE {}   RESTART {}   F2 CONTROLS",
-                        jump.text(),
-                        pause.text(),
-                        restart.text()
-                    ),
-                    WIDTH * 0.5,
-                    680.,
-                    WIDTH - 68.,
-                    15.,
-                    CREAM,
-                );
-            }
+
             if touch_mode
                 && game.session.is_playing()
                 && !player_input.touch_customized()

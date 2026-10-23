@@ -1,8 +1,5 @@
-use crate::{INK, sim::Run, text, trial::Trial};
-use ferravex_render::{
-    input::{HintDevice, PlayerInput},
-    prelude::*,
-};
+use crate::{sim::Run, text, trial::Trial};
+use ferravex_render::{input::PlayerInput, prelude::*};
 
 pub(crate) fn hint(player: &PlayerInput, action: &str) -> String {
     let mut buffer = [0; 512];
@@ -100,70 +97,6 @@ pub(crate) fn notice(run: &Run, trial: &Trial, player: &PlayerInput) -> Option<(
     } else {
         None
     }
-}
-
-pub(crate) fn controls(player: &PlayerInput) {
-    let roll = if player.current_device() == HintDevice::KeyboardMouse {
-        format!(
-            "ROLL {} / {} / {} / {}",
-            hint(player, "move_forward"),
-            hint(player, "move_left"),
-            hint(player, "move_back"),
-            hint(player, "move_right")
-        )
-    } else {
-        format!(
-            "ROLL {} / {}",
-            hint(player, "move_x"),
-            hint(player, "move_y")
-        )
-    };
-    if screen_height() >= 320. {
-        if screen_width() < 560. && player.current_device() == HintDevice::KeyboardMouse {
-            centered(
-                &format!(
-                    "ROLL {} / {}",
-                    hint(player, "move_forward"),
-                    hint(player, "move_back")
-                ),
-                screen_height() - 87.,
-                12,
-                INK,
-            );
-            centered(
-                &format!(
-                    "ROLL {} / {}",
-                    hint(player, "move_left"),
-                    hint(player, "move_right")
-                ),
-                screen_height() - 67.,
-                12,
-                INK,
-            );
-        } else {
-            centered(&roll, screen_height() - 67., 12, INK);
-        }
-        centered(
-            &format!(
-                "HOLD {} VIEW / {} COURSES",
-                hint(player, "overview"),
-                hint(player, "courses")
-            ),
-            screen_height() - 47.,
-            12,
-            INK,
-        );
-    }
-    centered(
-        &format!(
-            "{} BRAKE / {} RECOVER",
-            hint(player, "brake"),
-            hint(player, "recover")
-        ),
-        screen_height() - 27.,
-        12,
-        INK,
-    );
 }
 
 #[cfg(test)]

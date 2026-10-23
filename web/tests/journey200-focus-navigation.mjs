@@ -342,7 +342,7 @@ test('actual Details dialog keeps Escape through capture and closes through its 
 
 test('reserved host exit, remapped gameplay keys and held releases survive the combined listeners', async t => {
   const h = fixture(); t.after(h.close); await h.finish(); await h.enter(); h.calls.length = 0;
-  assert.equal(h.key('keydown', 'Tab', h.canvas, {shiftKey: true}).defaultPrevented, false);
+  assert.equal(h.key('keydown', 'Tab', h.canvas, {shiftKey: true}).defaultPrevented, true, 'fullscreen routes focus to its visible game menu');
   assert.equal(h.key('keyup', 'Tab', h.help, {shiftKey: true}).defaultPrevented, false);
   assert.deepEqual(h.calls.filter(row => row[0] === 'key'), []);
   for (const [code, value] of [['Tab', 0xff09], ['F2', 0xffbf], ['KeyJ', 106], ['Semicolon', 59]]) {

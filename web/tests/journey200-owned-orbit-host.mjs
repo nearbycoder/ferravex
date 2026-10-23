@@ -20,7 +20,7 @@ const inline = scripts.filter(([, attrs]) => !attributes(attrs).src);
 const plain = source => source.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
 const paragraph = id => plain(html.match(new RegExp(`<p id="${id}"[^>]*>([\\s\\S]*?)<\\/p>`))[1]);
 
-test('canvas has a real game title, visible instructions and live phase feedback', () => {
+test('canvas has a real title, short introduction, on-demand instructions and live phase feedback', () => {
   const ids = elements.filter(element => element.attrs.id).map(element => element.attrs.id);
   assert.equal(ids.length, new Set(ids).size);
   assert.match(html, /<html lang="en">/);
@@ -40,12 +40,14 @@ test('canvas has a real game title, visible instructions and live phase feedback
     const element = withId(id);
     assert.equal(element.tag, 'p');
     assert.ok(!('hidden' in element.attrs) && !('aria-hidden' in element.attrs));
-    assert.ok(html.indexOf(`id="${id}"`) < html.indexOf('<details'), 'instructions are outside collapsed help');
+    if (['orbit-description', 'game-state'].includes(id)) assert.ok(html.indexOf(`id="${id}"`) < html.indexOf('<details'), 'the short introduction and live state stay outside collapsed help');
   }
   assert.match(paragraph('orbit-description'), /paddle.*two debris fields.*three lives/);
   assert.match(paragraph('orbit-keys'), /Default keys:.*A.*Left arrow.*D.*Right arrow.*Space.*Enter.*Escape.*R/);
   assert.match(paragraph('orbit-keys'), /Controls.*F2.*remap current bindings/);
   assert.match(paragraph('orbit-navigation'), /Shift \+ Tab.*How to play.*does not pause/);
+  assert.ok(html.indexOf('id="orbit-keys"')>html.indexOf('id="orbit-help"'), 'keyboard notes stay inside collapsed help');
+  assert.ok(html.indexOf('id="orbit-navigation"')>html.indexOf('id="orbit-help"'), 'navigation notes stay inside collapsed help');
   for (const id of ['notice', 'game-state']) {
     assert.equal(withId(id).attrs['aria-live'], 'polite');
     assert.equal(withId(id).attrs['aria-atomic'], 'true');
@@ -56,7 +58,7 @@ test('canvas has a real game title, visible instructions and live phase feedback
 });
 
 test('help documents the existing controls, remapping, retry and separate menu exits', () => {
-  const help = plain(html.slice(html.indexOf('<details'), html.indexOf('</details>')));
+  const help = plain(html.slice(html.indexOf('<details id="orbit-help"'), html.indexOf('</details>', html.indexOf('<details id="orbit-help"'))));
   assert.match(help, /Saved remaps take precedence.*current bindings/);
   assert.match(help, /retry readies a fresh run; release, then press again to launch/);
   assert.match(help, /Restart clears the score, restores three lives.*separate press to launch/);

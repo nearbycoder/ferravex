@@ -1,9 +1,9 @@
 //! Game-owned screen composition. World fitting and simulation stay independent.
-use crate::{AMBER, CORAL, CYAN, FLOOR, INK, MUTED, PAPER, game::*, hint};
+use crate::{CORAL, CYAN, FLOOR, INK, MUTED, PAPER, game::*, hint};
 use ferravex_render::{
     canvas::Canvas2D,
     input::{
-        HintDevice, PlayerInput,
+        PlayerInput,
         touch::{Control, Output, Region},
     },
     prelude::*,
@@ -18,7 +18,9 @@ pub(crate) struct ScreenLayout {
     pub compact: bool,
     pub viewport: Viewport,
     header: UiRect,
+    #[cfg(test)]
     hints: UiRect,
+
     card: UiRect,
     action: UiRect,
     dock: Option<UiRect>,
@@ -47,16 +49,12 @@ impl ScreenLayout {
             size: screen,
         };
         let safe = bounds.inset([8.; 4]).unwrap();
-        let arena_top = canvas.project(vec2(ARENA.x, ARENA.y)).y;
         let arena_bottom = canvas.project(vec2(ARENA.x, ARENA.bottom())).y;
         // Keep the entire arena visible in portrait. In a very short window,
         // clip secondary rows rather than shrink text or cover the whole arena.
-        let header_height = (arena_top - 16.).clamp(56., 140.).min(safe.size[1]);
+        let header_height = 80_f32.min(safe.size[1]);
         let header = UiRect {
-            min: [
-                safe.min[0],
-                (arena_top - header_height - 8.).max(safe.min[1]),
-            ],
+            min: safe.min,
             size: [safe.size[0], header_height],
         };
         let hints_y = (arena_bottom + 8.).min(screen[1] - safe.min[1]);
@@ -84,6 +82,7 @@ impl ScreenLayout {
             compact,
             viewport,
             header,
+            #[cfg(test)]
             hints,
             card,
             action,
@@ -169,34 +168,19 @@ impl ScreenLayout {
         true
     }
 
-    pub fn hud(&self, ui: &mut Ui, game: &Game, input: &PlayerInput) {
+    pub fn hud(&self, ui: &mut Ui, game: &Game, _input: &PlayerInput) {
         ui.push_clip(self.header).unwrap();
         ui.panel(self.header, INK).unwrap();
         let inner = self.header.inset([8.; 4]).unwrap();
-        let title = inner.size[1] >= 124.;
         let y = inner.min[1];
-        if title {
-            line(
-                ui,
-                rect(inner.min[0], y, inner.size[0] - 118., 24.),
-                "NEON SWARM",
-                18.,
-                PAPER,
-            );
-            line(
-                ui,
-                rect(inner.min[0] + inner.size[0] - 110., y + 3., 110., 20.),
-                &format!("WAVE {}/3", game.wave),
-                TEXT,
-                CYAN,
-            );
-        }
-        let stats = rect(
-            inner.min[0],
-            y + if title { 28. } else { 0. },
-            inner.size[0],
-            40.,
+        line(
+            ui,
+            rect(inner.min[0], y, inner.size[0] - 64., 20.),
+            &format!("WAVE {}/3", game.wave),
+            TEXT,
+            CYAN,
         );
+        let stats = rect(inner.min[0], y + 20., inner.size[0], 40.);
         let mut slots = hud_slots(stats, 4, ((inner.size[0] - 8.) * 0.5).max(1.), ROW, 0.).unwrap();
         let cells: [UiRect; 4] = std::array::from_fn(|_| slots.next().unwrap());
         // Fixed-size labels ellipsize at absurdly small widths; no font fitting.
@@ -229,100 +213,6 @@ impl ScreenLayout {
             format!("DASH {:.1}s", dash.cooldown_remaining)
         };
         line(ui, cells[3], &dash, TEXT, CYAN);
-        let progress_y = stats.min[1] + 42.;
-        let progress = match game.progression.next_cost() {
-            Some(cost) => format!(
-                "LV {} / XP {}/{} / DMG {}",
-                game.progression.level(),
-                game.progression.xp(),
-                cost,
-                game.shot_damage()
-            ),
-            None => format!(
-                "LV {} MAX / DMG {}",
-                game.progression.level(),
-                game.shot_damage()
-            ),
-        };
-        line(
-            ui,
-            rect(inner.min[0], progress_y, inner.size[0], ROW),
-            &progress,
-            TEXT,
-            PAPER,
-        );
-        line(
-            ui,
-            rect(inner.min[0], progress_y + ROW, inner.size[0], ROW),
-            &format!(
-                "W{} / {} LIVE / {} QUEUED",
-                game.wave,
-                game.enemy_count(),
-                game.remaining_enemies()
-                    .saturating_sub(game.enemy_count() as u32)
-            ),
-            TEXT,
-            MUTED,
-        );
-        line(
-            ui,
-            rect(inner.min[0], progress_y + 2. * ROW, inner.size[0], ROW),
-            &status(game),
-            TEXT,
-            AMBER,
-        );
-        ui.pop_clip();
-
-        ui.push_clip(self.hints).unwrap();
-        let touch = input.current_device() == HintDevice::Touch;
-        let docked = touch && self.dock.is_some() && !input.touch_customized();
-        let available = if docked {
-            self.hints.size[1] - 100.
-        } else {
-            self.hints.size[1]
-        };
-        let area = rect(
-            self.hints.min[0] + 8.,
-            self.hints.min[1],
-            (self.hints.size[0] - 16.).max(0.),
-            available,
-        );
-        ui.push_clip(area).unwrap();
-        if touch {
-            line(ui, area_row(area, 0), "TOUCH: AUTO AIM + FIRE", TEXT, MUTED);
-            binding(ui, area_row(area, 1), input, "boost", "DASH");
-            line(ui, area_row(area, 2), "F2 / TOOLBAR: CONTROLS", TEXT, MUTED);
-        } else {
-            for (row, action, name) in [
-                (0, "fire", "FIRE"),
-                (1, "boost", "DASH"),
-                (2, "pause", "PAUSE"),
-            ] {
-                binding(ui, area_row(area, row), input, action, name);
-            }
-            if input.current_device() == HintDevice::KeyboardMouse {
-                for (row, left, right, a, b) in [
-                    (3, "move_forward", "move_back", "UP", "DOWN"),
-                    (4, "move_left", "move_right", "LEFT", "RIGHT"),
-                ] {
-                    let r = area_row(area, row);
-                    let width = (r.size[0] - 8.).max(0.) * 0.5;
-                    binding(ui, rect(r.min[0], r.min[1], width, ROW), input, left, a);
-                    binding(
-                        ui,
-                        rect(r.min[0] + width + 8., r.min[1], width, ROW),
-                        input,
-                        right,
-                        b,
-                    );
-                }
-            } else {
-                binding(ui, area_row(area, 3), input, "move_x", "MOVE X");
-                binding(ui, area_row(area, 4), input, "move_y", "MOVE Y");
-            }
-            line(ui, area_row(area, 5), "F2 / TOOLBAR: CONTROLS", TEXT, MUTED);
-        }
-        ui.pop_clip();
         ui.pop_clip();
     }
 
@@ -416,15 +306,6 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> UiRect {
     }
 }
 
-fn area_row(area: UiRect, index: u32) -> UiRect {
-    rect(
-        area.min[0],
-        area.min[1] + index as f32 * ROW,
-        area.size[0],
-        ROW,
-    )
-}
-
 fn line(ui: &mut Ui, rect: UiRect, text: &str, size: f32, color: Color) {
     ui.label(
         rect,
@@ -447,39 +328,6 @@ fn binding(ui: &mut Ui, rect: UiRect, input: &PlayerInput, action: &str, name: &
         TEXT,
         MUTED,
     );
-}
-
-fn status(game: &Game) -> String {
-    if let Some(remaining) = game.wave_clear_remaining() {
-        return if game.wave == 3 {
-            format!("ALL CLEAR / SECURING {remaining:.1}s")
-        } else {
-            format!("WAVE CLEAR / NEXT {remaining:.1}s")
-        };
-    }
-    let threats = game
-        .world
-        .query::<&Enemy>()
-        .iter()
-        .filter(|e| e.attack.phase() == ferravex_play::action::ActionPhase::Windup)
-        .count();
-    if threats > 0 {
-        return format!("EVADE / {threats} WINDUP");
-    }
-    let (admission, position) = game.spawn_preview();
-    match admission {
-        ferravex_play::encounter::AdmissionPreview::InsufficientCredits { .. } => {
-            "CLEAR REMAINING DRONES".to_owned()
-        }
-        ferravex_play::encounter::AdmissionPreview::AliveLimit { .. } => {
-            "ENTRY HELD / ARENA FULL".to_owned()
-        }
-        _ if position.is_none() => "ENTRY HELD / NO SAFE ZONE".to_owned(),
-        _ => format!(
-            "ENTRY {:.1}s / IF CLEAR",
-            admission.next_available_in().unwrap_or(0.)
-        ),
-    }
 }
 
 #[cfg(test)]
@@ -511,7 +359,7 @@ mod tests {
             assert!(layout.compact);
             assert_eq!(layout.viewport.scale(), 1.);
             assert_eq!(layout.viewport.bounds().size, size);
-            assert_eq!(layout.header.size[1], 140.);
+            assert_eq!(layout.header.size[1], 80.);
             assert!(layout.hints.size[1] >= 156.);
             assert!(
                 layout.header.min[1] + layout.header.size[1] + 8.

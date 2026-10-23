@@ -16,7 +16,7 @@
 //! assert_eq!(session.tick(), 3); // Two automatic ticks and one manual tick.
 //! assert!(session.is_paused());
 //! ```
-use ferravex_core::{FrameStats, session::GameSession};
+use ferravex_core::session::GameSession;
 use ferravex_physics::d3::{
     ColliderBuilder, JointBuilder, PhysicsWorld, QueryOptions, QueryReport, RayHit,
     RigidBodyBuilder, RigidBodyHandle,
@@ -331,15 +331,6 @@ enum DropShape {
     Ball,
 }
 
-impl DropShape {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Crate => "CRATE",
-            Self::Ball => "BALL",
-        }
-    }
-}
-
 struct Orbit {
     yaw: f32,
     pitch: f32,
@@ -448,8 +439,8 @@ impl Lab {
             pending_pulse: false,
             dropped_seconds: 0.,
             impact_cooldown: 0.,
-            feedback: "Drop, pause, STEP to inspect.",
-            feedback_time: 5.,
+            feedback: "",
+            feedback_time: 0.,
         }
     }
 
@@ -649,6 +640,7 @@ impl Inspector {
     }
 }
 
+#[cfg(test)]
 fn binding_hint<'a>(input: &PlayerInput, name: &str, buffer: &'a mut [u8]) -> &'a str {
     input.format_hint(name, buffer).unwrap_or("Controls")
 }
@@ -662,7 +654,7 @@ fn footer_layout(width: f32, height: f32) -> (Rect, [Rect; 8]) {
         4
     };
     let rows = 8_usize.div_ceil(columns);
-    let text_height = if width < 540. { 176. } else { 96. };
+    let text_height = 48.;
     let panel = Rect::new(
         12.,
         height - (text_height + 12. + rows as f32 * 44.),
@@ -708,6 +700,7 @@ fn hud_lines(mut text: &str, width: f32, size: u16) -> impl Iterator<Item = &str
     })
 }
 
+#[cfg(test)]
 fn inspector_hint(text: &str, width: f32, narrow: bool) -> &str {
     let (size, rows) = if narrow { (14, 2) } else { (16, 1) };
     if hud_lines(text, width, size).count() <= rows {
@@ -781,7 +774,7 @@ impl Camera for SceneCamera {
 }
 
 fn scene_rect(width: f32, panel: Rect) -> Rect {
-    Rect::new(0., 126., width, (panel.y - 126.).max(1.))
+    Rect::new(0., 44., width, (panel.y - 44.).max(1.))
 }
 
 fn window_conf() -> Conf {
@@ -795,7 +788,6 @@ async fn game() {
     let mut presentation = Presentation::default();
     let mut inspector = Inspector::new();
     let mut sound = GameAudio::new();
-    let mut stats = FrameStats::<90>::default();
     let material = LitMaterial::new()
         .expect("The built-in Ferravex material must compile on the selected GPU backend");
     let crate_mesh = Mesh3d::cuboid(vec3(1.16, 1.16, 1.16), CRATE);
@@ -842,7 +834,6 @@ async fn game() {
         // FeedbackController, flash overlay, camera shake or particle emitter.
         presentation.begin_frame(dt);
         ui::warm_up_font();
-        stats.record(get_frame_time());
         let (panel, buttons) = footer_layout(screen_width(), screen_height());
         let scene = scene_rect(screen_width(), panel);
         player_input
@@ -1043,131 +1034,33 @@ async fn game() {
             }
         }
         set_default_camera();
-        let mut hint_buffers = [[0; 128]; 4];
-        let [pause_hint, step_hint, view_hint, reset_hint] = &mut hint_buffers;
-        let mut controls = format!(
-            "{}: pause | {}: step",
-            binding_hint(&player_input, "pause", pause_hint),
-            binding_hint(&player_input, "step", step_hint)
-        );
-        if screen_width() > 660. {
-            controls.push_str(&format!(
-                " | {}: view | {}: reset",
-                binding_hint(&player_input, "reset_view", view_hint),
-                binding_hint(&player_input, "restart", reset_hint)
-            ));
-        }
-        let controls = inspector_hint(&controls, screen_width() - 49., false);
-        ui::header("3D RIGID BODIES", "The loading yard.", controls);
+        draw_text("PHYSICS 3D", 16., 29., 18., ui::INK);
         ui::panel(panel);
         let paused = lab.session.is_paused();
         let state = if paused { "PAUSED" } else { "PLAYING" };
-        let mut status = if screen_width() < 540. {
-            format!(
-                "{state} {}/{MAX_BODIES} tick {}",
-                sandbox.bodies.len(),
-                lab.session.tick()
-            )
-        } else {
-            format!(
-                "{state} | {}/{MAX_BODIES} | tick {}",
-                sandbox.bodies.len(),
-                lab.session.tick()
-            )
-        };
-        if screen_width() > 700. {
-            status.push_str(&format!(
-                " | 120 Hz | {} | zoom {:.0}",
-                lab.shape.label(),
-                lab.orbit.radius
-            ));
-        }
-        if screen_width() > 1100. {
-            status.push_str(&format!(
-                " | p95 {:.1} ms",
-                stats.percentile_ms(95.).unwrap_or(0.)
-            ));
-        }
-        let row_gap = if screen_width() < 540. { 40. } else { 20. };
         hud_text(
-            &status,
+            &format!("{state} / {} BODIES", sandbox.bodies.len()),
             panel.x + 12.,
             panel.y + 21.,
             panel.w - 24.,
             if paused { ui::AMBER } else { ui::INK },
         );
-        let sleep = sandbox.physics.sleep_stats();
-        let contacts = sandbox
-            .physics
-            .contacts()
-            .filter(|pair| !pair.sensor)
-            .count();
-        let mut counts = format!(
-            "Contacts {contacts} | awake {} | sleep {}",
-            sleep.awake_bodies, sleep.sleeping_bodies
-        );
-        if screen_width() > 700. {
-            counts.push_str(&format!(
-                " | {} wake requests | {} CCD | {:.3}s dropped",
-                sleep.wake_requests, sandbox.physics.last_step.ccd_impacts, lab.dropped_seconds
-            ));
-        }
-        hud_text(
-            &counts,
-            panel.x + 12.,
-            panel.y + 21. + row_gap,
-            panel.w - 24.,
-            ui::INK,
-        );
-        let query = format!(
-            "Ray {}/{}{} | near {}",
-            inspector.query.written,
-            inspector.query.total,
-            if inspector.query.is_truncated() {
-                " capped"
-            } else {
-                ""
-            },
-            inspector.hits[0]
-                .map_or_else(|| "none".to_owned(), |hit| format!("{:.1}m", hit.distance))
-        );
-        hud_text(
-            &query,
-            panel.x + 12.,
-            panel.y + 21. + row_gap * 2.,
-            panel.w - 24.,
-            ui::INK,
-        );
-        let mut drop_buffer = [0; 128];
-        let mut pulse_buffer = [0; 128];
-        let action_hint = format!(
-            "{}: drop {} | {}: pulse{}",
-            binding_hint(&player_input, "drop", &mut drop_buffer),
-            lab.shape.label(),
-            binding_hint(&player_input, "pulse", &mut pulse_buffer),
-            if sandbox.pulse_time > 0. {
-                " recharging"
-            } else {
-                ""
-            }
-        );
-        let hint = if lab.feedback_time > 0. {
-            lab.feedback
-        } else if sandbox.bodies.len() == MAX_BODIES {
-            "Body limit reached. RESET yard."
-        } else if paused {
-            "STEP: 1 tick. Drop or resume."
-        } else {
-            &action_hint
+        let feedback = match lab.feedback {
+            "Resume to pulse. DROP/STEP work." => "RESUME TO PULSE",
+            "Pulse recharging." => "PULSE RECHARGING",
+            "PAUSE before stepping." => "PAUSE TO STEP",
+            "Body limit reached. RESET yard." => "BODY LIMIT REACHED",
+            _ => "",
         };
-        let hint = inspector_hint(hint, panel.w - 24., screen_width() < 540.);
-        hud_text(
-            hint,
-            panel.x + 12.,
-            panel.y + 22. + row_gap * 3.,
-            panel.w - 24.,
-            ui::CYAN,
-        );
+        if lab.feedback_time > 0. {
+            hud_text(
+                feedback,
+                panel.x + 12.,
+                panel.y + 42.,
+                panel.w - 24.,
+                ui::CYAN,
+            );
+        }
         pending.crate_drop = ui::button(buttons[0], "CRATE", lab.shape == DropShape::Crate);
         pending.ball_drop = ui::button(buttons[1], "BALL", lab.shape == DropShape::Ball);
         pending.drop = ui::button(buttons[2], "DROP", false);

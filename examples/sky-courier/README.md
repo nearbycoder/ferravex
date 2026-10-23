@@ -76,19 +76,16 @@ are required. This game still has no saved progress or replay format to migrate.
 The HUD now uses logical pixel sizes instead of fitting a 560-pixel design onto
 narrow screens. The briefing, pause and results panel replaces navigation and
 telemetry while inactive, with a 48-pixel flight button and complete recovery,
-delivery and retry guidance. Gameplay retains ordered progress, current target,
-recovery notices and remapping-aware hints. A binding too long for its row reads
-**Open Controls**; no default key is substituted. Some keys, including PageUp and
-PageDown, currently use numeric names supplied by the shared Controls editor.
+delivery and retry guidance. Gameplay retains ordered progress, the current target and recovery notices.
+Current bindings are available in **Game menu → Controls**; the flight HUD does
+not repeat a permanent key list.
 
-At widths up to 620 pixels the browser reserves a 600-pixel flight canvas so the
-scene, readable HUD and shared Controls panel have room. Short pages and
-fullscreen scroll. On short pages, **Panel top** and **Panel bottom** remain
-visible over the flight stage and align either end with the scroll viewport,
-without requiring a drag over the input canvas. The page outside the canvas also
-scrolls. The toolbar can wrap to any height. This does not change the
-flight camera, touch regions, gameplay clock or controls. Native windows smaller
-than the complete panel should be enlarged; text is not scaled down to fit them.
+The fullscreen app uses the actual viewport and hides the website toolbar and
+page scroll links. The HUD keeps a small time/gate/hull badge, short navigation
+cues and a 58px telemetry strip. Delivery guidance appears on approach; full
+bindings and instructions are available from the game menu. The inline page
+retains its scrolling links. Menus are centered cards capped at 420px wide,
+without repeated binding lists or paragraphs about every state transition.
 
 The private `flight_ui` module is registered by this game's root. Its tests cover
 menu containment, actual logical-pixel button hit regions, long/remapped/unbound
@@ -124,4 +121,4 @@ This is an arcade flight slice, not an aerodynamic simulator. Collision volumes 
 
 ## Browser player update
 
-Open **Details → Player tools** for screenshots, clean sharing links, frame limits, session timing, screen wake lock, accessibility preferences and settings backups. All shared player upgrades apply to this example. Read the [player guide](../../docs/PLAYER_GUIDE.md) for behavior and browser limits.
+Open **Game menu → Settings → Player tools** for screenshots, clean sharing links, frame limits, session timing, screen wake lock, accessibility preferences and settings backups. All shared player upgrades apply to this example. Read the [player guide](../../docs/PLAYER_GUIDE.md) for behavior and browser limits.

@@ -23,16 +23,12 @@ Drag with the left mouse button or touch the scene to orbit; arrows/WASD and gam
 | Restore the default orbit without changing physics | C | North | VIEW |
 | Rebuild yard, restore view, resume simulation | R | Select / Back | RESET |
 
-These are default bindings. Change them in **Controls (F2)**; on-canvas pause/step and drop/pulse hints follow current bindings and the active input device. Wider headers also show current view/reset bindings. Oversized binding lists direct you to Controls. Shape buttons highlight the active repeat-drop shape; STEP is disabled while running, and PULSE is disabled while paused or recharging. Keyboard requests still explain those restrictions. Controls wrap onto two rows on narrow screens.
-
-The footer inspector separates:
-
-- State, dynamic body count (maximum 180), and one tick counter covering automatic and manual steps.
-- **Contacts**: solid collider pairs observed during the last physics tick, including transient substep contacts. **Awake/sleep**: live dynamic-body counts, including shapes just added while paused. Wider views also show pending wake requests, last-step CCD impacts and discarded catch-up seconds.
-- **Ray**: stored/total collider hits from one 60-meter camera-center ray at current simulation poses each presentation frame. The nearest eight hits are retained; `capped` means more were found. Compound children count separately. `near` is the closest distance, or `none`. This is a query probe, not a count of all solver queries or rendered/interpolated contacts.
-- Action feedback, including body-limit rejection. Wider views retain selected shape, 120 Hz, orbit distance and the bounded frame-time p95.
-
-The query and sleep counts remain readable while paused; contacts remain the last-step snapshot until STEP or resume. The yard retains its crate stack, falling balls, ramp, stairs, compound bodies and four hinge/fixed/distance/spring mechanisms.
+These are default bindings. Change them in **Game menu → Controls** (or F2).
+The compact HUD shows state, body count and action buttons. Shape buttons
+highlight the selected repeat-drop shape. STEP is disabled while running, and
+PULSE is disabled while paused or recharging. Rejected actions show short
+feedback. Dense per-frame query, timing and sleep-counter paragraphs are omitted
+from the playfield; the ray probe and authored yard mechanisms remain active.
 
 Pausing discards elapsed inactive time. Drops while paused appear immediately but remain frozen until a manual step or resume. Each press of N/STEP calls `GameSession::step_paused`, advances exactly 1/120 second, increments the shared session tick and remains paused. Fractional time from before pausing is preserved for resume. Pausing and manual stepping synchronize interpolation history, so resuming before the next tick does not rewind the inspected pose. The keyboard step action while running gives a pause prompt. RESET restores the original 39 bodies, selected crate, camera, clock, impact cooldown and pulse state, then resumes. Reset wins over other actions in the same frame. VIEW restores only the camera, with an immediate camera cut instead of smoothing from the previous view.
 
@@ -50,12 +46,14 @@ Targeted tests exercise pause/no catch-up, shared manual tick accounting and fra
 
 ## Browser player update
 
-Open **Details → Player tools** for screenshots, clean sharing links, frame limits, session timing, screen wake lock, accessibility preferences and settings backups. All shared player upgrades apply to this example. Read the [player guide](../../docs/PLAYER_GUIDE.md) for behavior and browser limits.
+Open **Game menu → Settings → Player tools** for screenshots, clean sharing links, frame limits, session timing, screen wake lock, accessibility preferences and settings backups. All shared player upgrades apply to this example. Read the [player guide](../../docs/PLAYER_GUIDE.md) for behavior and browser limits.
 
 Browser focus follows the host guidance: focus the canvas before game keys; Tab/Shift+Tab navigate the page while Controls is closed. Inside Controls, those keys navigate the editor; Escape cancels capture or closes it. The host descriptions list defaults, while renderer hints reflect remapping. Journey200 migration checks are native/headless; fresh Wasm linkage, GPU/browser layout and physical-input playtesting remain parent integration work.
 
 ## Narrow browser layout
 
-Below 540 canvas pixels, the inspector uses two reserved rows per field at a fixed 14-pixel size. Long binding hints use an explicit **Bindings: Controls** fallback instead of shrinking. Buttons use three columns below 360 pixels and four on other narrow views. The narrow world projection fits the same band between y=126 and the inspector that accepts scene orbit/zoom input; its minimum horizontal field of view retains the authored mechanisms at the default orbit. Camera eye, target, near/far depth, fog, simulation and relative input sensitivity remain unchanged; desktop projection remains unchanged.
-
-The narrow browser canvas is at least 640 CSS pixels tall. **Scene**, **Lab actions** and **Guide** links move through the page, and the 24-pixel **Scroll page** strip accepts native page panning beside the orbit surface. These are page navigation surfaces, not simulated gameplay controls. Physical touch behavior requires separate device verification.
+Below 540 canvas pixels, the camera fits the authored mechanisms into the
+same scene band used for orbit and zoom input. The band begins below the compact
+44px header and ends at the action dock. Eye, target, depth, fog, simulation and
+relative input sensitivity are preserved. The browser's fullscreen app fills the
+viewport and hides scrolling strips. Inline page navigation remains available.

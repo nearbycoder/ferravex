@@ -760,6 +760,7 @@ async fn game() {
     let mut player_input = PlayerInput::preset("orchard-guard", Preset::Strategy);
     let mut hud_ui = Ui::new();
     hud_ui.set_auto_focus(false);
+    let mut plot_picker = false;
     loop {
         let reloaded = if let Some(next) = content.poll(demo.dt(), |text| {
             Ok(Game::with_level(Arc::new(level::Level::parse(text)?)))
@@ -780,6 +781,9 @@ async fn game() {
         let compact = (280. ..900.)
             .contains(&screen.x)
             .then(|| compact::Layout::new(screen));
+        if compact.is_none() || reloaded {
+            plot_picker = false;
+        }
         let canvas = Canvas2D::fit(SIZE, screen);
         // Keep resume/restart UI interactive while the session owns the pause.
         player_input.sample(true);
@@ -804,6 +808,7 @@ async fn game() {
             .into_iter()
             .find_map(|(pressed, action)| pressed.then_some(action));
         let plot = if click
+            && !plot_picker
             && campaign.game.outcome == Outcome::Playing
             && !campaign.session.is_paused()
         {
@@ -833,6 +838,7 @@ async fn game() {
                 &campaign,
                 progress.error().is_some(),
                 &player_input,
+                plot_picker,
             );
             compact::overlay(&mut hud_ui, layout, &campaign, &player_input);
         } else {
@@ -851,6 +857,12 @@ async fn game() {
         hud_ui.finish_player(&mut player_input, !blocked && !reloaded);
         hud_ui.paint();
         let ui_action = hud_action(&hud_ui, campaign.game.level.plots.len());
+        if hud_ui.activated(9) {
+            plot_picker = !plot_picker;
+        }
+        if matches!(ui_action, Some(Action::Select(_))) {
+            plot_picker = false;
+        }
         let previous_state = campaign.session.state();
         let events = campaign.frame_with_input(
             if reloaded { 0. } else { demo.dt() as f64 },
@@ -860,6 +872,7 @@ async fn game() {
             || take_command(&mut player_input),
         );
         if events.restarted {
+            plot_picker = false;
             progress.restart(&campaign.game);
             hud_ui.cancel();
             sound = GameAudio::new();

@@ -8,7 +8,7 @@ const bytes=readFileSync(path);
 console.log('Wasm SHA256',createHash('sha256').update(bytes).digest('hex'));
 const module=new WebAssembly.Module(bytes);
 const multiply=(m,v)=>[0,1,2,3].map(row=>v.reduce((n,x,col)=>n+m[col*4+row]*x,0));
-for(const [w,h] of [[320,448],[390,652],[1280,608]]) {
+for(const [w,h] of [[320,300],[320,448],[390,652],[844,390],[1280,608]]) {
   const e=new WebAssembly.Instance(module,{env:{
     ferravex_save_len:()=>0,ferravex_save_load:()=>-1,ferravex_save_store:()=>-1,
     ferravex_controls_len:()=>0,ferravex_controls_load:()=>-1,ferravex_controls_store:()=>-1,
@@ -32,8 +32,8 @@ for(const [w,h] of [[320,448],[390,652],[1280,608]]) {
       for(let k=0;k<geometry.length;k+=10) {
         const clip=multiply(camera,multiply(model,[...geometry.slice(k,k+3),1]));
         const x=(clip[0]/clip[3]+1)*w/2,y=(1-clip[1]/clip[3])*h/2;
-        const bottom=h-(w<700?196:148)-24;
-        assert.ok(x>=15.99&&x<=w-15.99&&y>=95.99&&y<=bottom+.01,
+        const bottom=h-116-24;
+        assert.ok(x>=15.99&&x<=w-15.99&&y>=55.99&&y<=bottom+.01,
           `${w}x${h}: ${isTarget?'target':'cannon'} at ${pos} vertex projects to ${x},${y} outside scene`);
         min=[Math.min(min[0],x),Math.min(min[1],y)];max=[Math.max(max[0],x),Math.max(max[1],y)];vertices++;
       }

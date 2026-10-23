@@ -1195,7 +1195,7 @@ async fn game() {
             vec![Binding::digital(InputCode::Key(KeyCode::H as u16))],
         )
         .unwrap();
-    let mut help = true;
+    let mut help = false;
     let mut confirm_requested = false;
     loop {
         // Read on every presentation frame, before accepted feedback and draws,
@@ -1344,27 +1344,21 @@ async fn game() {
         let retry_hint = action_hint(&player_input, "restart");
         let pause_hint = action_hint(&player_input, "pause");
         let help_hint = action_hint(&player_input, "help");
-        draw_rectangle(0., 0., w, 105., Color::new(0.03, 0.08, 0.08, 0.8));
-        draw_text("CRYSTAL CAVERN", 26.0, 36.0, 22.0, WARM);
-        text_center(
-            &format!(
-                "Crystals {} / 3    Altars {} / 2    Seal {}",
-                game.count(),
-                game.switches,
-                if game.open() { "OPEN" } else { "LOCKED" }
-            ),
-            64.,
-            20,
+        draw_rectangle(0., 0., w - 64., 43., Color::new(0.03, 0.08, 0.08, 0.8));
+        draw_text(
+            &format!("GEMS {}/3  ALTARS {}/2", game.count(), game.switches),
+            16.,
+            28.,
+            14.,
             MINT,
         );
-        text_center(&game.objective_hint(), 90., 17, WHITE);
         // A steady six-part bar includes walking into daylight, not just opening
         // the seal. It reads accepted graph completion without mutating it.
-        let bar_width = (w - 32.).max(1.);
+        let bar_width = (w - 96.).max(1.);
         for view in game.objectives.iter() {
             draw_rectangle(
                 16. + view.index as f32 * bar_width / 6.,
-                100.,
+                40.,
                 (bar_width / 6. - 2.).max(1.),
                 3.,
                 if view.state == ObjectiveState::Complete {
@@ -1403,7 +1397,9 @@ async fn game() {
                 );
                 wrapped_text(&mut overlay_text, &prompt, prompt_top, 72., target_color);
             }
-            if game.notice_time > 0.0 {
+            if game.notice_time > 0.0
+                && game.notice != "Recover three crystals. Wake the numbered altars."
+            {
                 wrapped_text(&mut overlay_text, &game.notice, h - 150., 72., WARM);
             }
             if help {

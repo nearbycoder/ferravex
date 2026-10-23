@@ -1,8 +1,10 @@
 //! Local immediate-mode lab labels. No shared layout or input ownership.
-use ferravex_render::{prelude::*, ui};
+use ferravex_render::prelude::*;
 
 pub(super) const NARROW_FOOTER_HEIGHT: f32 = 536.;
+#[cfg(test)]
 const ROW_HEIGHT: f32 = 20.;
+#[cfg(test)]
 const SLOT_LINES: [usize; 5] = [4, 3, 4, 5, 5];
 
 pub(super) struct LabLayout {
@@ -36,6 +38,24 @@ impl LabLayout {
         }
     }
 
+    /// Compact play layout: keep diagnostics out of the scene, without shrinking text.
+    pub fn compact(width: f32, height: f32) -> Self {
+        let mut layout = Self::new(width, height);
+        layout.footer_height = if width < 360. {
+            210.
+        } else if width < 640. {
+            166.
+        } else {
+            124.
+        };
+        layout.footer_y = height - layout.footer_height;
+        layout.scale = ((width - 40.) / 26.)
+            .min((layout.footer_y - 60.).max(1.) / 14.)
+            .max(0.1);
+        layout.origin = vec2(width * 0.5, layout.footer_y - 8. - layout.scale);
+        layout
+    }
+
     pub fn to_screen(&self, point: Vec2) -> Vec2 {
         self.origin + vec2(point.x, -point.y) * self.scale
     }
@@ -50,7 +70,7 @@ impl LabLayout {
     pub fn contains_scene(&self, point: Vec2) -> bool {
         point.x >= 16.
             && point.x <= self.width - 16.
-            && point.y > 110.
+            && point.y > 44.
             && point.y < self.footer_y - 8.
     }
 
@@ -103,6 +123,7 @@ pub(super) fn label_lines(text: &str, width: f32) -> impl Iterator<Item = &str> 
     })
 }
 
+#[cfg(test)]
 pub(super) fn slot_y(footer_y: f32, width: f32, slot: usize) -> f32 {
     footer_y
         + 116.
@@ -110,21 +131,7 @@ pub(super) fn slot_y(footer_y: f32, width: f32, slot: usize) -> f32 {
         + SLOT_LINES[..slot].iter().sum::<usize>() as f32 * ROW_HEIGHT
 }
 
-pub(super) fn wrapped_label(text: &str, x: f32, y: f32, width: f32, color: Color) {
-    for (row, line) in label_lines(text, width).enumerate() {
-        draw_text_ex(
-            line,
-            x,
-            y + row as f32 * ROW_HEIGHT,
-            TextParams {
-                font_size: 16,
-                font_scale: 1.,
-                color,
-            },
-        );
-    }
-}
-
+#[cfg(test)]
 pub(super) fn bounded_hint(hint: &str, width: f32) -> &str {
     if get_default_font()
         .try_metrics(16, 1.)
@@ -140,23 +147,27 @@ pub(super) fn bounded_hint(hint: &str, width: f32) -> &str {
     }
 }
 
-pub(super) fn narrow_header(hints: [&str; 3], width: f32) {
-    draw_rectangle(0., 0., width, 104., ui::PANEL);
-    draw_text("2D RIGID BODIES", 24., 27., 20., ui::INK);
-    for (row, (action, hint)) in ["Drop", "Pause", "Inspect"]
-        .into_iter()
-        .zip(hints)
-        .enumerate()
-    {
-        let text = format!("{action}: {}", bounded_hint(hint, width - 48. - 9. * 12.));
-        draw_text(&text, 24., 50. + row as f32 * ROW_HEIGHT, 16., ui::MUTED);
-    }
-    draw_line(24., 103., width - 24., 103., 1., ui::LINE);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compact_scene_and_actions_fit_the_actual_viewport() {
+        for (w, h) in [(320., 480.), (390., 568.), (844., 390.), (1280., 800.)] {
+            let layout = LabLayout::compact(w, h);
+            assert!(layout.footer_height < h * 0.5);
+            for i in 0..7 {
+                let button = layout.button(i);
+                assert!(button.y >= layout.footer_y && button.y + button.h < h);
+                assert!(!layout.contains_scene(button.center()));
+            }
+            for world in [vec2(-11.2, 0.6), vec2(11.2, 12.4)] {
+                let point = layout.to_screen(world);
+                assert!(layout.contains_scene(point));
+                assert!((layout.to_world(point) - world).length() < 0.001);
+            }
+        }
+    }
 
     #[test]
     fn hosted_short_viewports_keep_world_buttons_and_diagnostics_separate() {
@@ -180,7 +191,7 @@ mod tests {
                 assert!(layout.contains_scene(point));
                 assert!((layout.to_world(point) - world).length() < 0.00001);
             }
-            assert!(!layout.contains_scene(vec2(100., 100.)));
+            assert!(!layout.contains_scene(vec2(100., 30.)));
             for index in 0..7 {
                 let button = layout.button(index);
                 assert!(button.x >= 28. && button.x + button.w <= width - 28.);

@@ -54,7 +54,11 @@ fn button(ui: &mut Ui, id: u64, r: UiRect, s: &str, enabled: bool) {
         s,
         enabled,
         ButtonStyle {
-            fill: DARK,
+            fill: if matches!(id, 14 | 20 | 21 | 24) {
+                COPPER
+            } else {
+                Color::from_rgba(43, 76, 60, 255)
+            },
             ink: PAPER,
             focus: GOLD,
             disabled: Color::from_rgba(68, 81, 71, 255),
@@ -79,7 +83,8 @@ impl Camera for GolfCamera {
         Some(self.eye)
     }
 }
-/// Pixel-reserved scene region. Menus and shot controls never cover the course.
+/// Course region between the compact score chip and shot dock.
+/// On-demand menus may temporarily cover the course.
 #[derive(Clone, Copy, Debug)]
 pub struct Scene {
     pub x: f32,
@@ -91,9 +96,9 @@ impl Scene {
     pub fn new(w: f32, h: f32) -> Self {
         Self {
             x: 12.,
-            y: 143.,
+            y: 60.,
             w: (w - 24.).max(1.),
-            h: (h - 336.).max(1.),
+            h: (h - 144.).max(1.),
         }
     }
     fn contains(self, p: Vec2) -> bool {
@@ -328,15 +333,6 @@ impl App {
         self.drag_touch = None;
         self.auto_wait = 0.6;
     }
-    fn hint(&self, name: &str) -> String {
-        let mut b = [0; 160];
-        self.input
-            .format_hint(name, &mut b)
-            .ok()
-            .filter(|s| s.len() < 19)
-            .unwrap_or("See Controls")
-            .to_owned()
-    }
     /// Sample input and prepare screen-space UI once per frame. Physics edges
     /// remain pending until `tick`; UI and shared Controls own their gestures.
     pub fn prepare(&mut self, session: &mut GameSession, dt: f32) {
@@ -359,132 +355,90 @@ impl App {
         let w = screen_width();
         let h = screen_height();
         let scene = Scene::new(w, h);
-        let narrow = w < 600.;
         self.ui
             .begin(Viewport::responsive([w, h], [0.; 4]).expect("positive screen"));
-        let title = if self.view == View::TwoD {
-            "COPPER GREENS / 2D"
-        } else {
-            "COPPER GREENS / 3D"
-        };
-        self.ui.panel(rect(0., 0., w, 91.), PAPER).unwrap();
-        label(&mut self.ui, rect(16., 12., w - 32., 22.), title, 16., DARK);
-        label(
-            &mut self.ui,
-            rect(16., 39., w - 32., 25.),
-            &format!(
-                "{:02} / 12   {}",
-                self.round.hole_index + 1,
-                self.round.course.name
-            ),
-            if narrow { 16. } else { 23. },
-            DARK,
-        );
-        label(
-            &mut self.ui,
-            rect(16., 69., w - 32., 19.),
-            &format!(
-                "PAR {}   STROKES {}   TOTAL {}",
-                self.round.course.par,
-                self.round.strokes,
-                self.round.total()
-            ),
-            14.,
-            DARK,
-        );
-        let by = h - 183.;
-        self.ui.panel(rect(0., by, w, 183.), PAPER).unwrap();
-        let state = match self.round.phase {
-            Phase::Aiming => "AIM & PUTT",
-            Phase::Rolling => "BALL IN MOTION",
-            Phase::Water => "WATER / +1 PENALTY",
-            Phase::Holed => "HOLE COMPLETE",
-            Phase::Finished => "ROUND COMPLETE",
-        };
-        label(
-            &mut self.ui,
-            rect(14., by + 10., w - 126., 25.),
-            state,
-            12.,
-            DARK,
-        );
-        let status = if self.notice_time > 0. {
-            self.notice.to_owned()
-        } else if self.round.phase == Phase::Aiming {
-            format!("Putt: {} / drag toward target", self.hint("shoot"))
-        } else {
-            "Wait for the ball to come to rest.".to_owned()
-        };
-        label(
-            &mut self.ui,
-            rect(14., by + 35., w - 28., 36.),
-            &status,
-            14.,
-            DARK,
-        );
-        let gap = 6.;
-        let bw = (w - 28. - gap * 4.) / 5.;
-        let y = by + 105.;
-        for (i, id, s) in [
-            (0, 10, "<"),
-            (1, 11, ">"),
-            (2, 12, "-"),
-            (3, 13, "+"),
-            (4, 14, "PUTT"),
-        ] {
-            button(
-                &mut self.ui,
-                id,
-                rect(14. + i as f32 * (bw + gap), y, bw, 45.),
-                s,
-                self.round.phase == Phase::Aiming && self.menu == Menu::None && !self.manual_pause,
-            );
-        }
-        button(
-            &mut self.ui,
-            15,
-            rect(w - 104., by + 10., 90., 24.),
-            "CARD / C",
-            true,
-        );
-        let pause_hint = format!("Pause: {} / F2: Controls", self.hint("pause"));
-        label(
-            &mut self.ui,
-            rect(14., by + 158., w - 28., 24.),
-            &pause_hint,
-            12.,
-            DARK,
-        );
-        self.ui
-            .panel(
-                rect(14., by + 78., w - 28., 16.),
-                Color::from_rgba(209, 213, 186, 255),
-            )
-            .unwrap();
-        self.ui
-            .panel(rect(14., by + 78., (w - 28.) * self.power, 16.), COPPER)
-            .unwrap();
-        label(
-            &mut self.ui,
-            rect(18., by + 77., w - 36., 18.),
-            &format!("{}% POWER", (self.power * 100.).round() as u16),
-            13.,
-            DARK,
-        );
-        label(
-            &mut self.ui,
-            rect(16., 100., w - 32., 38.),
-            self.round.course.hint,
-            13.,
-            PAPER,
-        );
+        // Only the score and the shot belong in the permanent HUD. Course notes,
+        // bindings and player preferences live in the on-demand game menu.
         let modal = self.menu != Menu::None
             || self.manual_pause
             || matches!(self.round.phase, Phase::Holed | Phase::Finished);
+        if !modal {
+            self.ui
+                .button(
+                    15,
+                    rect(10., 10., (w - 80.).min(350.), 44.),
+                    "",
+                    true,
+                    ButtonStyle {
+                        fill: DARK,
+                        focus: GOLD,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            label(
+                &mut self.ui,
+                rect(20., 15., w - 110., 18.),
+                &format!(
+                    "{:02}/12   PAR {}",
+                    self.round.hole_index + 1,
+                    self.round.course.par
+                ),
+                14.,
+                PAPER,
+            );
+            label(
+                &mut self.ui,
+                rect(20., 35., w - 110., 17.),
+                &format!(
+                    "{} SHOTS / {} TOTAL",
+                    self.round.strokes,
+                    self.round.total()
+                ),
+                13.,
+                GOLD,
+            );
+            let dock_w = (w - 24.).min(420.);
+            let x = (w - dock_w) * 0.5;
+            let y = h - 64.;
+            let gap = 6.;
+            let bw = (dock_w - gap * 4.) / 5.;
+            if self.round.phase == Phase::Aiming {
+                self.ui.panel(rect(x, y - 12., dock_w, 4.), DARK).unwrap();
+                self.ui
+                    .panel(rect(x, y - 12., dock_w * self.power, 4.), COPPER)
+                    .unwrap();
+                for (i, id, text) in [
+                    (0, 10, "<"),
+                    (1, 11, ">"),
+                    (2, 12, "-"),
+                    (3, 13, "+"),
+                    (4, 14, "PUTT"),
+                ] {
+                    button(
+                        &mut self.ui,
+                        id,
+                        rect(x + i as f32 * (bw + gap), y, bw, 48.),
+                        text,
+                        true,
+                    );
+                }
+            }
+            if self.notice_time > 0. {
+                label(
+                    &mut self.ui,
+                    rect(16., 58., w - 32., 20.),
+                    self.notice,
+                    13.,
+                    GOLD,
+                );
+            }
+        }
         if modal {
             self.modal(w, h);
         }
         let controls_open = self.input.controls_open();
+        self.ui.set_auto_focus(modal);
         self.ui.finish_player(&mut self.input, !controls_open);
         let consumed = self.ui.interaction().pointer_consumed;
         for id in 10..=15 {
@@ -641,169 +595,131 @@ impl App {
         }
     }
     fn modal(&mut self, w: f32, h: f32) {
-        let width = (w - 24.).min(610.);
+        let width = (w - 32.).min(420.);
+        let height = if self.menu == Menu::Practice {
+            268.
+        } else if self.menu == Menu::Score {
+            276.
+        } else if self.manual_pause {
+            264.
+        } else {
+            212.
+        };
         let x = (w - width) * 0.5;
+        let y = ((h - height) * 0.5).max(8.);
+        let tx = x + 16.;
+        let tw = width - 32.;
         self.ui.modal(900).expect("one modal");
-        let y = 101.;
-        let height = (h - y - 12.).max(350.);
         self.ui.panel(rect(x, y, width, height), DARK).unwrap();
-        let tx = x + 18.;
-        let tw = width - 36.;
-        let by = y + height - 57.;
         if self.menu == Menu::Practice {
             label(
                 &mut self.ui,
-                rect(tx, y + 17., tw, 32.),
-                "PRACTICE A HOLE",
-                24.,
+                rect(tx, y + 16., tw, 26.),
+                "PRACTICE",
+                20.,
                 PAPER,
             );
-            label(
-                &mut self.ui,
-                rect(tx, y + 54., tw, 38.),
-                "Pick any hole. Practice never replaces a full-round record.",
-                14.,
-                PAPER,
-            );
-            let cw = (tw - 8.) * 0.5;
+            let cw = (tw - 18.) / 4.;
             for i in 0..12 {
-                let xx = tx + (i % 2) as f32 * (cw + 8.);
-                let yy = y + 103. + (i / 2) as f32 * 46.;
                 button(
                     &mut self.ui,
                     100 + i as u64,
-                    rect(xx, yy, cw, 42.),
-                    &format!("{:02}  PAR {}", i + 1, course::hole(i).par),
+                    rect(
+                        tx + (i % 4) as f32 * (cw + 6.),
+                        y + 54. + (i / 4) as f32 * 50.,
+                        cw,
+                        44.,
+                    ),
+                    &format!("{:02}", i + 1),
                     true,
                 );
             }
-            button(&mut self.ui, 20, rect(tx, by, tw, 44.), "BACK", true);
+            button(&mut self.ui, 20, rect(tx, y + 208., tw, 44.), "BACK", true);
             return;
         }
         if self.menu == Menu::Score {
             label(
                 &mut self.ui,
-                rect(tx, y + 17., tw, 32.),
-                "THE SCORECARD",
-                24.,
+                rect(tx, y + 16., tw, 26.),
+                "SCORECARD",
+                20.,
                 PAPER,
             );
-            let mut yy = y + 64.;
+            let cw = (tw - 12.) * 0.5;
             for i in 0..12 {
-                let c = course::hole(i);
                 let score = self.round.scores[i]
-                    .map(|s| {
-                        if self.round.picked_up[i] {
-                            format!("{s}*")
-                        } else {
-                            format!("{s}")
-                        }
-                    })
+                    .map(|s| format!("{}{}", s, if self.round.picked_up[i] { "*" } else { "" }))
                     .unwrap_or_else(|| "-".into());
                 label(
                     &mut self.ui,
-                    rect(tx, yy, tw - 49., 21.),
-                    &format!("{:02} {}", i + 1, c.name),
+                    rect(
+                        tx + (i / 6) as f32 * (cw + 12.),
+                        y + 54. + (i % 6) as f32 * 20.,
+                        cw,
+                        21.,
+                    ),
+                    &format!("{:02}  {}/{}", i + 1, score, course::hole(i).par),
                     14.,
                     PAPER,
                 );
-                label(
-                    &mut self.ui,
-                    rect(tx + tw - 47., yy, 47., 21.),
-                    &format!("{}/{}", score, c.par),
-                    if self.round.picked_up[i] { 12. } else { 14. },
-                    GOLD,
-                );
-                yy += 23.;
             }
             label(
                 &mut self.ui,
-                rect(tx, yy + 8., tw, 42.),
+                rect(tx, y + 184., tw, 23.),
                 &format!(
-                    "TOTAL {}    PAR {}    {:+}",
+                    "TOTAL {}  ({:+})",
                     self.round.total(),
-                    self.round.par_played(),
                     self.round.total() as i16 - self.round.par_played() as i16
                 ),
-                14.,
+                16.,
                 GOLD,
             );
-            label(
-                &mut self.ui,
-                rect(tx, yy + 56., tw, 22.),
-                "* Picked up at stroke limit",
-                12.,
-                PAPER,
-            );
+            let half = (tw - 8.) * 0.5;
             button(
                 &mut self.ui,
                 20,
-                rect(tx, by, tw, 44.),
-                "BACK TO GREEN",
+                rect(tx, y + 216., half, 44.),
+                "BACK",
                 true,
             );
+            button(
+                &mut self.ui,
+                25,
+                rect(tx + half + 8., y + 216., half, 44.),
+                "TAKE 12",
+                self.round.phase == Phase::Aiming,
+            );
+
             return;
         }
-        let (heading, copy) = if self.manual_pause {
-            (
-                "TAKE A BREATHER",
-                "The ball and moving obstacles are paused. Resume when you are ready.",
-            )
+        let heading = if self.manual_pause {
+            "PAUSED"
         } else if self.round.phase == Phase::Finished {
-            (
-                "THE CLUBHOUSE",
-                if self.auto {
-                    "Demonstration complete. Real putts, real rules. Demo rounds do not change your personal best."
-                } else if self.round.practice {
-                    "Practice complete. Practice scores never replace a full-round record."
-                } else {
-                    "Twelve greens, one scorecard. Full rounds save a local best when storage is available."
-                },
-            )
+            "ROUND COMPLETE"
         } else if self.round.phase == Phase::Holed {
-            (
-                "IN THE CUP",
-                if self.round.picked_up[self.round.hole_index] {
-                    "Picked up at the 12-stroke limit. Continue to the next green."
-                } else {
-                    "A clean finish. Every accepted putt and water penalty is on your card."
-                },
-            )
+            "IN THE CUP"
         } else {
-            (
-                "WELCOME TO THE GREENS",
-                "Twelve greens. Bank around stone, cross bridges, read slopes and time moving gates.",
-            )
+            "COPPER GREENS"
         };
         label(
             &mut self.ui,
-            rect(tx, y + 22., tw, 64.),
+            rect(tx, y + 20., tw, 28.),
             heading,
-            if w < 360. { 24. } else { 30. },
+            20.,
             PAPER,
         );
-        label(&mut self.ui, rect(tx, y + 94., tw, 90.), copy, 16., PAPER);
         let detail = if matches!(self.round.phase, Phase::Holed | Phase::Finished) {
             format!(
-                "{} strokes / par {}\nRound {} ({:+})\nBest full round: {}",
-                self.round.strokes,
-                self.round.course.par,
+                "{} STROKES  /  {:+} TO PAR",
                 self.round.total(),
-                self.round.total() as i16 - self.round.par_played() as i16,
-                self.best
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "not set".into())
+                self.round.total() as i16 - self.round.par_played() as i16
             )
+        } else if self.manual_pause {
+            "".into()
         } else {
-            "Drag from the ball toward your target.\nRelease to putt, or use the aim / power\nbuttons, then PUTT.\nWater: +1. Return ball: R (+1).".into()
+            "12 HOLES. ONE GREAT ROUND.".into()
         };
-        label(
-            &mut self.ui,
-            rect(tx, y + 193., tw, 96.),
-            &detail,
-            14.,
-            GOLD,
-        );
+        label(&mut self.ui, rect(tx, y + 58., tw, 22.), &detail, 13., GOLD);
         let first = if self.round.phase == Phase::Holed {
             24
         } else if self.round.phase == Phase::Finished {
@@ -813,7 +729,7 @@ impl App {
         };
         let action = if first == 24 {
             if self.round.hole_index == 11 {
-                "FINISH ROUND"
+                "FINISH"
             } else {
                 "NEXT HOLE"
             }
@@ -822,12 +738,12 @@ impl App {
         } else if self.manual_pause {
             "RESUME"
         } else {
-            "START ROUND"
+            "PLAY"
         };
         button(
             &mut self.ui,
             first,
-            rect(tx, by - 104., tw, 44.),
+            rect(tx, y + 96., tw, 44.),
             action,
             true,
         );
@@ -835,33 +751,31 @@ impl App {
         button(
             &mut self.ui,
             22,
-            rect(tx, by - 52., half, 44.),
+            rect(tx, y + 152., half, 44.),
             "PRACTICE",
             true,
         );
         button(
             &mut self.ui,
             23,
-            rect(tx + half + 8., by - 52., half, 44.),
-            "SCORECARD",
+            rect(tx + half + 8., y + 152., half, 44.),
+            "CARD",
             true,
         );
         if self.manual_pause {
-            button(&mut self.ui, 25, rect(tx, by, half, 44.), "PICK UP", true);
+            button(
+                &mut self.ui,
+                25,
+                rect(tx, y + 204., half, 44.),
+                "TAKE 12",
+                true,
+            );
             button(
                 &mut self.ui,
                 21,
-                rect(tx + half + 8., by, half, 44.),
-                "NEW ROUND",
+                rect(tx + half + 8., y + 204., half, 44.),
+                "RESTART",
                 true,
-            );
-        } else {
-            label(
-                &mut self.ui,
-                rect(tx, by + 8., tw, 40.),
-                "F2: current bindings / Tab: page tools",
-                13.,
-                PAPER,
             );
         }
     }
@@ -1207,7 +1121,14 @@ mod tests {
     use super::*;
     #[test]
     fn projections_preserve_pointer_aim() {
-        for (w, h) in [(320., 640.), (390., 640.), (1280., 720.)] {
+        for (w, h) in [
+            (320., 480.),
+            (320., 640.),
+            (390., 640.),
+            (844., 390.),
+            (400., 300.),
+            (1280., 720.),
+        ] {
             let s = Scene::new(w, h);
             for p in [vec2(2., 2.), vec2(9., 6.), vec2(16., 10.)] {
                 let q = top_map(s, p);

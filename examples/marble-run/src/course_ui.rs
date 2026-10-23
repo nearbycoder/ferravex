@@ -91,7 +91,13 @@ pub fn draw(
     }
     ui.begin(Viewport::fit([w, h], [w, h], [0.; 4]).unwrap());
     ui.set_auto_focus(picker || run.finished);
-    button(ui, 1, rect(w - 102., 12., 88., 34.), "COURSES", picker);
+    button(
+        ui,
+        1,
+        rect(12., 8., (w - 88.).min(240.), 44.),
+        COURSES[course].name,
+        picker,
+    );
     if !picker && can_recover && player.touch_seen() {
         button(ui, 2, rect(w - 102., 54., 88., 32.), "RECOVER", false);
     }

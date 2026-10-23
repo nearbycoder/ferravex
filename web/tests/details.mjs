@@ -190,6 +190,8 @@ function panel(t){
  const controls=new Element('button');doc.body.append(controls);
  doc.querySelector=selector=>{
   if(selector==='[data-controls],#controls')return controls;
+  if(selector==='[data-audio],#audio')return null;
+  if(selector==='.ferravex-details-trigger')return elements.find(node=>node.className==='ferravex-details-trigger');
   if(selector==='.ferravex-details-trigger,[data-controls],#controls')return elements.find(node=>node.className==='ferravex-details-trigger');
   if(selector==='dialog[open]')return elements.find(node=>node.tagName==='dialog'&&node.open)??null;
   assert.fail('Unexpected selector '+selector);
@@ -252,7 +254,7 @@ test('details dialog downloads fresh bounded JSON and keeps keyboard focus and l
  assert.equal(snapshot.state.graphics,'lost');assert.equal(snapshot.state.audio,'interrupted');
  assert.ok(!(await h.blobs[0].text()).includes('private-token'));
  assert.equal(h.status.textContent,'Diagnostic download started.');h.details.update();assert.equal(h.status.textContent,'Diagnostic download started.');
- assert.ok(h.elements.filter(node=>node.tagName==='a').every(node=>!node.parentElement));
+ assert.ok(h.elements.filter(node=>node.tagName==='a'&&node.download).every(node=>!node.parentElement));
  h.download.click();h.download.dispatchEvent(new Event('click'));assert.equal(h.downloads.length,1);assert.equal(h.timers.size,1);
  h.flush();assert.deepEqual(h.revoked,['blob:test-1']);assert.equal(h.download.getAttribute('aria-disabled'),'false');assert.equal(h.timers.size,0);
  h.canvas.dataset.frames='4';h.download.click();assert.equal(JSON.parse(await h.blobs[1].text()).counters.frames,4);
@@ -272,7 +274,7 @@ for(const stage of ['exports','blob','size','url','click','timer'])test(`downloa
  assert.match(h.status.textContent,/download unavailable/);assert.ok(!h.status.textContent.includes('private'));
  assert.equal(h.download.getAttribute('aria-disabled'),'false');assert.equal(h.timers.size,0);assert.equal(h.downloads.length,0);
  assert.deepEqual(h.revoked,stage==='click'||stage==='timer'?['blob:test-1']:[]);
- assert.ok(h.elements.filter(node=>node.tagName==='a').every(node=>!node.parentElement));
+ assert.ok(h.elements.filter(node=>node.tagName==='a'&&node.download).every(node=>!node.parentElement));
  h.details.update();assert.match(h.status.textContent,/download unavailable/);
  h.fail[stage]=false;h.download.click();assert.equal(h.downloads.length,1);h.flush();assert.equal(h.download.getAttribute('aria-disabled'),'false');
 });

@@ -62,7 +62,7 @@ fn table_layout(w: f32, h: f32) -> (f32, Vec2, Rect) {
     // The HUD uses logical pixels independently of the physics table scale.
     // A short window must not squeeze Reset into the game title.
     let hud_width = (w - 24.).clamp(1., 516.);
-    let reset = Rect::new((w + hud_width) * 0.5 - 68., 8., 68., 44.);
+    let reset = Rect::new((w + hud_width) * 0.5 - 124., 8., 68., 44.);
     (scale, origin, reset)
 }
 
@@ -88,17 +88,8 @@ fn table_render(game: &PinballGame, presentation: &Presentation, input: &PlayerI
     let table = game.table();
     let state = game.session().state();
     let touch_mode = input.current_device() == HintDevice::Touch;
-    let mut buffers = [[0; 128]; 6];
-    let [
-        left_buf,
-        right_buf,
-        launch_buf,
-        pause_buf,
-        restart_buf,
-        confirm_buf,
-    ] = &mut buffers;
-    let left = hint(input, "flipper_left", left_buf);
-    let right = hint(input, "flipper_right", right_buf);
+    let mut buffers = [[0; 128]; 4];
+    let [launch_buf, pause_buf, restart_buf, confirm_buf] = &mut buffers;
     let launch = hint(input, "launch", launch_buf);
     let pause = hint(input, "pause", pause_buf);
     let restart = hint(input, "restart", restart_buf);
@@ -278,7 +269,7 @@ fn table_render(game: &PinballGame, presentation: &Presentation, input: &PlayerI
     // Text accompanies the three ball lamps so lives are not color-only feedback.
     let hud_width = (w - 24.).clamp(1., 516.);
     let hud_x = (w - hud_width) * 0.5;
-    draw_text("SALVAGE PINBALL", hud_x, 31.0, 16.0, BRASS);
+    draw_text("SALVAGE", hud_x, 31.0, 16.0, BRASS);
     let score = format!("{:06}", table.score);
     if let Some((size, _)) = fitted_text(&score, 32., hud_width - 88.) {
         draw_text(&score, hud_x, 72., size, CREAM);
@@ -343,18 +334,6 @@ fn table_render(game: &PinballGame, presentation: &Presentation, input: &PlayerI
             13.,
             MINT,
         );
-    } else if state == SessionState::Playing {
-        hud_line(
-            if table.save_available {
-                "NEXT LAUNCH / 5s BALL SAVE"
-            } else {
-                "SAVE SPENT / AVOID THE DRAIN"
-            },
-            "SAVE SPENT",
-            footer + 22.,
-            13.,
-            BRASS,
-        );
     }
     if table.waiting && state == SessionState::Playing {
         hud_line(
@@ -363,16 +342,6 @@ fn table_render(game: &PinballGame, presentation: &Presentation, input: &PlayerI
             footer + 44.,
             13.,
             CREAM,
-        );
-    } else if presentation.launch_seconds > 0. && state == SessionState::Playing {
-        hud_line("BALL IN PLAY", "BALL IN PLAY", footer + 44., 13., CREAM);
-    } else {
-        hud_line(
-            &format!("{launch} LAUNCH / {pause} PAUSE"),
-            "BINDINGS: SEE CONTROLS",
-            footer + 44.,
-            13.,
-            MINT,
         );
     }
     if matches!(
@@ -437,13 +406,6 @@ fn table_render(game: &PinballGame, presentation: &Presentation, input: &PlayerI
             MINT,
         );
     }
-    hud_line(
-        &format!("{left} LEFT FLIP / {right} RIGHT FLIP"),
-        "FLIPPERS: SEE CONTROLS",
-        footer + 66.,
-        13.0,
-        MINT,
-    );
 }
 
 fn play_feedback(sound: &mut GameAudio, events: PinballFeedback) {
@@ -578,7 +540,7 @@ mod tests {
             let (scale, origin, reset) = table_layout(w, h);
             let hud_width = (w - 24.0_f32).clamp(1., 516.);
             let hud_x = (w - hud_width) * 0.5;
-            let (_, title_width) = fitted_text("SALVAGE PINBALL", 16., w).unwrap();
+            let (_, title_width) = fitted_text("SALVAGE", 16., w).unwrap();
             assert!(hud_x + title_width + 12. <= reset.x);
             assert!(reset.w >= 44. && reset.h >= 44.);
             assert!(reset.x >= 0. && reset.x + reset.w <= w);

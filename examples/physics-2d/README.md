@@ -25,11 +25,16 @@ The sandbox starts running immediately. Autoplay lets the original scene settle 
 | Inspect a body at the cursor | I | Left trigger |
 | Restore the original scene | R | Back / Select; RESET |
 
-The movement keys or left stick move the virtual cursor. The south face button also activates on-screen buttons. All bindings, including drop, step and inspect, appear in the shared Controls panel and can be remapped. Canvas hints read the current bindings and device through `PlayerInput::format_hint`; the table above lists defaults. Buttons wrap into two rows on narrow screens and three rows below 360px so RESUME remains readable. Narrow diagnostics use fixed 16px text in reserved wrapped rows; long binding hints point to Controls instead of shrinking. Unbound hints remain explicit. The browser provides a taller scrollable canvas and a sticky Scene / Lab controls / Guide link bar, which remains a native page scrolling surface above the canvas. STEP is disabled while running, PULSE while paused or recharging, and DROP at capacity. Drop previews match the clamped placement inside the boundaries.
+The movement keys or left stick move the virtual cursor. The south face button
+also activates on-screen buttons. Current bindings and remapping are in
+**Game menu → Controls** (or F2); the table above lists defaults. The compact
+HUD shows running/paused state, body count and actionable buttons. STEP is
+disabled while running, PULSE while paused or recharging, and DROP at capacity.
+Drop previews use the same projection and clamped placement as the scene.
+Fullscreen uses the actual viewport and hides page navigation; the inline page
+retains its native scrolling links.
 
-The footer shows the selected shape, running/paused/suspended state, body/awake/asleep counts, fixed frequency, tick and pulse readiness. Wide layouts also show mean and p95 frame times. Last-tick diagnostics show solid contact pairs and contact starts/stops. Cursor queries count collider hits, retaining at most eight and explicitly reporting truncation; compound children count separately. Queries use actual current collider poses, which may lead the interpolated drawing by part of a tick while running. Pausing shows the current pose directly.
-
-Press **I** over a body to pin its inspection. The steady white outline and footer identify its scene number, shape, awake/asleep/pending-wake state, quiet time, speed and last-tick contact count. Inspection is read-only and does not wake bodies. A miss clears selection; successful drops select the new body. Reset clears body selection while preserving the shape chosen for future drops. Contact diagnostics remain the latest completed tick while paused; they are not new events every render frame.
+Press **I** over a body to pin its inspection. The steady white outline and footer identify its scene number, shape, awake/asleep/pending-wake state, speed and last-tick contact count. Inspection is read-only and does not wake bodies. A miss clears selection; successful drops select the new body. Reset clears body selection while preserving the shape chosen for future drops. The scene and inspection remain frozen until STEP or resume.
 
 Pausing freezes body motion, simulation ticks and physics/audio cooldowns. You can still select and place shapes while paused; they remain still until you resume or step. Each **N / STEP** press advances exactly one 1/120-second tick and leaves the session paused; holding a button does not continuously step. STEP while running adds no extra tick. Running drop/pulse edges are consumed on actual fixed ticks, so a zero-tick render frame retains a quick tap and catch-up ticks do not repeat it. UI drop/pulse requests each have one pending slot; repeated requests before a tick coalesce. Paused drops remain immediate editor operations. Pulse is available only while running and has a 0.65-second simulation-time cooldown; pulses wake bodies and pass through the normal solver.
 
@@ -47,4 +52,4 @@ Regression tests cover pause/resume without catch-up, single stepping and resume
 
 ## Browser player update
 
-Open **Details → Player tools** for screenshots, clean sharing links, frame limits, session timing, screen wake lock, accessibility preferences and settings backups. All shared player upgrades apply to this example. Read the [player guide](../../docs/PLAYER_GUIDE.md) for behavior and browser limits.
+Open **Game menu → Settings → Player tools** for screenshots, clean sharing links, frame limits, session timing, screen wake lock, accessibility preferences and settings backups. All shared player upgrades apply to this example. Read the [player guide](../../docs/PLAYER_GUIDE.md) for behavior and browser limits.

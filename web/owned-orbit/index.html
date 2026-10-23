@@ -47,26 +47,29 @@
       #game:focus-visible{outline-color:Highlight!important}
       button:focus-visible,a:focus-visible,summary:focus-visible{outline-color:Highlight}
     }
+    #orbit-compact-hud{position:absolute;top:0;left:0;right:0;min-height:42px;padding:10px 64px 10px 10px;background:#091219;color:#dce8df;font:600 15px/22px system-ui;pointer-events:none;z-index:1}
+    @media(min-width:700px){body:not(.ferravex-fullscreen) #orbit-compact-hud{display:none}}
   </style>
 </head>
 <body>
   <main>
     <h1 id="orbit-title">Orbit Breaker</h1>
-    <p id="orbit-description">Steer a paddle to bounce the ball through two debris fields. Clear both sectors before losing three lives.</p>
-    <p id="orbit-keys"><strong>Default keys:</strong> <kbd>A</kbd> / <kbd>Left arrow</kbd> and <kbd>D</kbd> / <kbd>Right arrow</kbd> move; <kbd>Space</kbd> or <kbd>Enter</kbd> launches or retries; <kbd>Escape</kbd> pauses or resumes; <kbd>R</kbd> restarts. Open <strong>Controls</strong> or press <kbd>F2</kbd> in the playfield to view or remap current bindings.</p>
-    <p id="orbit-navigation">Pause before reading help. <kbd>Shift</kbd> + <kbd>Tab</kbd> from the playfield moves to <strong>How to play</strong>; use <kbd>Shift</kbd> + <kbd>Tab</kbd> again to reach the toolbar buttons. Moving focus or opening this help does not pause the game.</p>
+    <p id="orbit-description">Steer the paddle. Clear two debris fields with three lives.</p>
     <div class="orbit-stage">
       <canvas id="game" width="640" height="720" tabindex="0" aria-labelledby="orbit-title" aria-describedby="orbit-description orbit-keys orbit-navigation game-state">Orbit Breaker requires JavaScript, Canvas 2D and WebAssembly. Keyboard instructions are available in How to play below.</canvas>
+      <div id="orbit-compact-hud" aria-label="Round status"></div>
       <div id="notice" role="status" aria-live="polite" aria-atomic="true"><div><strong id="notice-title">ORBIT BREAKER</strong><span id="notice-message">Loading the Rust game…</span><br><button id="resume" type="button" hidden>Resume</button></div></div>
     </div>
     <p id="game-state" aria-live="polite" aria-atomic="true"></p>
-    <p id="orbit-readable" aria-live="off" hidden></p>
+    <details><summary>Round details</summary><p id="orbit-readable" aria-live="off" hidden></p></details>
     <nav id="orbit-toolbar" class="toolbar" aria-label="Game controls">
       <a href="../">← Ferravex · All games</a><span class="spacer"></span>
       <button type="button" data-controls aria-pressed="false" title="View or remap controls (F2)" disabled>Controls</button><button type="button" data-audio aria-pressed="false" title="Enable sound" disabled>Sound off</button><button id="pause" type="button" aria-pressed="false">Pause</button><button id="restart" type="button">Restart</button>
       <details id="orbit-help">
         <summary id="orbit-help-summary">How to play · keyboard and remapping</summary>
         <div class="help">
+          <p id="orbit-keys"><strong>Default keys:</strong> <kbd>A</kbd> / <kbd>Left arrow</kbd> and <kbd>D</kbd> / <kbd>Right arrow</kbd> move; <kbd>Space</kbd> or <kbd>Enter</kbd> launches or retries; <kbd>Escape</kbd> pauses or resumes; <kbd>R</kbd> restarts. Open <strong>Controls</strong> or press <kbd>F2</kbd> in the playfield to view or remap current bindings.</p>
+          <p id="orbit-navigation">Pause before reading help. <kbd>Shift</kbd> + <kbd>Tab</kbd> from the playfield moves to <strong>How to play</strong>; use <kbd>Shift</kbd> + <kbd>Tab</kbd> again to reach the toolbar buttons. Moving focus or opening this help does not pause the game.</p>
           <h2>Default controls</h2>
           <p>Saved remaps take precedence over these defaults. The Controls panel shows your current bindings.</p>
           <dl>

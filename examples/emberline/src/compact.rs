@@ -24,7 +24,7 @@ impl CompactHud {
                 Rect::new(12., h - 72., 56., 56.),
                 Rect::new(80., h - 72., 56., 56.),
                 Rect::new(w - 76., h - 72., 64., 56.),
-                Rect::new(w - 84., 10., 72., 44.),
+                Rect::new(w - 160., h - 72., 72., 56.),
             ],
         })
     }
@@ -55,13 +55,11 @@ impl CompactHud {
     pub(super) fn draw(self, game: &Game, input: &PlayerInput) {
         set_camera(&self.canvas.camera());
         let w = self.canvas.size.x;
-        let h = self.canvas.size.y;
         let center = w * 0.5;
         let collected = game.embers.iter().filter(|(_, found)| *found).count();
         let touch = input.current_device() == HintDevice::Touch;
         let defaults = touch && !input.touch_customized();
-        draw_rectangle(0., 0., w, 96., Color::new(0.08, 0.13, 0.11, 0.96));
-        label("EMBERLINE", 12., 30., 20., CREAM);
+        draw_rectangle(0., 0., w, 64., Color::new(0.08, 0.13, 0.11, 0.96));
         label(
             &format!(
                 "{:.2}s / LANTERNS {}/2",
@@ -69,19 +67,19 @@ impl CompactHud {
                 game.checkpoints.index()
             ),
             12.,
-            70.,
+            28.,
             15.,
             CREAM,
         );
         fitted_centered_label(
             &format!(
-                "{collected}/{} EMBERS / {} POINTS",
+                "{collected}/{} EMBERS / {} PTS",
                 game.embers.len(),
                 game.score.total()
             ),
-            center,
-            90.,
-            w - 24.,
+            (w - 64.) * 0.5,
+            52.,
+            w - 88.,
             15.,
             ORANGE,
         );
@@ -102,9 +100,9 @@ impl CompactHud {
                     "AIR JUMP READY"
                 }
             } else {
-                "REACH THE GREEN LIFT >"
+                ""
             };
-            centered_label(notice, center, 112., 14., CREAM);
+            centered_label(notice, center, 82., 14., CREAM);
             if defaults
                 && [
                     ("move_left", 12),
@@ -131,29 +129,6 @@ impl CompactHud {
                         CREAM,
                     );
                 }
-            } else if game.elapsed < 7. {
-                draw_rectangle(0., h - 96., w, 96., Color::new(0.08, 0.13, 0.11, 0.96));
-                for (i, (name, action)) in [
-                    ("LEFT", "move_left"),
-                    ("RIGHT", "move_right"),
-                    ("JUMP", "jump"),
-                ]
-                .into_iter()
-                .enumerate()
-                {
-                    self.hint(
-                        &format!("{name} {}", ControlHint::new(input, action).text()),
-                        h - 74. + i as f32 * 22.,
-                    );
-                }
-                self.hint(
-                    &format!(
-                        "PAUSE {} / RETRY {}",
-                        ControlHint::new(input, "pause").text(),
-                        ControlHint::new(input, "restart").text()
-                    ),
-                    h - 8.,
-                );
             }
             return;
         }
@@ -323,6 +298,13 @@ mod tests {
             let hud = CompactHud::for_screen(screen).unwrap();
             assert_eq!(hud.canvas.scale, 1.);
             let controls = hud.touch_layout();
+            let menu = Rect::new(screen.x - 52., 8., 44., 44.);
+            for button in hud.buttons {
+                assert!(
+                    !button.overlaps(&menu),
+                    "touch actions leave the game menu clear"
+                );
+            }
             for (i, control) in controls.iter().enumerate() {
                 let Region::Rect(rect) = control.region else {
                     panic!("rectangular target")

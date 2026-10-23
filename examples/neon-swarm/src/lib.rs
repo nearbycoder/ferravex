@@ -737,7 +737,7 @@ fn hud_label(
     )
     .unwrap();
 }
-fn draw_hud(ui: &mut Ui, game: &Game, started: bool, input: &PlayerInput) {
+fn draw_hud(ui: &mut Ui, game: &Game, started: bool, _input: &PlayerInput) {
     hud_label(
         ui,
         [72., 57.],
@@ -879,74 +879,6 @@ fn draw_hud(ui: &mut Ui, game: &Game, started: bool, input: &PlayerInput) {
         CYAN,
     )
     .unwrap();
-    // Binding text comes from the sampled profile, including unbound/remapped
-    // inputs. Each column has bounded text; Controls retains the full mapping.
-    for (column, action, title) in [
-        (0., "fire", "FIRE"),
-        (1., "boost", "DASH"),
-        (2., "pause", "PAUSE"),
-    ] {
-        let mut binding = [0; 128];
-        let binding = hint(input, action, &mut binding);
-        ui.label(
-            UiRect {
-                min: [265. + column * 265., 734.75],
-                size: [255., 14.],
-            },
-            &format!("{title}: {binding}"),
-            TextStyle {
-                size: 14.,
-                color: MUTED,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    }
-    let mut binding = [0; 128];
-    let movement = if input.current_device() == ferravex_render::input::HintDevice::KeyboardMouse {
-        format!(
-            "MOVE: {} / {} / {} / {}",
-            hint(input, "move_forward", &mut [0; 128]),
-            hint(input, "move_left", &mut [0; 128]),
-            hint(input, "move_back", &mut [0; 128]),
-            hint(input, "move_right", &mut [0; 128])
-        )
-    } else {
-        format!(
-            "MOVE X: {} / Y: {}",
-            hint(input, "move_x", &mut binding),
-            hint(input, "move_y", &mut [0; 128])
-        )
-    };
-    ui.label(
-        UiRect {
-            min: [265., 759.625],
-            size: [790., 13.],
-        },
-        &movement,
-        TextStyle {
-            size: 13.,
-            color: MUTED,
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    hud_label(
-        ui,
-        [73., 793.],
-        1135.,
-        13.,
-        MUTED,
-        Align::Left,
-        format_args!(
-            "{} / F2: CONTROLS",
-            if input.touch_active() {
-                "TOUCH ACTIVE: AUTO AIM / FIRE AT NEAREST DRONE"
-            } else {
-                "AIM: POINTER / MAPPED AIM AXES"
-            }
-        ),
-    );
     let progress = match game.progression.next_cost() {
         Some(cost) => format!(
             "LV {} / XP {}/{} / DMG {}",

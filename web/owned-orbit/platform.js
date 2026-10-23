@@ -72,9 +72,10 @@ function render(timestamp){
  ctx.putImageData(image,0,0);drawInput2d(ctx,engine,canvas.width,canvas.height);details.player?.frame(timestamp);
  const paused=!!engine.orbit_paused();pauseButton.textContent=paused?'Resume':'Pause';pauseButton.setAttribute('aria-pressed',String(paused));
  notice.hidden=!paused||panel;document.querySelector('#resume').hidden=!paused;
- if(paused){noticeTitle.textContent='GAME PAUSED';noticeMessage.textContent='Ball, serve charge and sector countdown are frozen. Resume when ready.';}
+ if(paused){noticeTitle.textContent='PAUSED';noticeMessage.textContent='';}
  const descriptions=['Ready. Wait to charge; Controls shows the current launch binding.','Playing.','Sector 1 secured. Preparing reinforced panels in sector 2.','Both sectors cleared. Use the current binding in Controls to retry, then launch.','Run ended. Use the current binding in Controls to retry, then launch.'];
  const lives=engine.lives();
+ const compactHud=document.querySelector('#orbit-compact-hud');if(compactHud)compactHud.textContent=`${engine.score()} pts · ${lives} lives · ${engine.sector()}/2`;
  const readable=readStatusText(),newline=readable?.indexOf('\n')??-1;
  const description=readable?(newline<0?readable:readable.slice(0,newline)):`${paused?'Paused. Resume to continue.':descriptions[engine.status()]} Sector ${engine.sector()} of 2. Score ${engine.score()}. ${lives} ${lives===1?'life':'lives'} remaining.`;
  if(description!==previousDescription){stateLabel.textContent=description;previousDescription=description;}
