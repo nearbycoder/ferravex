@@ -1,7 +1,7 @@
 # Build with the current engine
 
 Start with a small loop, then add the systems that give your game its identity.
-Ferravex shares its Rust simulation, input and presentation helpers across fifteen
+Ferravex shares its Rust simulation, input and presentation helpers across seventeen
 playable examples. The facade is `ferravex`; use its qualified modules when you
 need a specific system. The [quickstart](QUICKSTART.md) and
 [project generator](../website/content/getting-started.md) get you to running code.

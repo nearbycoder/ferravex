@@ -16,9 +16,9 @@ const cards = [...html.matchAll(/<a\b([^>]*\bdata-game\b[^>]*)>([\s\S]*?)<\/a>/g
   description: content.match(/<small>([^<]+)<\/small>/)[1],
 }));
 
-test('all 15 original game links and displayed metadata match real local hosts', () => {
-  assert.equal(cards.length, 15);
-  assert.equal(new Set(cards.map(card => card.href)).size, 15);
+test('all catalog game links and displayed metadata match real local hosts', () => {
+  assert.equal(cards.length, 17);
+  assert.equal(new Set(cards.map(card => card.href)).size, 17);
   assert.deepEqual(cards.map(card => card.href), catalog.map(game => `${game.host}/`));
   for (const [index, card] of cards.entries()) {
     assert.match(card.href, /^[a-z0-9-]+\/$/);
@@ -48,8 +48,8 @@ test('empty searches and dimension filters preserve ordering and input records',
   assert.deepEqual(filterGames(games), games);
   assert.deepEqual(filterGames(games, {query: '  — /  '}), games);
   assert.notEqual(filterGames(games), games);
-  assert.equal(filterGames(games, {dimension: '2D'}).length, 7);
-  assert.equal(filterGames(games, {dimension: '3D'}).length, 8);
+  assert.equal(filterGames(games, {dimension: '2D'}).length, 8);
+  assert.equal(filterGames(games, {dimension: '3D'}).length, 9);
   assert.deepEqual(filterGames(games, {dimension: '4D'}), []);
   assert.deepEqual(filterGames([], {query: 'physics'}), []);
   assert.equal(filterGames(games, {query: 'ember'})[0], games[2]);
@@ -69,7 +69,7 @@ test('static controls have labels, live result text, and a skip destination', ()
   assert.match(html, /<button type="submit" aria-controls="games">View results<\/button>/);
   assert.match(html, /id="empty-heading"[^>]*aria-describedby="empty-description"/);
   assert.match(html, /id="empty-description"/);
-  assert.match(html, /<noscript>[\s\S]*All fifteen examples are listed below/);
+  assert.match(html, /<noscript>[\s\S]*All seventeen examples are listed below/);
 });
 
 // Minimal first-party event/focus doubles exercise the real controller without
@@ -148,13 +148,13 @@ function fixture({query = '', dimension = 'all', url, historyState = null, histo
 test('controller filters immediately, updates results, and keeps typing focus', () => {
   const page = fixture();
   assert.equal(page.controls['catalog-filters'].hidden, false);
-  assert.equal(page.visible().length, 15);
+  assert.equal(page.visible().length, 17);
   page.controls['catalog-search'].focus();
   page.search('physics lab');
   assert.equal(page.visible().length, 2);
   page.select('3D');
   assert.equal(page.visible().length, 1);
-  assert.equal(page.controls['result-count'].textContent, 'Showing 1 of 15 examples matching “physics lab” in 3D.');
+  assert.equal(page.controls['result-count'].textContent, 'Showing 1 of 17 examples matching “physics lab” in 3D.');
   assert.equal(page.document.activeElement, page.controls['catalog-search']);
   const submit = page.send(page.controls['catalog-filters'], 'submit');
   assert.equal(submit.defaultPrevented, true, 'Enter must not navigate/reload');
@@ -170,7 +170,7 @@ test('Escape clears only the query and respects composition', () => {
   const escape = page.send(search, 'keydown', {key: 'Escape'});
   assert.equal(escape.defaultPrevented, true);
   assert.equal(search.value, '');
-  assert.equal(page.visible().length, 8, 'dimension stays selected');
+  assert.equal(page.visible().length, 9, 'dimension stays selected');
   assert.equal(page.document.activeElement, search);
   assert.equal(page.send(search, 'keydown', {key: 'Escape'}).defaultPrevented, false);
 });
@@ -184,7 +184,7 @@ test('no matches has a focus destination and recovery restores all links', () =>
   assert.equal(page.document.activeElement, page.controls['empty-heading']);
   page.controls['show-all'].focus();
   page.send(page.controls['show-all'], 'click');
-  assert.equal(page.visible().length, 15);
+  assert.equal(page.visible().length, 17);
   assert.equal(page.controls['catalog-empty'].hidden, true);
   assert.equal(page.controls['catalog-search'].value, '');
   assert.equal(page.dimensions[0].checked, true);
@@ -192,7 +192,7 @@ test('no matches has a focus destination and recovery restores all links', () =>
   page.select('3D');
   page.search('physics');
   page.send(page.controls['clear-filters'], 'click');
-  assert.equal(page.visible().length, 15);
+  assert.equal(page.visible().length, 17);
 });
 
 test('history-restored filters refresh and never leave focus inside hidden content', () => {
@@ -207,7 +207,7 @@ test('history-restored filters refresh and never leave focus inside hidden conte
   assert.equal(page.document.activeElement, page.controls['empty-heading']);
   page.controls['catalog-search'].value = '';
   page.send(page.document.defaultView, 'pageshow');
-  assert.equal(page.visible().length, 15);
+  assert.equal(page.visible().length, 17);
   assert.equal(page.document.activeElement, page.controls['catalog-search']);
 });
 
@@ -243,7 +243,7 @@ test('partial card metadata leaves links available and searchable by remaining f
     links[1].textContent = 'Orbit Breaker';
     delete links[2].dataset.dimension;
   }});
-  assert.equal(page.visible().length, 15);
+  assert.equal(page.visible().length, 17);
   page.search('Courtyard');
   assert.deepEqual(page.visible(), [page.links[0]]);
   page.search('Orbit');
@@ -258,7 +258,7 @@ test('missing required controls retain the static catalog without partial enhanc
   assert.doesNotThrow(() => initCatalog({querySelector: () => null}));
   const page = fixture({prepare({container}) { container.children.delete('#result-count'); }});
   assert.equal(page.controls['catalog-filters'].hidden, true);
-  assert.equal(page.visible().length, 15);
+  assert.equal(page.visible().length, 17);
 });
 
 test('URL filters restore without rewriting the URL or stealing focus on initial load', () => {
@@ -299,14 +299,14 @@ test('filter edits round-trip Unicode/reserved characters and retain other URL s
   assert.equal(page.view.location.searchParams.has('dimension'), false);
   assert.equal(page.view.location.searchParams.get('ref'), 'menu');
   assert.equal(page.view.location.hash, '#games-heading');
-  assert.equal(page.visible().length, 15);
+  assert.equal(page.visible().length, 17);
 });
 
 test('URL decoding tolerates empty, invalid and duplicate filter parameters', () => {
   for (const dimension of ['4D', '3d', '', 'null', 'all']) {
     const page = fixture({url: `https://example.test/?dimension=${dimension}`});
     assert.equal(page.dimensions[0].checked, true);
-    assert.equal(page.visible().length, 15);
+    assert.equal(page.visible().length, 17);
   }
   const page = fixture({url: 'https://example.test/?q=ember&q=physics&dimension=2D&dimension=3D&ref=keep'});
   assert.equal(page.controls['catalog-search'].value, 'ember');
@@ -318,7 +318,7 @@ test('URL decoding tolerates empty, invalid and duplicate filter parameters', ()
   assert.equal(page.view.location.searchParams.get('ref'), 'keep');
   assert.doesNotThrow(() => fixture({url: 'https://example.test/?q=%E0%A4%A&dimension=%ZZ'}));
   const empty = fixture({url: 'https://example.test/?q=&dimension=', query: 'stale', dimension: '3D'});
-  assert.equal(empty.visible().length, 15);
+  assert.equal(empty.visible().length, 17);
   assert.equal(empty.controls['catalog-search'].value, '');
 });
 
@@ -357,7 +357,7 @@ test('Back/Forward and page restoration use URL state and rescue only hidden foc
   page.send(page.view, 'popstate');
   assert.equal(page.controls['catalog-search'].value, '');
   assert.equal(page.dimensions[0].checked, true);
-  assert.equal(page.visible().length, 15);
+  assert.equal(page.visible().length, 17);
   assert.equal(page.document.activeElement, page.controls['catalog-search']);
   assert.equal(page.replacements.length, 0, 'history restoration does not overwrite navigated entries');
 });
@@ -378,7 +378,7 @@ test('denied or unavailable history access does not break local filtering and re
     assert.equal(page.document.activeElement, page.links[14]);
     page.search('no such game');
     page.send(page.controls['show-all'], 'click');
-    assert.equal(page.visible().length, 15);
+    assert.equal(page.visible().length, 17);
     assert.equal(page.document.activeElement, page.controls['catalog-search']);
   }
 });
@@ -408,7 +408,7 @@ test('no-results text identifies filters and hides irrelevant dimension recovery
   assert.equal(page.controls['search-all-dimensions'].hidden, true);
   assert.equal(page.document.activeElement, page.controls['catalog-search']);
   assert.equal(page.controls['empty-description'].textContent, `No examples matching “${query}” in 3D. Try fewer search words or clear all filters.`);
-  assert.match(page.controls['result-count'].textContent, /Showing 0 of 15 examples/);
+  assert.match(page.controls['result-count'].textContent, /Showing 0 of 17 examples/);
   assert.equal(page.controls['empty-description'].children.size, 0, 'query is plain text');
 });
 
@@ -472,10 +472,10 @@ test('radio changes retain native focus and result announcements distinguish equ
   assert.equal(page.send(page.dimensions[2], 'keydown', {key: 'ArrowLeft'}).defaultPrevented, false);
   const count = page.controls['result-count'];
   page.search('crystal');
-  assert.match(count.textContent, /Showing 1 of 15 examples matching “crystal” in 3D/);
+  assert.match(count.textContent, /Showing 1 of 17 examples matching “crystal” in 3D/);
   const firstWrites = count.textWrites;
   page.search('dune');
-  assert.match(count.textContent, /Showing 1 of 15 examples matching “dune” in 3D/);
+  assert.match(count.textContent, /Showing 1 of 17 examples matching “dune” in 3D/);
   assert.equal(count.textWrites, firstWrites + 1);
   page.search('dune');
   assert.equal(count.textWrites, firstWrites + 1, 'unchanged result text is not announced repeatedly');

@@ -6,7 +6,7 @@ Build from this checkout for the current game catalog and browser player tools. 
 
 ## Play and build locally
 
-The [catalog](examples/catalog.json) contains fifteen examples: the ten original 2D/3D games, Strike, two physics labs, Courtyard and Orbit Breaker. The thirteen restored examples use the original `ferravex-render` runtime. Courtyard retains its instanced WebGL2 renderer; Orbit Breaker presents its Rust framebuffer through Canvas2D.
+The [catalog](examples/catalog.json) contains seventeen examples: Copper Greens in 2D and 3D, the ten original 2D/3D games, Strike, two physics labs, Courtyard and Orbit Breaker. The fifteen shared-runtime examples use the original `ferravex-render` runtime. Courtyard retains its instanced WebGL2 renderer; Orbit Breaker presents its Rust framebuffer through Canvas2D.
 
 ```sh
 python3 -B scripts/ferravex.py doctor --profile web
@@ -17,7 +17,7 @@ python3 -B scripts/ferravex.py build-web release --jobs 2
 python3 -B scripts/serve-web.py --bind 127.0.0.1 --port 8000
 ```
 
-Open http://127.0.0.1:8000/ for the local catalog. Individual pages include `/emberline/`, `/neon-swarm/`, `/strike/`, `/owned/` for Courtyard and `/owned-orbit/` for Orbit Breaker. Browser hosts use standard APIs directly, with no external runtime libraries, fonts, art downloads or CDN loaders.
+Open http://127.0.0.1:8000/ for the local catalog. Individual pages include `/mini-golf-2d/`, `/mini-golf-3d/`, `/emberline/`, `/neon-swarm/`, `/strike/`, `/owned/` for Courtyard and `/owned-orbit/` for Orbit Breaker. Browser hosts use standard APIs directly, with no external runtime libraries, fonts, art downloads or CDN loaders.
 
 Use Rust 1.88 or newer, Python 3.11 or newer, and Node 22 or newer for host tests.
 `ferravex.py list` lists catalog IDs; `--dry-run` previews commands. The CLI uses
@@ -143,6 +143,6 @@ MIT. Engine/game source and authored assets are first-party. Build toolchains, o
 
 [Gameplay recipes](docs/GAMEPLAY_RECIPES.md) map reusable reward, weapon, encounter, interaction, platform and trial rules to their host contracts. Run `cargo run -p ferravex-play --example gameplay_recipe --offline --locked -j 2` for a small survival/crafting composition. The [40-feature series](docs/GAMEPLAY_40.md) applies the rules to Neon Swarm, Emberline and Orbit Breaker.
 
-## The player update
+## Shared player features
 
-All fifteen browser examples share the new player tools: frame limits, screenshots, clean sharing, wake lock, active session timing, accessibility preferences and settings backups. Read the [player guide](docs/PLAYER_GUIDE.md) for controls and browser limits. The [30-change catalog](website/releases/player30.json) links each improvement to its individual PR.
+All seventeen browser examples share player tools: frame limits, screenshots, clean sharing, wake lock, active session timing, accessibility preferences and settings backups. Read the [player guide](docs/PLAYER_GUIDE.md) for controls and browser limits. Explore the site’s Features section for engine capabilities, guides and playable examples.

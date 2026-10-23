@@ -146,13 +146,14 @@ def entry(title, url, section, text='', subtitle='', icon='file-text'):
 def build_index(root, docs, games, repository):
     rows = [
         entry('Ferravex', '/', 'Pages', 'Home Rust 2D 3D low poly game engine', 'Engine overview', 'home'),
-        entry('All examples', '/examples/', 'Pages', 'games demos 2D 3D gallery play', 'Fifteen playable games and labs', 'grid'),
+        entry('All examples', '/examples/', 'Pages', 'games demos 2D 3D gallery play', f'{len(games)} playable games and labs', 'grid'),
         entry('Documentation', '/docs/', 'Pages', 'guides tutorials getting started architecture', 'Guides and engine systems', 'book'),
         entry('Rust API reference', '/api/ferravex/index.html', 'Pages', 'API crates Rust reference types functions methods', 'Browse the public Rust API', 'code'),
     ]
     import json
-    for update in json.loads((repository / 'website/releases/player30.json').read_text(encoding="utf-8")):
-        rows.append(entry(update['title'], f"/updates/#feature-{update['id']}", 'Pages', update['detail'], update['category'], 'file-text'))
+    rows.append(entry('Features', '/features/', 'Pages', 'engine systems physics rendering UI gameplay networking tools', 'What you can build with Ferravex', 'grid'))
+    for feature in json.loads((repository / 'website/features.json').read_text(encoding="utf-8")):
+        rows.append(entry(feature['title'], f"/features/#{feature['id']}", 'Features', feature['detail']+' '+' '.join(feature['items']), feature['label'], 'file-text'))
     for slug, title, group, source in docs:
         url = f'/docs/{slug}/'
         parser = ContentParser()

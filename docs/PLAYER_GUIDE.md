@@ -1,6 +1,6 @@
 # The browser player guide
 
-All fifteen games and labs share browser tools for controls, presentation and recovery. Open **Details** in any game, then scroll to **Player tools**. These tools run in the browser adapter; native hosts and simulation rules retain their documented behavior. See [every change](../website/releases/player30.json) and the [game catalog](../examples/catalog.json).
+All seventeen games and labs share browser tools for controls, presentation and recovery. Open **Details** in any game, then scroll to **Player tools**. These tools run in the browser adapter; native hosts and simulation rules retain their documented behavior. See the [game catalog](../examples/catalog.json) and [Copper Greens guide](../examples/shared/mini-golf/README.md).
 
 ## Controls and focus
 

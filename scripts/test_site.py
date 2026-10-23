@@ -89,7 +89,7 @@ class SiteTests(unittest.TestCase):
         self.assertTrue((root / 'index.html').is_file(), 'Build the documentation site first')
         pages = [root / 'index.html', *root.glob('docs/**/*.html'), *root.glob('examples/**/*.html')]
         self.assertEqual({p.parent.name for p in (root / 'examples').glob('*/index.html')}, {g['id'] for g in json.loads((ROOT / 'examples/catalog.json').read_text())})
-        self.assertEqual(len(list((root / 'play').rglob('*.wasm'))), 15)
+        self.assertEqual(len(list((root / 'play').rglob('*.wasm'))), len(json.loads((ROOT / 'examples/catalog.json').read_text())))
         self.assertFalse((root / 'third-party').exists())
         self.assertTrue((root / 'api/ferravex_physics').exists())
         self.assertTrue((root / 'play/runtime.js').exists())

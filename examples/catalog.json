@@ -716,5 +716,29 @@
         }
       }
     }
+  },
+  {
+    "id": "mini-golf-2d",
+    "title": "Copper Greens 2D",
+    "dimension": "2D",
+    "kind": "game",
+    "host": "mini-golf-2d",
+    "genre": "12-hole miniature golf",
+    "description": "Twelve handcrafted greens with bank shots, bunkers, water, slopes, a windmill and moving gates. A crisp top-down course with a full scorecard and practice selector.",
+    "controls": "Drag toward the target and release to putt \u00b7 Arrows aim / power \u00b7 Space putt \u00b7 P pause \u00b7 C scorecard \u00b7 R return (+1)",
+    "image": "mini-golf-2d.png",
+    "source": "examples/mini-golf-2d/src/lib.rs"
+  },
+  {
+    "id": "mini-golf-3d",
+    "title": "Copper Greens 3D",
+    "dimension": "3D",
+    "kind": "game",
+    "host": "mini-golf-3d",
+    "genre": "12-hole miniature golf",
+    "description": "Twelve handcrafted greens with bank shots, bunkers, water, slopes, a windmill and moving gates. An isometric 3D course with extruded stone, raised greens and a rolling ball.",
+    "controls": "Drag toward the target and release to putt \u00b7 Arrows aim / power \u00b7 Space putt \u00b7 P pause \u00b7 C scorecard \u00b7 R return (+1)",
+    "image": "mini-golf-3d.png",
+    "source": "examples/mini-golf-3d/src/lib.rs"
   }
 ]

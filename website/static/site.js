@@ -49,8 +49,6 @@ for (const button of document.querySelectorAll('.menu-toggle')) {
   });
 }
 const gameQuery = document.getElementById('game-query');
-const updateQuery = document.getElementById('updates-query');
-const updateCategory = document.getElementById('updates-category');
 function saveFilters(values) {
   const url = new URL(location.href);
   for (const [key, value] of Object.entries(values)) {
@@ -80,20 +78,6 @@ for (const button of document.querySelectorAll('[data-filter]')) {
   });
 }
 gameQuery?.addEventListener('input', () => filterGames());
-function filterUpdates(save = true) {
-  if (!updateQuery || !updateCategory) return;
-  const query = updateQuery.value.trim().toLowerCase();
-  let count = 0;
-  for (const card of document.querySelectorAll('[data-update-category]')) {
-    card.hidden = !((!query || card.textContent.toLowerCase().includes(query)) && (updateCategory.value === 'all' || card.dataset.updateCategory === updateCategory.value));
-    if (!card.hidden) count++;
-  }
-  document.getElementById('updates-count').textContent = `${count} improvement${count === 1 ? '' : 's'}`;
-  document.getElementById('updates-empty').hidden = count !== 0;
-  if (save) saveFilters({q: updateQuery.value.trim(), category: updateCategory.value});
-}
-updateQuery?.addEventListener('input', () => filterUpdates());
-updateCategory?.addEventListener('change', () => filterUpdates());
 function restoreFilters() {
   const params = new URL(location.href).searchParams;
   if (gameQuery) {
@@ -102,12 +86,7 @@ function restoreFilters() {
     for (const button of document.querySelectorAll('[data-filter]')) button.setAttribute('aria-pressed', String(button.dataset.filter === dimension));
     filterGames(false);
   }
-  if (updateQuery && updateCategory) {
-    updateQuery.value = params.get('q') ?? '';
-    const category = params.get('category');
-    updateCategory.value = [...updateCategory.options].some(option => option.value === category) ? category : 'all';
-    filterUpdates(false);
-  }
+
 }
 restoreFilters();
 window.addEventListener('popstate', restoreFilters);

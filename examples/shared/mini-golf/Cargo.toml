@@ -1,0 +1,11 @@
+[package]
+name = "mini-golf"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ferravex-core.workspace = true
+ferravex-math.workspace = true
+ferravex-render.workspace = true
+ferravex-play.workspace = true

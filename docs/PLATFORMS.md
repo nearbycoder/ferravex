@@ -9,7 +9,7 @@ verification are separate milestones:
 
 | Platform | Host source in this repository | Release checks and remaining limits |
 |---|---|---|
-| Web | WebGL2, DOM keyboard/pointer/touch/gamepad, AudioWorklet, context restoration | All 15 Wasm builds/contracts; actual browser input, multiplayer and context loss/recovery |
+| Web | WebGL2, DOM keyboard/pointer/touch/gamepad, AudioWorklet, context restoration | All 17 Wasm builds/contracts; actual browser input, multiplayer and context loss/recovery |
 | Linux | X11/GLX/OpenGL, keyboard/pointer capture, desktop DPI, minimize/resume, ALSA | All native builds, 15 gameplay/PNG smoke runs, GPU pixel/recovery/timing and audio checks |
 | Windows | Win32/WGL OpenGL 3.3 core, raw mouse, keys/buttons/wheel, per-monitor DPI, minimize/resume, WinMM audio | Windows CI: native compilation/linking, Rust tests, runnable guide examples and strict Clippy; interactive windows, hardware input and audio listening remain unverified |
 | macOS | AppKit/NSOpenGL 4.1 core, Retina metrics, keyboard/mouse, focus/minimize lifecycle, AudioQueue | macOS CI: native compilation/linking, Rust tests, runnable guide examples and strict Clippy; interactive windows, hardware input and audio listening remain unverified |
@@ -48,7 +48,7 @@ not implemented yet. Linux uses its joystick provider; browser gamepads are
 polled through the browser API. Embedding hosts can supply controller samples
 through `input::gamepad_sample`.
 
-The catalog provides fifteen browser entries. The thirteen shared examples use
+The catalog provides seventeen browser entries. The fifteen shared examples use
 paths such as `/neon-swarm/`, `/marble-run/` and `/strike/`; Courtyard uses `/owned/`
 and Orbit Breaker uses `/owned-orbit/`. The docs site's corresponding paths begin
 with `/play/`. The builder stages required host files and fetches no runtime

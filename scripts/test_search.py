@@ -47,7 +47,7 @@ class CorpusTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.write('website/releases/player30.json', '[]')
+        self.write('website/features.json', '[]')
         self.write('docs/camera/index.html', '''<article class="prose">
 <h1>Camera guide</h1><p>Start here.</p><h2 id="timing">Timing</h2>
 <p>Use <code>fixed_ticks</code> with Rig<wbr>3.<br>Keep interpolation.</p>
