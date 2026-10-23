@@ -1,5 +1,6 @@
 use ferravex_engine::play::authoring::*;
 use ferravex_render::prelude::*;
+pub const MAX_CHECKPOINTS: usize = 16;
 pub const SOURCE: &str = include_str!("../content/aqueduct.fxscene");
 #[derive(Clone, Copy)]
 pub struct Platform {
@@ -346,7 +347,7 @@ impl Level {
                 })
                 .collect::<Result<_, ContentError>>()?,
             0,
-            16,
+            MAX_CHECKPOINTS,
             "checkpoints",
         )?;
         let gems = ordered(

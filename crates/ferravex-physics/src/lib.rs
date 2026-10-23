@@ -5,23 +5,30 @@
 //! distance or spring connections. Capsule/cylinder contact pairs remain limited
 //! to the documented primitive matrix.
 //! This is a small native solver, not a compatibility implementation of Rapier.
+pub mod assembly;
 mod body;
 pub mod character;
 mod geometry;
 mod joints;
 mod mass;
 mod material;
+pub mod radial;
+pub mod triggers;
 pub use joints::{
     BreakLimits, Joint, JointBreakEvent, JointDesc, JointHandle, JointKind, JointLoad, JointMotor,
-    JointSet, MAX_JOINTS,
+    JointSet, JointValidationError, MAX_JOINTS,
 };
-pub use material::{CombineRule, PhysicsMaterial};
+pub use mass::{MassProperties, MassPropertyError, MassPropertyIssue};
+pub use material::{CombineError, CombineRule, MaterialError, PhysicsMaterial};
 mod world;
-pub use body::{BodySet, Collider, ColliderHandle, ColliderSet, RigidBodyHandle};
+pub use body::{
+    BodySet, BodyValidationError, Collider, ColliderHandle, ColliderSet, RigidBodyHandle,
+};
 use ferravex_math::{Quat, Vec2, Vec3};
 pub use world::{
-    ContactEvent, ContactManifold, ContactPair, ContactPoint, MAX_CHILDREN, MAX_COLLIDERS,
-    SolverSettings, StepStats,
+    BodySleepState, ContactEvent, ContactManifold, ContactPair, ContactPoint, ImpactRecord,
+    ImpactRecordingError, ImpactSettings, MAX_CHILDREN, MAX_COLLIDERS, MAX_IMPACT_RECORDS,
+    SleepStats, SolverSettings, StepStats,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

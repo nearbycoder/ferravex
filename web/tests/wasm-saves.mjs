@@ -1,11 +1,13 @@
 // Actual release Wasm + first-party browser backend, sharing only a storage Map.
 import assert from 'node:assert/strict';import fs from 'node:fs';import {bindInput} from '../input.js';
+import {resolve} from 'node:path';import {pathToFileURL} from 'node:url';
+const root=process.argv[2]?pathToFileURL(resolve(process.argv[2])+'/'):new URL('../../',import.meta.url);
 class Target {addEventListener(){}}
-const catalog=JSON.parse(fs.readFileSync(new URL('../../examples/catalog.json',import.meta.url)));
+const catalog=JSON.parse(fs.readFileSync(new URL('examples/catalog.json',root)));
 function runtime(game,data){
  let e,reads=0,writes=0;
  const input=bindInput(new Target(),game.id,()=>e,()=>false,{window:new Target(),document:new Target(),navigator:{},storage:()=>({getItem:k=>{reads++;return data.get(k)??null;},setItem:(k,v)=>{writes++;data.set(k,v);}}),atob,btoa});
- const module=new WebAssembly.Module(fs.readFileSync(new URL(`../../dist/web/${game.host}/${game.id.replaceAll('-','_')}.wasm`,import.meta.url)));
+ const module=new WebAssembly.Module(fs.readFileSync(new URL(`dist/web/${game.host}/${game.id.replaceAll('-','_')}.wasm`,root)));
  e=new WebAssembly.Instance(module,{env:{...input.imports,ferravex_set_playing(){}}}).exports;(e.ferravex_init??e.init)();
  const frame=()=>game.id==='owned-orbit'?e.orbit_controls_frame(1/60,1280,720):game.id==='owned-lab'?e.ferravex_controls_step(1/60,0,1,16/9,1280,720):e.ferravex_frame(1/60,1280,720);
  const key=code=>{e.ferravex_key(code,1);e.ferravex_key(code,0);frame();};
@@ -20,9 +22,11 @@ for(const game of catalog){
  const data=new Map(),key='ferravex.save.v1.'+game.id+'.preferences';let r=runtime(game,data);r.frame();
  editMaster(r);assert.ok(Math.abs(r.e.ferravex_audio_master_gain()-.75)<1e-6,game.id+' applies volume');
  assert.ok(data.get(key)?.startsWith('fxsv1:'),game.id+' persists typed preferences');
- r.e.ferravex_pointer(965,181,0,0);r.e.ferravex_button(1,1);r.frame();r.e.ferravex_button(1,0);r.frame();
+ // Devices row follows the readable editor header at panel.y + 143.
+ const rowCenter=(720-Math.min(620,Math.max(300,720-24)))/2+143+15.5;
+ r.e.ferravex_pointer(965,rowCenter,0,0);r.e.ferravex_button(1,1);r.frame();r.e.ferravex_button(1,0);r.frame();
  assert.ok(Math.abs(r.e.ferravex_audio_master_gain()-.8)<1e-6,game.id+' mouse plus changes volume once');
- r.e.ferravex_pointer(890,181,0,0);r.e.ferravex_button(1,1);r.frame();r.e.ferravex_button(1,0);r.frame();
+ r.e.ferravex_pointer(890,rowCenter,0,0);r.e.ferravex_button(1,1);r.frame();r.e.ferravex_button(1,0);r.frame();
  assert.ok(Math.abs(r.e.ferravex_audio_master_gain()-.75)<1e-6,game.id+' mouse minus changes volume once');
 
  if(game.id==='emberline'){
@@ -50,10 +54,14 @@ for(const game of catalog){
  const game=catalog.find(g=>g.id==='orchard-guard'),data=new Map();let r=runtime(game,data);r.frame();r.key(0xff09);r.key(0xff0d);r.frame();
  const key='ferravex.save.v1.orchard-guard.checkpoint';assert.ok(data.has(key),'actual build writes a safe checkpoint');
  const stored=data.get(key);r=runtime(game,data);r.frame();assert.equal(data.get(key),stored,'loading progress does not rewrite it');
- // A restored tower exposes the upgrade panel x260 rather than the empty plot x240.
+ // A restored tower exposes the 415-wide upgrade panel, not either 190-wide
+ // empty-plot build control. The upgrade now shares their left edge.
  const v=new Float32Array(r.e.memory.buffer,r.e.ferravex_vertices(),r.e.ferravex_vertex_count()*8);
- const scale=Math.min(1280/1200,720/760),x=(1280-1200*scale)/2+260*scale,y=683*scale;
- let upgrade=false;for(let i=0;i+15<v.length;i+=8)if(Math.abs(v[i]-(x/1280*2-1))<1e-5&&Math.abs(v[i+1]-(1-y/720*2))<1e-5&&Math.abs(v[i+4]-.23)<1e-5){upgrade=true;break;}
+ const scale=Math.min(1280/1200,720/760),x=(1280-1200*scale)/2+240*scale,y=683*scale,w=415*scale,h=55*scale;
+ const near=(a,b)=>Math.abs(a-b)<1e-5;
+ let upgrade=false;for(let i=0;i+23<v.length;i+=8)if(near(v[i],x/1280*2-1)&&near(v[i+1],1-y/720*2)
+  &&near(v[i+8],(x+w)/1280*2-1)&&near(v[i+9],1-y/720*2)&&near(v[i+17],1-(y+h)/720*2)
+  &&[.23,.39,.24,1].every((c,n)=>near(v[i+4+n],c))){upgrade=true;break;}
  assert.ok(upgrade,'fresh Wasm instance restores the actual tower and upgrade HUD');
  r.key(114);r.frame();assert.notEqual(data.get(key),stored,'restart clears the checkpoint explicitly');
  console.log('Orchard actual build, native-code checkpoint serialization, fresh-instance resume and restart passed');

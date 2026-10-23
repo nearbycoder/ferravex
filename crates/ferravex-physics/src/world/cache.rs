@@ -1,5 +1,12 @@
 use super::*;
 pub(super) const MAX_POINTS: usize = 8;
+pub(super) struct ImpactMotion {
+    body: RigidBodyHandle,
+    center: Vec3,
+    velocity: Vec3,
+    angular: Vec3,
+}
+
 fn push_manifold(buffer: &mut Vec<Manifold>, manifold: Manifold, limit: usize) {
     if buffer.len() == buffer.capacity() {
         let next = (buffer.capacity().max(1) * 2).min(limit);
@@ -81,6 +88,202 @@ pub struct ContactManifold<'a> {
     pub points: &'a [ContactPoint],
 }
 impl<B: Access> World<B> {
+    /// Current observation configuration; `None` means disabled (the default).
+    /// See [`Self::set_impact_settings`] for configuration and consumption.
+    pub fn impact_settings(&self) -> Option<ImpactSettings> {
+        self.impact_settings
+    }
+    /// Prepare bounded observation storage without changing physical state.
+    /// Valid capacities are 0..=65536, impulse thresholds finite/nonnegative and
+    /// approach thresholds finite/positive. Reservation is fallible and occurs
+    /// here, never during recording: at most `capacity` records plus scratch for
+    /// 4096 body motions. Allocators may round reservations upward.
+    ///
+    /// Changing settings or disabling clears records/drop counts. Reinstalling
+    /// identical settings preserves them. Disabling and [`Self::clear_impacts`]
+    /// retain memory; dropping the world releases it. No bodies are woken and no
+    /// contact/joint caches are reset. New physical contacts may still allocate
+    /// in existing solver scratch independently of recording preparation.
+    ///
+    /// Only approaching points accepted by the velocity solver are observed;
+    /// sensors, separating/resting points and sweep-only hits with no constraint
+    /// impulse are excluded. Approach uses saved pre-force point velocities at
+    /// the old center of mass and the new contact position, then the pre-warm
+    /// contact speed. This heuristic can omit an impact accelerated from rest
+    /// entirely within one substep; it is not a second collision detector or a
+    /// force/energy decomposition. Persistent solver jitter above the authored
+    /// approach threshold can qualify. Choose thresholds for the scene's units.
+    ///
+    /// The local typed cue below is a pure feedback handoff. A game may map it to
+    /// `ferravex_play::feedback::FeedbackEvent::hit` after stepping each executed
+    /// tick, assign its own feedback ID and honor presentation preferences.
+    /// This recipe performs no device/audio I/O and consumes each snapshot once.
+    ///
+    /// ```
+    /// # #[cfg(any(feature = "dim2", feature = "dim3"))] {
+    /// # #[cfg(feature = "dim2")]
+    /// use ferravex_physics::d2::*;
+    /// # #[cfg(all(not(feature = "dim2"), feature = "dim3"))]
+    /// # use ferravex_physics::d3::*;
+    /// use ferravex_math::Vec3;
+    /// #[derive(Debug)]
+    /// enum Cue { Hit { point: Vec3, intensity: f32 } }
+    /// let mut world = PhysicsWorld::default();
+    /// let mut options = world.impact_settings().unwrap_or_default();
+    /// options.capacity = 8;
+    /// options.min_approach_speed = 0.5;
+    /// world.set_impact_settings(Some(options)).unwrap();
+    /// world.insert(RigidBodyBuilder::fixed(), ColliderBuilder::ball(0.5));
+    /// world.insert(
+    ///     RigidBodyBuilder::dynamic().translation(-Vector::X * 1.1)
+    ///         .linvel(Vector::X * 10.).ccd_enabled(true),
+    ///     ColliderBuilder::ball(0.5),
+    /// );
+    /// world.step(1. / 60.); // Only after a simulation tick actually executes.
+    /// let cues: Vec<_> = world.impacts().iter().map(|impact| Cue::Hit {
+    ///     point: impact.point,
+    ///     intensity: (impact.peak_normal_impulse / 10.).clamp(0., 4.),
+    /// }).collect(); // Host-owned storage, independent of the bounded recorder.
+    /// assert_eq!(cues.len(), 1);
+    /// let Cue::Hit { point, intensity } = cues[0];
+    /// assert!(point.is_finite() && intensity > 0.);
+    /// assert_eq!(world.impact_dropped(), 0);
+    /// world.clear_impacts(); // Scene restart/cancel, without changing physics.
+    /// assert!(world.impacts().is_empty());
+    /// world.set_impact_settings(None).unwrap();
+    /// assert!(world.impact_settings().is_none());
+    /// # }
+    /// ```
+    pub fn set_impact_settings(
+        &mut self,
+        settings: Option<ImpactSettings>,
+    ) -> Result<(), ImpactRecordingError> {
+        if let Some(settings) = settings {
+            if settings.capacity > MAX_IMPACT_RECORDS
+                || !settings.min_normal_impulse.is_finite()
+                || settings.min_normal_impulse < 0.
+                || !settings.min_approach_speed.is_finite()
+                || settings.min_approach_speed <= 0.
+            {
+                return Err(ImpactRecordingError::InvalidSettings);
+            }
+            self.impacts
+                .try_reserve_exact(settings.capacity.saturating_sub(self.impacts.len()))
+                .map_err(|_| ImpactRecordingError::AllocationFailed)?;
+            self.impact_motions
+                .try_reserve_exact(4096_usize.saturating_sub(self.impact_motions.len()))
+                .map_err(|_| ImpactRecordingError::AllocationFailed)?;
+        }
+        if self.impact_settings != settings {
+            self.impact_settings = settings;
+            self.clear_impacts();
+            self.impact_motions.clear();
+        }
+        Ok(())
+    }
+    /// Canonically sorted, borrowed snapshot; at most one record per pair.
+    /// Strictly stronger peaks replace point/normal/speed; ties keep the earliest
+    /// substep, then the first contact feature in solver order. Removal/teleport
+    /// and other edits preserve this historical snapshot with original handle
+    /// generations. Check live handles before applying later gameplay to them.
+    /// A valid step (including an empty world) replaces it; invalid dt/gravity
+    /// panics preserve it. See [`Self::set_impact_settings`] for a runnable recipe.
+    pub fn impacts(&self) -> &[ImpactRecord] {
+        &self.impacts
+    }
+    /// Saturating count of qualifying pair/substep candidates rejected because
+    /// the buffer was full. A retained pair can still update at full capacity.
+    /// A rejected pair can count again in later substeps (at most eight per
+    /// outer step); this is not a count of distinct lost pairs/gameplay hits.
+    /// Multiple points/iterations of one pair in a substep count only once.
+    /// See [`Self::set_impact_settings`] for configuration and reset semantics.
+    pub fn impact_dropped(&self) -> usize {
+        self.impact_dropped
+    }
+    /// Clear only the observation snapshot/drop count, retaining configuration
+    /// and reserved memory. No simulation, wake or physical cache edits occur.
+    /// See [`Self::set_impact_settings`] for a reset/cancel recipe.
+    pub fn clear_impacts(&mut self) {
+        self.impacts.clear();
+        self.impact_dropped = 0;
+    }
+    pub(super) fn capture_impact_motion(&mut self) {
+        self.impact_motions.clear();
+        if self.impact_settings.is_some() {
+            self.impact_motions
+                .extend(self.bodies.iter().map(|(body, b)| {
+                    let b = b.core();
+                    ImpactMotion {
+                        body,
+                        center: b.world_com(),
+                        velocity: b.velocity,
+                        angular: b.angular_velocity,
+                    }
+                }));
+        }
+    }
+    fn impact_approach(
+        &self,
+        a: RigidBodyHandle,
+        b: RigidBodyHandle,
+        point: Vec3,
+        normal: Vec3,
+    ) -> f32 {
+        let velocity = |body| {
+            // Arena iteration follows slot index; handle ordering starts with
+            // that index, so holes and reused generations remain sorted.
+            let i = self
+                .impact_motions
+                .binary_search_by_key(&body, |m| m.body)
+                .expect("captured live body motion");
+            let m = &self.impact_motions[i];
+            m.velocity + m.angular.cross(point - m.center)
+        };
+        -(velocity(b) - velocity(a)).dot(normal)
+    }
+    pub(super) fn record_impacts(&mut self) {
+        let Some(settings) = self.impact_settings else {
+            return;
+        };
+        let mut first = 0;
+        while first < self.constraints.len() {
+            let key = self.constraints[first].key;
+            let mut end = first + 1;
+            let mut strongest = first;
+            while end < self.constraints.len() && self.constraints[end].key == key {
+                if self.constraints[end].impact_peak > self.constraints[strongest].impact_peak {
+                    strongest = end;
+                }
+                end += 1;
+            }
+            let c = &self.constraints[strongest];
+            if c.impact_peak.is_finite() && c.impact_peak > settings.min_normal_impulse {
+                let record = ImpactRecord {
+                    collider1: key.0,
+                    collider2: key.1,
+                    point: c.point,
+                    normal: c.normal,
+                    peak_normal_impulse: c.impact_peak,
+                    approach_speed: c.impact_approach,
+                };
+                match self
+                    .impacts
+                    .binary_search_by_key(&key, |r| (r.collider1, r.collider2))
+                {
+                    Ok(i) => {
+                        if record.peak_normal_impulse > self.impacts[i].peak_normal_impulse {
+                            self.impacts[i] = record;
+                        }
+                    }
+                    Err(i) if self.impacts.len() < settings.capacity => {
+                        self.impacts.insert(i, record)
+                    }
+                    Err(_) => self.impact_dropped = self.impact_dropped.saturating_add(1),
+                }
+            }
+            first = end;
+        }
+    }
     pub fn solver_settings(&self) -> SolverSettings {
         self.settings
     }
@@ -383,6 +586,18 @@ impl<B: Access> World<B> {
                         local_b,
                         normal_impulse,
                         normal_denominator: 0.,
+                        impact_baseline: normal_impulse,
+                        impact_peak: 0.,
+                        impact_approach: self.impact_settings.map_or(0., |settings| {
+                            let approach = self
+                                .impact_approach(pa.body, pb.body, p.point, p.normal)
+                                .min(-speed);
+                            if approach > settings.min_approach_speed {
+                                approach
+                            } else {
+                                0.
+                            }
+                        }),
                         tangent_impulse,
                         bounce: if speed < -1. {
                             -speed * restitution
@@ -429,4 +644,119 @@ impl<B: Access> World<B> {
             }
         }
     }
+}
+
+#[cfg(test)]
+mod journey400_226 {
+    use super::*;
+
+    macro_rules! solver_observation_tests {
+        ($dimension:ident) => {
+            mod $dimension {
+                use super::*;
+                use crate::$dimension::{ColliderBuilder, PhysicsWorld, RigidBodyBuilder, Vector};
+
+                // Synthetic baseline injection isolates the observation measure
+                // from contact matching. Contacts and solves are production paths.
+                #[test]
+                fn peak_subtracts_initial_warm_start_and_does_not_sum_iterations() {
+                    for (incoming, expected) in [(0., 0.), (2., 0.), (3., 1.)] {
+                        for iterations in [1, 12, 64] {
+                            let mut world = PhysicsWorld::default();
+                            world.set_impact_settings(Some(ImpactSettings {
+                                min_approach_speed: 0.01,
+                                ..Default::default()
+                            })).unwrap();
+                            world.set_solver_settings(SolverSettings {
+                                velocity_iterations: iterations,
+                                ..Default::default()
+                            }).unwrap();
+                            world.insert(RigidBodyBuilder::fixed(), ColliderBuilder::ball(0.5).friction(0.));
+                            let (body, _) = world.insert(
+                                RigidBodyBuilder::dynamic().translation(-Vector::X * 0.9)
+                                    .linvel(Vector::X * incoming),
+                                ColliderBuilder::ball(0.5).friction(0.),
+                            );
+                            let mass = world.bodies[body].mass();
+                            world.raw.capture_impact_motion();
+                            world.raw.find_contacts(1. / 60., &mut StepStats::default());
+                            assert_eq!(world.raw.constraints.len(), 1);
+                            let c = &mut world.raw.constraints[0];
+                            c.normal_impulse = mass * 2.;
+                            c.impact_baseline = mass * 2.;
+                            // Force eligibility for this measure-only test,
+                            // including a replay with no physical approach.
+                            c.impact_approach = 3.;
+                            world.raw.warm_start(&mut StepStats::default());
+                            world.raw.solve_velocities(&mut StepStats::default());
+                            world.raw.record_impacts();
+                            if expected == 0. {
+                                assert!(world.impacts().is_empty());
+                            } else {
+                                assert_eq!(world.impacts().len(), 1);
+                                assert!((world.impacts()[0].peak_normal_impulse - mass * expected).abs() < 1e-5);
+                            }
+                        }
+                    }
+                }
+
+                #[test]
+                fn stronger_later_substep_updates_at_capacity_ties_keep_first_and_drops_group_points() {
+                    let mut world = PhysicsWorld::default();
+                    world.set_impact_settings(Some(ImpactSettings { capacity: 1, ..Default::default() })).unwrap();
+                    world.insert(RigidBodyBuilder::fixed(), ColliderBuilder::ball(0.5));
+                    world.insert(RigidBodyBuilder::dynamic().translation(-Vector::X * 0.9), ColliderBuilder::ball(0.5));
+                    world.raw.capture_impact_motion();
+                    world.raw.find_contacts(1. / 60., &mut StepStats::default());
+                    let mut later = world.raw.constraints[0].clone();
+                    world.raw.constraints[0].impact_peak = 4.;
+                    later.feature += 1;
+                    later.point = Vec3::Y;
+                    later.impact_peak = 4.;
+                    world.raw.constraints.push(later);
+                    world.raw.record_impacts();
+                    let first = world.impacts()[0];
+                    assert_eq!(first.point, world.raw.constraints[0].point);
+                    world.raw.constraints[1].impact_peak = 8.;
+                    world.raw.record_impacts();
+                    assert_eq!(world.impacts().len(), 1);
+                    assert_eq!(world.impacts()[0].point, Vec3::Y);
+                    assert_eq!(world.impacts()[0].peak_normal_impulse, 8.);
+                    assert_eq!(world.impact_dropped(), 0);
+                    world.raw.constraints[0].impact_peak = 8.;
+                    world.raw.record_impacts();
+                    assert_eq!(world.impacts()[0].point, Vec3::Y);
+                    world.raw.impact_settings.as_mut().unwrap().capacity = 0;
+                    world.clear_impacts();
+                    world.raw.record_impacts();
+                    assert_eq!(world.impact_dropped(), 1);
+                    world.raw.impact_dropped = usize::MAX;
+                    world.raw.record_impacts();
+                    assert_eq!(world.impact_dropped(), usize::MAX);
+                }
+
+                #[test]
+                fn default_off_and_reset_retain_prepared_storage_only_when_enabled() {
+                    let mut world = PhysicsWorld::default();
+                    world.step(1. / 60.);
+                    assert_eq!(world.raw.impacts.capacity(), 0);
+                    assert_eq!(world.raw.impact_motions.capacity(), 0);
+                    world.set_impact_settings(Some(ImpactSettings::default())).unwrap();
+                    let capacities = (world.raw.impacts.capacity(), world.raw.impact_motions.capacity());
+                    assert!(capacities.0 >= 64 && capacities.1 >= 4096);
+                    world.set_impact_settings(None).unwrap();
+                    world.clear_impacts();
+                    world.step(1. / 60.);
+                    assert_eq!((world.raw.impacts.capacity(), world.raw.impact_motions.capacity()), capacities);
+                    let err = ImpactRecordingError::InvalidSettings;
+                    let error: &dyn std::error::Error = &err;
+                    assert!(error.to_string().contains("invalid"));
+                }
+            }
+        };
+    }
+    #[cfg(feature = "dim2")]
+    solver_observation_tests!(d2);
+    #[cfg(feature = "dim3")]
+    solver_observation_tests!(d3);
 }

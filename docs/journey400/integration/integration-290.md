@@ -1,0 +1,15 @@
+# Journey400 290 parent integration
+
+Captured exact theme and unique test files over validated277 with only derived playui/theme registration. Inventory `integration-290/source-capture.json` SHA-256 is ea1c40b84f96373a1703de9c5e7c1f604b26c31a6a336c0216face8fdf8a5c33. Active inspector285, clock315 and InputQueue316 changes are excluded; this is not the whole concurrent checkout.
+
+Parent passed996 play unit/integration/doctests with zero failures or ignores,392 renderer unit/integration/doctests with14 existing platform-dependent ignores, strict all-target/all-feature play/renderer Clippy, native all-feature facade compilation and play/renderer/facade all-feature Wasm compilation. Commands/logs are in `integration-290/report.json`.
+
+Parent additionally built the frozen play/renderer libraries, selected exact Cargo compiler-artifact paths, compiled and executed the returned complete theme consumer recipe. All stages exited0; `theme-report.json` records commands and artifacts. Exact recipe source SHA-256 is 3b01f8ea1fe068c4a6c55bfda2661024cc7efa4edbf2ecc8353c1bdcf5bf3820. It exercises normal/high-contrast tokens,1x/1.5x text, narrow/wide logical viewports, measured stats, fixed actions, explicit too-short rejection, inspection and CPU paint, not a GPU or browser playtest.
+
+Reviewed caller-owned fixed-value tokens and atomic authoring. Type metrics only enlarge within checked finite bounds; no global theme or altered game defaults are installed. Opaque normalized sRGB palettes validate foregrounds against both backgrounds, with separate text/focus/border policy. Related background/foreground edits validate together before mutation. Static contextual copy plus shape/pattern cues remain actual consumer drawing responsibilities, not implicit accessibility behavior.
+
+Contrast helpers require explicit encoded-sRGB versus linear-sRGB units and reuse the existing math conversion. Alpha contrast requires an explicit opaque backdrop and composites both layers in linear light; it does not model an encoded-channel renderer blend or arbitrary background. Palette measurements and logical font sizes do not establish physical-display readability, antialiasing, shaping, whole-renderer accessibility or device conformance.
+
+Tests include known color ratios, no double decoding, alpha boundaries, malformed channels, contrast failures against either background, complete light-palette replacement, capacity/duplicate edits, rollback, enlarged metrics and warmed allocation observations. Shared stat/composition/inspection/input regressions remain passing. The existing CardLayout has fixed styling; no themed CardLayout or changed authored palette is claimed. Inspector285 can consume supported style tokens directly, while card styling would need a separately reviewed additive seam.
+
+No game consumer, preference wire/save format, shared Wasm release or browser source changed. Game adoption, cue drawing and fresh browser/device acceptance remain parent-owned. Existing capture and platform limitations remain open.

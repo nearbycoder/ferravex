@@ -1,5 +1,31 @@
 //! Bounded attribute modifiers and timed status effects, with explicit stacking.
 //! Periodic pulses report work to the host; the host applies authoritative damage.
+//!
+//! Inspection copies the current simulation state without advancing time or
+//! consuming pulses. Feed [`EffectSet::advance`] from fixed simulation ticks.
+//!
+//! ```
+//! use ferravex_play::attributes::{EffectSet, EffectSpec, Periodic, Stacking};
+//!
+//! let mut effects = EffectSet::<4>::new().unwrap();
+//! assert!(effects.is_empty());
+//! let mut burn = EffectSpec::modifier(7, 0, 1.0, 2.0);
+//! burn.stacking = Stacking::Stack(3);
+//! burn.periodic = Some(Periodic { interval: 0.5, amount: 2.0 });
+//! effects.apply(burn, 0).unwrap();
+//! effects.apply(burn, 0).unwrap();
+//! effects.advance(0.125).unwrap();
+//!
+//! let status = effects.status(7).unwrap();
+//! assert_eq!(effects.len(), 1);
+//! assert_eq!(status.spec.seconds, 2.0);
+//! assert_eq!(status.remaining_seconds, 1.875);
+//! assert_eq!(status.stacks, 2);
+//! assert_eq!(status.periodic_elapsed_seconds, Some(0.125));
+//! assert_eq!(status.periodic_progress(), Some(0.25));
+//! assert_eq!(status.seconds_until_pulse(), Some(0.375));
+//! assert_eq!(effects.iter().next(), Some(status));
+//! ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AttributeError {
     Invalid,
@@ -12,12 +38,12 @@ pub enum Stacking {
     Strongest,
     Stack(u8),
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Periodic {
     pub interval: f32,
     pub amount: f32,
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EffectSpec {
     pub key: u32,
     pub attribute: u16,
@@ -46,8 +72,7 @@ impl EffectSpec {
     }
     fn valid(self) -> bool {
         self.key != 0
-            && self.seconds.is_finite()
-            && (0.0001..=3600.).contains(&self.seconds)
+            && valid_duration(self.seconds)
             && self.additive.is_finite()
             && self.additive.abs() <= 1e6
             && self.multiplier.is_finite()
@@ -63,12 +88,63 @@ impl EffectSpec {
             })
     }
 }
+
+fn valid_duration(seconds: f32) -> bool {
+    seconds.is_finite() && (0.0001..=3600.).contains(&seconds)
+}
+
+/// A copied view of one active effect; editing it cannot change the set.
+///
+/// Times retain the simulation's `f64` precision. See the [module example](crate::attributes)
+/// for inspection alongside periodic pulses.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EffectStatus {
+    /// The currently applied specification. Its duration is the last accepted
+    /// specification's duration, not the effect's age or total lifetime.
+    pub spec: EffectSpec,
+    /// Simulation seconds until expiry. This may exceed `spec.seconds` after a
+    /// duration refresh or reapplication of a shorter specification.
+    pub remaining_seconds: f64,
+    /// Number of active stacks, including the first application.
+    pub stacks: u8,
+    /// Elapsed seconds in the current pulse interval, or `None` for a
+    /// nonperiodic effect. Refreshes preserve this phase.
+    pub periodic_elapsed_seconds: Option<f64>,
+}
+
+impl EffectStatus {
+    /// Fraction of the current pulse interval elapsed, or `None` for a
+    /// nonperiodic effect. Views returned by the set yield a value in `[0, 1)`.
+    pub fn periodic_progress(&self) -> Option<f64> {
+        let periodic = self.spec.periodic?;
+        Some(self.periodic_elapsed_seconds? / f64::from(periodic.interval))
+    }
+
+    /// Seconds to the next pulse boundary, or `None` for a nonperiodic effect.
+    /// This does not guarantee another pulse: the effect may expire first.
+    /// Inspection does not advance time or consume a pulse.
+    pub fn seconds_until_pulse(&self) -> Option<f64> {
+        let periodic = self.spec.periodic?;
+        Some(f64::from(periodic.interval) - self.periodic_elapsed_seconds?)
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct Active {
     spec: EffectSpec,
     remaining: f64,
     phase: f64,
     stacks: u8,
+}
+impl Active {
+    fn status(&self) -> EffectStatus {
+        EffectStatus {
+            spec: self.spec,
+            remaining_seconds: self.remaining,
+            stacks: self.stacks,
+            periodic_elapsed_seconds: self.spec.periodic.map(|_| self.phase),
+        }
+    }
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Pulse {
@@ -88,6 +164,41 @@ impl<const N: usize> EffectSet<N> {
         }
         Ok(Self { effects: [None; N] })
     }
+
+    /// Number of active effect keys (not the sum of their stacks), at most `N`.
+    pub fn len(&self) -> usize {
+        self.effects.iter().flatten().count()
+    }
+
+    /// Whether there are no active effects.
+    pub fn is_empty(&self) -> bool {
+        self.effects.iter().all(Option::is_none)
+    }
+
+    /// Copies the active status for `key`; missing, expired and zero keys yield
+    /// `None`. See the [module example](crate::attributes) for the view's fields.
+    pub fn status(&self, key: u32) -> Option<EffectStatus> {
+        self.effects
+            .iter()
+            .flatten()
+            .find(|active| active.spec.key == key)
+            .map(Active::status)
+    }
+
+    /// Iterates over copied statuses without allocation, scanning at most `N`
+    /// slots. Order is stable slot order, not key or application order: removal
+    /// leaves a vacancy and a new key reuses the first vacancy. Refreshes retain
+    /// their slot. Holding a copied status does not borrow or track the set.
+    pub fn iter(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = EffectStatus> + std::iter::FusedIterator + '_ {
+        self.effects.iter().flatten().map(Active::status)
+    }
+
+    /// Applies a specification without changing any effect on error or immunity
+    /// rejection. Compatible reapplications preserve periodic phase and never
+    /// shorten remaining time. A weaker `Strongest` application returns `true`
+    /// but leaves the active effect unchanged, including its duration.
     pub fn apply(&mut self, spec: EffectSpec, immune_tags: u64) -> Result<bool, AttributeError> {
         if !spec.valid() {
             return Err(AttributeError::Invalid);
@@ -137,6 +248,48 @@ impl<const N: usize> EffectSet<N> {
             phase: 0.,
             stacks: 1,
         });
+        Ok(true)
+    }
+
+    /// Ensures an existing effect has at least `seconds` remaining, without
+    /// changing its specification, stacks or periodic phase. This never adds
+    /// an effect and works at capacity. It does not recheck immunity: the host
+    /// decides whether to refresh an already active effect.
+    ///
+    /// Zero keys and nonfinite durations or durations outside `0.0001..=3600.0`
+    /// return [`AttributeError::Invalid`] before any change, even for missing
+    /// keys. Valid missing keys return `Ok(false)`; present keys return `Ok(true)`
+    /// even if their remaining duration already meets the requested minimum.
+    ///
+    /// ```
+    /// use ferravex_play::attributes::{AttributeError, EffectSet, EffectSpec, Stacking};
+    /// let mut effects = EffectSet::<1>::new().unwrap();
+    /// let mut slow = EffectSpec::modifier(1, 0, 0.5, 1.0);
+    /// slow.stacking = Stacking::Stack(3);
+    /// effects.apply(slow, 0).unwrap();
+    /// effects.advance(0.5).unwrap();
+    /// assert_eq!(effects.refresh_duration(1, 2.0), Ok(true));
+    /// let status = effects.status(1).unwrap();
+    /// assert_eq!(status.remaining_seconds, 2.0);
+    /// assert_eq!(status.stacks, 1);
+    /// assert_eq!(status.spec, slow);
+    /// assert_eq!(effects.refresh_duration(1, f32::NAN), Err(AttributeError::Invalid));
+    /// assert_eq!(effects.status(1), Some(status));
+    /// assert_eq!(effects.refresh_duration(2, 1.0), Ok(false));
+    /// ```
+    pub fn refresh_duration(&mut self, key: u32, seconds: f32) -> Result<bool, AttributeError> {
+        if key == 0 || !valid_duration(seconds) {
+            return Err(AttributeError::Invalid);
+        }
+        let Some(active) = self
+            .effects
+            .iter_mut()
+            .flatten()
+            .find(|active| active.spec.key == key)
+        else {
+            return Ok(false);
+        };
+        active.remaining = active.remaining.max(f64::from(seconds));
         Ok(true)
     }
     /// At most N pulse reports regardless of dt; elapsed periodic ticks aggregate.
@@ -213,17 +366,34 @@ impl<const N: usize> EffectSet<N> {
             .find(|e| e.spec.key == key)
             .map_or(0., |e| e.remaining as f32)
     }
-    pub fn remove(&mut self, key: u32) -> bool {
-        if let Some(slot) = self
-            .effects
+    /// Removes all stacks for `key` and returns their final status in one
+    /// operation. Missing, expired and zero keys return `None` without changes.
+    /// Other effects retain their slots and state; removal emits no pulse.
+    /// Reapplying a removed key starts at one stack with a fresh pulse phase.
+    ///
+    /// ```
+    /// use ferravex_play::attributes::{EffectSet, EffectSpec};
+    /// let mut effects = EffectSet::<1>::new().unwrap();
+    /// effects.apply(EffectSpec::modifier(7, 0, 0.5, 2.0), 0).unwrap();
+    /// effects.advance(0.5).unwrap();
+    /// let removed = effects.take(7).unwrap();
+    /// assert_eq!(removed.remaining_seconds, 1.5);
+    /// assert_eq!(removed.periodic_progress(), None);
+    /// assert!(effects.is_empty());
+    /// assert_eq!(effects.take(7), None);
+    /// ```
+    pub fn take(&mut self, key: u32) -> Option<EffectStatus> {
+        self.effects
             .iter_mut()
             .find(|e| e.is_some_and(|s| s.spec.key == key))
-        {
-            *slot = None;
-            true
-        } else {
-            false
-        }
+            .and_then(Option::take)
+            .map(|active| active.status())
+    }
+
+    /// Removes all stacks for `key`, returning whether it was present.
+    /// Use [`Self::take`] to also inspect the removed status.
+    pub fn remove(&mut self, key: u32) -> bool {
+        self.take(key).is_some()
     }
     pub fn clear(&mut self) {
         self.effects.fill(None)
@@ -302,6 +472,386 @@ impl Vitals {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn burn(key: u32, stacking: Stacking) -> EffectSpec {
+        EffectSpec {
+            tags: 2,
+            stacking,
+            periodic: Some(Periodic {
+                interval: 0.25,
+                amount: 2.,
+            }),
+            ..EffectSpec::modifier(key, 0, 0.5, 2.)
+        }
+    }
+
+    #[test]
+    fn status_views_report_stacks_and_periodic_progress_without_consuming_pulses() {
+        let mut effects = EffectSet::<2>::new().unwrap();
+        let spec = burn(1, Stacking::Stack(3));
+        effects.apply(spec, 0).unwrap();
+        effects.apply(spec, 0).unwrap();
+        effects
+            .apply(EffectSpec::modifier(2, 1, 1., 2.), 0)
+            .unwrap();
+        let initial = effects.status(1).unwrap();
+        assert_eq!(initial.spec, spec);
+        assert_eq!(initial.remaining_seconds, 2.);
+        assert_eq!(initial.stacks, 2);
+        assert_eq!(initial.periodic_elapsed_seconds, Some(0.));
+        assert_eq!(initial.periodic_progress(), Some(0.));
+        assert_eq!(initial.seconds_until_pulse(), Some(0.25));
+        let plain = effects.status(2).unwrap();
+        assert_eq!(plain.periodic_elapsed_seconds, None);
+        assert_eq!(plain.periodic_progress(), None);
+        assert_eq!(plain.seconds_until_pulse(), None);
+
+        let pulses = effects.advance(0.625).unwrap();
+        assert_eq!(pulses[0].unwrap().count, 2);
+        assert_eq!(pulses[0].unwrap().amount, 8.);
+        assert!(pulses[1].is_none());
+        let halfway = effects.status(1).unwrap();
+        assert_eq!(halfway.remaining_seconds, 1.375);
+        assert_eq!(halfway.periodic_elapsed_seconds, Some(0.125));
+        assert_eq!(halfway.periodic_progress(), Some(0.5));
+        assert_eq!(halfway.seconds_until_pulse(), Some(0.125));
+        for _ in 0..4 {
+            assert_eq!(effects.iter().next(), Some(halfway));
+            assert_eq!(effects.status(1), Some(halfway));
+        }
+        assert!(effects.advance(0.).unwrap().iter().all(Option::is_none));
+        assert_eq!(effects.status(1), Some(halfway));
+        let pulse = effects.advance(0.125).unwrap()[0].unwrap();
+        assert_eq!((pulse.count, pulse.amount), (1, 4.));
+        assert_eq!(effects.status(1).unwrap().periodic_progress(), Some(0.));
+        // A copied view remains the state it captured, even after advancement.
+        assert_eq!(initial.remaining_seconds, 2.);
+        assert_eq!(halfway.periodic_progress(), Some(0.5));
+        let pulse = effects.advance(60.).unwrap()[0].unwrap();
+        assert_eq!((pulse.count, pulse.amount), (5, 20.));
+        assert!(effects.is_empty());
+        assert_eq!(effects.status(1), None);
+        assert_eq!(effects.iter().next(), None);
+    }
+
+    #[test]
+    fn iteration_is_bounded_and_preserves_slots_across_removal_and_reuse() {
+        assert!(matches!(
+            EffectSet::<0>::new(),
+            Err(AttributeError::Capacity)
+        ));
+        assert!(matches!(
+            EffectSet::<33>::new(),
+            Err(AttributeError::Capacity)
+        ));
+        let mut effects = EffectSet::<32>::new().unwrap();
+        assert!(effects.is_empty());
+        assert_eq!(effects.len(), 0);
+        assert_eq!(effects.iter().next_back(), None);
+        assert_eq!(effects.status(0), None);
+        for key in 1..=32 {
+            effects
+                .apply(EffectSpec::modifier(key, 0, 1., 1.), 0)
+                .unwrap();
+        }
+        assert_eq!(effects.len(), 32);
+        assert!(!effects.is_empty());
+        assert_eq!(effects.iter().count(), 32);
+        assert_eq!(effects.status(33), None);
+        assert_eq!(
+            effects.apply(EffectSpec::modifier(33, 0, 1., 1.), 0),
+            Err(AttributeError::Capacity)
+        );
+        assert_eq!(effects.take(2).unwrap().spec.key, 2);
+        assert_eq!(effects.len(), 31);
+        effects
+            .apply(EffectSpec::modifier(33, 0, 1., 1.), 0)
+            .unwrap();
+        effects.refresh_duration(1, 2.).unwrap();
+        effects
+            .apply(EffectSpec::modifier(3, 0, 0.5, 2.), 0)
+            .unwrap();
+        {
+            let mut iter = effects.iter();
+            assert_eq!(iter.next().unwrap().spec.key, 1);
+            assert_eq!(iter.next_back().unwrap().spec.key, 32);
+            assert_eq!(iter.next().unwrap().spec.key, 33);
+            for key in 3..32 {
+                assert_eq!(iter.next().unwrap().spec.key, key);
+            }
+            assert_eq!(iter.next(), None);
+            assert_eq!(iter.next_back(), None);
+            assert_eq!(iter.next(), None);
+        }
+        effects.clear();
+        assert_eq!(effects.len(), 0);
+        assert!(effects.is_empty());
+        assert_eq!(effects.iter().next(), None);
+        assert_eq!(effects.status(1), None);
+    }
+
+    #[test]
+    fn duration_refresh_keeps_spec_stacks_phase_and_other_effects_at_capacity() {
+        let mut effects = EffectSet::<2>::new().unwrap();
+        let spec = burn(1, Stacking::Stack(3));
+        effects.apply(spec, 0).unwrap();
+        effects.apply(spec, 0).unwrap();
+        effects.apply(burn(2, Stacking::Strongest), 0).unwrap();
+        effects.advance(0.125).unwrap();
+        let before = effects.status(1).unwrap();
+        let other = effects.status(2).unwrap();
+        assert_eq!(effects.refresh_duration(1, 3.), Ok(true));
+        assert_eq!(
+            effects.status(1),
+            Some(EffectStatus {
+                remaining_seconds: 3.,
+                ..before
+            })
+        );
+        assert_eq!(effects.status(2), Some(other));
+        assert_eq!(effects.refresh_duration(1, 0.5), Ok(true));
+        assert_eq!(effects.status(1).unwrap().remaining_seconds, 3.);
+        assert_eq!(effects.value(0, 100., 0., 100.).unwrap(), 12.5);
+        assert_eq!(effects.advance(0.125).unwrap()[0].unwrap().amount, 4.);
+        assert_eq!(effects.refresh_duration(1, 3600.), Ok(true));
+        assert_eq!(effects.remaining(1), 3600.);
+        assert_eq!(effects.refresh_duration(1, 0.0001), Ok(true));
+        assert_eq!(effects.remaining(1), 3600.);
+    }
+
+    #[test]
+    fn invalid_or_missing_refreshes_and_invalid_advancement_leave_all_state_intact() {
+        let mut effects = EffectSet::<2>::new().unwrap();
+        effects.apply(burn(1, Stacking::Stack(3)), 0).unwrap();
+        effects.apply(burn(2, Stacking::Refresh), 0).unwrap();
+        effects.advance(0.125).unwrap();
+        let before: Vec<_> = effects.iter().collect();
+        for seconds in [
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            -1.,
+            0.,
+            0.00001,
+            3601.,
+        ] {
+            for key in [1, 3] {
+                assert_eq!(
+                    effects.refresh_duration(key, seconds),
+                    Err(AttributeError::Invalid)
+                );
+                assert_eq!(effects.iter().collect::<Vec<_>>(), before);
+            }
+        }
+        assert_eq!(
+            effects.refresh_duration(0, 1.),
+            Err(AttributeError::Invalid)
+        );
+        assert_eq!(effects.refresh_duration(3, 1.), Ok(false));
+        assert_eq!(effects.iter().collect::<Vec<_>>(), before);
+        for dt in [f32::NAN, f32::INFINITY, -0.01, 61.] {
+            assert!(matches!(effects.advance(dt), Err(AttributeError::Invalid)));
+            assert_eq!(effects.iter().collect::<Vec<_>>(), before);
+        }
+        effects.advance(2.).unwrap();
+        assert_eq!(effects.refresh_duration(1, 1.), Ok(false));
+        assert!(effects.is_empty());
+    }
+
+    #[test]
+    fn reapplication_errors_and_immunity_are_transactional_in_status_views() {
+        let mut effects = EffectSet::<1>::new().unwrap();
+        let spec = burn(1, Stacking::Stack(3));
+        effects.apply(spec, 0).unwrap();
+        effects.advance(0.125).unwrap();
+        let before = effects.status(1);
+        for invalid in [
+            EffectSpec {
+                seconds: f32::NAN,
+                ..spec
+            },
+            EffectSpec {
+                additive: f32::INFINITY,
+                ..spec
+            },
+            EffectSpec {
+                periodic: Some(Periodic {
+                    interval: 0.,
+                    amount: 2.,
+                }),
+                ..spec
+            },
+        ] {
+            assert_eq!(effects.apply(invalid, 0), Err(AttributeError::Invalid));
+            assert_eq!(effects.status(1), before);
+        }
+        for incompatible in [
+            EffectSpec {
+                attribute: 1,
+                ..spec
+            },
+            EffectSpec {
+                stacking: Stacking::Stack(2),
+                ..spec
+            },
+            EffectSpec {
+                periodic: None,
+                ..spec
+            },
+            EffectSpec {
+                periodic: Some(Periodic {
+                    interval: 0.5,
+                    amount: 2.,
+                }),
+                ..spec
+            },
+        ] {
+            assert_eq!(
+                effects.apply(incompatible, 0),
+                Err(AttributeError::Incompatible)
+            );
+            assert_eq!(effects.status(1), before);
+        }
+        assert_eq!(effects.apply(spec, 2), Ok(false));
+        assert_eq!(effects.apply(EffectSpec { key: 2, ..spec }, 2), Ok(false));
+        assert_eq!(
+            effects.apply(EffectSpec { key: 2, ..spec }, 0),
+            Err(AttributeError::Capacity)
+        );
+        assert_eq!(effects.status(1), before);
+
+        let replacement = EffectSpec {
+            seconds: 0.5,
+            tags: 4,
+            periodic: Some(Periodic {
+                interval: 0.25,
+                amount: 3.,
+            }),
+            ..spec
+        };
+        for _ in 0..5 {
+            effects.apply(replacement, 0).unwrap();
+        }
+        let status = effects.status(1).unwrap();
+        assert_eq!(status.spec, replacement);
+        assert_eq!(status.remaining_seconds, before.unwrap().remaining_seconds);
+        assert_eq!(status.periodic_elapsed_seconds, Some(0.125));
+        assert_eq!(status.stacks, 3);
+        assert_eq!(effects.tags(), 4);
+        assert_eq!(effects.advance(0.125).unwrap()[0].unwrap().amount, 9.);
+    }
+
+    #[test]
+    fn strongest_views_keep_weaker_refreshes_out_and_accept_equal_strength() {
+        let mut effects = EffectSet::<1>::new().unwrap();
+        let spec = burn(1, Stacking::Strongest);
+        effects.apply(spec, 0).unwrap();
+        effects.advance(0.125).unwrap();
+        let before = effects.status(1).unwrap();
+        let weaker = EffectSpec {
+            strength: 0.1,
+            seconds: 3.,
+            ..spec
+        };
+        assert_eq!(effects.apply(weaker, 0), Ok(true));
+        assert_eq!(effects.status(1), Some(before));
+        let stronger = EffectSpec {
+            strength: 0.75,
+            multiplier: 0.25,
+            seconds: 0.5,
+            ..spec
+        };
+        effects.apply(stronger, 0).unwrap();
+        assert_eq!(
+            effects.status(1),
+            Some(EffectStatus {
+                spec: stronger,
+                ..before
+            })
+        );
+        let equal = EffectSpec {
+            seconds: 3.,
+            ..stronger
+        };
+        effects.apply(equal, 0).unwrap();
+        assert_eq!(
+            effects.status(1),
+            Some(EffectStatus {
+                spec: equal,
+                remaining_seconds: 3.,
+                ..before
+            })
+        );
+    }
+
+    #[test]
+    fn take_returns_final_state_and_reapplication_starts_fresh() {
+        let mut effects = EffectSet::<2>::new().unwrap();
+        let spec = burn(1, Stacking::Stack(3));
+        effects.apply(spec, 0).unwrap();
+        effects.apply(spec, 0).unwrap();
+        effects
+            .apply(
+                EffectSpec {
+                    tags: 4,
+                    ..burn(2, Stacking::Refresh)
+                },
+                0,
+            )
+            .unwrap();
+        effects.advance(0.125).unwrap();
+        let removed = effects.status(1).unwrap();
+        let other = effects.status(2).unwrap();
+        assert_eq!(effects.take(0), None);
+        assert_eq!(effects.take(3), None);
+        assert_eq!(effects.take(1), Some(removed));
+        assert_eq!(effects.take(1), None);
+        assert!(!effects.remove(1));
+        assert_eq!(effects.status(1), None);
+        assert_eq!(effects.status(2), Some(other));
+        assert_eq!(effects.len(), 1);
+        assert_eq!(effects.tags(), 4);
+        assert_eq!(effects.value(0, 100., 0., 100.).unwrap(), 50.);
+        effects.apply(spec, 0).unwrap();
+        let fresh = effects.status(1).unwrap();
+        assert_eq!(fresh.stacks, 1);
+        assert_eq!(fresh.remaining_seconds, 2.);
+        assert_eq!(fresh.periodic_elapsed_seconds, Some(0.));
+        let pulses = effects.advance(0.125).unwrap();
+        assert!(pulses[0].is_none());
+        assert_eq!(pulses[1].unwrap().count, 1);
+        assert!(effects.remove(1));
+        assert!(effects.remove(2));
+        assert!(effects.is_empty());
+        assert!(effects.advance(1.).unwrap().iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn views_keep_f64_time_and_do_not_promise_pulses_past_expiry() {
+        let mut effects = EffectSet::<1>::new().unwrap();
+        effects.apply(burn(1, Stacking::Refresh), 0).unwrap();
+        effects.advance(0.1).unwrap();
+        let status = effects.status(1).unwrap();
+        assert_eq!(status.remaining_seconds, 2. - f64::from(0.1f32));
+        assert_eq!(status.periodic_elapsed_seconds, Some(f64::from(0.1f32)));
+        assert_eq!(status.seconds_until_pulse(), Some(0.25 - f64::from(0.1f32)));
+        effects.clear();
+        effects
+            .apply(
+                EffectSpec {
+                    seconds: 0.125,
+                    ..burn(1, Stacking::Refresh)
+                },
+                0,
+            )
+            .unwrap();
+        let status = effects.status(1).unwrap();
+        assert!(status.seconds_until_pulse().unwrap() > status.remaining_seconds);
+        assert!(effects.advance(1.).unwrap()[0].is_none());
+        assert_eq!(effects.take(1), None);
+        assert!(effects.is_empty());
+    }
+
     #[test]
     fn slows_stack_refresh_and_expire_without_mutating_base() {
         let mut s = EffectSet::<4>::new().unwrap();

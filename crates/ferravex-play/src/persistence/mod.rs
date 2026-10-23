@@ -309,7 +309,10 @@ pub trait SaveData: Sized {
 mod tests;
 
 mod preferences;
-pub use preferences::Preferences;
+pub use preferences::{PreferenceOverrides, Preferences};
 
 mod records;
-pub use records::{MAX_RECORDS, MAX_RUN_US, Record, RecordBook, run_micros};
+pub use records::{
+    MAX_RECORDS, MAX_RUN_US, Record, RecordBook, RecordComparison, RecordDelta, RecordSummary,
+    run_micros,
+};

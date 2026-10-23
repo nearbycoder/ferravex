@@ -34,9 +34,8 @@ pub struct Capture {
 }
 impl Capture {
     pub fn new(game: &Match, seed: u64, limits: Limits) -> Result<Self, Error> {
-        let mut state = Vec::with_capacity(MAX_CHECKPOINT_BYTES);
-        game.checkpoint_into(&mut state)?;
-        let recorder = Recorder::new(
+        Self::with_header(
+            game,
             Header {
                 schema: SCHEMA,
                 version: 1,
@@ -44,6 +43,16 @@ impl Capture {
                 tick_hz: TICK_RATE as u16,
                 seed,
             },
+            limits,
+        )
+    }
+    // Narrow additive seam: alternate schemas reuse exactly the legacy
+    // checkpoint/input/event encoding and Recorder preparation.
+    pub(crate) fn with_header(game: &Match, header: Header, limits: Limits) -> Result<Self, Error> {
+        let mut state = Vec::with_capacity(MAX_CHECKPOINT_BYTES);
+        game.checkpoint_into(&mut state)?;
+        let recorder = Recorder::new(
+            header,
             limits,
             u64::from(game.tick),
             &state,
@@ -176,70 +185,104 @@ impl ReplayWorld for World {
         Ok(self.game.state_hash()?)
     }
     fn step(&mut self, input: &[u8], expected: EventIter<'_>) -> Result<(), Error> {
-        let mut r = checkpoint::Reader { b: input, i: 0 };
-        let n = r.u8()? as usize;
-        if n > MAX_PLAYERS {
-            return Err(Error::InvalidInput);
-        }
-        let mut commands = [(0, InputFrame::default()); MAX_PLAYERS];
-        let mut ids = 0u16;
-        for c in &mut commands[..n] {
-            let id = r.u8()?;
-            let frame = InputFrame {
-                sequence: r.u32()?,
-                move_x: r.f32()?,
-                move_z: r.f32()?,
-                yaw: r.f32()?,
-                pitch: r.f32()?,
-                buttons: r.u8()?,
-            };
-            if id as usize >= MAX_PLAYERS || ids & (1 << id) != 0 || !frame.is_valid() {
-                return Err(Error::InvalidInput);
-            }
-            ids |= 1 << id;
-            *c = (id, frame);
-        }
-        let s = r.u8()? as usize;
-        if s > MAX_PLAYERS {
-            return Err(Error::InvalidInput);
-        }
-        let mut shots = [ShotTime { player: 0, tick: 0 }; MAX_PLAYERS];
-        ids = 0;
-        for shot in &mut shots[..s] {
-            *shot = ShotTime {
-                player: r.u8()?,
-                tick: r.u32()?,
-            };
-            if shot.player as usize >= MAX_PLAYERS || ids & (1 << shot.player) != 0 {
-                return Err(Error::InvalidInput);
-            }
-            ids |= 1 << shot.player;
-        }
-        if r.i != input.len() || expected.len() > 64 {
-            return Err(Error::InvalidInput);
-        }
-        // Validate authority payloads before mutating the simulation.
-        let mut wanted = [None; 64];
-        for (slot, e) in wanted.iter_mut().zip(expected.clone()) {
-            if e.kind != 1 {
-                return Err(Error::InvalidInput);
-            }
-            let e = NetworkEvent::decode(e.payload).map_err(|_| Error::InvalidInput)?;
-            if e.tick != self.game.tick.wrapping_add(1) {
-                return Err(Error::InvalidInput);
-            }
-            *slot = Some(e.event);
-        }
-        let step = self.game.step_with_rewind(&commands[..n], &shots[..s]);
+        let input = decode_inputs(input)?;
+        let wanted = decode_events(expected.clone(), self.game.tick.wrapping_add(1))?;
+        let step = self.game.step_with_rewind(
+            &input.commands[..input.command_count],
+            &input.shots[..input.shot_count],
+        );
         self.events.clear();
         self.events.extend(step.events);
-        if self.events.len() != expected.len()
-            || self.events.iter().zip(wanted).any(|(a, b)| Some(*a) != b)
-        {
-            return Err(Error::EventsDiffer);
-        }
-        Ok(())
+        compare_events(&self.events, &wanted, expected.len())
     }
+}
+// Fixed-size shared input and event validation; no alternate codec.
+pub(crate) struct DecodedInputs {
+    pub commands: [(u8, InputFrame); MAX_PLAYERS],
+    pub command_count: usize,
+    pub shots: [ShotTime; MAX_PLAYERS],
+    pub shot_count: usize,
+}
+pub(crate) fn decode_inputs(input: &[u8]) -> Result<DecodedInputs, Error> {
+    let mut r = checkpoint::Reader { b: input, i: 0 };
+    let n = r.u8()? as usize;
+    if n > MAX_PLAYERS {
+        return Err(Error::InvalidInput);
+    }
+    let mut commands = [(0, InputFrame::default()); MAX_PLAYERS];
+    let mut ids = 0u16;
+    for c in &mut commands[..n] {
+        let id = r.u8()?;
+        let frame = InputFrame {
+            sequence: r.u32()?,
+            move_x: r.f32()?,
+            move_z: r.f32()?,
+            yaw: r.f32()?,
+            pitch: r.f32()?,
+            buttons: r.u8()?,
+        };
+        if id as usize >= MAX_PLAYERS || ids & (1 << id) != 0 || !frame.is_valid() {
+            return Err(Error::InvalidInput);
+        }
+        ids |= 1 << id;
+        *c = (id, frame);
+    }
+    let s = r.u8()? as usize;
+    if s > MAX_PLAYERS {
+        return Err(Error::InvalidInput);
+    }
+    let mut shots = [ShotTime { player: 0, tick: 0 }; MAX_PLAYERS];
+    ids = 0;
+    for shot in &mut shots[..s] {
+        *shot = ShotTime {
+            player: r.u8()?,
+            tick: r.u32()?,
+        };
+        if shot.player as usize >= MAX_PLAYERS || ids & (1 << shot.player) != 0 {
+            return Err(Error::InvalidInput);
+        }
+        ids |= 1 << shot.player;
+    }
+    if r.i != input.len() {
+        return Err(Error::InvalidInput);
+    }
+    Ok(DecodedInputs {
+        commands,
+        command_count: n,
+        shots,
+        shot_count: s,
+    })
+}
+pub(crate) fn decode_events(
+    expected: EventIter<'_>,
+    tick: u32,
+) -> Result<[Option<GameEvent>; 64], Error> {
+    if expected.len() > 64 {
+        return Err(Error::InvalidInput);
+    }
+    // Validate authority payloads before mutating the simulation.
+    let mut wanted = [None; 64];
+    for (slot, e) in wanted.iter_mut().zip(expected.clone()) {
+        if e.kind != 1 {
+            return Err(Error::InvalidInput);
+        }
+        let e = NetworkEvent::decode(e.payload).map_err(|_| Error::InvalidInput)?;
+        if e.tick != tick {
+            return Err(Error::InvalidInput);
+        }
+        *slot = Some(e.event);
+    }
+    Ok(wanted)
+}
+pub(crate) fn compare_events(
+    events: &[GameEvent],
+    wanted: &[Option<GameEvent>; 64],
+    count: usize,
+) -> Result<(), Error> {
+    if events.len() != count || events.iter().zip(wanted).any(|(a, b)| Some(*a) != *b) {
+        return Err(Error::EventsDiffer);
+    }
+    Ok(())
 }
 #[cfg(test)]
 mod tests {

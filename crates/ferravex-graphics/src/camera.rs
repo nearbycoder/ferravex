@@ -30,6 +30,47 @@ impl Camera {
     pub fn frustum(self) -> Option<Frustum> {
         Frustum::from_matrix(self.view_projection, self.clip_depth)
     }
+
+    /// Cache projection and picking using this camera's actual clip-depth convention.
+    ///
+    /// Coordinates share the viewport's units (normally logical pixels). Rays
+    /// start at the near plane; callers declare finite/infinite far intent because
+    /// it cannot reliably be recovered from the composed matrix. Infinite far is
+    /// currently rejected. Camera position and rendering remain unchanged.
+    ///
+    /// ```
+    /// use ferravex_graphics::{Camera, Vec3, vec2, vec3};
+    /// use ferravex_math::projection::{FarPlane, ScreenYAxis, Viewport};
+    /// let camera = Camera::perspective(
+    ///     vec3(0., 0., 5.), Vec3::ZERO, Vec3::Y, 1., 2., 0.5, 50.,
+    /// );
+    /// let projector = camera.prepare_projector(
+    ///     Viewport { origin: vec2(20., 80.), size: vec2(800., 400.) },
+    ///     ScreenYAxis::Down, FarPlane::Finite,
+    /// )?;
+    /// let anchor = projector.project(Vec3::ZERO)?;
+    /// assert!(anchor.screen.abs_diff_eq(vec2(420., 280.), 0.001));
+    /// let ray = projector.pick_ray(anchor.screen)?;
+    /// assert!(ray.origin.abs_diff_eq(vec3(0., 0., 4.5), 0.001));
+    /// assert!(ray.direction.abs_diff_eq(Vec3::NEG_Z, 0.001));
+    /// # Ok::<(), ferravex_math::projection::ProjectionError>(())
+    /// ```
+    pub fn prepare_projector(
+        self,
+        viewport: ferravex_math::projection::Viewport,
+        y_axis: ferravex_math::projection::ScreenYAxis,
+        far_plane: ferravex_math::projection::FarPlane,
+    ) -> Result<
+        ferravex_math::projection::PreparedProjector3D,
+        ferravex_math::projection::ProjectionError,
+    > {
+        use ferravex_math::projection::{NdcDepth, PreparedProjector3D};
+        let depth = match self.clip_depth {
+            ClipDepth::NegativeOneToOne => NdcDepth::NegativeOneToOne,
+            ClipDepth::ZeroToOne => NdcDepth::ZeroToOne,
+        };
+        PreparedProjector3D::try_new(self.view_projection, viewport, y_axis, depth, far_plane)
+    }
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Frustum {

@@ -1,4 +1,177 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ferravex examples</title><style>
-:root{color-scheme:dark;background:#101813;color:#edf0e9;font:16px system-ui,sans-serif}body{max-width:850px;margin:10vh auto;padding:24px}h1{font-size:clamp(36px,7vw,64px);letter-spacing:-.04em}p{color:#b6c7b9;line-height:1.6}nav{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:24px;margin:40px 0}a{display:block;padding:28px;border:1px solid #3e5745;border-radius:4px;color:#edba91;text-decoration:none}a:hover,a:focus-visible{background:#1d3022;outline:2px solid #edba91}strong{display:block;font-size:24px;margin-bottom:12px}small{color:#b6c7b9;line-height:1.6}
-</style></head><body><p>FERRAVEX / FIRST-PARTY EXAMPLES</p><h1>Two dimensions.<br>One original Rust engine.</h1><p>These games use only Ferravex crates, Rust std and browser APIs. Choose a game to load its WebAssembly module.</p><nav aria-label="Playable games"><a href="owned/"><strong>Courtyard</strong><small>3D · Flat-shaded stone, moving operators, shared shooter simulation and browser peer sessions.</small></a><a href="owned-orbit/"><strong>Orbit Breaker</strong><small>2D · Clear two sectors of panels with continuous ball collision, pickups and original Rust pixel rendering.</small></a><a href="emberline/"><strong>Emberline</strong><small>2D · Cross a forgotten foundry, collect embers, and reach the signal tower.</small></a><a href="neon-swarm/"><strong>Neon Swarm</strong><small>2D · Hold the arena through escalating swarms with aim, dash, and pickups.</small></a><a href="pocket-rally/"><strong>Pocket Rally</strong><small>2D · Find the racing line, drift through bends, and finish three clean laps.</small></a><a href="salvage-pinball/"><strong>Salvage Pinball</strong><small>2D · Work the flippers and bumpers of an industrial salvage table.</small></a><a href="orchard-guard/"><strong>Orchard Guard</strong><small>2D · Place and upgrade defenses to protect the last orchard.</small></a><a href="marble-run/"><strong>Marble Run</strong><small>3D · Guide a rolling marble across suspended platforms to the finish.</small></a><a href="dune-skimmer/"><strong>Dune Skimmer</strong><small>3D · Thread a low-poly desert circuit and manage your boost.</small></a><a href="crystal-cavern/"><strong>Crystal Cavern</strong><small>3D · Recover crystals and open the sealed cavern gate.</small></a><a href="siege-foundry/"><strong>Siege Foundry</strong><small>3D · Aim a limited supply of cannonballs at a rigid-body fortress.</small></a><a href="sky-courier/"><strong>Sky Courier</strong><small>3D · Fly through island air gates and deliver cargo before time runs out.</small></a><a href="strike/"><strong>Strike</strong><small>3D · The original Dockyard shooter with native UDP multiplayer.</small></a><a href="physics-2d/"><strong>2D Physics Lab</strong><small>2D · Drop, stack, and bounce rigid bodies.</small></a><a href="physics-3d/"><strong>3D Physics Lab</strong><small>3D · A flat-shaded loading yard for testing rigid-body stacks.</small></a></nav></body></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Explore fifteen original Ferravex games and physics labs. Find a 2D or 3D example and play in your browser.">
+  <title>Ferravex examples</title>
+  <style>
+    :root { color-scheme: dark; background: #101813; color: #edf0e9; font: 16px/1.6 system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body { max-width: 1000px; margin: 0 auto; padding: clamp(16px, 4vw, 40px); }
+    header { margin: 16px 0 24px; }
+    h1 { font-size: clamp(32px, 5.5vw, 52px); line-height: 1.1; letter-spacing: -.04em; margin: 14px 0; }
+    h2 { font-size: 24px; line-height: 1.3; }
+    p { color: #b6c7b9; }
+    a { color: #edba91; }
+    :where(a, button, input, [tabindex]):focus-visible { outline: 3px solid #edba91; outline-offset: 4px; }
+    .skip-link { position: absolute; top: 8px; left: 8px; padding: 12px 20px; background: #1d3022; transform: translateY(-160%); z-index: 1; }
+    .skip-link:focus { transform: none; }
+    .eyebrow { font-size: 14px; letter-spacing: .06em; margin: 0; }
+    .intro { max-width: 65ch; margin: 0; }
+    .filters { padding: 20px; border: 1px solid #3e5745; border-radius: 4px; background: #15231a; }
+    .search-label { display: block; margin-bottom: 8px; font-weight: 650; }
+    input[type="search"] { display: block; width: 100%; min-width: 0; min-height: 48px; border: 1px solid #76937e; border-radius: 4px; padding: 10px 12px; background: #101813; color: #edf0e9; font: inherit; }
+    input::placeholder { color: #b6c7b9; opacity: 1; }
+    .hint { font-size: 14px; margin: 8px 0 16px; }
+    .filter-row { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 16px 24px; }
+    fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+    legend { padding: 0; margin-bottom: 8px; font-weight: 650; }
+    .dimensions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .dimension { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 14px; border: 1px solid #76937e; border-radius: 4px; cursor: pointer; }
+    .dimension:focus-within { background: #1d3022; }
+    input[type="radio"] { width: 18px; height: 18px; margin: 0; accent-color: #edba91; }
+    button { min-height: 44px; padding: 8px 16px; border: 1px solid #edba91; border-radius: 4px; background: #1d3022; color: #edba91; font: inherit; cursor: pointer; }
+    button:hover { background: #29422f; }
+    .results-heading { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 0 16px; margin-top: 28px; }
+    .results-heading h2, .results-heading p { margin: 8px 0; }
+    .games { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: 20px; margin: 20px 0 40px; }
+    .game { display: flex; flex-direction: column; min-width: 0; padding: 24px; border: 1px solid #3e5745; border-radius: 4px; color: #edba91; text-decoration: none; overflow-wrap: anywhere; }
+    .game:hover, .game:focus-visible { background: #1d3022; border-color: #edba91; }
+    .game strong { display: block; font-size: 24px; line-height: 1.25; margin: 10px 0 12px; }
+    .game small { color: #b6c7b9; font-size: 16px; }
+    .genre { color: #c5d7c8; font-size: 14px; }
+    .play { display: block; margin-top: auto; padding-top: 20px; font-weight: 650; }
+    .empty { padding: 24px; border: 1px dashed #76937e; border-radius: 4px; margin: 20px 0; overflow-wrap: anywhere; }
+    .empty h3 { margin: 0; font-size: 24px; }
+    @media (max-width: 400px) {
+      header { margin-top: 24px; }
+      .filters, .game, .empty { padding: 16px; }
+      .dimension { padding: 8px 10px; }
+      .games { gap: 16px; }
+    }
+    @media (forced-colors: active) {
+      .filters, .game, .dimension, button, input[type="search"] { border-color: CanvasText; }
+      :where(a, button, input, [tabindex]):focus-visible { outline-color: Highlight; }
+    }
+  </style>
+  <script type="module" src="catalog.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#games-heading">Skip to games</a>
+  <header>
+    <p class="eyebrow">FERRAVEX / PLAYABLE EXAMPLES</p>
+    <h1>Two dimensions.<br>One original Rust engine.</h1>
+    <p class="intro">Play fifteen games and physics labs, from platforming and racing to tactical combat. Choose an example to start playing.</p>
+  </header>
+  <main data-catalog>
+    <form class="filters" id="catalog-filters" role="search" aria-label="Find an example" hidden>
+      <label class="search-label" for="catalog-search">Search games and labs</label>
+      <input id="catalog-search" type="search" name="q" placeholder="Try racing, physics, or Emberline" aria-describedby="search-help" aria-controls="games" autocomplete="off" spellcheck="false" maxlength="200" enterkeyhint="search">
+      <p class="hint" id="search-help">Enter focuses the first result. Escape clears your search; from a result, it returns to search. Tab moves between links and controls. Share this page’s address to share your filters.</p>
+      <div class="filter-row">
+        <fieldset aria-describedby="dimension-help">
+          <legend>Dimensions</legend>
+          <div class="dimensions">
+            <label class="dimension"><input type="radio" name="dimension" value="all" checked>All</label>
+            <label class="dimension"><input type="radio" name="dimension" value="2D">2D</label>
+            <label class="dimension"><input type="radio" name="dimension" value="3D">3D</label>
+          </div>
+          <p class="hint" id="dimension-help">Use arrow keys to choose a dimension.</p>
+        </fieldset>
+        <button type="submit" aria-controls="games">View results</button>
+        <button type="button" id="clear-filters">Clear filters</button>
+      </div>
+    </form>
+    <noscript><p>All fifteen examples are listed below. Enable JavaScript to search and filter this catalog.</p></noscript>
+    <div class="results-heading">
+      <h2 id="games-heading" tabindex="-1">Choose an example</h2>
+      <p id="result-count" role="status" aria-live="polite" aria-atomic="true">Showing 15 of 15 examples.</p>
+    </div>
+    <section class="empty" id="catalog-empty" aria-labelledby="empty-heading" aria-describedby="empty-description" hidden>
+      <h3 id="empty-heading" tabindex="-1" aria-describedby="empty-description">No matching examples</h3>
+      <p id="empty-description">Try a shorter search or another dimension, or return to the full collection.</p>
+      <button type="button" id="search-all-dimensions" hidden>Search all dimensions</button>
+      <button type="button" id="show-all">Show all examples</button>
+    </section>
+    <nav class="games" id="games" aria-label="Playable games" aria-describedby="result-count">
+      <a class="game" data-game data-dimension="3D" href="owned/">
+        <span class="genre">3D · FPS training ground</span>
+        <strong>Courtyard</strong><small>Flat-shaded stone, moving operators, shared shooter simulation and browser peer sessions.</small>
+        <span class="play" aria-hidden="true">Play Courtyard →</span>
+      </a>
+      <a class="game" data-game data-dimension="2D" href="owned-orbit/">
+        <span class="genre">2D · Arcade physics</span>
+        <strong>Orbit Breaker</strong><small>Clear two sectors of panels with continuous ball collision, pickups and original Rust pixel rendering.</small>
+        <span class="play" aria-hidden="true">Play Orbit Breaker →</span>
+      </a>
+      <a class="game" data-game data-dimension="2D" href="emberline/">
+        <span class="genre">2D · Platformer</span>
+        <strong>Emberline</strong><small>Cross a forgotten foundry, collect embers, and reach the signal tower.</small>
+        <span class="play" aria-hidden="true">Play Emberline →</span>
+      </a>
+      <a class="game" data-game data-dimension="2D" href="neon-swarm/">
+        <span class="genre">2D · Arena survival</span>
+        <strong>Neon Swarm</strong><small>Hold the arena through escalating swarms with aim, dash, and pickups.</small>
+        <span class="play" aria-hidden="true">Play Neon Swarm →</span>
+      </a>
+      <a class="game" data-game data-dimension="2D" href="pocket-rally/">
+        <span class="genre">2D · Rally time trial</span>
+        <strong>Pocket Rally</strong><small>Find the racing line, drift through bends, and finish three clean laps.</small>
+        <span class="play" aria-hidden="true">Play Pocket Rally →</span>
+      </a>
+      <a class="game" data-game data-dimension="2D" href="salvage-pinball/">
+        <span class="genre">2D · Physics pinball</span>
+        <strong>Salvage Pinball</strong><small>Work the flippers and bumpers of an industrial salvage table.</small>
+        <span class="play" aria-hidden="true">Play Salvage Pinball →</span>
+      </a>
+      <a class="game" data-game data-dimension="2D" href="orchard-guard/">
+        <span class="genre">2D · Tower defense</span>
+        <strong>Orchard Guard</strong><small>Place and upgrade defenses to protect the last orchard.</small>
+        <span class="play" aria-hidden="true">Play Orchard Guard →</span>
+      </a>
+      <a class="game" data-game data-dimension="3D" href="marble-run/">
+        <span class="genre">3D · Physics obstacle course</span>
+        <strong>Marble Run</strong><small>Master four suspended courses: narrow switchbacks, rotating sweepers and slippery downhill runs.</small>
+        <span class="play" aria-hidden="true">Play Marble Run →</span>
+      </a>
+      <a class="game" data-game data-dimension="3D" href="dune-skimmer/">
+        <span class="genre">3D · Hover racing</span>
+        <strong>Dune Skimmer</strong><small>Thread a low-poly desert circuit and manage your boost.</small>
+        <span class="play" aria-hidden="true">Play Dune Skimmer →</span>
+      </a>
+      <a class="game" data-game data-dimension="3D" href="crystal-cavern/">
+        <span class="genre">3D · Exploration puzzle</span>
+        <strong>Crystal Cavern</strong><small>Recover crystals and open the sealed cavern gate.</small>
+        <span class="play" aria-hidden="true">Play Crystal Cavern →</span>
+      </a>
+      <a class="game" data-game data-dimension="3D" href="siege-foundry/">
+        <span class="genre">3D · Physics demolition</span>
+        <strong>Siege Foundry</strong><small>Aim a limited supply of cannonballs at a rigid-body fortress.</small>
+        <span class="play" aria-hidden="true">Play Siege Foundry →</span>
+      </a>
+      <a class="game" data-game data-dimension="3D" href="sky-courier/">
+        <span class="genre">3D · Flight delivery</span>
+        <strong>Sky Courier</strong><small>Fly through island air gates and deliver cargo before time runs out.</small>
+        <span class="play" aria-hidden="true">Play Sky Courier →</span>
+      </a>
+      <a class="game" data-game data-dimension="3D" href="strike/">
+        <span class="genre">3D · Tactical FPS</span>
+        <strong>Strike</strong><small>The original Dockyard shooter with native UDP multiplayer.</small>
+        <span class="play" aria-hidden="true">Play Strike →</span>
+      </a>
+      <a class="game" data-game data-dimension="2D" href="physics-2d/">
+        <span class="genre">2D · Original rigid-body sandbox</span>
+        <strong>2D Physics Lab</strong><small>Drop, stack, and bounce rigid bodies.</small>
+        <span class="play" aria-hidden="true">Open 2D Physics Lab →</span>
+      </a>
+      <a class="game" data-game data-dimension="3D" href="physics-3d/">
+        <span class="genre">3D · Original rigid-body sandbox</span>
+        <strong>3D Physics Lab</strong><small>A flat-shaded loading yard for testing rigid-body stacks.</small>
+        <span class="play" aria-hidden="true">Open 3D Physics Lab →</span>
+      </a>
+    </nav>
+  </main>
+</body>
+</html>

@@ -68,6 +68,7 @@ version = "0.1.0"
 name = "ferravex-engine"
 version = "0.1.0"
 dependencies = [
+ "ferravex-core",
  "ferravex-dynamics",
  "ferravex-ecs",
  "ferravex-graphics",

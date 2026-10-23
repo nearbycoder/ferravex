@@ -1,0 +1,117 @@
+//! @@NAME@@: a native/browser @@DIMENSION@@ game using the Ferravex facade.
+//! [`Game`] contains the fixed-step rules and a headless usage example.
+mod game;
+pub use game::Game;
+
+use ferravex::{
+    core::session::SessionState,
+    render::{
+        self,
+        demo::Demo,
+        input::{PlayerInput, Preset},
+        prelude::*,
+        ui,
+    },
+};
+
+fn window_conf() -> Conf {
+    render::window_conf(@@WINDOW_TITLE_RUST@@)
+}
+
+fn draw_world(game: &Game, alpha: f32) {
+    let width = screen_width().max(1.0);
+    let height = screen_height().max(1.0);
+    let scale = (width / 15.0).min(height / 11.0);
+    set_camera(&Camera2D {
+        zoom: vec2(2.0 * scale / width, -2.0 * scale / height),
+        ..Default::default()
+    });
+    draw_rectangle(-6.4, -3.4, 12.8, 6.8, ui::PANEL);
+    for x in -6..=6 {
+        draw_line(x as f32, -3.0, x as f32, 3.0, 0.015, ui::LINE);
+    }
+    for y in -3..=3 {
+        draw_line(-6.0, y as f32, 6.0, y as f32, 0.015, ui::LINE);
+    }
+    draw_circle(game::START.x, game::START.y, 0.6, ui::LINE);
+    draw_circle_lines(game::GOAL.x, game::GOAL.y, 0.6, 0.06, ui::AMBER);
+    draw_circle(game::GOAL.x, game::GOAL.y, 0.22, ui::AMBER);
+    let player = game.render_position(alpha);
+    draw_circle(player.x, player.y, 0.26, ui::CYAN);
+    draw_circle_lines(player.x, player.y, 0.32, 0.03, ui::INK);
+    set_default_camera();
+}
+
+async fn play() {
+    let mut demo = Demo::new();
+    let mut game = Game::new(demo.autoplay);
+    let mut input = PlayerInput::preset("@@NAME@@", Preset::Explore);
+    loop {
+        input.sample(game.session().is_playing());
+        if input.pressed("restart") {
+            game.restart();
+        }
+        if input.pressed("pause") {
+            game.toggle_pause();
+        }
+        if input.pressed("confirm") {
+            match game.session().state() {
+                SessionState::Ready => {
+                    game.start();
+                }
+                SessionState::Paused => {
+                    game.toggle_pause();
+                }
+                SessionState::Won | SessionState::Lost => game.restart(),
+                SessionState::Playing => {}
+            }
+        }
+        let movement = if demo.autoplay {
+            Vec2::X
+        } else {
+            input.movement()
+        };
+        // The input adapter suppresses elapsed time while unfocused or editing
+        // controls. GameSession owns explicit pause/start/terminal state.
+        let frame = game.advance(f64::from(input.simulation_dt(demo.dt())), movement);
+        clear_background(ui::BACKGROUND);
+        draw_world(&game, frame.alpha);
+        ui::header(
+            "@@DIMENSION@@",
+            @@WINDOW_TITLE_RUST@@,
+            "Reach the gold beacon | WASD / arrows: move | Esc: pause | R: restart",
+        );
+        let label = match game.session().state() {
+            SessionState::Ready => "Play (Enter)",
+            SessionState::Paused => "Resume (Enter / Esc)",
+            SessionState::Won => "Beacon reached! Play again (Enter)",
+            SessionState::Lost => "Try again (Enter)",
+            SessionState::Playing => "Pause (Esc)",
+        };
+        let width = 310.0_f32.min((screen_width() - 24.0).max(1.0));
+        let button = Rect::new(
+            (screen_width() - width) * 0.5,
+            (screen_height() - 62.0).max(110.0),
+            width,
+            42.0,
+        );
+        if ui::button(button, label, !game.session().is_playing()) {
+            match game.session().state() {
+                SessionState::Ready => {
+                    game.start();
+                }
+                SessionState::Playing | SessionState::Paused => {
+                    game.toggle_pause();
+                }
+                SessionState::Won | SessionState::Lost => game.restart(),
+            }
+        }
+        if demo.finish_frame() {
+            break;
+        }
+        next_frame().await;
+    }
+}
+
+// Exports native run() and the browser's ferravex_init ABI from the same loop.
+ferravex::render::game!(window_conf, play);

@@ -45,7 +45,7 @@ fn main() {
         } else {
             owned_orbit::game::Input::default()
         };
-        app.game.tick(input, 1.0 / 120.0);
+        app.advance_input(1.0 / 120.0, input);
         if let (Some(session), Some(token)) = (&mut performance, token) {
             let cpu_us = token.elapsed_us();
             let render_start = std::time::Instant::now();

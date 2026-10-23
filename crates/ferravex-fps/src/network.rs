@@ -3,24 +3,26 @@ struct RenderFrame {
     players: Vec<Player>,
     epochs: [u32; MAX_PLAYERS],
 }
+pub mod client_state;
 mod replication;
+pub mod server_state;
 mod tactical;
 use super::{Arena, InputFrame, MAX_PLAYERS, Match, NetworkEvent, Player, step_player};
 #[cfg(target_arch = "wasm32")]
 use crate::browser::Socket;
-use crate::tactical::{Mode, SessionEvent, View};
-use ferravex_net::reliable::{EventReceiver, EventSender};
+use crate::tactical::View;
+#[cfg(test)]
+use ferravex_net::TimedInput;
+#[cfg(test)]
+use ferravex_net::encode_server;
 use ferravex_net::time::Instant;
 #[cfg(all(not(test), not(target_arch = "wasm32")))]
 use ferravex_net::udp::Socket;
-use ferravex_net::{ClientExtension, TimedInput};
-use ferravex_net::{
-    ClientPacket, InputQueue, MAX_INPUTS_PER_PACKET, MAX_PACKET_BYTES, ServerPacket, Snapshot,
-    decode_client, decode_server, encode_client, encode_server, sequence_newer,
-};
+#[cfg(test)]
+use ferravex_net::{ClientPacket, decode_server, encode_client};
+use ferravex_net::{MAX_PACKET_BYTES, ServerPacket, Snapshot};
 use ferravex_play::rounds::RuleError;
 use std::{
-    collections::VecDeque,
     io,
     net::{SocketAddr, ToSocketAddrs},
     time::Duration,
@@ -92,50 +94,67 @@ fn nonce() -> u64 {
         h.finish().max(1)
     }
 }
-fn send_ok(result: io::Result<usize>) -> io::Result<()> {
-    match result {
-        Ok(_) => Ok(()),
-        Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(()),
-        Err(e) => Err(e),
-    }
-}
-fn protocol_error(error: ferravex_net::ProtocolError) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, error)
-}
-
-struct Peer {
-    addr: SocketAddr,
-    nonce: u64,
-    session: u64,
-    id: u8,
-    inputs: InputQueue,
-    last_input: InputFrame,
-    last_shot: Option<u32>,
-    snapshots: VecDeque<(u32, Vec<u8>)>,
-    baseline: Option<(u32, Vec<u8>)>,
-    last_ping: Option<Instant>,
-    commands: EventReceiver,
-    last_input_tick: u32,
-    ack: Option<u32>,
-    last_seen: Instant,
-    last_hello: Instant,
-    events: EventSender,
-}
-
-/// A native nonblocking authoritative server. Call `tick` at exactly 64 Hz.
-/// Each client can advance at most one simulation input per server tick.
-/// Network traffic per poll and input queues are bounded independently.
+/// Native/Wasm nonblocking adapter around the transport-independent authority.
+/// Call tick at exactly 64 Hz. Public game/counters/configuration remain available
+/// through the owned ServerState; all protocol decisions live in that core.
 pub struct GameServer {
     socket: Socket,
-    peers: Vec<Peer>,
-    pub game: Match,
-    pub rejected_packets: u64,
-    pub slow_event_disconnects: u64,
-    pub rejected_shots: u64,
-    tactical_options: Option<TacticalOptions>,
-    tactical: Option<Mode>,
-    round_dirty: bool,
+    state: server_state::ServerState,
     started: Instant,
+}
+impl std::ops::Deref for GameServer {
+    type Target = server_state::ServerState;
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+impl std::ops::DerefMut for GameServer {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.state
+    }
+}
+fn driver_error(error: server_state::DriverError) -> io::Error {
+    let kind = match &error {
+        server_state::DriverError::InvalidLocalInputs
+        | server_state::DriverError::TacticalConfiguration => io::ErrorKind::InvalidInput,
+        server_state::DriverError::Reliable(_) => io::ErrorKind::Other,
+        _ => io::ErrorKind::InvalidData,
+    };
+    io::Error::new(kind, error)
+}
+// UDP and browser queue acceptance requires the complete datagram. WouldBlock,
+// a short result and fatal transport errors must never advance retry timestamps.
+fn offer_datagram(
+    socket: &Socket,
+    addr: SocketAddr,
+    bytes: &[u8],
+    error: &mut Option<io::Error>,
+) -> bool {
+    if error.is_some() {
+        return false;
+    }
+    datagram_result(socket.send_to(bytes, addr), bytes.len(), error)
+}
+fn datagram_result(
+    result: io::Result<usize>,
+    expected: usize,
+    error: &mut Option<io::Error>,
+) -> bool {
+    match result {
+        Ok(n) if n == expected => true,
+        Ok(_) => {
+            *error = Some(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "short authority datagram",
+            ));
+            false
+        }
+        Err(e) if e.kind() == io::ErrorKind::WouldBlock => false,
+        Err(e) => {
+            *error = Some(e);
+            false
+        }
+    }
 }
 impl GameServer {
     pub fn bind(addr: impl ToSocketAddrs) -> io::Result<Self> {
@@ -144,14 +163,7 @@ impl GameServer {
     pub fn with_arena(addr: impl ToSocketAddrs, arena: Arena) -> io::Result<Self> {
         Ok(Self {
             socket: Socket::bind(addr)?,
-            peers: Vec::with_capacity(MAX_PLAYERS),
-            game: Match::new(arena),
-            rejected_packets: 0,
-            slow_event_disconnects: 0,
-            rejected_shots: 0,
-            tactical_options: None,
-            tactical: None,
-            round_dirty: false,
+            state: server_state::ServerState::new(arena),
             started: Instant::now(),
         })
     }
@@ -159,17 +171,38 @@ impl GameServer {
         self.socket.local_addr()
     }
     pub fn peer_count(&self) -> usize {
-        self.peers.len()
+        self.state.peer_count()
     }
     pub fn pending_event_count(&self) -> usize {
-        self.peers.iter().map(|peer| peer.events.pending()).sum()
+        self.state.pending_event_count()
+    }
+    pub fn enable_tactical(&mut self, options: TacticalOptions) -> io::Result<()> {
+        self.state
+            .enable_tactical(options)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))
+    }
+    pub fn tactical_view(&self) -> Option<View> {
+        self.state.tactical_view()
+    }
+    pub fn tactical_lobby(&self) -> Option<(usize, usize)> {
+        self.state.tactical_lobby()
+    }
+    pub fn act_local(
+        &mut self,
+        id: u8,
+        action: ferravex_play::rounds::Action,
+    ) -> Result<(), RuleError> {
+        self.state.act_local(id, action)
+    }
+    pub fn restart_tactical(&mut self) {
+        self.state.restart_tactical();
     }
     pub fn poll(&mut self) -> io::Result<()> {
         let mut buffer = [0; MAX_PACKET_BYTES + 1];
         for _ in 0..POLL_BUDGET {
             let received = match self.socket.recv_from(&mut buffer) {
-                Err(error) if error.kind() == io::ErrorKind::InvalidData => {
-                    self.rejected_packets += 1;
+                Err(e) if e.kind() == io::ErrorKind::InvalidData => {
+                    self.state.rejected_packets += 1;
                     continue;
                 }
                 other => other?,
@@ -177,127 +210,22 @@ impl GameServer {
             let Some((n, addr)) = received else {
                 break;
             };
-            let Ok(packet) = decode_client(&buffer[..n]) else {
-                self.rejected_packets += 1;
-                continue;
-            };
-            match packet {
-                ClientPacket::Extension(packet) => self.extension(addr, packet)?,
-                ClientPacket::EventAck { session, sequence } => {
-                    let Some(peer) = self
-                        .peers
-                        .iter_mut()
-                        .find(|peer| peer.addr == addr && peer.session == session)
-                    else {
-                        self.rejected_packets += 1;
-                        continue;
-                    };
-                    if peer.events.acknowledge(sequence) {
-                        peer.last_seen = Instant::now();
-                    }
-                }
-                ClientPacket::Hello {
-                    nonce: client_nonce,
-                } => {
-                    let now = Instant::now();
-                    if let Some(peer) = self.peers.iter_mut().find(|p| p.addr == addr) {
-                        // Bound handshake reflection and session churn independently
-                        // of the global receive budget. Lost welcomes retry at 250ms.
-                        if now.duration_since(peer.last_hello) < HELLO_INTERVAL {
-                            continue;
-                        }
-                        peer.last_hello = now;
-                        // A fresh client on the same endpoint starts a session but
-                        // cannot use Hello to restore health, ammunition, or position.
-                        if peer.nonce != client_nonce {
-                            peer.nonce = client_nonce;
-                            peer.session = nonce();
-                            peer.inputs = InputQueue::default();
-                            peer.events = EventSender::default();
-                            peer.commands = EventReceiver::default();
-                            self.round_dirty = true;
-                            peer.last_input = InputFrame::default();
-                            peer.last_shot = None;
-                            peer.snapshots.clear();
-                            peer.baseline = None;
-                            peer.last_ping = None;
-                            peer.ack = None;
-                            peer.last_input_tick = self.game.tick;
-                            if let Some(player) = self.game.player(peer.id) {
-                                peer.last_input.yaw = player.yaw;
-                                peer.last_input.pitch = player.pitch;
-                            }
-                        }
-                        peer.last_seen = Instant::now();
-                    } else {
-                        if self.peers.len() >= MAX_PLAYERS || !self.may_join() {
-                            self.rejected_packets += 1;
-                            continue;
-                        }
-                        let Some(id) =
-                            (0..MAX_PLAYERS as u8).find(|id| self.game.player(*id).is_none())
-                        else {
-                            continue;
-                        };
-                        if self.tactical.as_ref().is_some_and(|m| {
-                            m.rules.phase() == ferravex_play::rounds::Phase::Finished
-                        }) {
-                            self.tactical = None;
-                            self.round_dirty = true;
-                        }
-                        self.round_dirty |= self.tactical_options.is_some();
-                        self.game.spawn_player(id);
-                        self.peers.push(Peer {
-                            addr,
-                            nonce: client_nonce,
-                            session: nonce(),
-                            id,
-                            inputs: InputQueue::default(),
-                            last_input: InputFrame::default(),
-                            last_shot: None,
-                            snapshots: VecDeque::with_capacity(32),
-                            baseline: None,
-                            last_ping: None,
-                            commands: EventReceiver::default(),
-                            last_input_tick: self.game.tick,
-                            ack: None,
-                            last_seen: now,
-                            last_hello: now,
-                            events: EventSender::default(),
-                        });
-                    }
-                    let peer = self
-                        .peers
-                        .iter_mut()
-                        .find(|p| p.addr == addr)
-                        .expect("peer inserted");
-                    let welcome = encode_server(&ServerPacket::Welcome {
-                        nonce: peer.nonce,
-                        session: peer.session,
-                        player_id: peer.id,
-                        tick: self.game.tick,
-                    })
-                    .map_err(protocol_error)?;
-                    send_ok(self.socket.send_to(&welcome, addr))?;
-                    Self::send_snapshot(&self.socket, &self.game, peer)?;
-                }
-                ClientPacket::Input { session, inputs } => {
-                    let Some(peer) = self
-                        .peers
-                        .iter_mut()
-                        .find(|p| p.addr == addr && p.session == session)
-                    else {
-                        self.rejected_packets += 1;
-                        continue;
-                    };
-                    peer.last_seen = Instant::now();
-                    for input in inputs {
-                        peer.inputs.push(input);
-                    }
-                }
+            let mut error = None;
+            let result = self.state.receive(
+                addr,
+                &buffer[..n],
+                self.started.elapsed(),
+                nonce,
+                server_state::OutputBudget::default(),
+                |to, bytes| offer_datagram(&self.socket, to, bytes, &mut error),
+            );
+            if let Some(error) = error {
+                self.state.last_report.errors += 1;
+                return Err(error);
             }
+            result.map_err(driver_error)?;
         }
-        Ok(())
+        self.flush_events()
     }
     pub fn tick(&mut self) -> io::Result<Vec<super::GameEvent>> {
         self.tick_with_local(&[])
@@ -306,190 +234,73 @@ impl GameServer {
         &mut self,
         local: &[(u8, InputFrame)],
     ) -> io::Result<Vec<super::GameEvent>> {
-        if local.len() > MAX_PLAYERS
-            || local.iter().enumerate().any(|(i, (id, _))| {
-                self.game.player(*id).is_none()
-                    || local[..i].iter().any(|(old, _)| old == id)
-                    || self.peers.iter().any(|p| p.id == *id)
-            })
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "invalid local authority inputs",
-            ));
-        }
+        // Preserve validation before receiving/stepping, including disconnected
+        // local IDs and attempts to override a remote authority actor.
+        self.state
+            .validate_local(local)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
         self.poll()?;
-        let now = Instant::now();
-        self.peers.retain(|p| {
-            if now.duration_since(p.last_seen) > PEER_TIMEOUT {
-                self.game.remove_player(p.id);
-                false
-            } else {
-                true
-            }
-        });
-        self.prepare_tactical()?;
-        let mut commands = [(0, InputFrame::default()); MAX_PLAYERS];
-        let mut command_count = 0;
-        let mut shots = [super::ShotTime { player: 0, tick: 0 }; MAX_PLAYERS];
-        let mut shot_count = 0;
-        for peer in &mut self.peers {
-            if let Some(timed) = peer.inputs.pop_latest_timed() {
-                let input = timed.input;
-                peer.last_input = input;
-                peer.last_shot = timed.shot_tick;
-                peer.last_input_tick = self.game.tick;
-                peer.ack = Some(input.sequence);
-            }
-            let mut input = peer.last_input;
-            // Do not leave movement/fire held forever when packets stop arriving.
-            if self.game.tick.wrapping_sub(peer.last_input_tick) > 12 {
-                input.move_x = 0.;
-                input.move_z = 0.;
-                input.buttons = 0;
-                if let Some(mode) = &mut self.tactical
-                    && mode
-                        .rules
-                        .interaction_progress()
-                        .is_some_and(|(id, _)| id == u16::from(peer.id))
-                {
-                    let _ = mode
-                        .rules
-                        .act(u16::from(peer.id), ferravex_play::rounds::Action::Cancel);
-                    self.round_dirty = true;
-                }
-            }
-            if input.buttons & super::BUTTON_FIRE != 0
-                && let Some(tick) = peer.last_shot
-            {
-                shots[shot_count] = super::ShotTime {
-                    player: peer.id,
-                    tick,
-                };
-                shot_count += 1;
-            }
-            commands[command_count] = (peer.id, input);
-            command_count += 1;
+        let mut error = None;
+        let result = self.state.tick(
+            local,
+            self.started.elapsed(),
+            server_state::OutputBudget::default(),
+            |to, bytes| offer_datagram(&self.socket, to, bytes, &mut error),
+        );
+        if let Some(error) = error {
+            self.state.last_report.errors += 1;
+            return Err(error);
         }
-        for &(id, input) in local {
-            if command_count == MAX_PLAYERS {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "authority input capacity",
-                ));
-            }
-            commands[command_count] = (id, input);
-            command_count += 1;
-        }
-        let step = self.step_combat(&commands[..command_count], &shots[..shot_count]);
-        self.rejected_shots = self
-            .rejected_shots
-            .saturating_add(step.rejected_shots.len() as u64);
-        for (id, _) in &step.rejected_shots {
-            if let Some(peer) = self.peers.iter_mut().find(|p| p.id == *id) {
-                peer.last_input.buttons &= !super::BUTTON_FIRE;
-                peer.last_shot = None;
-            }
-        }
-
-        let events = step.events;
-        let mut payloads: Vec<_> = events
-            .iter()
-            .map(|event| {
-                NetworkEvent {
-                    tick: self.game.tick,
-                    event: *event,
-                }
-                .encode()
-            })
-            .collect::<Result<_, _>>()
-            .map_err(protocol_error)?;
-        if let Some(payload) = self.round_payload()? {
-            payloads.push(payload);
-        }
-        let mut slow = [false; MAX_PLAYERS];
-        for peer in &mut self.peers {
-            for payload in &payloads {
-                if peer.events.pending() + peer.commands.buffered()
-                    >= ferravex_net::reliable::EVENT_LIMIT
-                    || peer.events.queue(payload).is_err()
-                {
-                    slow[peer.id as usize] = true;
-                    break;
-                }
-            }
-        }
-        // Reliability is not silently sacrificed when a consumer stops ACKing.
-        // Bound per-peer state and require a fresh session for an overflowing peer.
-        self.peers.retain(|peer| {
-            if slow[peer.id as usize] {
-                self.slow_event_disconnects += 1;
-                self.game.remove_player(peer.id);
-                false
-            } else {
-                true
-            }
-        });
-        if self.round_dirty || self.game.tick.is_multiple_of(SNAPSHOT_INTERVAL) {
-            for peer in &mut self.peers {
-                Self::send_snapshot(&self.socket, &self.game, peer)?;
-            }
-        }
-        self.round_dirty = false;
-        self.flush_events()?;
-        Ok(events)
+        result.map(|v| v.events).map_err(driver_error)
     }
     fn flush_events(&mut self) -> io::Result<()> {
-        let now = self.started.elapsed().as_millis().min(u64::MAX as u128) as u64;
-        for peer in &mut self.peers {
-            for event in peer.events.due(now, EVENT_SEND_BUDGET) {
-                let bytes = encode_server(&ServerPacket::ReliableEvent {
-                    session: peer.session,
-                    event,
-                })
-                .map_err(protocol_error)?;
-                send_ok(self.socket.send_to(&bytes, peer.addr))?;
-            }
+        let mut error = None;
+        let result = self.state.poll(
+            self.started.elapsed(),
+            server_state::OutputBudget::default(),
+            |to, bytes| offer_datagram(&self.socket, to, bytes, &mut error),
+        );
+        if let Some(error) = error {
+            self.state.last_report.errors += 1;
+            return Err(error);
         }
-        Ok(())
+        result.map(|_| ()).map_err(driver_error)
     }
 }
 
-/// Native prediction/reconciliation client. `tick` runs one local fixed step;
-/// `poll` can additionally run each render frame. Up to six input commands are
-/// repeated per datagram to tolerate isolated packet loss without reliable UDP.
-/// Remote actors expose both authoritative and buffered interpolated samples.
+/// Native/Wasm nonblocking adapter around one production ClientState. `tick`
+/// executes one local fixed step; poll through local overlays on render frames.
+/// Socket I/O, time sampling and fresh reconnect nonces remain at this boundary.
 pub struct GameClient {
     socket: Socket,
-    arena: Arena,
-    nonce: u64,
-    session: Option<u64>,
-    id: Option<u8>,
-    next_sequence: u32,
-    pending: VecDeque<TimedInput>,
-    snapshots: VecDeque<(u32, Vec<u8>)>,
-    clock: ferravex_net::clock::ClientClock,
-    unwrapper: ferravex_net::clock::TickUnwrapper,
-    history: ferravex_net::history::History<RenderFrame>,
-    last_ping: Option<Instant>,
-    last_full_request: Option<Instant>,
-    predicted: Option<Player>,
-    commands: EventSender,
-    round: Option<View>,
-    lobby: Option<(u8, u8)>,
-    action_result: Option<(u64, Result<(), RuleError>)>,
-    players: Vec<Player>,
-    previous_players: Vec<Player>,
-    epochs: [u32; MAX_PLAYERS],
-    previous_epochs: [u32; MAX_PLAYERS],
-    latest_tick: Option<u32>,
-    previous_tick: u32,
-    last_snapshot: Option<Instant>,
-    last_hello: Option<Instant>,
-    ack: Option<u32>,
-    pub rejected_packets: u64,
-    event_receiver: EventReceiver,
-    delivered_events: VecDeque<NetworkEvent>,
+    state: client_state::ClientState,
+    started: Instant,
+}
+impl std::ops::Deref for GameClient {
+    type Target = client_state::ClientState;
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+impl std::ops::DerefMut for GameClient {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.state
+    }
+}
+fn client_driver_error(error: client_state::DriverError) -> io::Error {
+    let kind = match error {
+        client_state::DriverError::NotConnected => io::ErrorKind::NotConnected,
+        client_state::DriverError::Reliable(_) => io::ErrorKind::WouldBlock,
+        client_state::DriverError::InvalidNonce => io::ErrorKind::InvalidInput,
+        _ => io::ErrorKind::InvalidData,
+    };
+    io::Error::new(kind, error)
+}
+fn offer_client_datagram(socket: &Socket, bytes: &[u8], error: &mut Option<io::Error>) -> bool {
+    if error.is_some() {
+        return false;
+    }
+    datagram_result(socket.send(bytes), bytes.len(), error)
 }
 impl GameClient {
     pub fn connect(addr: impl ToSocketAddrs) -> io::Result<Self> {
@@ -498,120 +309,64 @@ impl GameClient {
     pub fn with_arena(addr: impl ToSocketAddrs, arena: Arena) -> io::Result<Self> {
         let mut this = Self {
             socket: Socket::connect(addr)?,
-            arena,
-            nonce: nonce(),
-            session: None,
-            id: None,
-            next_sequence: 0,
-            pending: VecDeque::with_capacity(MAX_PENDING_INPUTS),
-            snapshots: VecDeque::with_capacity(32),
-            clock: Default::default(),
-            unwrapper: Default::default(),
-            history: ferravex_net::history::History::new(32),
-            last_ping: None,
-            last_full_request: None,
-            predicted: None,
-            commands: EventSender::default(),
-            round: None,
-            lobby: None,
-            action_result: None,
-            players: vec![],
-            previous_players: vec![],
-            epochs: [0; MAX_PLAYERS],
-            previous_epochs: [0; MAX_PLAYERS],
-            latest_tick: None,
-            previous_tick: 0,
-            last_snapshot: None,
-            last_hello: None,
-            ack: None,
-            rejected_packets: 0,
-            event_receiver: EventReceiver::default(),
-            delivered_events: VecDeque::new(),
+            state: client_state::ClientState::new(arena, nonce()).map_err(client_driver_error)?,
+            started: Instant::now(),
         };
         this.hello()?;
         Ok(this)
     }
     fn hello(&mut self) -> io::Result<()> {
-        if self
-            .last_hello
-            .is_none_or(|sent| sent.elapsed() >= HELLO_INTERVAL)
-        {
-            let bytes = encode_client(&ClientPacket::Hello { nonce: self.nonce })
-                .map_err(protocol_error)?;
-            send_ok(self.socket.send(&bytes))?;
-            self.last_hello = Some(Instant::now());
+        self.maintain()
+    }
+    fn receive_datagram(&mut self, bytes: &[u8]) -> io::Result<()> {
+        let mut error = None;
+        let result =
+            self.state
+                .receive(bytes, self.started.elapsed(), Default::default(), |bytes| {
+                    offer_client_datagram(&self.socket, bytes, &mut error)
+                });
+        if let Some(error) = error {
+            self.state.last_report.errors += 1;
+            return Err(error);
+        }
+        result.map(|_| ()).map_err(client_driver_error)
+    }
+    fn maintain(&mut self) -> io::Result<()> {
+        // One initial poll plus one possible timeout reconnect. No repeated
+        // transport/driver error loop; failures return to the caller immediately.
+        for _ in 0..2 {
+            if self.state.needs_reconnect() {
+                let mut fresh = nonce();
+                if fresh == self.state.nonce {
+                    fresh = fresh.wrapping_add(1).max(1);
+                }
+                self.state
+                    .reconnect(fresh, self.started.elapsed())
+                    .map_err(client_driver_error)?;
+            }
+            let mut error = None;
+            let result = self
+                .state
+                .poll(self.started.elapsed(), Default::default(), |bytes| {
+                    offer_client_datagram(&self.socket, bytes, &mut error)
+                });
+            if let Some(error) = error {
+                self.state.last_report.errors += 1;
+                return Err(error);
+            }
+            result.map_err(client_driver_error)?;
+            if !self.state.needs_reconnect() {
+                break;
+            }
         }
         Ok(())
-    }
-    pub fn player_id(&self) -> Option<u8> {
-        self.id
-    }
-    pub fn is_connected(&self) -> bool {
-        self.id.is_some() && self.predicted.is_some()
-    }
-    pub fn local_player(&self) -> Option<&Player> {
-        self.predicted.as_ref()
-    }
-    pub fn players(&self) -> &[Player] {
-        &self.players
-    }
-    pub fn server_tick(&self) -> u32 {
-        self.latest_tick.unwrap_or(0)
-    }
-    /// Deliver reliable authority events exactly once in server sequence order.
-    /// Drain regularly. An application that never drains eventually applies
-    /// backpressure and is disconnected instead of consuming unbounded memory.
-    pub fn drain_events(&mut self) -> Vec<NetworkEvent> {
-        self.delivered_events.drain(..).collect()
-    }
-    pub fn pending_event_count(&self) -> usize {
-        self.delivered_events.len()
-    }
-    pub fn pending_input_count(&self) -> usize {
-        self.pending.len()
-    }
-    pub fn acknowledged_sequence(&self) -> Option<u32> {
-        self.ack
-    }
-    pub fn snapshot_age(&self) -> Option<Duration> {
-        self.last_snapshot.map(|t| t.elapsed())
-    }
-    pub fn tick(&mut self, mut input: InputFrame) -> io::Result<()> {
-        self.poll()?;
-        let Some(session) = self.session else {
-            return self.hello();
-        };
-        input = input.sanitized();
-        input.sequence = self.next_sequence;
-        self.next_sequence = self.next_sequence.wrapping_add(1);
-        if self.pending.len() == MAX_PENDING_INPUTS {
-            self.pending.pop_front();
-        }
-        let shot_tick = (input.buttons & super::BUTTON_FIRE != 0).then(|| self.rendered_tick());
-        self.pending.push_back(TimedInput { input, shot_tick });
-        if let Some(local) = &mut self.predicted {
-            tactical::predict(self.round.as_ref(), &self.arena, local, input);
-        }
-        let count = self.pending.len().min(MAX_INPUTS_PER_PACKET);
-        let inputs = self
-            .pending
-            .iter()
-            .skip(self.pending.len() - count)
-            .copied()
-            .collect();
-        let bytes = encode_client(&ClientPacket::Extension(ClientExtension::Inputs {
-            session,
-            inputs,
-        }))
-        .map_err(protocol_error)?;
-        send_ok(self.socket.send(&bytes))
     }
     pub fn poll(&mut self) -> io::Result<()> {
         let mut buffer = [0; MAX_PACKET_BYTES + 1];
         for _ in 0..POLL_BUDGET {
             let received = match self.socket.recv_from(&mut buffer) {
                 Err(error) if error.kind() == io::ErrorKind::InvalidData => {
-                    self.rejected_packets += 1;
+                    self.state.rejected_packets = self.state.rejected_packets.saturating_add(1);
                     continue;
                 }
                 other => other?,
@@ -619,142 +374,94 @@ impl GameClient {
             let Some((n, _)) = received else {
                 break;
             };
-            let Ok(packet) = decode_server(&buffer[..n]) else {
-                self.rejected_packets += 1;
-                continue;
-            };
-            match packet {
-                ServerPacket::Extension(packet) => self.extension(packet)?,
-                ServerPacket::ReliableEvent { session, event } => {
-                    if Some(session) != self.session
-                        || SessionEvent::decode(&event.payload).is_err()
-                    {
-                        self.rejected_packets += 1;
-                        continue;
-                    }
-                    let new = event.sequence >= self.event_receiver.next_sequence()
-                        && !self.event_receiver.contains_buffered(event.sequence);
-                    if new
-                        && self.delivered_events.len() + self.event_receiver.buffered()
-                            >= MAX_DELIVERED_EVENTS
-                    {
-                        // Do not ACK data for which the application has no room.
-                        continue;
-                    }
-                    let delivered = match self.event_receiver.receive(&event) {
-                        Ok(delivered) => delivered,
-                        Err(_) => {
-                            self.rejected_packets += 1;
-                            continue;
-                        }
-                    };
-                    for packet in delivered {
-                        self.consume_session_event(
-                            SessionEvent::decode(&packet.payload)
-                                .expect("payload validated before buffering"),
-                        );
-                    }
-                    let ack = encode_client(&ClientPacket::EventAck {
-                        session,
-                        sequence: event.sequence,
-                    })
-                    .map_err(protocol_error)?;
-                    send_ok(self.socket.send(&ack))?;
-                }
-                ServerPacket::Welcome {
-                    nonce,
-                    session,
-                    player_id,
-                    ..
-                } => {
-                    if nonce != self.nonce {
-                        self.rejected_packets += 1;
-                        continue;
-                    }
-                    if self.session != Some(session) {
-                        self.clear_replication();
-                        self.session = Some(session);
-                        self.id = Some(player_id);
-                        self.pending.clear();
-                        self.event_receiver = EventReceiver::default();
-                        self.delivered_events.clear();
-                        self.ack = None;
-                        self.latest_tick = None;
-                        self.last_snapshot = Some(Instant::now());
-                        self.predicted = Some(Player::new(player_id, self.arena.spawn(player_id)));
-                    }
-                }
-                ServerPacket::Snapshot(snapshot) => {
-                    self.accept_snapshot(snapshot, buffer[..n].to_vec())?;
-                }
-            }
+            self.receive_datagram(&buffer[..n])?;
         }
-        // Automatic reconnect after a timed-out server session; a new nonce makes
-        // delayed Welcome packets from the old session harmless.
-        if self
-            .last_snapshot
-            .is_some_and(|time| time.elapsed() > PEER_TIMEOUT)
-        {
-            self.clear_replication();
-            self.session = None;
-            self.id = None;
-            self.predicted = None;
-            self.pending.clear();
-            self.event_receiver = EventReceiver::default();
-            self.delivered_events.clear();
-            self.nonce = nonce();
-            self.latest_tick = None;
-            self.last_snapshot = None;
-            self.last_hello = None;
-            self.hello()?;
-        }
-        self.probe_clock()?;
-        self.flush_commands()?;
-        Ok(())
+        self.maintain()
     }
-    /// Interpolate the last two authority frames, intentionally one snapshot late.
-    /// Supply alpha in `[0,1]`, or call `interpolation_alpha` for a time-based value.
+    pub fn tick(&mut self, input: InputFrame) -> io::Result<()> {
+        self.poll()?;
+        let mut error = None;
+        let result = self
+            .state
+            .tick(input, self.started.elapsed(), Default::default(), |bytes| {
+                offer_client_datagram(&self.socket, bytes, &mut error)
+            });
+        if let Some(error) = error {
+            self.state.last_report.errors += 1;
+            return Err(error);
+        }
+        result.map(|_| ()).map_err(client_driver_error)
+    }
+    pub fn player_id(&self) -> Option<u8> {
+        self.state.player_id()
+    }
+    pub fn is_connected(&self) -> bool {
+        self.state.is_connected()
+    }
+    pub fn local_player(&self) -> Option<&Player> {
+        self.state.local_player()
+    }
+    pub fn players(&self) -> &[Player] {
+        self.state.players()
+    }
+    pub fn server_tick(&self) -> u32 {
+        self.state.server_tick()
+    }
+    pub fn drain_events(&mut self) -> Vec<NetworkEvent> {
+        self.state.drain_events()
+    }
+    pub fn pending_event_count(&self) -> usize {
+        self.state.pending_event_count()
+    }
+    pub fn pending_input_count(&self) -> usize {
+        self.state.pending_input_count()
+    }
+    pub fn acknowledged_sequence(&self) -> Option<u32> {
+        self.state.acknowledged_sequence()
+    }
+    pub fn snapshot_age(&self) -> Option<Duration> {
+        self.state
+            .snapshot_age(self.started.elapsed())
+            .expect("adapter monotonic time")
+    }
     pub fn interpolated_players(&self, alpha: f32) -> Vec<Player> {
-        let alpha = if alpha.is_finite() {
-            alpha.clamp(0., 1.)
-        } else {
-            1.
-        };
-        self.players
-            .iter()
-            .map(|current| {
-                let mut p = current.clone();
-                if let Some(old) = self.previous_players.iter().find(|old| old.id == p.id) {
-                    // Death/respawn and teleports should snap, not glide across the map.
-                    if self.epochs[p.id as usize] == self.previous_epochs[p.id as usize]
-                        && old.health > 0
-                        && p.health > 0
-                        && old.position.distance_squared(p.position) < 25.
-                    {
-                        p.position = old.position.lerp(p.position, alpha);
-                        let delta = (p.yaw - old.yaw + std::f32::consts::PI)
-                            .rem_euclid(std::f32::consts::TAU)
-                            - std::f32::consts::PI;
-                        p.yaw = old.yaw + delta * alpha;
-                        p.pitch = old.pitch + (p.pitch - old.pitch) * alpha;
-                    }
-                }
-                p
-            })
-            .collect()
+        self.state.interpolated_players(alpha)
     }
     pub fn interpolation_alpha(&self) -> f32 {
-        let interval = self
-            .latest_tick
-            .unwrap_or(0)
-            .wrapping_sub(self.previous_tick)
-            .clamp(1, 64) as f32
-            * super::FIXED_DT;
-        (self
-            .last_snapshot
-            .map_or(interval, |time| time.elapsed().as_secs_f32())
-            / interval)
-            .clamp(0., 1.)
+        self.state
+            .interpolation_alpha(self.started.elapsed())
+            .expect("adapter monotonic time")
+    }
+    pub fn rendered_tick(&self) -> u32 {
+        self.state
+            .rendered_tick(self.started.elapsed())
+            .expect("adapter monotonic time")
+    }
+    pub fn rendered_players(&self) -> Vec<Player> {
+        self.state
+            .rendered_players(self.started.elapsed())
+            .expect("adapter monotonic time")
+    }
+    pub fn round_trip_seconds(&self) -> Option<f64> {
+        self.state.round_trip_seconds()
+    }
+    pub fn jitter_seconds(&self) -> f64 {
+        self.state.jitter_seconds()
+    }
+    pub fn tactical_lobby(&self) -> Option<(u8, u8)> {
+        self.state.tactical_lobby()
+    }
+    pub fn tactical_view(&self) -> Option<&View> {
+        self.state.tactical_view()
+    }
+    pub fn last_action_result(&self) -> Option<(u64, Result<(), RuleError>)> {
+        self.state.last_action_result()
+    }
+    pub fn queue_action(&mut self, action: ferravex_play::rounds::Action) -> io::Result<u64> {
+        self.state.queue_action(action).map_err(client_driver_error)
+    }
+    pub fn pending_command_count(&self) -> usize {
+        self.state.pending_command_count()
     }
 }
 
@@ -960,7 +667,14 @@ mod tests {
             .iter_mut()
             .find(|p| p.id == 1)
             .unwrap()
-            .last_seen = Instant::now() - PEER_TIMEOUT - Duration::from_secs(1);
+            .last_seen = Duration::ZERO;
+        server.started = server.started - PEER_TIMEOUT - Duration::from_secs(1);
+        let now = server.started.elapsed();
+        for p in &mut server.state.peers {
+            if p.id != 1 {
+                p.last_seen = now;
+            }
+        }
         server.tick().unwrap();
         assert_eq!(server.peer_count(), 1);
         assert!(server.game.player(1).is_none());
@@ -993,7 +707,7 @@ mod tests {
             server.peers[0].session, old_session,
             "immediate session churn is throttled"
         );
-        server.peers[0].last_hello = Instant::now() - HELLO_INTERVAL;
+        server.started = server.started - HELLO_INTERVAL;
         client.socket.send(&hello).unwrap();
         server.poll().unwrap();
         client.poll().unwrap();
@@ -1124,7 +838,7 @@ mod tests {
         server.poll().unwrap();
         assert_eq!(server.pending_event_count(), 1);
         // Advance the retry clock without sleeping in a unit test.
-        server.started = Instant::now() - Duration::from_millis(250);
+        server.started = server.started - Duration::from_millis(250);
         server.flush_events().unwrap();
         client.poll().unwrap();
         let delivered = client.drain_events();
@@ -1161,7 +875,7 @@ mod tests {
         client.poll().unwrap();
         assert_eq!(client.pending_event_count(), 1);
         client.nonce = client.nonce.wrapping_add(1);
-        server.peers[0].last_hello = Instant::now() - HELLO_INTERVAL;
+        server.started = server.started - HELLO_INTERVAL;
         client
             .socket
             .send(
@@ -1221,7 +935,7 @@ mod tests {
         assert_eq!(server.pending_event_count(), 1);
         assert_eq!(client.event_receiver.next_sequence(), 0);
         client.drain_events();
-        server.started = Instant::now() - Duration::from_millis(250);
+        server.started = server.started - Duration::from_millis(250);
         server.flush_events().unwrap();
         client.poll().unwrap();
         server.poll().unwrap();
@@ -1241,5 +955,30 @@ mod tests {
         assert_eq!(server.peer_count(), 0);
         assert!(server.game.player(0).is_none());
         assert_eq!(server.pending_event_count(), 0);
+    }
+}
+
+#[cfg(test)]
+mod authority_adapter_tests {
+    use super::*;
+    #[test]
+    fn complete_datagram_admission_refuses_would_block_short_and_fatal_results() {
+        let mut error = None;
+        assert!(datagram_result(Ok(26), 26, &mut error));
+        assert!(error.is_none());
+        assert!(!datagram_result(
+            Err(io::ErrorKind::WouldBlock.into()),
+            26,
+            &mut error
+        ));
+        assert!(error.is_none());
+        assert!(!datagram_result(Ok(25), 26, &mut error));
+        assert_eq!(error.take().unwrap().kind(), io::ErrorKind::WriteZero);
+        assert!(!datagram_result(
+            Err(io::ErrorKind::ConnectionReset.into()),
+            26,
+            &mut error
+        ));
+        assert_eq!(error.take().unwrap().kind(), io::ErrorKind::ConnectionReset);
     }
 }

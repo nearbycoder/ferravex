@@ -45,14 +45,12 @@ pub enum Server {
         sequence: u64,
     },
 }
-fn session(out: &mut Vec<u8>, id: u64) -> Result<(), ProtocolError> {
-    if id == 0 {
-        return Err(ProtocolError::Invalid);
-    }
+fn session(out: &mut Encoder<'_>, id: u64) -> Result<(), EncodeError> {
+    valid_session(id)?;
     put_u64(out, id);
     Ok(())
 }
-fn put_tick(out: &mut Vec<u8>, tick: Option<u32>) {
+fn put_tick(out: &mut Encoder<'_>, tick: Option<u32>) {
     out.push(tick.is_some() as u8);
     put_u32(out, tick.unwrap_or(0));
 }
@@ -82,58 +80,55 @@ fn payload(r: &mut Reader<'_>, max: usize) -> Result<Vec<u8>, ProtocolError> {
     r.pos = end;
     Ok(bytes.to_vec())
 }
+#[cfg(test)]
 pub(super) fn encode_client(p: &Client) -> Result<Vec<u8>, ProtocolError> {
-    let mut out = header(match p {
+    encode_allocated(|out| write_client(p, out))
+}
+pub(super) fn write_client(p: &Client, out: &mut Encoder<'_>) -> Result<(), EncodeError> {
+    if let Client::Command { session, event } = p {
+        return BorrowedEvent::Command {
+            session: *session,
+            event,
+        }
+        .write(out);
+    }
+    out.header(match p {
         Client::Inputs { .. } => 7,
         Client::SnapshotAck { .. } => 8,
         Client::Ping { .. } => 9,
-        Client::Command { .. } => 10,
+        Client::Command { .. } => unreachable!("command encoded above"),
     });
     match p {
         Client::Inputs {
             session: id,
             inputs,
         } => {
-            session(&mut out, *id)?;
-            if inputs.is_empty()
-                || inputs.len() > MAX_INPUTS_PER_PACKET
-                || inputs.iter().any(|v| !v.input.is_valid())
-            {
-                return Err(ProtocolError::Invalid);
-            }
+            session(out, *id)?;
+            valid_len("inputs", inputs.len(), 1, MAX_INPUTS_PER_PACKET)?;
             out.push(inputs.len() as u8);
-            for t in inputs {
-                put_input(&mut out, &t.input);
-                put_tick(&mut out, t.shot_tick);
+            for (index, t) in inputs.iter().enumerate() {
+                validate_input(&t.input, index)?;
+                put_input(out, &t.input);
+                put_tick(out, t.shot_tick);
             }
         }
         Client::SnapshotAck { session: id, tick } => {
-            session(&mut out, *id)?;
-            put_tick(&mut out, *tick);
+            session(out, *id)?;
+            put_tick(out, *tick);
         }
         Client::Ping {
             session: id,
             nonce,
             client_us,
         } => {
-            session(&mut out, *id)?;
-            if *client_us > MAX_CLOCK_US {
-                return Err(ProtocolError::Invalid);
-            }
-            put_u32(&mut out, *nonce);
-            put_u64(&mut out, *client_us);
+            session(out, *id)?;
+            valid_field(*client_us <= MAX_CLOCK_US, "client_us", None)?;
+            put_u32(out, *nonce);
+            put_u64(out, *client_us);
         }
-        Client::Command { session: id, event } => {
-            session(&mut out, *id)?;
-            if event.payload.is_empty() || event.payload.len() > reliable::EVENT_BYTES {
-                return Err(ProtocolError::Invalid);
-            }
-            put_u64(&mut out, event.sequence);
-            put_u16(&mut out, event.payload.len() as u16);
-            out.extend(&event.payload);
-        }
+        Client::Command { .. } => unreachable!("command encoded above"),
     }
-    Ok(out)
+    Ok(())
 }
 pub(super) fn decode_client(r: &mut Reader<'_>, kind: u8) -> Result<Client, ProtocolError> {
     let session = read_session(r)?;
@@ -182,25 +177,29 @@ pub(super) fn decode_client(r: &mut Reader<'_>, kind: u8) -> Result<Client, Prot
         _ => return Err(ProtocolError::Kind),
     })
 }
+#[cfg(test)]
 pub(super) fn encode_server(p: &Server) -> Result<Vec<u8>, ProtocolError> {
-    let mut out = header(match p {
+    encode_allocated(|out| write_server(p, out))
+}
+pub(super) fn write_server(p: &Server, out: &mut Encoder<'_>) -> Result<(), EncodeError> {
+    out.header(match p {
         Server::SnapshotDelta { .. } => 11,
         Server::Pong { .. } => 12,
         Server::CommandAck { .. } => 13,
     });
     match p {
         Server::SnapshotDelta { session: id, delta } => {
-            session(&mut out, *id)?;
-            if !sequence_newer(delta.tick, delta.base_tick)
-                || delta.bytes.len() < 3
-                || delta.bytes.len() > MAX_PACKET_BYTES - 24
-            {
-                return Err(ProtocolError::Invalid);
-            }
-            put_u32(&mut out, delta.base_tick);
-            put_u32(&mut out, delta.tick);
-            put_u16(&mut out, delta.bytes.len() as u16);
-            out.extend(&delta.bytes);
+            session(out, *id)?;
+            valid_field(
+                sequence_newer(delta.tick, delta.base_tick),
+                "delta.tick",
+                None,
+            )?;
+            valid_len("delta.bytes", delta.bytes.len(), 3, MAX_PACKET_BYTES - 24)?;
+            put_u32(out, delta.base_tick);
+            put_u32(out, delta.tick);
+            put_u16(out, delta.bytes.len() as u16);
+            out.extend_from_slice(&delta.bytes);
         }
         Server::Pong {
             session: id,
@@ -210,26 +209,31 @@ pub(super) fn encode_server(p: &Server) -> Result<Vec<u8>, ProtocolError> {
             send_us,
             tick,
         } => {
-            session(&mut out, *id)?;
-            validate_pong(*client_us, *receive_us, *send_us)?;
-            put_u32(&mut out, *nonce);
+            session(out, *id)?;
+            valid_field(*client_us <= MAX_CLOCK_US, "client_us", None)?;
+            valid_field(*receive_us <= MAX_CLOCK_US, "receive_us", None)?;
+            valid_field(*send_us <= MAX_CLOCK_US, "send_us", None)?;
+            valid_field(send_us >= receive_us, "pong.send_order", None)?;
+            valid_field(
+                send_us - receive_us <= 5_000_000,
+                "pong.processing_us",
+                None,
+            )?;
+            put_u32(out, *nonce);
             for value in [client_us, receive_us, send_us] {
-                put_u64(&mut out, *value);
+                put_u64(out, *value);
             }
-            put_u32(&mut out, *tick);
+            put_u32(out, *tick);
         }
         Server::CommandAck {
             session: id,
             sequence,
         } => {
-            session(&mut out, *id)?;
-            put_u64(&mut out, *sequence);
+            session(out, *id)?;
+            put_u64(out, *sequence);
         }
     }
-    if out.len() > MAX_PACKET_BYTES {
-        return Err(ProtocolError::TooLarge);
-    }
-    Ok(out)
+    Ok(())
 }
 fn validate_pong(client: u64, receive: u64, send: u64) -> Result<(), ProtocolError> {
     if client > MAX_CLOCK_US

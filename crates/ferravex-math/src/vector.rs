@@ -33,14 +33,49 @@ macro_rules! vector {
             pub fn dot(self, rhs: Self) -> f32 { 0.0 $(+ self.$field * rhs.$field)+ }
             pub fn length_squared(self) -> f32 { self.dot(self) }
             /// Uses wider intermediates so finite small vectors do not underflow.
-            pub fn length(self) -> f32 { (0.0_f64 $(+ f64::from(self.$field).powi(2))+).sqrt() as f32 }
+            pub fn length(self) -> f32 { self.length_f64() as f32 }
+            fn length_f64(self) -> f64 { (0.0_f64 $(+ f64::from(self.$field).powi(2))+).sqrt() }
             pub fn length_recip(self) -> f32 { self.length().recip() }
             pub fn distance(self, other: Self) -> f32 { (self-other).length() }
             pub fn distance_squared(self, other: Self) -> f32 { (self-other).length_squared() }
             /// Normalizes every finite nonzero vector, including subnormal inputs.
+            ///
+            /// Returns `None` for zero or any non-finite component. Wider
+            /// intermediates also support vectors whose length exceeds `f32::MAX`.
+            /// The unit vector's components are rounded to `f32`.
+            ///
+            /// ```
+            #[doc = concat!("use ferravex_math::", stringify!($name), " as Vector;")]
+            /// let tiny = Vector::X * f32::from_bits(1);
+            /// assert_eq!(tiny.try_normalize(), Some(Vector::X));
+            /// assert!(Vector::splat(f32::MAX).try_normalize().unwrap().is_normalized());
+            /// assert_eq!(Vector::ZERO.try_normalize(), None);
+            /// ```
             pub fn try_normalize(self) -> Option<Self> {
-                let length = (0.0_f64 $(+ f64::from(self.$field).powi(2))+).sqrt();
+                let length = self.length_f64();
                 if length > 0.0 && length.is_finite() {
+                    Some(Self {$($field: (f64::from(self.$field) / length) as f32),+})
+                } else { None }
+            }
+            /// Normalizes only when the length is strictly greater than `min_length`.
+            ///
+            /// This lets callers reject near-zero directions using a threshold in
+            /// their own units. Returns `None` for a negative or non-finite threshold,
+            /// a non-finite vector, or a length at or below the threshold. A zero
+            /// threshold is equivalent to [`Self::try_normalize`]. Length comparisons
+            /// use wider intermediates, including for subnormal and huge vectors.
+            ///
+            /// ```
+            #[doc = concat!("use ferravex_math::", stringify!($name), " as Vector;")]
+            /// let direction = Vector::X * 0.001;
+            /// assert_eq!(direction.try_normalize_with_min_length(0.01), None);
+            /// assert_eq!(direction.try_normalize_with_min_length(0.0001), Some(Vector::X));
+            /// assert_eq!(Vector::X.try_normalize_with_min_length(f32::NAN), None);
+            /// ```
+            pub fn try_normalize_with_min_length(self, min_length: f32) -> Option<Self> {
+                if !min_length.is_finite() || min_length < 0.0 { return None; }
+                let length = self.length_f64();
+                if length > f64::from(min_length) && length.is_finite() {
                     Some(Self {$($field: (f64::from(self.$field) / length) as f32),+})
                 } else { None }
             }
@@ -80,6 +115,81 @@ macro_rules! vector {
             pub fn clamp_length_min(self, min: f32) -> Self {
                 assert!(min.is_finite() && min >= 0.0);
                 if self.length() < min { self.normalize_or_zero()*min } else { self }
+            }
+            /// Tries to clamp a finite vector's length to the inclusive range `[min, max]`.
+            ///
+            /// Returns `None` if a component or bound is non-finite, if the bounds
+            /// do not satisfy `0 <= min <= max`, or if a zero vector would need to
+            /// grow to a positive minimum (it has no direction). Invalid inputs do
+            /// not panic. A vector already in range is returned bit-for-bit unchanged.
+            ///
+            /// Length comparisons and scaling use `f64` intermediates to avoid
+            /// overflow and underflow for finite `f32` inputs. Successful results
+            /// have finite components. Rescaled components are rounded to `f32`, so
+            /// the resulting length can fall slightly outside the requested range.
+            /// At subnormal bounds, relative error can be large and components can
+            /// round to zero; length and direction are subject to that quantization.
+            ///
+            /// ```
+            #[doc = concat!("use ferravex_math::", stringify!($name), " as Vector;")]
+            /// assert_eq!((Vector::X * 4.0).try_clamp_length(1.0, 2.0), Some(Vector::X * 2.0));
+            /// assert_eq!(Vector::ZERO.try_clamp_length(1.0, 2.0), None);
+            /// assert_eq!(Vector::X.try_clamp_length(2.0, 1.0), None);
+            /// assert_eq!(Vector::INFINITY.try_clamp_length(0.0, 2.0), None);
+            /// ```
+            pub fn try_clamp_length(self, min: f32, max: f32) -> Option<Self> {
+                if !min.is_finite() || !max.is_finite() || min < 0.0 || min > max {
+                    return None;
+                }
+                self.try_clamp_length_f64(f64::from(min), f64::from(max))
+            }
+            /// Tries to limit a finite vector's length to a finite, nonnegative `max`.
+            ///
+            /// Equivalent to [`Self::try_clamp_length`] with a zero minimum, including
+            /// its rounding limits. Returns `None` for non-finite components or an
+            /// invalid bound. Zero vectors are valid; a zero bound maps any finite
+            /// nonzero vector to zero. Vectors within the limit are unchanged.
+            ///
+            /// ```
+            #[doc = concat!("use ferravex_math::", stringify!($name), " as Vector;")]
+            /// let limited = Vector::splat(f32::MAX).try_clamp_length_max(1.0).unwrap();
+            /// assert!(limited.is_normalized());
+            /// assert_eq!(Vector::ZERO.try_clamp_length_max(1.0), Some(Vector::ZERO));
+            /// assert_eq!(Vector::X.try_clamp_length_max(-1.0), None);
+            /// ```
+            pub fn try_clamp_length_max(self, max: f32) -> Option<Self> {
+                self.try_clamp_length(0.0, max)
+            }
+            /// Tries to raise a finite vector's length to a finite, nonnegative `min`.
+            ///
+            /// Returns `None` for non-finite components, an invalid bound, or a zero
+            /// vector with a positive minimum. A vector already at least `min` long
+            /// is returned bit-for-bit unchanged, even if its length exceeds
+            /// `f32::MAX`. Scaling has the rounding limits of [`Self::try_clamp_length`].
+            ///
+            /// ```
+            #[doc = concat!("use ferravex_math::", stringify!($name), " as Vector;")]
+            /// let tiny = -Vector::X * f32::from_bits(1);
+            /// assert_eq!(tiny.try_clamp_length_min(2.0), Some(-Vector::X * 2.0));
+            /// assert_eq!(Vector::ZERO.try_clamp_length_min(2.0), None);
+            /// let huge = Vector::splat(f32::MAX);
+            /// assert_eq!(huge.try_clamp_length_min(1.0), Some(huge));
+            /// ```
+            pub fn try_clamp_length_min(self, min: f32) -> Option<Self> {
+                if !min.is_finite() || min < 0.0 { return None; }
+                self.try_clamp_length_f64(f64::from(min), f64::INFINITY)
+            }
+            // Callers validate bounds. Only the minimum-only path uses an infinite maximum.
+            fn try_clamp_length_f64(self, min: f64, max: f64) -> Option<Self> {
+                let length = self.length_f64();
+                if !length.is_finite() { return None; }
+                let target = length.clamp(min, max);
+                if target == length { return Some(self); }
+                if length == 0.0 { return None; }
+                // Keep the scale and products wide until the final conversion: a
+                // normalized f32 intermediate can erase tiny components permanently.
+                let scale = target / length;
+                Some(Self {$($field: (f64::from(self.$field) * scale) as f32),+})
             }
             pub fn lerp(self, rhs: Self, t: f32) -> Self { self * (1.0-t) + rhs*t }
             pub fn mul_add(self, multiplier: Self, add: Self) -> Self { Self {$($field: self.$field.mul_add(multiplier.$field, add.$field)),+} }

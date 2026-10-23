@@ -1,5 +1,10 @@
 //! First-party validated PCM clips, procedural cues and a bounded spatial mixer.
 //! Hosts supply sample output; no platform calls or unsafe code live here.
+//!
+//! [`Mixer::fade_bus_gain`] and [`Mixer::fade_master_gain`] provide sample-timed
+//! volume transitions independent of voice smoothing. Fade to zero for silence
+//! while keeping playback time; retarget or cancel a fade without a gain jump.
+//! Immediate `set_bus_gain`/`set_master_gain` controls remain available.
 use std::sync::Arc;
 /// Maximum decoded interleaved-stereo storage: 64 MiB, also bounded to 10 minutes.
 pub const MAX_CLIP_FRAMES: usize = 8 * 1024 * 1024;
@@ -116,7 +121,10 @@ fn frame_limit(rate: u32) -> usize {
 }
 mod mixer;
 mod synth;
-pub use mixer::{Bus, MixStats, Mixer, Sound, Spatial, VoiceHandle, VoiceParams};
+pub use mixer::{
+    Bus, MixStats, Mixer, Sound, Spatial, VoiceAdmission, VoiceHandle, VoiceParams, VoicePolicy,
+    VoiceRejection,
+};
 pub use synth::{Cue, SoundBank, Surface};
 pub fn encode_wav(sample_rate: u32, samples: &[[f32; 2]]) -> Option<Vec<u8>> {
     if !(8000..=96000).contains(&sample_rate) || samples.len() > frame_limit(sample_rate) {

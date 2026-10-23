@@ -1,7 +1,151 @@
 <!doctype html>
-<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Strike · Ferravex</title>
-<style>*{box-sizing:border-box}html,body{margin:0;height:100%;background:#101a21;color:#e2ece2;font:14px system-ui}body{display:flex;flex-direction:column}nav{height:40px;flex:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 16px;border-bottom:1px solid #2c3c45}nav>a{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}nav>button{flex:none}a{color:#97c3b5;text-decoration:none}canvas{width:100%;height:calc(100% - 40px);display:block;touch-action:none;outline:none}button[data-controls],button[data-audio],button[data-multiplayer]{font:inherit;color:#c3d9d0;background:transparent;border:1px solid #40545b;border-radius:4px;padding:3px 9px;cursor:pointer}button[data-controls]:hover,button[data-controls]:focus-visible,button[data-audio]:hover,button[data-audio]:focus-visible,button[data-multiplayer]:hover,button[data-multiplayer]:focus-visible{background:#293f46;outline:1px solid #97c3b5}button[data-controls]:disabled,button[data-audio]:disabled,button[data-multiplayer]:disabled{opacity:.4;cursor:wait}nav>span{margin-left:auto;margin-right:16px}@media(max-width:540px){nav>span{display:none}}@media(max-width:420px){nav{padding:0 8px;gap:5px}button[data-controls],button[data-audio],button[data-multiplayer]{font-size:12px;padding:4px 5px}}[role=status]{position:absolute;top:50%;width:100%;text-align:center;pointer-events:none}</style>
-<nav><a href="../">FERRAVEX / Strike</a><span>3D · Tactical FPS</span><button type="button" data-multiplayer disabled>Multiplayer</button><button type="button" data-controls title="Controls (F2)" aria-pressed="false" disabled>Controls</button><button type="button" data-audio title="Enable sound" aria-pressed="false" disabled>Sound off</button></nav>
-<canvas tabindex="0" data-game="strike" aria-label="Strike game"></canvas><div role="status">Loading original Rust engine…</div>
-<script type="module" src="../runtime.js"></script></html>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%;background:#101a21;color:#e2ece2;font:16px/1.5 system-ui}
+a{color:#acdcca;text-underline-offset:.2em}
+#strike-navigation{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;padding:8px 16px;border-bottom:1px solid #40545b}
+#strike-home{padding:6px 0;overflow-wrap:anywhere}
+#strike-navigation>span{color:#bbcfc7}
+.strike-tools{display:flex;flex-wrap:wrap;gap:8px;margin-left:auto;min-width:0}
+#strike-navigation button{font:inherit;color:#e2ece2;background:#18262b;border:1px solid #647e83;border-radius:4px;padding:8px 12px;min-height:44px;cursor:pointer}
+#strike-navigation button:hover{background:#293f46}
+#strike-navigation button:disabled{opacity:.6;cursor:wait}
+#strike-navigation :focus-visible,#strike-guide :focus-visible{outline:3px solid #ffe19c;outline-offset:3px}
+#strike-guide{padding:12px 16px;max-width:76rem;margin:auto;overflow-wrap:anywhere}
+#strike-guide p{margin:0 0 10px}
+#strike-guide summary{cursor:pointer;padding:8px 0;min-height:44px;color:#acdcca}
+#strike-guide details[open] summary{margin-bottom:8px}
+#strike-guide h2{font-size:1.1rem;margin:16px 0 8px}
+#strike-guide ul{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,15rem),1fr));gap:8px 24px;padding-left:24px}
+#strike-guide kbd{font:inherit;font-weight:600}
+#strike-stage{position:relative;height:72vh;height:72dvh;min-height:30rem}
+#strike-canvas{display:block;width:100%;height:100%;touch-action:none}
+#strike-canvas:focus-visible{outline:3px solid #ffe19c;outline-offset:-3px}
+#strike-loading{position:absolute;inset:0;display:grid;place-content:center;padding:24px;text-align:center;pointer-events:none;overflow-wrap:anywhere}
+#strike-loading:empty{display:none}
+body.ferravex-fullscreen{display:flex;flex-direction:column}
+body.ferravex-fullscreen>header{flex:none}
+body.ferravex-fullscreen>main{flex:1;min-height:0;overflow:auto}
+.screen-reader-help{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}
+@media(max-width:540px){#strike-navigation>span{display:none}.strike-tools{flex-basis:100%;margin-left:0}}
+@media(max-width:360px){#strike-navigation,#strike-guide{padding-inline:12px}.strike-tools{gap:8px}}
+</style>
+</head>
+<body>
+<header>
+ <nav id="strike-navigation" aria-label="Game and player tools">
+  <a id="strike-home" href="../" title="Back to all games" aria-keyshortcuts="Alt+M">FERRAVEX / Strike</a>
+  <span>3D · Tactical FPS</span>
+  <div class="strike-tools" role="group" aria-label="Player tools">
+   <button type="button" data-multiplayer disabled>Multiplayer</button>
+   <button type="button" data-controls title="Controls (F2)" aria-pressed="false" disabled>Controls</button>
+   <button type="button" data-audio title="Enable sound" aria-pressed="false" disabled>Sound off</button>
+  </div>
+ </nav>
+</header>
+<main>
+ <h1 class="screen-reader-help">Strike: Dockyard</h1>
+ <section id="strike-guide" aria-label="Strike instructions">
+  <p id="strike-help" aria-live="polite" aria-atomic="true">For mouse play, choose Start practice or Resume practice, then click the game view to capture the mouse.</p>
+  <p id="strike-navigation-help">In the game menu, <kbd>Tab</kbd> or arrow keys select a button; <kbd>Enter</kbd> activates it. To reach the page controls, release mouse capture with <kbd>Escape</kbd>, then press <kbd>Alt+M</kbd> (<kbd>Option+M</kbd> on Mac). This shortcut only moves focus; it does not pause play.</p>
+  <details>
+   <summary>How to play and default controls</summary>
+   <p id="strike-description">Strike is a tactical first-person shooter in Dockyard. Choose Start practice to train against five bots with automatic respawns, or open Multiplayer to set up a match.</p>
+   <p id="strike-remapping"><strong>These keys are defaults.</strong> Saved or remapped controls may differ. Open Controls (<kbd>F2</kbd>) to inspect your current keyboard, mouse and gamepad bindings or change them. Keyboard shortcuts apply while the game view is focused. Use your current Menu binding to open or close the game menu; its default is <kbd>Escape</kbd>. The browser still uses <kbd>Escape</kbd> to release mouse capture.</p>
+   <h2>Keyboard and mouse defaults</h2>
+   <ul>
+    <li><kbd>WASD</kbd> or arrow keys: move</li>
+    <li>Mouse: aim; left click: fire</li>
+    <li><kbd>Space</kbd>: jump</li>
+    <li><kbd>R</kbd>: reload</li>
+    <li>Hold <kbd>Tab</kbd>: show players</li>
+    <li><kbd>Escape</kbd>: game menu</li>
+   </ul>
+   <p>Controls also lists tactical actions, replay controls and device settings. Details contains the shared player, display and accessibility settings.</p>
+   <h2>Menus, focus and matches</h2>
+   <p>Opening Controls or Details, or losing window focus, opens the game menu. Close settings, then choose Resume practice, Return to match or Return to replay as offered. In Controls, <kbd>Escape</kbd> cancels a pending binding capture before closing the panel.</p>
+   <p><strong>Offline practice pauses in the menu. Multiplayer matches continue, and you remain vulnerable.</strong> Replay playback also continues in local menus/settings; use Pause replay in Controls or the replay panel to pause it. Page focus is separate from the game menu. After returning to the game, choose its start or resume action before clicking the view for mouse capture.</p>
+  </details>
+  <a id="strike-focus-game" href="#strike-canvas">Focus game view</a>
+  <noscript><p>Strike requires JavaScript and WebGL2 to load the Rust game. The instructions and link back to all games remain available.</p></noscript>
+ </section>
+ <div id="strike-stage">
+  <canvas id="strike-canvas" tabindex="0" data-game="strike" aria-label="Strike: Dockyard tactical shooter game view" aria-describedby="strike-description strike-navigation-help strike-remapping">Strike uses a WebGL2 canvas for its game view. Read the instructions above for keyboard navigation and controls.</canvas>
+  <div id="strike-loading" role="status" aria-live="polite" aria-atomic="true">Loading original Rust engine…</div>
+ </div>
+</main>
+<script type="module">
+const canvas=document.querySelector('#strike-canvas');
+const help=document.querySelector('#strike-help');
+const home=document.querySelector('#strike-home');
+// bindPlayer adds its shared help after boot. Preserve that reference and this
+// game's specific instructions when it replaces aria-describedby.
+const descriptionIds=['strike-description','strike-navigation-help','strike-remapping'];
+const describeCanvas=()=>{
+ const current=canvas.getAttribute('aria-describedby')||'';
+ const next=[...new Set([...descriptionIds,...current.split(/\s+/).filter(Boolean)])].join(' ');
+ if(current!==next)canvas.setAttribute('aria-describedby',next);
+};
+new MutationObserver(describeCanvas).observe(canvas,{attributes:true,attributeFilter:['aria-describedby']});
+describeCanvas();
+// The shared bridge handles keys on window. Keep native page navigation and
+// disclosure activation out of gameplay. Only releases of keys pressed in the
+// game should reach it from the page, or Space keyup cancels native disclosure.
+const gameKeys=new Set();
+let keyOverflow=false;
+for(const id of ['#strike-navigation','#strike-guide']){
+ const region=document.querySelector(id);
+ region.addEventListener('keydown',event=>event.stopPropagation());
+ region.addEventListener('keyup',event=>{
+  if(!gameKeys.has(event.code)&&!keyOverflow)event.stopPropagation();
+ });
+}
+document.addEventListener('keydown',event=>{
+ if(event.target!==canvas||event.repeat||event.ctrlKey||event.metaKey||event.altKey||event.isComposing||event.keyCode===229||document.hidden||!document.hasFocus())return;
+ if(!event.code)return;
+ // Match Marble Run's bounded release bookkeeping. Overflow forwards releases
+ // until a lifecycle reset so even an untracked held game key can be released.
+ if(gameKeys.size<128&&event.code.length<=32)gameKeys.add(event.code);
+ else keyOverflow=true;
+});
+document.addEventListener('keyup',event=>gameKeys.delete(event.code));
+const clearGameKeys=()=>{gameKeys.clear();keyOverflow=false;};
+for(const type of ['blur','pagehide','resize','orientationchange'])window.addEventListener(type,clearGameKeys);
+window.visualViewport?.addEventListener('resize',clearGameKeys);
+document.addEventListener('visibilitychange',()=>{if(document.hidden)clearGameKeys();});
+document.addEventListener('pointerlockchange',clearGameKeys);
+canvas.addEventListener('keydown',event=>{
+ if(event.code!=='KeyM'||!event.altKey||event.ctrlKey||event.metaKey||event.shiftKey||event.repeat||event.isComposing||event.keyCode===229||document.pointerLockElement)return;
+ event.preventDefault();
+ event.stopPropagation();
+ home.focus();
+});
+document.querySelector('#strike-focus-game').addEventListener('click',event=>{
+ event.preventDefault();
+ canvas.focus();
+});
+// Report capture, not gameplay state: the runtime and Rust own menus, settings,
+// touch layouts and authoritative ticks. No synthetic keys or Wasm calls here.
+let captured=document.pointerLockElement===canvas;
+document.addEventListener('pointerlockchange',()=>{
+ const next=document.pointerLockElement===canvas;
+ if(next===captured)return;
+ captured=next;
+ help.textContent=captured
+  ?'Mouse captured. Escape releases it. Your Menu binding opens the game menu; Controls (F2) shows current bindings.'
+  :'Mouse released. Use your Menu binding or Controls (F2) if you need the menu. Choose the start or resume action, then click the view to capture again. Multiplayer matches continue.';
+});
+document.addEventListener('pointerlockerror',()=>{
+ if(document.pointerLockElement)return;
+ const message='Mouse capture was blocked. For mouse play, choose the start or resume action, then click the game view to try again. Controls (F2) shows current bindings.';
+ if(help.textContent!==message)help.textContent=message;
+});
+</script>
+<script type="module" src="../runtime.js"></script>
+</body>
+</html>

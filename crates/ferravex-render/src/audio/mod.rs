@@ -2,6 +2,8 @@
 use crate::prelude::{Vec3, vec3};
 pub use ferravex_play::audio::*;
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+pub mod batch;
 #[cfg(not(target_arch = "wasm32"))]
 mod capture;
 mod game;
@@ -13,6 +15,7 @@ pub use game::GameAudio;
 pub const SAMPLE_RATE: u32 = 48000;
 pub const MAX_PULL_FRAMES: usize = 4096;
 struct Audio {
+    identity: Rc<()>,
     mixer: Mixer,
     bank: Option<SoundBank>,
     fraction: f64,
@@ -30,6 +33,7 @@ fn initialize() {
         let mut state = cell.borrow_mut();
         if state.is_none() {
             *state = Some(Audio {
+                identity: Rc::new(()),
                 mixer: Mixer::new(SAMPLE_RATE, 64).unwrap(),
                 bank: None,
                 fraction: 0.,

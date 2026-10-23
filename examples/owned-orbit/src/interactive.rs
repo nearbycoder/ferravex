@@ -1,6 +1,6 @@
 //! Interactive host adapter; the headless/software simulation keeps its API.
 use super::*;
-use ferravex_engine::render::audio::{Cue, GameAudio, Surface};
+use ferravex_engine::render::audio::GameAudio;
 use ferravex_engine::render::{
     self,
     input::{
@@ -91,10 +91,13 @@ pub extern "C" fn orbit_controls_frame(dt: f32, width: u32, height: u32) {
             .unwrap();
             p.sample_play();
             if let Some(app) = APP.lock().unwrap().as_mut() {
-                if p.pressed("restart") {
-                    app.game = Game::new();
-                    app.clock.reset();
+                let restart = p.pressed("restart");
+                if restart {
+                    p.set_paused(false);
+                    p.sample(true);
                 }
+                let resumed = app.session_state() == SessionState::Paused && p.gameplay_active();
+                app.set_paused(!p.gameplay_active());
                 let mut axis = p.movement().x;
                 let pointer = render::input::logical_touches()
                     .into_iter()
@@ -117,52 +120,40 @@ pub extern "C" fn orbit_controls_frame(dt: f32, width: u32, height: u32) {
                         / 18.)
                         .clamp(-1., 1.);
                 }
-                let hits = app.game.ccd_impacts;
-                let score = app.game.score;
-                let lives = app.game.lives;
-                let phase = app.game.phase;
-                let frame = app.clock.advance(p.simulation_dt(dt) as f64);
-                for _ in 0..frame.steps {
-                    app.game.tick(
-                        Input {
-                            axis,
-                            launch: p.pressed("launch"),
-                            restart: false,
-                        },
-                        frame.dt,
-                    );
-                }
+                app.presentation.hints.update(p);
+                // Sample edges exactly once, including zero-tick frames. Orbit
+                // latches launch and consumes it only on the first catch-up tick.
+                app.advance_input(
+                    if resumed { 0. } else { f64::from(dt) },
+                    Input {
+                        axis,
+                        launch: p.pressed("launch"),
+                        restart,
+                    },
+                );
                 SOUND.with(|cell| {
                     let mut cell = cell.borrow_mut();
                     let sound = cell.get_or_insert_with(GameAudio::new);
-                    if app.game.score > score {
-                        sound.cue(Cue::Pickup, 0.45);
-                    } else if app.game.ccd_impacts > hits {
-                        sound.cue(Cue::Impact(Surface::Metal), 0.5);
-                    }
-                    if app.game.lives < lives {
-                        sound.cue(Cue::Failure, 0.45);
-                    }
-                    if app.game.phase == game::Phase::Won && phase != game::Phase::Won {
-                        sound.cue(Cue::Success, 0.65);
-                    }
-                    if app.game.phase == game::Phase::Playing && phase == game::Phase::Ready {
-                        sound.cue(Cue::Jump, 0.45);
+                    for (cue, gain) in app.presentation.take_cues() {
+                        sound.cue(cue, gain);
                     }
                 });
                 app.render();
             }
-            p.draw_settings();
+            p.draw_controls();
         })
     });
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn orbit_pause(value: u32) {
     CONTROLS.with(|cell| {
-        if let Some(p) = cell.borrow_mut().as_mut() {
-            p.set_paused(value != 0);
-        }
+        cell.borrow_mut()
+            .get_or_insert_with(profile)
+            .set_paused(value != 0);
     });
+    if let Some(app) = APP.lock().unwrap().as_mut() {
+        app.set_paused(value != 0);
+    }
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn orbit_paused() -> u32 {
@@ -170,8 +161,122 @@ pub extern "C" fn orbit_paused() -> u32 {
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn orbit_restart() {
+    CONTROLS.with(|cell| {
+        if let Some(p) = cell.borrow_mut().as_mut() {
+            // Suppress a press that opened the menu or was held at restart.
+            p.set_paused(true);
+            p.set_paused(false);
+        }
+    });
     if let Some(app) = APP.lock().unwrap().as_mut() {
-        app.game = Game::new();
-        app.clock.reset();
+        app.restart();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::presentation::ControlHints;
+
+    #[test]
+    fn hints_follow_real_orbit_rebinds_unbound_actions_and_reset() {
+        let mut input = profile();
+        let mut hints = ControlHints::default();
+        hints.update(&input);
+        assert_eq!(hints.launch, "SPACE / ENTER / MOUSE 1");
+        input
+            .rebind("launch", vec![Binding::digital(InputCode::Key(74))])
+            .unwrap();
+        input
+            .rebind("pause", vec![Binding::digital(InputCode::Key(80))])
+            .unwrap();
+        input
+            .rebind("move_left", vec![Binding::digital(InputCode::Key(74))])
+            .unwrap();
+        hints.update(&input);
+        assert_eq!(hints.launch, "J");
+        assert_eq!(hints.pause, "P");
+        assert!(hints.movement.starts_with("J /"));
+        input.rebind("launch", Vec::new()).unwrap();
+        hints.update(&input);
+        assert_eq!(hints.launch, "UNBOUND");
+        // Long remaps cannot create unbounded HUD strings or retain stale keys.
+        input
+            .rebind(
+                "launch",
+                (1..=64)
+                    .map(|code| Binding::digital(InputCode::Key(code)))
+                    .collect(),
+            )
+            .unwrap();
+        hints.update(&input);
+        assert_eq!(hints.launch, "SEE CONTROLS");
+        input.reset_defaults();
+        hints.update(&input);
+        assert_eq!(hints.launch, "SPACE / ENTER / MOUSE 1");
+    }
+
+    #[test]
+    fn readable_status_uses_the_same_current_bindings_without_sampling_or_consuming_input() {
+        let mut input = profile();
+        let mut app = Orbit::new();
+        input
+            .rebind("launch", vec![Binding::digital(InputCode::Key(74))])
+            .unwrap();
+        app.presentation.hints.update(&input);
+        assert!(
+            app.status_text_v1()
+                .lines()
+                .next()
+                .unwrap()
+                .contains("Launch: J.")
+        );
+        assert!(!app.status_text_v1().contains("SPACE"));
+        for tick in 0..3840 {
+            app.advance_input(
+                1. / 120.,
+                Input {
+                    axis: 1.,
+                    launch: [240, 1440, 2640].contains(&tick),
+                    restart: false,
+                },
+            );
+        }
+        assert_eq!(app.game.phase, game::Phase::Lost);
+        assert!(
+            app.status_text_v1()
+                .lines()
+                .next()
+                .unwrap()
+                .contains("Retry: J. Release, then press J again to launch.")
+        );
+        assert!(!app.status_text_v1().contains("SPACE"));
+        app.restart();
+        input.rebind("launch", Vec::new()).unwrap();
+        app.presentation.hints.update(&input);
+        assert!(
+            app.status_text_v1()
+                .contains("Launch is unbound. Open Controls to bind it.")
+        );
+        input
+            .rebind(
+                "launch",
+                (1..=64)
+                    .map(|code| Binding::digital(InputCode::Key(code)))
+                    .collect(),
+            )
+            .unwrap();
+        app.presentation.hints.update(&input);
+        assert!(
+            app.status_text_v1()
+                .contains("Open Controls for the current launch binding.")
+        );
+        assert!(!app.status_text_v1().contains("press SEE CONTROLS"));
+        input.reset_defaults();
+        app.presentation.hints.update(&input);
+        assert!(
+            app.status_text_v1()
+                .contains("Launch: SPACE / ENTER / MOUSE 1.")
+        );
     }
 }

@@ -13,7 +13,41 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  CARGO_NET_OFFLINE: "true"
+  CARGO_BUILD_JOBS: "2"
+  PYTHONDONTWRITEBYTECODE: "1"
+
 jobs:
+  changed-plan:
+    name: Advisory changed-path validation plan
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Plan affected groups without executing checks
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        # Keep both rename sides and deletions. This plan does not gate or trim
+        # the authoritative full jobs below; redirects are CI-owned artifacts.
+        run: |
+          mkdir -p target/validation
+          git diff --no-renames --name-only -z "$BASE_SHA...$HEAD_SHA" -- > target/validation/changed-paths.z
+          python3 -B scripts/validate.py --mode changed --changed-paths-file target/validation/changed-paths.z --dry-run --json > target/validation/changed-plan.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: validation-changed-plan
+          path: target/validation
+          if-no-files-found: warn
+
   native:
     name: Native / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
@@ -24,37 +58,33 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - name: Linux graphics libraries
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libx11-dev libgl1-mesa-dev libasound2-dev xvfb
-      - name: Formatting
+      - name: Rust, dependency boundary, catalog and developer-tool regressions
+        run: python3 -B scripts/validate.py --mode full --group rust --group python --require-complete --report target/validation/native.json
+      - name: Headless, rendered gameplay and GPU pixel regressions
         if: runner.os == 'Linux'
-        run: cargo fmt --all --check
-      - name: Check workspace targets
-        run: cargo check --workspace --all-targets --all-features --offline --locked
-      - name: First-party dependency boundary
-        run: python3 scripts/audit-owned.py
-      - name: Unit, physics, gameplay, and loopback UDP tests
-        run: cargo test --workspace --all-features --offline --locked
-      - name: Browser input regression
-        if: runner.os == 'Linux'
-        run: node examples/owned-orbit/tests/platform-input.mjs
-      - name: Clippy
-        if: runner.os == 'Linux'
-        run: cargo clippy --workspace --all-targets --all-features --offline --locked -- -D warnings
-      - name: Rendered gameplay smoke tests
-        if: runner.os == 'Linux'
-        run: |
-          cargo build --release --workspace --bins --all-features --offline --locked
-          LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 1280x1024x24" python3 scripts/smoke-games.py --frames 180 --output target/game-smoke
+        run: LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 1280x1024x24" python3 -B scripts/validate.py --mode full --group native --require-complete --report target/validation/graphics.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: validation-${{ matrix.os }}
+          path: target/validation
+          if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Linux' && always()
         with:
           name: native-gameplay-captures
-          path: target/game-smoke
+          path: |
+            target/game-smoke
+            target/game-smoke-headless
           if-no-files-found: warn
 
   web:
@@ -63,31 +93,30 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - name: Build and stage the first-party browser hosts
-        run: |
-          sh scripts/build-web.sh release
-      - name: Browser host and actual-Wasm regressions
-        run: |
-          for suite in web/tests/*.mjs; do node "$suite" || exit; done
-          node crates/ferravex-render/tests/browser-input.mjs
-          node examples/owned-orbit/tests/platform-input.mjs
-      - name: Native authority and browser WebSocket integration
-        run: |
-          cargo build --release -p ferravex-fps --bin ferravex-server --offline --locked
-          node web/tests/multiplayer.mjs --native
-      - name: Report exact artifact sizes
-        run: python3 scripts/report-size.py --profile release
-      - name: Documentation site and HTTP regressions
-        run: |
-          cargo doc --workspace --no-deps --all-features --offline --locked
-          python3 scripts/build-site.py --skip-build
-          python3 -B -m unittest discover -s scripts -p 'test_*.py'
+      - name: Native linker libraries for generated-template checks
+        # wasm.templates also tests and links the generated native entry points.
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev libgl1-mesa-dev
+      - name: Browser hosts, actual Wasm, native authority, tooling and documentation
+        run: python3 -B scripts/validate.py --mode full --group js --group wasm --group python --group site --require-complete --report target/validation/web.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: validation-web
+          path: |
+            target/validation
+            target/journey-200/template-parity/run-*/logs-*/*.log
+            target/journey-200/template-parity/run-*/report.json
+            target/journey-200/template-parity/run-*/rustc.log
+          if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         with:
           name: ferravex-web
@@ -110,4 +139,4 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - name: Check against the Apple SDK (no signing or simulator execution)
-        run: cargo check --workspace --all-features --offline --locked --target ${{ matrix.target }}
+        run: cargo check --workspace --all-features --offline --locked --jobs 2 --target ${{ matrix.target }}

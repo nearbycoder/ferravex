@@ -1,0 +1,11 @@
+# Journey400 276 parent integration
+
+Captured the exact two-file stat-list implementation over validated281, with only the derived `pub mod stats;` registration. `integration-276/source-capture.json` records the immutable inventory; active card277 and physics226/227 work is excluded. Source SHA-256 is b1c2e275c237648807a631a1369fa4bc4cdd26ed98a18672ef792ac635bad451.
+
+Parent passed364 renderer unit/integration/doctests, zero failures with14 existing platform-dependent ignores, strict all-target/all-feature renderer Clippy, native all-feature facade compilation and renderer/facade all-feature Wasm compilation. Exact commands and logs are in `integration-276/report.json`. The two public recipes compile and execute against actual retained UI, inspection and composition at320/640 logical widths.
+
+Reviewed bounded64-row stack geometry, shared natural-label columns, full-size stacked fallback, explicit complete-prefix overflow, fractional endpoint rounding and nested atomic submission. Values, unavailable meaning, precision and units remain caller-owned. Labels, values and descriptions use existing WrappedText measurement and the same rectangles for paint and inspection; no new shaping or implicit ellipsis policy is introduced. Empty blocks reserve a line. All supplied text is measured, including hidden rows, so bounded row storage does not bound caller source length or total scan work.
+
+Behavioral evidence includes rollover/signed/max-u64 values, empty versus unavailable copy, Unicode and multiline source, fractional geometry, invalid/zero/tiny bounds, full64-row submission and65-row rejection, arena/vertex/command exhaustion, enclosing modal rollback and actual fallback touch activation. Existing composition and inspection regressions pass. Native warmed allocation instrumentation observed zero allocations with inspection both enabled and disabled; this is not a browser or timing benchmark.
+
+Hidden rows are a successful explicit layout outcome, not an automatic essential-copy fallback. Consumers must reserve sufficient height or choose scrolling/expansion/explicit feedback before committing the card. Ancestor clipping and occlusion remain consumer concerns. No game, host, shared runtime artifact or simulation default changed; card277 and game adoption plus fresh browser/GPU/device acceptance remain separate.

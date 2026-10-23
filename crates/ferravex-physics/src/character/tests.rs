@@ -491,3 +491,522 @@ fn layer_masks_and_malformed_slice_obstacles_are_not_silently_accepted() {
     );
     assert_eq!(c, saved);
 }
+
+fn motor_shapes() -> [CharacterShape; 2] {
+    [
+        CharacterShape::Box2 {
+            half: Vec2::new(0.3, 0.8),
+        },
+        capsule(),
+    ]
+}
+
+#[test]
+fn recovery_reports_the_last_allowed_push_in_both_dimensions() {
+    for shape in motor_shapes() {
+        let settings = CharacterSettings {
+            max_iterations: 1,
+            ..Default::default()
+        };
+        let feet = -Vec3::Y * 0.2;
+        let motion =
+            move_and_slide(&[floor()][..], shape, settings, feet, Vec3::ZERO, false).unwrap();
+        assert!(motion.grounded);
+        assert_eq!(motion.recovery.iterations, 1);
+        assert!((motion.recovery.max_depth - 0.2).abs() < 1e-5);
+        assert!((motion.recovery.distance - 0.202).abs() < 1e-5);
+        assert!((motion.recovery.translation - Vec3::Y * 0.202).length() < 1e-5);
+        assert!((motion.position.y - settings.skin).abs() < 1e-5);
+        assert!(motion.support_motion.is_none());
+
+        // Preliminary step recovery must appear even though the velocity sweep
+        // itself starts clear and needs no correction.
+        let mut c = Character::new(feet);
+        let tick = c
+            .step(&[floor()][..], shape, settings, Default::default(), DT)
+            .unwrap();
+        assert_eq!(tick.motion.recovery, motion.recovery);
+        assert_eq!(tick.carried, Vec3::ZERO);
+        let clear = c
+            .step(&[floor()][..], shape, settings, Default::default(), DT)
+            .unwrap();
+        assert_eq!(clear.motion.recovery, Recovery::default());
+    }
+}
+
+#[test]
+fn reset_and_failed_teleports_preserve_their_state_contracts() {
+    for shape in motor_shapes() {
+        let mut c = Character::new(Vec3::Y * 2.);
+        c.velocity = Vec3::new(3., -4., 0.);
+        c.grounded = true;
+        c.ground_normal = Vec3::new(-0.6, 0.8, 0.);
+        c.jump = JumpState {
+            coyote: 0.05,
+            buffer: 0.1,
+            held: true,
+        };
+        c.support = Some(Support {
+            id: 19,
+            local_anchor: Vec3::X,
+            previous_anchor: c.position,
+        });
+        let saved = c;
+        for feet in [
+            Vec3::splat(f32::NAN),
+            Vec3::Y * f32::INFINITY,
+            Vec3::X * 1_000_001.,
+        ] {
+            assert_eq!(c.reset(shape, feet), Err(CharacterError::InvalidInput));
+            assert_eq!(c, saved);
+            assert_eq!(
+                c.teleport(&[][..], shape, Default::default(), feet)
+                    .unwrap_err(),
+                CharacterError::InvalidInput
+            );
+            assert_eq!(c, saved);
+        }
+        let invalid_shape = CharacterShape::Capsule {
+            radius: 0.,
+            height: 1.,
+        };
+        assert_eq!(
+            c.reset(invalid_shape, Vec3::ZERO),
+            Err(CharacterError::InvalidInput)
+        );
+        assert_eq!(c, saved);
+        for (settings, error) in [
+            (
+                CharacterSettings {
+                    max_recovery: 0.01,
+                    ..Default::default()
+                },
+                CharacterError::UnresolvedPenetration,
+            ),
+            (
+                CharacterSettings {
+                    max_candidates: 1,
+                    ..Default::default()
+                },
+                CharacterError::QueryBudget,
+            ),
+            (
+                CharacterSettings {
+                    skin: f32::NAN,
+                    ..Default::default()
+                },
+                CharacterError::InvalidInput,
+            ),
+        ] {
+            assert_eq!(
+                c.teleport(&[floor()][..], shape, settings, -Vec3::Y * 0.2)
+                    .unwrap_err(),
+                error
+            );
+            assert_eq!(c, saved);
+        }
+        let invalid_obstacle = Obstacle {
+            position: Vec3::splat(f32::NAN),
+            ..floor()
+        };
+        assert_eq!(
+            c.teleport(
+                &[invalid_obstacle][..],
+                shape,
+                Default::default(),
+                Vec3::ZERO
+            )
+            .unwrap_err(),
+            CharacterError::InvalidObstacle
+        );
+        assert_eq!(c, saved);
+        if shape.planar() {
+            assert_eq!(c.reset(shape, Vec3::Z), Err(CharacterError::InvalidInput));
+            assert_eq!(c, saved);
+            assert_eq!(
+                c.teleport(&[][..], shape, Default::default(), Vec3::Z)
+                    .unwrap_err(),
+                CharacterError::InvalidInput
+            );
+            assert_eq!(c, saved);
+        }
+        c.reset(shape, Vec3::X * 10.).unwrap();
+        assert_eq!(c, Character::new(Vec3::X * 10.));
+    }
+}
+
+#[test]
+fn teleport_rebinds_support_and_discards_old_motion_and_jump_state() {
+    for shape in motor_shapes() {
+        let mut world = [
+            Obstacle::cuboid(1, Vec3::new(0., -0.1, 0.), Vec3::new(2., 0.1, 2.)),
+            Obstacle::cuboid(2, Vec3::new(10., -0.1, 0.), Vec3::new(2., 0.1, 2.)),
+            Obstacle::cuboid(3, Vec3::new(5., 1., 0.), Vec3::new(0.1, 1., 2.)),
+        ];
+        let mut c = Character::new(Vec3::ZERO);
+        c.step(
+            &world[..],
+            shape,
+            Default::default(),
+            Default::default(),
+            DT,
+        )
+        .unwrap();
+        assert_eq!(c.support.unwrap().id, 1);
+        c.velocity = Vec3::X * 4.;
+        c.jump = JumpState {
+            coyote: 0.1,
+            buffer: 0.1,
+            held: true,
+        };
+        let destination = Vec3::new(10., -0.1, 0.);
+        let report = c
+            .teleport(&world[..], shape, Default::default(), destination)
+            .unwrap();
+        assert_eq!(c.support.unwrap().id, 2);
+        assert_eq!(report.translation, c.position - destination);
+        assert!(report.recovery.distance > 0.1);
+        assert_eq!(c.velocity, Vec3::ZERO);
+        assert_eq!(c.jump, JumpState::default());
+        world[0].position.x += 0.4;
+        world[1].position.x += 0.1;
+        let tick = c
+            .step(
+                &world[..],
+                shape,
+                Default::default(),
+                Default::default(),
+                DT,
+            )
+            .unwrap();
+        assert!(!tick.jumped);
+        assert_eq!(tick.motion.support_motion.unwrap().id, 2);
+        assert!((tick.carried.x - 0.1).abs() < 1e-5);
+        assert_eq!(tick.motion.recovery, Recovery::default());
+
+        // Reset itself never keeps an anchor that could drag the destination.
+        c.reset(shape, Vec3::new(-20., 4., 0.)).unwrap();
+        world[1].position.x += 0.1;
+        let tick = c
+            .step(
+                &world[..],
+                shape,
+                Default::default(),
+                Default::default(),
+                DT,
+            )
+            .unwrap();
+        assert_eq!(tick.carried, Vec3::ZERO);
+        assert!(tick.motion.support_motion.is_none());
+    }
+}
+
+#[test]
+fn teleport_classifies_recovered_walkable_and_steep_slopes() {
+    for shape in motor_shapes() {
+        for (angle, walkable) in [(0.4, true), (1.2, false)] {
+            let slope = Obstacle {
+                rotation: Quat::from_rotation_z(angle),
+                ..floor()
+            };
+            let mut c = Character::new(Vec3::Y * 5.);
+            let report = c
+                .teleport(&[slope][..], shape, Default::default(), Vec3::ZERO)
+                .unwrap();
+            assert_eq!(report.grounded, walkable, "{shape:?}, {angle}, {report:?}");
+            assert_eq!(c.grounded, walkable);
+            assert_eq!(report.support.is_some(), walkable);
+            assert!(report.recovery.distance > 0.);
+            assert_eq!(report.recovery.iterations, 1);
+            assert!(geometry::separation(shape, c.position, slope).unwrap().0 >= -1e-5);
+            if walkable {
+                assert!((report.ground_normal - slope.rotation * Vec3::Y).length() < 1e-5);
+                assert_eq!(report.support.unwrap().previous_anchor, c.position);
+            }
+            if shape.planar() {
+                assert_eq!(c.position.z, 0.);
+            }
+        }
+    }
+}
+
+#[test]
+fn moving_rotating_slopes_report_current_support_and_anchor_displacement() {
+    for shape in motor_shapes() {
+        let mut slope = Obstacle {
+            rotation: Quat::from_rotation_z(0.2),
+            ..floor()
+        };
+        let mut c = Character::new(Vec3::ZERO);
+        c.teleport(&[slope][..], shape, Default::default(), Vec3::ZERO)
+            .unwrap();
+        let old = c.support.unwrap();
+        slope.position += Vec3::new(0.1, 0.05, 0.);
+        slope.rotation = Quat::from_rotation_z(0.3);
+        let requested = slope.position + slope.rotation * old.local_anchor - old.previous_anchor;
+        let tick = c
+            .step(
+                &[slope][..],
+                shape,
+                Default::default(),
+                Default::default(),
+                DT,
+            )
+            .unwrap();
+        let carry = tick.motion.support_motion.unwrap();
+        assert_eq!(carry.requested, requested);
+        assert!((carry.applied - requested).length() < 1e-5);
+        assert!(!carry.blocked);
+        assert!(c.grounded);
+        assert_eq!(c.support.unwrap().id, slope.id);
+        assert!((c.ground_normal - slope.rotation * Vec3::Y).length() < 1e-5);
+        assert_eq!(c.support.unwrap().previous_anchor, c.position);
+        if shape.planar() {
+            assert_eq!(c.position.z, 0.);
+        }
+    }
+}
+
+#[test]
+fn support_carry_reports_clipping_and_released_filtered_or_removed_platforms() {
+    for shape in motor_shapes() {
+        let platform = Obstacle::cuboid(7, Vec3::new(0., -0.1, 0.), Vec3::new(4., 0.1, 4.));
+        let mut c = Character::new(Vec3::Y * 0.002);
+        c.teleport(&[platform][..], shape, Default::default(), c.position)
+            .unwrap();
+        let saved = c;
+        let mut moved = platform;
+        moved.position.x += 0.5;
+        let wall = Obstacle::cuboid(8, Vec3::new(0.6, 1., 0.), Vec3::new(0.1, 1., 2.));
+        let tick = c
+            .step(
+                &[moved, wall][..],
+                shape,
+                Default::default(),
+                Default::default(),
+                DT,
+            )
+            .unwrap();
+        let carry = tick.motion.support_motion.unwrap();
+        assert!((carry.requested - Vec3::X * 0.5).length() < 1e-5);
+        assert!(carry.blocked);
+        assert!(carry.applied.x > 0.19 && carry.applied.x < 0.2, "{carry:?}");
+        assert_eq!(carry.applied, tick.carried);
+        assert_eq!(tick.motion.recovery, Recovery::default());
+
+        for (world, mask) in [
+            (Vec::new(), u32::MAX),
+            (
+                vec![Obstacle {
+                    sensor: true,
+                    ..moved
+                }],
+                u32::MAX,
+            ),
+            (
+                vec![Obstacle {
+                    membership: 2,
+                    ..moved
+                }],
+                1,
+            ),
+        ] {
+            c = saved;
+            let settings = CharacterSettings {
+                membership_mask: mask,
+                ..Default::default()
+            };
+            let tick = c
+                .step(&world[..], shape, settings, Default::default(), DT)
+                .unwrap();
+            assert!(tick.motion.support_motion.is_none());
+            assert!(tick.motion.support.is_none());
+            assert!(!c.grounded);
+            assert_eq!(tick.carried, Vec3::ZERO);
+        }
+    }
+}
+
+#[test]
+fn support_carry_excludes_ground_snap_and_recovery_momentum() {
+    for shape in motor_shapes() {
+        for (platform_top, floor_top, expected_recovery) in [(0.1, 0.04, false), (0., 0.05, true)] {
+            let mut platform = Obstacle::cuboid(
+                7,
+                Vec3::new(0., platform_top - 0.1, 0.),
+                Vec3::new(4., 0.1, 4.),
+            );
+            let mut c = Character::new(Vec3::Y * (platform_top + 0.002));
+            c.teleport(&[platform][..], shape, Default::default(), c.position)
+                .unwrap();
+            platform.position.x += 0.1;
+            let other_floor = Obstacle {
+                position: Vec3::Y * floor_top,
+                ..floor()
+            };
+            let input = CharacterInput {
+                jump: true,
+                ..Default::default()
+            };
+            let tick = c
+                .step(
+                    &[platform, other_floor][..],
+                    shape,
+                    Default::default(),
+                    input,
+                    DT,
+                )
+                .unwrap();
+            assert!(tick.jumped);
+            assert!(tick.motion.support.is_none());
+            assert_eq!(tick.motion.support_motion.unwrap().id, platform.id);
+            assert!((tick.carried - Vec3::X * 0.1).length() < 1e-5, "{tick:?}");
+            assert_eq!(tick.motion.recovery.iterations > 0, expected_recovery);
+            let settings = CharacterSettings::default();
+            assert!(
+                (c.velocity.y - (settings.jump_speed - settings.gravity * DT)).abs() < 1e-5,
+                "{c:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn planar_support_cannot_carry_a_character_out_of_plane() {
+    let shape = motor_shapes()[0];
+    let mut platform = Obstacle::cuboid(7, -Vec3::Y * 0.1, Vec3::new(4., 0.1, 4.));
+    let mut c = Character::new(Vec3::ZERO);
+    c.teleport(&[platform][..], shape, Default::default(), Vec3::ZERO)
+        .unwrap();
+    let saved = c;
+    platform.position.z = 0.1;
+    assert_eq!(
+        c.step(
+            &[platform][..],
+            shape,
+            Default::default(),
+            Default::default(),
+            DT
+        )
+        .unwrap_err(),
+        CharacterError::InvalidObstacle
+    );
+    assert_eq!(c, saved);
+}
+
+#[test]
+fn recovery_distance_limit_counts_each_correction_and_clearance_queries_are_bounded() {
+    for shape in motor_shapes() {
+        let wall = Obstacle {
+            id: 2,
+            shape: ObstacleShape::Plane { normal: Vec3::X },
+            ..floor()
+        };
+        let world = [floor(), wall];
+        // Two orthogonal corrections need > 0.5 path length, even though their
+        // net displacement is shorter than 0.5. The public operation shares a cap.
+        let feet = Vec3::new(0., -0.25, 0.);
+        let mut c = Character::new(Vec3::Y * 3.);
+        let saved = c;
+        let settings = CharacterSettings {
+            max_recovery: 0.5,
+            ..Default::default()
+        };
+        assert_eq!(
+            c.teleport(&world[..], shape, settings, feet).unwrap_err(),
+            CharacterError::UnresolvedPenetration
+        );
+        assert_eq!(c, saved);
+        let settings = CharacterSettings {
+            max_recovery: 0.6,
+            max_iterations: 2,
+            ..settings
+        };
+        let report = c.teleport(&world[..], shape, settings, feet).unwrap();
+        assert_eq!(report.recovery.iterations, 2);
+        assert!(report.recovery.distance > 0.55);
+        assert!(report.recovery.translation.length() < 0.5);
+
+        let saved = c;
+        let limited = CharacterSettings {
+            max_candidates: 4,
+            ..settings
+        };
+        assert_eq!(
+            c.teleport(&world[..], shape, limited, feet).unwrap_err(),
+            CharacterError::QueryBudget
+        );
+        assert_eq!(c, saved);
+        let clear = CharacterSettings {
+            max_recovery: 0.,
+            ..Default::default()
+        };
+        let report = c
+            .teleport(&world[..], shape, clear, Vec3::new(2., 2., 0.))
+            .unwrap();
+        assert_eq!(report.recovery, Recovery::default());
+    }
+}
+
+#[test]
+fn mismatched_support_lookup_is_rejected_without_mutation() {
+    struct MismatchedSupport(Obstacle);
+    impl Terrain for MismatchedSupport {
+        fn visit(&self, bounds: QueryBounds, visitor: &mut dyn FnMut(Obstacle)) {
+            [self.0][..].visit(bounds, visitor);
+        }
+        fn obstacle(&self, _id: u64) -> Option<Obstacle> {
+            Some(Obstacle { id: 999, ..self.0 })
+        }
+    }
+    for shape in motor_shapes() {
+        let mut c = Character::new(Vec3::ZERO);
+        c.teleport(&[floor()][..], shape, Default::default(), Vec3::ZERO)
+            .unwrap();
+        let saved = c;
+        assert_eq!(
+            c.step(
+                &MismatchedSupport(floor()),
+                shape,
+                Default::default(),
+                Default::default(),
+                DT
+            )
+            .unwrap_err(),
+            CharacterError::InvalidObstacle
+        );
+        assert_eq!(c, saved);
+    }
+}
+
+#[cfg(feature = "dim2")]
+#[test]
+fn rigid_2d_support_teleport_uses_current_pose_and_fresh_anchors() {
+    use crate::d2::*;
+    let shape = motor_shapes()[0];
+    let mut world = PhysicsWorld::new([0., 0.]);
+    let (body, _) = world.insert(
+        RigidBodyBuilder::kinematic_position_based().translation(Vec2::new(0., -0.1)),
+        ColliderBuilder::cuboid(4., 0.1),
+    );
+    let mut c = Character::new(Vec3::ZERO);
+    c.teleport(&world, shape, Default::default(), Vec3::new(1., -0.1, 0.))
+        .unwrap();
+    world.bodies[body].set_translation(Vec2::new(0.2, -0.05), true);
+    let tick = c
+        .step(&world, shape, Default::default(), Default::default(), DT)
+        .unwrap();
+    let support = tick.motion.support_motion.unwrap();
+    assert!((support.applied - Vec3::new(0.2, 0.05, 0.)).length() < 1e-5);
+    assert_eq!(c.position.z, 0.);
+    let report = c
+        .teleport(&world, shape, Default::default(), Vec3::new(-1., -0.05, 0.))
+        .unwrap();
+    assert!(report.grounded);
+    assert!(report.recovery.distance > 0.1);
+    let tick = c
+        .step(&world, shape, Default::default(), Default::default(), DT)
+        .unwrap();
+    assert!(tick.carried.length() < 1e-5);
+    assert!(c.grounded);
+}

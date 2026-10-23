@@ -1,4 +1,88 @@
 use super::*;
+
+pub(super) fn diagnostic(source: &str, error: ContentError) -> SceneDiagnostic {
+    let (token, source_line) = source_excerpt(source, error.span)
+        .map(|(token, line)| (token.map(Box::<str>::from), Some(line.into())))
+        .unwrap_or_default();
+    let help = match (error.kind, error.context.as_str()) {
+        (ErrorKind::Version, _) => Some("Begin the document with `ferravex_scene 1;`."),
+        (ErrorKind::Type, "unknown value kind") => {
+            Some("Use bool, int, number, text, vec2, vec3, quat, rgba or ref after the field name.")
+        }
+        (ErrorKind::Syntax, "unknown node command") => {
+            Some("Inside a node, use parent, use, transform, component or override.")
+        }
+        (ErrorKind::Syntax, "invalid escape") => {
+            Some(r#"Supported string escapes are \", \\, \n, \r and \t."#)
+        }
+        (ErrorKind::Syntax, "unterminated string" | "unescaped control in string") => {
+            Some(r#"Close the string with a double quote; use \n, \r or \t for control characters."#)
+        }
+        (ErrorKind::Range, "expected i64") => {
+            Some("Use a whole number from -9223372036854775808 through 9223372036854775807.")
+        }
+        (ErrorKind::Range, "expected finite number" | "number exceeds f32") => {
+            Some("Use a finite number within the value type's range; NaN and infinity are rejected.")
+        }
+        (ErrorKind::InvalidTransform, _) => {
+            Some("Supply translation (3 numbers), a nonzero quaternion (4), and scale (3); all must be finite.")
+        }
+        _ => None,
+    }
+    .map(Box::<str>::from);
+    SceneDiagnostic {
+        error,
+        token,
+        source_line,
+        help,
+    }
+}
+
+// Validate externally constructible spans before slicing. Diagnostic tokens keep
+// their original spelling instead of the lexer's unescaped/decoded value.
+fn source_excerpt(source: &str, span: SourceSpan) -> Option<(Option<&str>, &str)> {
+    if span.line == 0 || span.column == 0 {
+        return None;
+    }
+    let prefix = source.get(..span.offset)?;
+    let line_start = prefix.rfind('\n').map_or(0, |at| at + 1);
+    if prefix.bytes().filter(|&c| c == b'\n').count() + 1 != span.line
+        || prefix[line_start..].chars().count() + 1 != span.column
+    {
+        return None;
+    }
+    let rest = &source[span.offset..];
+    let line_end = rest.find('\n').map_or(source.len(), |at| span.offset + at);
+    let line = source[line_start..line_end]
+        .strip_suffix('\r')
+        .unwrap_or(&source[line_start..line_end]);
+    let Some(first) = rest.chars().next() else {
+        return Some((None, line));
+    };
+    let mut end = first.len_utf8();
+    if first == '"' {
+        let mut escaped = false;
+        for (at, c) in rest.char_indices().skip(1) {
+            if matches!(c, '\n' | '\r') {
+                break;
+            }
+            end = at + c.len_utf8();
+            if c == '"' && !escaped {
+                break;
+            }
+            escaped = c == '\\' && !escaped;
+        }
+    } else if !"{};".contains(first) && !first.is_whitespace() {
+        for (at, c) in rest.char_indices().skip(1) {
+            if c.is_whitespace() || "{};#\"".contains(c) {
+                break;
+            }
+            end = at + c.len_utf8();
+        }
+    }
+    Some((Some(&rest[..end]), line))
+}
+
 #[derive(Debug)]
 struct Token {
     text: String,

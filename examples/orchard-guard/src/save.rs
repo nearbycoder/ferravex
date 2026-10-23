@@ -95,6 +95,7 @@ impl Checkpoint {
         g.selected = s.selected;
         g.time = s.time;
         g.towers.clone_from(&s.towers);
+        g.restore_spawn_sequence();
         Ok(Some(g))
     }
 }
@@ -342,6 +343,25 @@ mod tests {
             .unwrap();
         assert_eq!(restored.kills, g.kills);
         assert_eq!(restored.money, g.money);
+        assert_eq!(
+            restored.next_wave().unwrap().fast_count,
+            g.next_wave().unwrap().fast_count
+        );
+        // Spawn identity determines fast-pest cadence. Restoring a checkpoint
+        // must continue that cadence without extending the version-1 save.
+        for _ in 0..240 {
+            g.autoplay();
+            restored.autoplay();
+            g.step(1. / 60.);
+            restored.step(1. / 60.);
+            assert_eq!(restored.money, g.money);
+            assert_eq!(restored.kills, g.kills);
+            assert_eq!(restored.pests.len(), g.pests.len());
+            for (actual, expected) in restored.pests.iter().zip(&g.pests) {
+                assert_eq!((actual.id, actual.fast), (expected.id, expected.fast));
+                assert_eq!((actual.hp, actual.pos), (expected.hp, expected.pos));
+            }
+        }
         for _ in 0..18000 {
             restored.autoplay();
             restored.step(1. / 60.);

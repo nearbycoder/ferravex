@@ -1,17 +1,84 @@
 //! Allocation-free presentation cameras. World Y is up. Shooter yaw zero faces
 //! -Z; orbit eye offsets and vehicle-local chase forward use +Z. No simulation
 //! or input state is changed by damping, obstruction recovery or shake.
+//!
+//! [`Follow2`] and [`Rig3`] initialize on their first successful update. Use
+//! `snap` when the new spawn/teleport target is available, `reset` when restarting
+//! before that target exists, or `cut` to defer a snap until the next update while
+//! retaining the last pose. Honor the returned `cut` flag when interpolating
+//! rendered frames. Reset simulation interpolation at the teleport too: provide
+//! the new target directly so the camera does not follow a stale blended target.
+//!
+//! Smoothing half-lives are in seconds: after one half-life a stationary goal's
+//! error is halved. Existing tuning is retained by resets and snaps. Update time
+//! must be finite and in `0..=0.25`; larger gaps are rejected without mutation.
+//! A host can deliberately snap on resume or bound only its presentation time.
+//!
+//! This chase-camera integration uses Dune Skimmer's position/target damping.
+//! Call it after sampling the vehicle pose, then copy the returned pose into the
+//! renderer's camera. A recovery flag must be raised even for a short teleport
+//! below the automatic distance threshold.
+//!
+//! ```
+//! use ferravex_math::Vec3;
+//! use ferravex_play::camera::{
+//!     CameraError, CollisionQuery, Frame3, Input3, Mode3, NoObstructions,
+//!     Rig3, Settings3, Target3,
+//! };
+//!
+//! fn vehicle_view(
+//!     camera: &mut Rig3,
+//!     vehicle: Target3,
+//!     elapsed: f32,
+//!     recovered: bool,
+//!     blockers: &(impl CollisionQuery + ?Sized),
+//! ) -> Result<Frame3, CameraError> {
+//!     if !elapsed.is_finite() || elapsed < 0. {
+//!         return Err(CameraError::InvalidInput);
+//!     }
+//!     let input = Input3 {
+//!         target: vehicle,
+//!         mode: Mode3::Chase {
+//!             distance: 8., height: 3., look_ahead: 4., look_height: 1.,
+//!             speed_distance: 0.05, speed_height: 0., prediction: 0.1,
+//!             level: true,
+//!         },
+//!         fov_y: 1.,
+//!     };
+//!     if recovered || elapsed > 0.25 {
+//!         camera.snap(input, blockers)
+//!     } else {
+//!         camera.update(elapsed, input, blockers)
+//!     }
+//! }
+//!
+//! let mut camera = Rig3::new(Settings3 {
+//!     position_half_life: std::f32::consts::LN_2 / 5.5,
+//!     target_half_life: std::f32::consts::LN_2 / 8.,
+//!     ..Default::default()
+//! })?;
+//! let spawn = Target3::at(Vec3::new(100., 1., 20.));
+//! let frame = vehicle_view(&mut camera, spawn, 1. / 60., true, &NoObstructions)?;
+//! assert!(frame.cut);
+//! assert_eq!(camera.pose(), Some(frame.pose));
+//! # Ok::<(), CameraError>(())
+//! ```
 mod collision;
 mod composition;
-pub use composition::{CameraComposer, CameraZone};
+pub use composition::{
+    CameraComposer, CameraZone, FramingBounds, FramingError, FramingLimit, FramingResult,
+    FramingSettings, MAX_FRAMING_SUBJECTS,
+};
 mod follow;
+pub mod rail;
 mod shake;
 #[cfg(test)]
 mod tests;
-pub use collision::{Blocker, CollisionQuery, MAX_BLOCKERS, NoObstructions, Sweep};
+pub mod transition;
+pub use collision::{Blocker, CollisionQuery, MAX_BLOCKERS, NoObstructions, Sweep, SweepOutcome};
 use ferravex_math::{Quat, Vec3};
 pub use follow::{Follow2, Follow2Settings, Frame2, Limits2};
-pub use shake::{CameraShake, ShakeImpulse, ShakeSample};
+pub use shake::{CameraShake, ShakeEnvelope, ShakeImpulse, ShakeSample};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CameraError {
@@ -38,7 +105,7 @@ fn valid_dt(dt: f32) -> bool {
     nonnegative(dt, 0.25)
 }
 /// Exact exponential response to a stationary goal. Zero half-life snaps on a
-/// positive timestep; zero time does not advance an initialized camera.
+/// positive timestep; zero time contributes no damping.
 fn weight(dt: f32, half_life: f32) -> f32 {
     if dt == 0. {
         0.
@@ -225,9 +292,15 @@ impl Default for ObstructionSettings {
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Settings3 {
+    /// Position error half-life in seconds, in `0..=10`; zero disables damping
+    /// on positive timesteps. Orbit uses this for yaw, pitch and distance too.
     pub position_half_life: f32,
+    /// Look-target error half-life in seconds. First-person aim is always immediate.
     pub target_half_life: f32,
+    /// Vertical field-of-view error half-life in seconds.
     pub fov_half_life: f32,
+    /// Cut when subject motion between successful updates exceeds this distance.
+    /// `None` disables automatic teleport detection; explicit snaps still work.
     pub teleport_distance: Option<f32>,
     pub obstruction: Option<ObstructionSettings>,
     /// Set to zero for reduced-motion presentation.
@@ -286,6 +359,7 @@ impl Default for Pose3 {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Frame3 {
     pub pose: Pose3,
+    /// Discontinuity: discard any renderer interpolation from the previous frame.
     pub cut: bool,
     pub obstructed: bool,
     pub blocked_pivot: bool,
@@ -339,14 +413,82 @@ impl Rig3 {
         self.settings = settings;
         Ok(())
     }
+    /// Last successful pose, or `None` before initialization or after [`Self::reset`].
     pub fn pose(&self) -> Option<Pose3> {
         self.initialized.then_some(self.rendered)
     }
-    /// Cut on the next valid update and discard presentation shake.
+    /// Forget the pose, damping, orbit and obstruction history, retaining settings.
+    ///
+    /// Clears active shake without replacing its configured seed or sequence.
+    /// The next valid update initializes directly, even with zero elapsed time.
+    /// Shake queued after resetting belongs to the new scene and is retained.
+    ///
+    /// ```
+    /// use ferravex_play::camera::Rig3;
+    /// let mut camera = Rig3::default();
+    /// let tuning = camera.settings();
+    /// camera.reset(); // The restarted scene has not supplied its spawn yet.
+    /// assert_eq!(camera.pose(), None);
+    /// assert_eq!(camera.settings(), tuning);
+    /// ```
+    pub fn reset(&mut self) {
+        self.initialized = false;
+        self.cut_next = true;
+        self.last_mode = 0;
+        self.previous_subject = Vec3::ZERO;
+        self.base = Pose3::default();
+        self.rendered = Pose3::default();
+        self.boom_length = 0.;
+        self.orbit = Vec3::ZERO;
+        self.shake.clear();
+    }
+    /// Cut on the next valid update and discard current presentation shake.
+    /// The last pose remains available; shake queued after this call is retained.
     pub fn cut(&mut self) {
         self.cut_next = true;
         self.shake.clear();
     }
+    /// Immediately initialize or relocate the camera, clearing current shake.
+    ///
+    /// Position, look target, FOV and orbit state snap to `input`; obstruction
+    /// still constrains the boom, without sweeping from the old scene's pose.
+    /// Subsequent updates smooth from the new state with the same settings.
+    /// Input or collision errors preserve the complete previous camera state,
+    /// including shake and pending cuts. Queue new-scene shake after this call.
+    ///
+    /// ```
+    /// use ferravex_math::Vec3;
+    /// use ferravex_play::camera::{Input3, Mode3, NoObstructions, Rig3, Target3};
+    /// let mut camera = Rig3::default();
+    /// let frame = camera.snap(Input3 {
+    ///     target: Target3::at(Vec3::X * 100.),
+    ///     mode: Mode3::Follow {
+    ///         eye_offset: Vec3::Z * 10., look_offset: Vec3::ZERO,
+    ///     },
+    ///     fov_y: 1.,
+    /// }, &NoObstructions)?;
+    /// assert!(frame.cut);
+    /// assert_eq!(frame.pose.position, Vec3::new(100., 0., 10.));
+    /// # Ok::<(), ferravex_play::camera::CameraError>(())
+    /// ```
+    pub fn snap(
+        &mut self,
+        input: Input3,
+        collision: &(impl CollisionQuery + ?Sized),
+    ) -> Result<Frame3, CameraError> {
+        let mut next = *self;
+        next.cut();
+        let frame = next.update(0., input, collision)?;
+        *self = next;
+        Ok(frame)
+    }
+    /// Advance presentation with elapsed seconds in `0..=0.25`.
+    ///
+    /// Invalid or larger timesteps return [`CameraError::InvalidInput`] and leave
+    /// all state unchanged. Use [`Self::snap`] after a long host suspension if an
+    /// immediate view of the current target is desired. Zero time freezes damping
+    /// and shake time; initialization, cuts, first-person aim and collision still
+    /// apply. Automatic teleports and mode changes cut and clear old shake.
     pub fn update(
         &mut self,
         dt: f32,

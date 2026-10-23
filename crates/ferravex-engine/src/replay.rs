@@ -1,6 +1,7 @@
 pub use ferravex_play::replay::{
-    EventInput, EventIter, Header, Limits, Playback, PlaybackError, Recorder, Recording,
-    ReplayError, ReplayWorld, derive_seed, ghost,
+    EventInput, EventIter, Header, Limits, Playback, PlaybackError, PlaybackStatus, Recorder,
+    Recording, ReplayChecksum, ReplayError, ReplayMismatch, ReplayWorld, derive_seed, ghost,
+    input_checksum,
 };
 // Original bounded binary input replay. Checksums detect corruption, not malicious tampering.
 // Replay stores inputs and hashes; it does not capture arbitrary game state or restore sessions.

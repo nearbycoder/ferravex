@@ -471,3 +471,340 @@ fn explicit_cut_discards_old_feedback_but_keeps_a_new_impact_queued_after_it() {
     assert_eq!(rig.shake.active(), 1);
     assert!(frame.pose.position.distance(Vec3::new(100., 0., 10.)) > 0.0001);
 }
+
+#[test]
+fn planar_snap_applies_composition_and_limits_then_resumes_authored_smoothing() {
+    let settings = Follow2Settings {
+        offset: Vec2::new(4., 2.),
+        dead_zone: Vec2::splat(3.),
+        half_life: 0.25,
+        look_ahead_time: 0.5,
+        max_look_ahead: 4.,
+        limits: Some(Limits2 {
+            min: Vec2::ZERO,
+            max: Vec2::new(120., 80.),
+        }),
+        teleport_distance: None,
+    };
+    let mut rig = Follow2::new(settings).unwrap();
+    assert_eq!(rig.center(), None);
+    rig.update(0., Vec2::splat(10.), Vec2::ZERO).unwrap();
+    let frame = rig.snap(Vec2::new(100., 20.), Vec2::X * 20.).unwrap();
+    assert!(frame.cut);
+    assert_eq!(frame.center, Vec2::new(108., 22.));
+    assert_eq!(rig.center(), Some(frame.center));
+    let frame = rig
+        .update(0.25, Vec2::new(110., 20.), Vec2::X * 20.)
+        .unwrap();
+    assert!(!frame.cut);
+    assert_eq!(frame.center, Vec2::new(111.5, 22.));
+    let frame = rig.snap(Vec2::new(200., 20.), Vec2::X * 20.).unwrap();
+    assert!(frame.cut);
+    assert_eq!(frame.center, Vec2::new(120., 22.));
+    rig.reset();
+    assert_eq!(rig.center(), None);
+    assert_eq!(rig.settings(), settings);
+    let frame = rig.update(0., Vec2::splat(3.), Vec2::ZERO).unwrap();
+    assert!(frame.cut);
+    assert_eq!(frame.center, Vec2::new(7., 5.));
+    assert!(!rig.update(0., Vec2::splat(3.), Vec2::ZERO).unwrap().cut);
+}
+
+#[test]
+fn planar_dead_zone_smoothing_is_partition_independent_after_snap() {
+    for steps in [1, 30, 60, 120] {
+        let mut rig = Follow2::new(Follow2Settings {
+            half_life: 0.25,
+            dead_zone: Vec2::splat(2.),
+            teleport_distance: None,
+            ..Default::default()
+        })
+        .unwrap();
+        rig.snap(Vec2::ZERO, Vec2::ZERO).unwrap();
+        for _ in 0..steps {
+            let frame = rig
+                .update(0.25 / steps as f32, Vec2::X * 10., Vec2::ZERO)
+                .unwrap();
+            assert!(!frame.cut);
+        }
+        assert!(rig.center().unwrap().distance(Vec2::X * 4.) < 0.0001);
+    }
+}
+
+#[test]
+fn chase_snap_replaces_heading_speed_prediction_and_fov_then_smooths() {
+    let settings = Settings3 {
+        position_half_life: 0.25,
+        target_half_life: 0.25,
+        fov_half_life: 0.25,
+        teleport_distance: None,
+        ..Default::default()
+    };
+    let mut input = Input3 {
+        target: Target3::at(Vec3::ZERO),
+        mode: Mode3::Chase {
+            distance: 5.,
+            height: 2.,
+            look_ahead: 3.,
+            look_height: 1.,
+            speed_distance: 0.2,
+            speed_height: 0.1,
+            prediction: 0.1,
+            level: true,
+        },
+        fov_y: 1.,
+    };
+    let mut rig = Rig3::new(settings).unwrap();
+    rig.update(0., input, &NoObstructions).unwrap();
+    rig.shake.push(impulse()).unwrap();
+    input.target = Target3 {
+        position: Vec3::X * 100.,
+        rotation: Quat::from_rotation_y(std::f32::consts::FRAC_PI_2),
+        velocity: Vec3::X * 10.,
+    };
+    input.fov_y = 2.;
+    let frame = rig.snap(input, &NoObstructions).unwrap();
+    assert!(frame.cut);
+    assert!(frame.pose.position.distance(Vec3::new(94., 3., 0.)) < 0.0001);
+    assert!(frame.pose.target.distance(Vec3::new(104., 1., 0.)) < 0.0001);
+    assert_eq!(frame.pose.fov_y, 2.);
+    assert_eq!(rig.shake.active(), 0);
+    assert_eq!(rig.settings(), settings);
+    assert_eq!(rig.pose(), Some(frame.pose));
+    input.target.position.x += 8.;
+    input.fov_y = 1.;
+    for steps in [1, 30, 60, 120] {
+        let mut smoothed = rig;
+        for _ in 0..steps {
+            let frame = smoothed
+                .update(0.25 / steps as f32, input, &NoObstructions)
+                .unwrap();
+            assert!(!frame.cut);
+        }
+        let pose = smoothed.pose().unwrap();
+        assert!(pose.position.distance(Vec3::new(98., 3., 0.)) < 0.0002);
+        assert!(pose.target.distance(Vec3::new(108., 1., 0.)) < 0.0002);
+        assert!((pose.fov_y - 1.5).abs() < 0.0001);
+    }
+}
+
+#[test]
+fn snap_checks_the_new_boom_without_sweeping_across_a_teleport() {
+    let mut rig = Rig3::new(obstruction()).unwrap();
+    rig.snap(follow(-Vec3::X * 100.), &NoObstructions).unwrap();
+    let queries = std::cell::Cell::new(0);
+    let frame = rig
+        .snap(follow(Vec3::ZERO), &|sweep: Sweep| {
+            queries.set(queries.get() + 1);
+            assert_eq!(sweep.start, Vec3::ZERO);
+            assert_eq!(sweep.end, Vec3::Z * 10.);
+            Ok(Some(0.5))
+        })
+        .unwrap();
+    assert!(frame.cut && frame.obstructed && !frame.recovered);
+    assert_eq!(queries.get(), 1);
+    assert_eq!(frame.queries, 1);
+    assert!((frame.pose.position.z - 4.98).abs() < 0.0001);
+    let frame = rig
+        .update(0.2, follow(Vec3::ZERO), &NoObstructions)
+        .unwrap();
+    assert!(!frame.cut);
+    assert!((frame.pose.position.z - 7.49).abs() < 0.0001);
+    let frame = rig.snap(follow(Vec3::ZERO), &NoObstructions).unwrap();
+    assert!(frame.cut);
+    assert_eq!(frame.pose.position, Vec3::Z * 10.);
+}
+
+#[test]
+fn reset_forgets_orbit_and_obstruction_history_without_replacing_tuning_or_shake_seed() {
+    let settings = Settings3 {
+        position_half_life: 0.25,
+        target_half_life: 0.25,
+        ..obstruction()
+    };
+    let mut rig = Rig3::new(settings).unwrap();
+    rig.shake = CameraShake::new(42);
+    let mut input = Input3 {
+        mode: Mode3::Orbit {
+            yaw: 0.5,
+            pitch: 0.2,
+            distance: 8.,
+            pivot: Vec3::Y,
+        },
+        ..follow(Vec3::ZERO)
+    };
+    rig.snap(input, &|_| Ok(Some(0.25))).unwrap();
+    rig.shake.push(impulse()).unwrap();
+    let mut expected_shake = rig.shake;
+    expected_shake.clear();
+    rig.reset();
+    assert_eq!(rig.pose(), None);
+    assert_eq!(rig.settings(), settings);
+    assert_eq!(rig.shake, expected_shake);
+    input.target.position = Vec3::X * 100.;
+    input.fov_y = 2.;
+    input.mode = Mode3::Orbit {
+        yaw: -2.,
+        pitch: -0.1,
+        distance: 12.,
+        pivot: Vec3::Y,
+    };
+    let frame = rig.update(0., input, &NoObstructions).unwrap();
+    let mut fresh = Rig3::new(settings).unwrap();
+    assert_eq!(frame, fresh.update(0., input, &NoObstructions).unwrap());
+    assert!(frame.cut);
+    assert!(!rig.update(0., input, &NoObstructions).unwrap().cut);
+    rig.shake.push(impulse()).unwrap();
+    rig.reset();
+    assert_eq!(rig.shake.active(), 0);
+    rig.shake.push(impulse()).unwrap();
+    let frame = rig.update(0.01, input, &NoObstructions).unwrap();
+    assert!(frame.cut);
+    assert_eq!(rig.shake.active(), 1);
+}
+
+#[test]
+fn failed_snaps_preserve_pose_shake_and_pending_cuts() {
+    let mut planar = Follow2::default();
+    planar.snap(Vec2::X * 10., Vec2::ZERO).unwrap();
+    for pending_cut in [false, true] {
+        if pending_cut {
+            planar.cut();
+        }
+        let before = planar;
+        for (subject, velocity) in [
+            (Vec2::splat(f32::NAN), Vec2::ZERO),
+            (Vec2::ZERO, Vec2::splat(f32::INFINITY)),
+        ] {
+            assert_eq!(
+                planar.snap(subject, velocity),
+                Err(CameraError::InvalidInput)
+            );
+            assert_eq!(planar, before);
+        }
+    }
+    let mut rig = Rig3::new(obstruction()).unwrap();
+    rig.snap(follow(Vec3::ZERO), &NoObstructions).unwrap();
+    for pending_cut in [false, true] {
+        if pending_cut {
+            rig.cut();
+        }
+        rig.shake.push(impulse()).unwrap();
+        let before = rig;
+        let bad = Input3 {
+            fov_y: f32::NAN,
+            ..follow(Vec3::X * 100.)
+        };
+        assert_eq!(
+            rig.snap(bad, &NoObstructions),
+            Err(CameraError::InvalidInput)
+        );
+        assert_eq!(rig, before);
+        for result in [
+            Ok(Some(f32::NAN)),
+            Ok(Some(2.)),
+            Err(CameraError::QueryBudget),
+        ] {
+            assert!(rig.snap(follow(Vec3::X * 100.), &|_| result).is_err());
+            assert_eq!(rig, before);
+        }
+    }
+    assert!(
+        rig.update(0., follow(Vec3::ZERO), &NoObstructions)
+            .unwrap()
+            .cut
+    );
+    assert_eq!(rig.shake.active(), 1);
+}
+
+#[test]
+fn oversized_and_invalid_dt_preserve_initialization_and_pending_discontinuities() {
+    let mut planar = Follow2::default();
+    let mut rig = Rig3::default();
+    for initialized in [false, true] {
+        if initialized {
+            planar.snap(Vec2::ZERO, Vec2::ZERO).unwrap();
+            rig.snap(follow(Vec3::ZERO), &NoObstructions).unwrap();
+            planar.cut();
+            rig.cut();
+        }
+        rig.shake.push(impulse()).unwrap();
+        let planar_before = planar;
+        let rig_before = rig;
+        for dt in [
+            -f32::EPSILON,
+            f32::NEG_INFINITY,
+            f32::NAN,
+            f32::INFINITY,
+            0.250001,
+            10.,
+            f32::MAX,
+        ] {
+            assert_eq!(
+                planar.update(dt, Vec2::X * 5., Vec2::ZERO),
+                Err(CameraError::InvalidInput)
+            );
+            assert_eq!(planar, planar_before);
+            assert_eq!(
+                rig.update(dt, follow(Vec3::X * 5.), &NoObstructions),
+                Err(CameraError::InvalidInput)
+            );
+            assert_eq!(rig, rig_before);
+        }
+    }
+    assert!(planar.update(0., Vec2::X * 5., Vec2::ZERO).unwrap().cut);
+    assert!(
+        rig.update(0., follow(Vec3::X * 5.), &NoObstructions)
+            .unwrap()
+            .cut
+    );
+}
+
+#[test]
+fn zero_time_freezes_damping_even_with_zero_half_life_but_explicit_snaps_move() {
+    let mut planar = Follow2::new(Follow2Settings {
+        half_life: 0.,
+        ..Default::default()
+    })
+    .unwrap();
+    let mut rig = Rig3::new(Settings3 {
+        position_half_life: 0.,
+        target_half_life: 0.,
+        fov_half_life: 0.,
+        ..Default::default()
+    })
+    .unwrap();
+    let center = planar.update(0., Vec2::ZERO, Vec2::ZERO).unwrap().center;
+    let pose = rig
+        .update(0., follow(Vec3::ZERO), &NoObstructions)
+        .unwrap()
+        .pose;
+    let moved = Input3 {
+        fov_y: 2.,
+        ..follow(Vec3::X * 5.)
+    };
+    assert_eq!(
+        planar.update(0., Vec2::X * 5., Vec2::ZERO).unwrap().center,
+        center
+    );
+    assert_eq!(rig.update(0., moved, &NoObstructions).unwrap().pose, pose);
+    let planar_snap = planar.snap(Vec2::X * 5., Vec2::ZERO).unwrap();
+    let rig_snap = rig.snap(moved, &NoObstructions).unwrap();
+    assert!(planar_snap.cut && rig_snap.cut);
+    assert_eq!(planar_snap.center, Vec2::X * 5.);
+    assert_eq!(rig_snap.pose.position, Vec3::new(5., 0., 10.));
+    assert_eq!(rig_snap.pose.fov_y, 2.);
+    assert_eq!(
+        planar
+            .update(f32::EPSILON, Vec2::ZERO, Vec2::ZERO)
+            .unwrap()
+            .center,
+        center
+    );
+    assert_eq!(
+        rig.update(f32::EPSILON, follow(Vec3::ZERO), &NoObstructions)
+            .unwrap()
+            .pose,
+        pose
+    );
+}

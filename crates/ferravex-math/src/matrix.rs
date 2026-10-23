@@ -1,6 +1,52 @@
 use crate::{Quat, Vec3, Vec4, vec3, vec4};
 use std::ops::{Add, Index, IndexMut, Mul, MulAssign, Sub};
 
+/// Failure from a checked matrix operation. No fallback transform is substituted.
+///
+/// ```
+/// use ferravex_math::{Mat4, MatrixError};
+/// assert_eq!(Mat4::ZERO.checked_inverse(), Err(MatrixError::Singular { column: 0 }));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MatrixError {
+    /// The named input contains NaN or infinity.
+    NonFiniteInput { input: &'static str },
+    /// Elimination encountered an exactly zero pivot at this zero-based column.
+    Singular { column: usize },
+    /// An intermediate/output is non-finite, or a required projection coefficient
+    /// rounds to zero in f32. Rescale the inputs or use a less extreme frustum.
+    ResultOutOfRange,
+    /// The transformed homogeneous w is exactly zero: this point is at infinity.
+    ZeroHomogeneousW,
+    /// Perspective requires `0 < fov_y < PI`, `aspect > 0`, `near > 0`,
+    /// and (for a finite frustum) `far > near`.
+    InvalidPerspective { parameter: &'static str },
+    /// The two orthographic bounds on this axis are equal.
+    DegenerateOrthographic { axis: &'static str },
+    /// The direction is zero, or the eye and target coincide.
+    DegenerateDirection,
+    /// Up is zero or parallel to the viewing direction; choose a different up.
+    DegenerateUp,
+}
+
+impl std::fmt::Display for MatrixError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NonFiniteInput { input } => write!(f, "{input} must contain only finite values"),
+            Self::Singular { column } => write!(f, "matrix has a zero pivot at column {column}; remove dependent or zero axes"),
+            Self::ResultOutOfRange => f.write_str("matrix operation exceeds usable f32 range; rescale inputs or reduce frustum extremes"),
+            Self::ZeroHomogeneousW => f.write_str("projected point has zero homogeneous w; choose a point away from the projection plane"),
+            Self::InvalidPerspective { parameter } => write!(f, "invalid perspective {parameter}; require 0 < fov_y < PI, aspect > 0, near > 0, and far > near when supplied"),
+            Self::DegenerateOrthographic { axis } => write!(f, "orthographic {axis} bounds must differ"),
+            Self::DegenerateDirection => f.write_str("camera direction must be nonzero; eye and target must differ"),
+            Self::DegenerateUp => f.write_str("camera up must be nonzero and nonparallel to its direction"),
+        }
+    }
+}
+
+impl std::error::Error for MatrixError {}
+
 /// Column-major 4x4 matrix acting on column vectors: `translation * rotation * scale`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -129,6 +175,48 @@ impl Mat4 {
         let result = self * v.extend(1.0);
         result.truncate() / result.w
     }
+    /// Projects a finite point with f64 dot products and perspective division.
+    ///
+    /// Rejects a non-finite matrix or point with [`MatrixError::NonFiniteInput`].
+    /// Returns [`MatrixError::ZeroHomogeneousW`] for exactly zero w, and
+    /// [`MatrixError::ResultOutOfRange`] if a divided coordinate cannot round to
+    /// finite f32. There is no absolute epsilon: tiny nonzero w is allowed when
+    /// the divided result fits. Negative w and points outside the clip volume
+    /// are allowed; this method does not test visibility or require an inverse.
+    /// Output rounding may underflow coordinates to zero.
+    ///
+    /// An inverse matrix projects normalized device coordinates back to world
+    /// space (subject to floating-point error):
+    /// ```
+    /// use ferravex_math::{Mat4, MatrixError, vec3};
+    /// let projection = Mat4::try_perspective_rh(1.0, 1.5, 0.1, 100.0)?;
+    /// let point = vec3(0.2, -0.1, -2.0);
+    /// let ndc = projection.try_project_point3(point)?;
+    /// let restored = projection.checked_inverse()?.try_project_point3(ndc)?;
+    /// assert!(restored.abs_diff_eq(point, 1.0e-5));
+    /// # Ok::<(), MatrixError>(())
+    /// ```
+    pub fn try_project_point3(self, v: Vec3) -> Result<Vec3, MatrixError> {
+        finite_input("matrix", &self.to_cols_array())?;
+        finite_input("point", &v.to_array())?;
+        let point = v.extend(1.0).to_array().map(f64::from);
+        let projected: [f64; 4] = std::array::from_fn(|row| {
+            self.row(row)
+                .to_array()
+                .into_iter()
+                .zip(point)
+                .map(|(a, b)| f64::from(a) * b)
+                .sum()
+        });
+        if projected[3] == 0.0 {
+            return Err(MatrixError::ZeroHomogeneousW);
+        }
+        Ok(vec3(
+            finite_f32(projected[0] / projected[3])?,
+            finite_f32(projected[1] / projected[3])?,
+            finite_f32(projected[2] / projected[3])?,
+        ))
+    }
     pub fn mul_vec4(self, v: Vec4) -> Vec4 {
         self.x_axis * v.x + self.y_axis * v.y + self.z_axis * v.z + self.w_axis * v.w
     }
@@ -175,10 +263,33 @@ impl Mat4 {
         determinant as f32
     }
     /// Returns None for singular/non-finite matrices or inverses outside f32 range.
+    /// See [`Self::checked_inverse`] for error details and precision limits.
     pub fn try_inverse(self) -> Option<Self> {
-        if !self.is_finite() {
-            return None;
-        }
+        self.checked_inverse().ok()
+    }
+    /// General partial-pivot Gauss-Jordan inverse with diagnostic errors.
+    ///
+    /// Uses a fixed stack buffer and f64 intermediates. A zero pivot is singular;
+    /// there is no determinant/epsilon cutoff, so tiny finite scales are accepted
+    /// when the inverse rounds to finite f32. Non-finite input and overflow are
+    /// reported separately. Output rounding may underflow coefficients to zero.
+    /// Singularity is tested on the computed pivots, not with exact arithmetic;
+    /// cancellation can hide a dependency or erase a small nonzero pivot.
+    /// This is not a condition-number test: nearly dependent axes can amplify
+    /// rounding error, and success does not promise an accurate round trip.
+    /// [`Self::try_inverse`] and [`Self::inverse`] retain their Option/NaN behavior.
+    ///
+    /// ```
+    /// use ferravex_math::{Mat4, MatrixError, vec3};
+    /// let tiny = Mat4::from_scale(vec3(1.0e-30, 2.0e-30, 3.0e-30));
+    /// let inverse = tiny.checked_inverse()?;
+    /// assert!((tiny * inverse).abs_diff_eq(Mat4::IDENTITY, 1.0e-6));
+    /// assert_eq!(Mat4::NAN.checked_inverse(),
+    ///            Err(MatrixError::NonFiniteInput { input: "matrix" }));
+    /// # Ok::<(), MatrixError>(())
+    /// ```
+    pub fn checked_inverse(self) -> Result<Self, MatrixError> {
+        finite_input("matrix", &self.to_cols_array())?;
         let mut augmented = [[0.0_f64; 8]; 4];
         for (row, values) in augmented.iter_mut().enumerate() {
             for (column, value) in values.iter_mut().take(4).enumerate() {
@@ -195,8 +306,11 @@ impl Mat4 {
                 })
                 .unwrap();
             let divisor = augmented[pivot][column];
-            if divisor == 0.0 || !divisor.is_finite() {
-                return None;
+            if !divisor.is_finite() {
+                return Err(MatrixError::ResultOutOfRange);
+            }
+            if divisor == 0.0 {
+                return Err(MatrixError::Singular { column });
             }
             augmented.swap(column, pivot);
             for value in &mut augmented[column] {
@@ -216,10 +330,10 @@ impl Mat4 {
         let mut result = Self::ZERO;
         for row in 0..4 {
             for column in 0..4 {
-                result[column][row] = augmented[row][column + 4] as f32;
+                result[column][row] = finite_f32(augmented[row][column + 4])?;
             }
         }
-        result.is_finite().then_some(result)
+        Ok(result)
     }
     pub fn inverse(self) -> Self {
         self.try_inverse().unwrap_or(Self::NAN)
@@ -245,6 +359,71 @@ impl Mat4 {
     pub fn look_to_lh(eye: Vec3, direction: Vec3, up: Vec3) -> Self {
         Self::look_to_rh(eye, -direction, up)
     }
+    /// Checked right-handed view looking from `eye` toward `target` along -Z.
+    ///
+    /// Rejects non-finite inputs, coincident eye/target, zero or parallel up,
+    /// and translations outside f32 range. Subtraction, cross products and
+    /// normalization use f64, so tiny directions and extreme finite inputs do
+    /// not fail merely because an f32 intermediate would underflow/overflow.
+    /// No angular epsilon is imposed; almost parallel up can still be unstable.
+    ///
+    /// ```
+    /// use ferravex_math::{Mat4, MatrixError, Vec3, vec3};
+    /// let eye = vec3(0.0, 0.0, 5.0);
+    /// let view = Mat4::try_look_at_rh(eye, Vec3::ZERO, Vec3::Y)?;
+    /// assert_eq!(view.transform_point3(eye), Vec3::ZERO);
+    /// assert_eq!(Mat4::try_look_at_rh(eye, eye, Vec3::Y),
+    ///            Err(MatrixError::DegenerateDirection));
+    /// # Ok::<(), MatrixError>(())
+    /// ```
+    pub fn try_look_at_rh(eye: Vec3, target: Vec3, up: Vec3) -> Result<Self, MatrixError> {
+        finite_input("eye", &eye.to_array())?;
+        finite_input("target", &target.to_array())?;
+        view_from_f64(
+            eye,
+            std::array::from_fn(|i| f64::from(eye[i]) - f64::from(target[i])),
+            up,
+        )
+    }
+    /// Checked right-handed view along `direction` (camera -Z).
+    /// Uses the finite/degeneracy rules of [`Self::try_look_at_rh`].
+    ///
+    /// ```
+    /// use ferravex_math::{Mat4, Vec3};
+    /// assert_eq!(Mat4::try_look_to_rh(Vec3::ZERO, Vec3::NEG_Z, Vec3::Y).unwrap(), Mat4::IDENTITY);
+    /// ```
+    pub fn try_look_to_rh(eye: Vec3, direction: Vec3, up: Vec3) -> Result<Self, MatrixError> {
+        finite_input("direction", &direction.to_array())?;
+        view_from_f64(eye, direction.to_array().map(|v| -f64::from(v)), up)
+    }
+    /// Checked left-handed view toward `target` (camera +Z).
+    /// Uses the finite/degeneracy rules of [`Self::try_look_at_rh`].
+    ///
+    /// ```
+    /// use ferravex_math::{Mat4, Vec3};
+    /// assert_eq!(Mat4::try_look_at_lh(Vec3::ZERO, Vec3::Z, Vec3::Y).unwrap(), Mat4::IDENTITY);
+    /// ```
+    pub fn try_look_at_lh(eye: Vec3, target: Vec3, up: Vec3) -> Result<Self, MatrixError> {
+        finite_input("eye", &eye.to_array())?;
+        finite_input("target", &target.to_array())?;
+        view_from_f64(
+            eye,
+            std::array::from_fn(|i| f64::from(target[i]) - f64::from(eye[i])),
+            up,
+        )
+    }
+    /// Checked left-handed view along `direction` (camera +Z).
+    /// Uses the finite/degeneracy rules of [`Self::try_look_at_rh`].
+    ///
+    /// ```
+    /// use ferravex_math::{Mat4, Vec3};
+    /// assert_eq!(Mat4::try_look_to_lh(Vec3::ZERO, Vec3::Z, Vec3::Y).unwrap(), Mat4::IDENTITY);
+    /// ```
+    pub fn try_look_to_lh(eye: Vec3, direction: Vec3, up: Vec3) -> Result<Self, MatrixError> {
+        finite_input("direction", &direction.to_array())?;
+        view_from_f64(eye, direction.to_array().map(f64::from), up)
+    }
+
     /// Right-handed perspective with OpenGL depth [-1, 1].
     pub fn perspective_rh_gl(fov_y: f32, aspect: f32, near: f32, far: f32) -> Self {
         validate_perspective(fov_y, aspect, near, far);
@@ -346,6 +525,163 @@ impl Mat4 {
         result.z_axis = -result.z_axis;
         result
     }
+    /// Checked right-handed perspective with OpenGL depth [-1, 1].
+    ///
+    /// All arguments must be finite, `0 < fov_y < PI`, `aspect > 0`, and
+    /// `0 < near < far`. Uses f64 intermediates; returns a diagnostic error
+    /// instead of panicking. Rejects non-finite output and required scale/depth
+    /// coefficients that round to zero. Success does not guarantee good
+    /// conditioning or that the inverse is representable in f32.
+    ///
+    /// ```
+    /// use ferravex_math::{Mat4, MatrixError, vec3};
+    /// let p = Mat4::try_perspective_rh_gl(1.0, 1.5, 0.5, 100.0)?;
+    /// assert!((p.try_project_point3(vec3(0.0, 0.0, -0.5))?.z + 1.0).abs() < 1.0e-6);
+    /// # Ok::<(), MatrixError>(())
+    /// ```
+    pub fn try_perspective_rh_gl(
+        fov_y: f32,
+        aspect: f32,
+        near: f32,
+        far: f32,
+    ) -> Result<Self, MatrixError> {
+        checked_perspective(fov_y, aspect, near, far, true)
+    }
+    /// Checked right-handed perspective with depth [0, 1].
+    /// Uses the input/range rules of [`Self::try_perspective_rh_gl`].
+    ///
+    /// ```
+    /// use ferravex_math::{Mat4, MatrixError};
+    /// assert_eq!(Mat4::try_perspective_rh(1.0, 0.0, 0.1, 100.0),
+    ///            Err(MatrixError::InvalidPerspective { parameter: "aspect" }));
+    /// ```
+    pub fn try_perspective_rh(
+        fov_y: f32,
+        aspect: f32,
+        near: f32,
+        far: f32,
+    ) -> Result<Self, MatrixError> {
+        checked_perspective(fov_y, aspect, near, far, false)
+    }
+    /// Checked left-handed perspective with depth [0, 1].
+    /// Uses the input/range rules of [`Self::try_perspective_rh_gl`].
+    ///
+    /// ```
+    /// use ferravex_math::{Mat4, MatrixError, vec3};
+    /// let p = Mat4::try_perspective_lh(1.0, 1.0, 0.5, 10.0)?;
+    /// assert!(p.try_project_point3(vec3(0.0, 0.0, 0.5))?.z.abs() < 1.0e-6);
+    /// # Ok::<(), MatrixError>(())
+    /// ```
+    pub fn try_perspective_lh(
+        fov_y: f32,
+        aspect: f32,
+        near: f32,
+        far: f32,
+    ) -> Result<Self, MatrixError> {
+        let mut result = Self::try_perspective_rh(fov_y, aspect, near, far)?;
+        result.z_axis = -result.z_axis;
+        Ok(result)
+    }
+    /// Checked right-handed infinite perspective: near maps to 0, infinity to 1.
+    /// Uses [`Self::try_perspective_rh_gl`]'s rules without a far argument.
+    /// A finite positive near is validated directly, without computing `near * 2`.
+    ///
+    /// ```
+    /// use ferravex_math::Mat4;
+    /// assert!(Mat4::try_perspective_infinite_rh(1.0, 1.0, f32::MAX).is_ok());
+    /// ```
+    pub fn try_perspective_infinite_rh(
+        fov_y: f32,
+        aspect: f32,
+        near: f32,
+    ) -> Result<Self, MatrixError> {
+        let (x, y) = perspective_scales(fov_y, aspect, near)?;
+        perspective_from_f64(x, y, -1.0, -f64::from(near))
+    }
+    /// Checked right-handed infinite reverse depth: near maps to 1, infinity to 0.
+    /// Uses the input/range rules of [`Self::try_perspective_infinite_rh`].
+    ///
+    /// ```
+    /// use ferravex_math::{Mat4, MatrixError, vec3};
+    /// let p = Mat4::try_perspective_infinite_reverse_rh(1.0, 1.0, 0.5)?;
+    /// assert_eq!(p.try_project_point3(vec3(0.0, 0.0, -0.5))?.z, 1.0);
+    /// # Ok::<(), MatrixError>(())
+    /// ```
+    pub fn try_perspective_infinite_reverse_rh(
+        fov_y: f32,
+        aspect: f32,
+        near: f32,
+    ) -> Result<Self, MatrixError> {
+        let (x, y) = perspective_scales(fov_y, aspect, near)?;
+        perspective_from_f64(x, y, 0.0, f64::from(near))
+    }
+    /// Checked right-handed orthographic projection with OpenGL depth [-1, 1].
+    ///
+    /// Requires finite bounds and unequal endpoints on each axis. Reversed
+    /// ranges and negative near/far are allowed. Uses f64 intermediates and
+    /// reports output overflow or a scale rounded to zero instead of panicking.
+    /// Success does not guarantee that the inverse fits in f32: even a scale
+    /// rounded to a nonzero subnormal can have an overflowing reciprocal.
+    ///
+    /// ```
+    /// use ferravex_math::{Mat4, MatrixError, vec3};
+    /// let p = Mat4::try_orthographic_rh_gl(-2.0, 2.0, -1.0, 1.0, 0.5, 10.0)?;
+    /// assert!(p.try_project_point3(vec3(-2.0, -1.0, -0.5))?
+    ///             .abs_diff_eq(vec3(-1.0, -1.0, -1.0), 1.0e-6));
+    /// let wide = Mat4::try_orthographic_rh_gl(
+    ///     -f32::MAX, f32::MAX, -1.0, 1.0, 0.0, 1.0)?;
+    /// assert_eq!(wide.checked_inverse(), Err(MatrixError::ResultOutOfRange));
+    /// # Ok::<(), MatrixError>(())
+    /// ```
+    pub fn try_orthographic_rh_gl(
+        left: f32,
+        right: f32,
+        bottom: f32,
+        top: f32,
+        near: f32,
+        far: f32,
+    ) -> Result<Self, MatrixError> {
+        checked_orthographic([left, right, bottom, top, near, far], true)
+    }
+    /// Checked right-handed orthographic projection with depth [0, 1].
+    /// Uses the input/range rules of [`Self::try_orthographic_rh_gl`].
+    ///
+    /// ```
+    /// use ferravex_math::{Mat4, MatrixError};
+    /// assert_eq!(Mat4::try_orthographic_rh(0.0, 0.0, -1.0, 1.0, 0.1, 10.0),
+    ///            Err(MatrixError::DegenerateOrthographic { axis: "x" }));
+    /// ```
+    pub fn try_orthographic_rh(
+        left: f32,
+        right: f32,
+        bottom: f32,
+        top: f32,
+        near: f32,
+        far: f32,
+    ) -> Result<Self, MatrixError> {
+        checked_orthographic([left, right, bottom, top, near, far], false)
+    }
+    /// Checked left-handed orthographic projection with depth [0, 1].
+    /// Uses the input/range rules of [`Self::try_orthographic_rh_gl`].
+    ///
+    /// ```
+    /// use ferravex_math::{Mat4, MatrixError, vec3};
+    /// let p = Mat4::try_orthographic_lh(-1.0, 1.0, -1.0, 1.0, 0.5, 10.0)?;
+    /// assert!(p.try_project_point3(vec3(0.0, 0.0, 0.5))?.z.abs() < 1.0e-6);
+    /// # Ok::<(), MatrixError>(())
+    /// ```
+    pub fn try_orthographic_lh(
+        left: f32,
+        right: f32,
+        bottom: f32,
+        top: f32,
+        near: f32,
+        far: f32,
+    ) -> Result<Self, MatrixError> {
+        let mut result = Self::try_orthographic_rh(left, right, bottom, top, near, far)?;
+        result.z_axis = -result.z_axis;
+        Ok(result)
+    }
     /// Extracts TRS from an affine matrix with orthogonal, nonzero scale axes.
     /// Shear and perspective are rejected rather than approximated.
     pub fn try_to_scale_rotation_translation(self) -> Option<(Vec3, Quat, Vec3)> {
@@ -377,6 +713,142 @@ impl Mat4 {
             .unwrap_or((Vec3::NAN, Quat::NAN, Vec3::NAN))
     }
 }
+fn finite_input(input: &'static str, values: &[f32]) -> Result<(), MatrixError> {
+    if values.iter().all(|v| v.is_finite()) {
+        Ok(())
+    } else {
+        Err(MatrixError::NonFiniteInput { input })
+    }
+}
+
+fn finite_f32(value: f64) -> Result<f32, MatrixError> {
+    let value = value as f32;
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(MatrixError::ResultOutOfRange)
+    }
+}
+
+fn matrix_from_f64(columns: [[f64; 4]; 4]) -> Result<Mat4, MatrixError> {
+    let mut result = Mat4::ZERO;
+    for (column, values) in columns.into_iter().enumerate() {
+        for (row, value) in values.into_iter().enumerate() {
+            result[column][row] = finite_f32(value)?;
+        }
+    }
+    Ok(result)
+}
+
+fn dot3_f64(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a.into_iter().zip(b).map(|(a, b)| a * b).sum()
+}
+
+fn cross3_f64(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn unit3_f64(v: [f64; 3]) -> Option<[f64; 3]> {
+    let length = dot3_f64(v, v).sqrt();
+    (length > 0.0).then(|| v.map(|value| value / length))
+}
+
+fn view_from_f64(eye: Vec3, back: [f64; 3], up: Vec3) -> Result<Mat4, MatrixError> {
+    finite_input("eye", &eye.to_array())?;
+    finite_input("up", &up.to_array())?;
+    let z = unit3_f64(back).ok_or(MatrixError::DegenerateDirection)?;
+    // Cross before normalizing: products of finite f32 inputs fit in f64,
+    // including subnormals, without losing an exactly parallel basis to rounding.
+    let x = unit3_f64(cross3_f64(up.to_array().map(f64::from), back))
+        .ok_or(MatrixError::DegenerateUp)?;
+    let y = cross3_f64(z, x);
+    let eye = eye.to_array().map(f64::from);
+    matrix_from_f64([
+        [x[0], y[0], z[0], 0.0],
+        [x[1], y[1], z[1], 0.0],
+        [x[2], y[2], z[2], 0.0],
+        [-dot3_f64(x, eye), -dot3_f64(y, eye), -dot3_f64(z, eye), 1.0],
+    ])
+}
+
+fn perspective_scales(fov_y: f32, aspect: f32, near: f32) -> Result<(f64, f64), MatrixError> {
+    for (input, value) in [("fov_y", fov_y), ("aspect", aspect), ("near", near)] {
+        finite_input(input, &[value])?;
+        if value <= 0.0 || (input == "fov_y" && value >= std::f32::consts::PI) {
+            return Err(MatrixError::InvalidPerspective { parameter: input });
+        }
+    }
+    let y = (0.5 * f64::from(fov_y)).tan().recip();
+    Ok((y / f64::from(aspect), y))
+}
+
+fn perspective_from_f64(x: f64, y: f64, z: f64, depth: f64) -> Result<Mat4, MatrixError> {
+    let result = matrix_from_f64([
+        [x, 0.0, 0.0, 0.0],
+        [0.0, y, 0.0, 0.0],
+        [0.0, 0.0, z, -1.0],
+        [0.0, 0.0, depth, 0.0],
+    ])?;
+    if result.x_axis.x == 0.0 || result.y_axis.y == 0.0 || result.w_axis.z == 0.0 {
+        return Err(MatrixError::ResultOutOfRange);
+    }
+    Ok(result)
+}
+
+fn checked_perspective(
+    fov_y: f32,
+    aspect: f32,
+    near: f32,
+    far: f32,
+    gl: bool,
+) -> Result<Mat4, MatrixError> {
+    let (x, y) = perspective_scales(fov_y, aspect, near)?;
+    finite_input("far", &[far])?;
+    if far <= near {
+        return Err(MatrixError::InvalidPerspective { parameter: "far" });
+    }
+    let (near, far) = (f64::from(near), f64::from(far));
+    let span = near - far;
+    let z = if gl { (far + near) / span } else { far / span };
+    let depth = (if gl { 2.0 } else { 1.0 }) * far * near / span;
+    perspective_from_f64(x, y, z, depth)
+}
+
+fn checked_orthographic(bounds: [f32; 6], gl: bool) -> Result<Mat4, MatrixError> {
+    for (input, value) in ["left", "right", "bottom", "top", "near", "far"]
+        .into_iter()
+        .zip(bounds)
+    {
+        finite_input(input, &[value])?;
+    }
+    for (axis, pair) in ["x", "y", "z"].into_iter().zip(bounds.as_chunks::<2>().0) {
+        if pair[0] == pair[1] {
+            return Err(MatrixError::DegenerateOrthographic { axis });
+        }
+    }
+    let [left, right, bottom, top, near, far] = bounds.map(f64::from);
+    let (width, height, depth) = (right - left, top - bottom, far - near);
+    let result = matrix_from_f64([
+        [2.0 / width, 0.0, 0.0, 0.0],
+        [0.0, 2.0 / height, 0.0, 0.0],
+        [0.0, 0.0, -(if gl { 2.0 } else { 1.0 }) / depth, 0.0],
+        [
+            -(right + left) / width,
+            -(top + bottom) / height,
+            -(if gl { far + near } else { near }) / depth,
+            1.0,
+        ],
+    ])?;
+    if result.x_axis.x == 0.0 || result.y_axis.y == 0.0 || result.z_axis.z == 0.0 {
+        return Err(MatrixError::ResultOutOfRange);
+    }
+    Ok(result)
+}
+
 fn rotation_from_basis(x: Vec3, y: Vec3, z: Vec3) -> Quat {
     let trace = x.x + y.y + z.z;
     let q = if trace > 0.0 {

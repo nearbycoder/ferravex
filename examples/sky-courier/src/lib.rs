@@ -1,18 +1,28 @@
-use ferravex_core::FixedClock;
-use ferravex_play::camera::{
-    Input3, Mode3, NoObstructions, Rig3, Settings3, ShakeImpulse, Target3,
-};
+//! Fixed-step coastal mail delivery, using the shared game session and player UI.
+//!
+//! The interactive host owns rendering; flight rules and session transitions are
+//! exercised headlessly by the crate's tests. Autoplay uses the same flight inputs.
+//!
+//! ```no_run
+//! sky_courier::run();
+//! ```
+use ferravex_core::session::{GameSession, SessionState};
+use ferravex_play::camera::{Input3, Mode3, NoObstructions, Pose3, Rig3, Settings3, Target3};
+use ferravex_play::feedback::{FeedbackConfig, FeedbackController, FeedbackEvent, FeedbackFrame};
 use ferravex_play::particles::{
     Emitter, EmitterTransform, ParticlePool, RibbonFacing, Trail, TrailConfig, TrailSample, presets,
 };
-use ferravex_render::audio::{Cue, GameAudio, Surface};
+use ferravex_play::vehicle::{FlightHandling, FlightState};
+use ferravex_render::audio::{Cue, GameAudio};
 use ferravex_render::effects::{
     BillboardView, EffectStyle, ParticleRenderer, ParticleStyle, draw_ribbon,
 };
 use ferravex_render::input::{
-    PlayerInput, Preset,
+    HintDevice, PlayerInput, Preset,
     touch::{Control, Output, Region},
 };
+use ferravex_render::preferences;
+use ferravex_render::ui::{Align, ButtonOptions, ButtonStyle, TextStyle, Ui, UiRect, Viewport};
 use ferravex_render::{
     demo::Demo,
     mesh::Mesh3d,
@@ -20,10 +30,18 @@ use ferravex_render::{
     shaders::{LitMaterial, LitSettings},
 };
 
+mod flight_ui;
+mod presentation;
+use flight_ui::hud;
+use presentation::FlightPresentation;
+
 const SKY: Color = Color::new(0.64, 0.76, 0.77, 1.0);
 const INK: Color = Color::new(0.10, 0.20, 0.22, 1.0);
 const CREAM: Color = Color::new(0.95, 0.91, 0.78, 1.0);
 const CORAL: Color = Color::new(0.82, 0.36, 0.23, 1.0);
+const AMBER: Color = Color::new(0.93, 0.70, 0.34, 1.0);
+const GATES: usize = 5;
+const DELIVERY_SPEED: f32 = 18.;
 const ROUTE: [Vec3; 6] = [
     vec3(0., 24., 100.),
     vec3(44., 40., 205.),
@@ -51,6 +69,11 @@ struct Input {
     boost: bool,
     slow: bool,
 }
+impl Input {
+    fn neutral(self) -> bool {
+        self.turn.abs() < 0.05 && self.climb.abs() < 0.05 && !self.boost && !self.slow
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Outcome {
     Flying,
@@ -59,50 +82,51 @@ enum Outcome {
 }
 struct Flight {
     pos: Vec3,
-    yaw: f32,
-    pitch: f32,
-    bank: f32,
-    speed: f32,
+    motor: FlightState,
     next: usize,
     hull: u8,
     remaining: f32,
     outcome: Outcome,
     recovery: f32,
-    turn_rate: f32,
     boost_energy: f32,
     boost_exhausted: bool,
+    gate_notice: f32,
+    boosting: bool,
+    slowing: bool,
 }
 impl Flight {
     fn new() -> Self {
         Self {
             pos: vec3(0., 20., 0.),
-            yaw: 0.,
-            pitch: 0.,
-            bank: 0.,
-            speed: 24.,
+            motor: FlightState {
+                yaw: 0.,
+                pitch: 0.,
+                bank: 0.,
+                turn_rate: 0.,
+                speed: 24.,
+            },
             next: 0,
             hull: 3,
             remaining: 90.,
             outcome: Outcome::Flying,
             recovery: 0.,
-            turn_rate: 0.,
             boost_energy: 1.,
             boost_exhausted: false,
+            gate_notice: 0.,
+            boosting: false,
+            slowing: false,
         }
     }
     fn forward(&self) -> Vec3 {
-        vec3(
-            self.yaw.sin() * self.pitch.cos(),
-            self.pitch.sin(),
-            self.yaw.cos() * self.pitch.cos(),
-        )
+        self.motor.forward()
     }
     fn damage(&mut self) {
         if self.recovery > 0. || self.outcome != Outcome::Flying {
             return;
         }
         self.hull = self.hull.saturating_sub(1);
-        if self.hull == 0 {
+        self.remaining = (self.remaining - 5.).max(0.);
+        if self.hull == 0 || self.remaining == 0. {
             self.outcome = Outcome::Lost;
             return;
         }
@@ -112,13 +136,12 @@ impl Flight {
             ROUTE[self.next - 1]
         };
         let delta = ROUTE[self.next] - self.pos;
-        self.yaw = delta.x.atan2(delta.z);
-        self.pitch = 0.;
-        self.bank = 0.;
-        self.turn_rate = 0.;
-        self.speed = 24.;
+        self.motor
+            .reset(delta.x.atan2(delta.z), 0., 24.)
+            .expect("authored checkpoint heading and cruise speed");
+        self.boosting = false;
+        self.slowing = false;
         self.recovery = 2.5;
-        self.remaining = (self.remaining - 5.).max(0.);
     }
     fn tick(&mut self, input: Input, dt: f32) {
         if self.outcome != Outcome::Flying {
@@ -130,6 +153,7 @@ impl Flight {
             return;
         }
         self.recovery = (self.recovery - dt).max(0.);
+        self.gate_notice = (self.gate_notice - dt).max(0.);
         if self.boost_energy < 0.03 {
             self.boost_exhausted = true;
         }
@@ -137,6 +161,8 @@ impl Flight {
             self.boost_exhausted = false;
         }
         let boosting = input.boost && !input.slow && !self.boost_exhausted;
+        self.boosting = boosting;
+        self.slowing = input.slow;
         self.boost_energy =
             (self.boost_energy + dt * if boosting { -0.32 } else { 0.16 }).clamp(0., 1.);
         let target_speed = if input.slow {
@@ -146,15 +172,7 @@ impl Flight {
         } else {
             24.
         };
-        use ferravex_play::vehicle::*;
-        let mut motor = FlightState {
-            yaw: self.yaw,
-            pitch: self.pitch,
-            bank: self.bank,
-            turn_rate: self.turn_rate,
-            speed: self.speed,
-        };
-        motor
+        self.motor
             .step(
                 FlightHandling::default(),
                 input.turn,
@@ -163,13 +181,8 @@ impl Flight {
                 dt,
             )
             .unwrap();
-        self.yaw = motor.yaw;
-        self.pitch = motor.pitch;
-        self.bank = motor.bank;
-        self.turn_rate = motor.turn_rate;
-        self.speed = motor.speed;
         let previous = self.pos;
-        self.pos += self.forward() * self.speed * dt;
+        self.pos += self.forward() * self.motor.speed * dt;
         if self.pos.y < -17.
             || self.pos.y > 110.
             || self.pos.x.abs() > 260.
@@ -181,12 +194,13 @@ impl Flight {
             return;
         }
         // Swept sphere capture prevents missing a beacon between fixed steps.
-        let radius = if self.next == 5 { 8. } else { 8.5 };
+        let radius = if self.next == GATES { 8. } else { 8.5 };
         if segment_hits(previous, self.pos, ROUTE[self.next], radius)
-            && (self.next < 5 || self.speed <= 18.)
+            && (self.next < GATES || self.motor.speed <= DELIVERY_SPEED)
         {
             self.boost_energy = (self.boost_energy + 0.18).min(1.);
             self.next += 1;
+            self.gate_notice = 2.;
             if self.next == ROUTE.len() {
                 self.outcome = Outcome::Delivered;
             }
@@ -197,16 +211,135 @@ impl Flight {
             return Input::default();
         }
         let delta = ROUTE[self.next] - self.pos;
-        let error = (delta.x.atan2(delta.z) - self.yaw + std::f32::consts::PI)
-            .rem_euclid(std::f32::consts::TAU)
-            - std::f32::consts::PI;
+        let error = self.navigation().unwrap().bearing;
         let pitch = delta.y.atan2(vec2(delta.x, delta.z).length());
         Input {
             turn: (error * 2.7).clamp(-1., 1.),
             climb: (pitch / 0.58).clamp(-1., 1.),
-            slow: self.next == 5 && delta.length() < 90.,
+            slow: self.next == GATES && delta.length() < 90.,
             boost: false,
         }
+    }
+    fn navigation(&self) -> Option<Navigation> {
+        let target = *ROUTE.get(self.next)?;
+        let delta = target - self.pos;
+        Some(Navigation {
+            bearing: (delta.x.atan2(delta.z) - self.motor.yaw + std::f32::consts::PI)
+                .rem_euclid(std::f32::consts::TAU)
+                - std::f32::consts::PI,
+            altitude: delta.y,
+            distance: delta.length(),
+        })
+    }
+    fn flight_mode(&self) -> &'static str {
+        if self.outcome != Outcome::Flying {
+            "FLIGHT ENDED"
+        } else if self.slowing {
+            "SLOW FLIGHT"
+        } else if self.boosting {
+            "BOOSTING"
+        } else if self.boost_exhausted {
+            "RECHARGING"
+        } else {
+            "CRUISE"
+        }
+    }
+    fn countdown(&self) -> u32 {
+        // A still-open delivery window must never read 00:00.
+        self.remaining.ceil() as u32
+    }
+}
+
+struct Navigation {
+    bearing: f32,
+    altitude: f32,
+    distance: f32,
+}
+impl Navigation {
+    fn turn(&self) -> &'static str {
+        if self.bearing.abs() < 0.12 {
+            "ON COURSE"
+        } else if self.bearing < 0. {
+            "TURN LEFT"
+        } else {
+            "TURN RIGHT"
+        }
+    }
+    fn climb(&self) -> &'static str {
+        if self.altitude.abs() < 3. {
+            "HOLD ALTITUDE"
+        } else if self.altitude > 0. {
+            "CLIMB"
+        } else {
+            "DESCEND"
+        }
+    }
+}
+
+#[derive(Default)]
+struct FlightFrame {
+    seconds: f32,
+    gates: usize,
+    damaged: bool,
+    outcome: Option<Outcome>,
+}
+
+// The same coordinator drives the host and headless regression tests.
+struct FlightRun {
+    session: GameSession,
+    flight: Flight,
+    release_controls: bool,
+    elapsed: f64,
+}
+impl FlightRun {
+    fn new(autoplay: bool) -> Self {
+        Self {
+            session: GameSession::new(120., 12, autoplay),
+            flight: Flight::new(),
+            release_controls: !autoplay,
+            elapsed: 0.,
+        }
+    }
+    fn restart(&mut self) {
+        self.flight = Flight::new();
+        self.session.restart();
+        self.release_controls = true;
+        self.elapsed = 0.;
+    }
+    fn advance(&mut self, elapsed: f64, mut input: Input, autoplay: bool) -> FlightFrame {
+        let mut frame = FlightFrame::default();
+        if !self.session.is_playing() {
+            self.session.advance(elapsed);
+            return frame;
+        }
+        if self.release_controls && !autoplay {
+            self.release_controls = !input.neutral();
+            input = Input::default();
+        }
+        let steps = self.session.advance(elapsed);
+        for _ in 0..steps.steps {
+            let next = self.flight.next;
+            let hull = self.flight.hull;
+            self.flight.tick(
+                if autoplay {
+                    self.flight.autopilot()
+                } else {
+                    input
+                },
+                steps.dt,
+            );
+            frame.seconds += steps.dt;
+            self.elapsed += f64::from(steps.dt);
+            frame.gates += self.flight.next - next;
+            frame.damaged |= self.flight.hull < hull;
+            if self.flight.outcome != Outcome::Flying {
+                self.session
+                    .finish(self.flight.outcome == Outcome::Delivered);
+                frame.outcome = Some(self.flight.outcome);
+                break;
+            }
+        }
+        frame
     }
 }
 fn segment_hits(a: Vec3, b: Vec3, center: Vec3, radius: f32) -> bool {
@@ -333,9 +466,9 @@ impl Scene {
             self.cloud
                 .draw(vec3(x + 10., y - 2., z + 3.), Quat::IDENTITY);
         }
-        let rotation = Quat::from_rotation_y(game.yaw)
-            * Quat::from_rotation_x(-game.pitch)
-            * Quat::from_rotation_z(game.bank);
+        let rotation = Quat::from_rotation_y(game.motor.yaw)
+            * Quat::from_rotation_x(-game.motor.pitch)
+            * Quat::from_rotation_z(game.motor.bank);
         let draw = |mesh: &Mesh3d, offset: Vec3| mesh.draw(game.pos + rotation * offset, rotation);
         draw(&self.body, Vec3::ZERO);
         self.nose.draw(
@@ -359,133 +492,54 @@ impl Scene {
     }
 }
 
-fn label(text: &str, x: f32, y: f32, size: f32, color: Color) {
-    draw_text(
-        text,
-        x + 1.,
-        y + 1.,
+fn ui_rect(x: f32, y: f32, w: f32, h: f32) -> UiRect {
+    UiRect {
+        min: [x, y],
+        size: [w, h],
+    }
+}
+fn ui_text(size: f32, color: Color, align: Align) -> TextStyle {
+    TextStyle {
         size,
-        Color::new(0.82, 0.88, 0.85, 0.6),
-    );
-    draw_text(text, x, y, size, color);
+        color,
+        align,
+        wrap: true,
+        shadow: false,
+    }
 }
-fn centered(text: &str, y: f32, size: f32, color: Color) {
-    let width = measure_text(text, None, size as u16, 1.).width;
-    label(text, (screen_width() - width) * 0.5, y, size, color);
+fn control_hint<'a>(player: &PlayerInput, action: &str, buffer: &'a mut [u8]) -> &'a str {
+    if player.current_device() == HintDevice::Touch && !player.touch_customized() {
+        // Only these authored touch regions actually exist in this game.
+        return match action {
+            "move_x" | "move_y" => "Left stick",
+            "brake" => "Right side",
+            "confirm" => "Tap button",
+            _ => "Open Controls",
+        };
+    }
+    match player.format_hint(action, buffer) {
+        Ok(label) if label.len() <= 32 => label,
+        // Long/custom bindings remain available in the shared editor. Never
+        // replace an unavailable hint with a misleading default key.
+        _ => "Open Controls",
+    }
 }
-fn hud(game: &Flight, touch: bool) {
-    let width = screen_width();
-    label("SKY COURIER", 28., 42., 26., INK);
-    label("THE NORTH COAST POST", 29., 63., 13., INK);
-    let route = if game.next < 5 {
-        format!("BEACON {} / 5", game.next + 1)
+fn movement_hint<'a>(
+    player: &PlayerInput,
+    actions: [&str; 3],
+    buffers: &'a mut [[u8; 96]; 3],
+) -> (&'a str, &'a str) {
+    let [axis, negative, positive] = buffers;
+    let axis = control_hint(player, actions[0], axis);
+    if axis != "Unbound" {
+        return (axis, "");
+    }
+    let negative = control_hint(player, actions[1], negative);
+    let positive = control_hint(player, actions[2], positive);
+    if negative.len() + positive.len() > 32 {
+        ("Open Controls", "")
     } else {
-        "DELIVERY APPROACH".to_owned()
-    };
-    centered(&route, 37., 19., INK);
-    centered(
-        &format!(
-            "{:02}:{:02}",
-            game.remaining as u32 / 60,
-            game.remaining as u32 % 60
-        ),
-        63.,
-        22.,
-        INK,
-    );
-    label("HULL", width - 113., 32., 14., INK);
-    for i in 0..3 {
-        draw_rectangle(
-            width - 111. + i as f32 * 24.,
-            43.,
-            17.,
-            5.,
-            if i < game.hull as usize {
-                INK
-            } else {
-                Color::new(0.3, 0.4, 0.4, 0.2)
-            },
-        );
-    }
-    let bottom = screen_height() - 25.;
-    draw_rectangle(28., bottom - 56., 90., 3., INK);
-    draw_rectangle(28., bottom - 56., 90. * game.boost_energy, 3., CREAM);
-    label(
-        &format!("{} m", game.pos.y.max(0.) as u32),
-        28.,
-        bottom - 24.,
-        24.,
-        CREAM,
-    );
-    label(
-        &format!("{} kt", (game.speed * 1.94) as u32),
-        28.,
-        bottom,
-        16.,
-        CREAM,
-    );
-    if game.next == 5 && game.outcome == Outcome::Flying {
-        centered("Slow pass over the landing cross to deliver", 98., 20., INK);
-        centered("Hold SHIFT / touch right side", 121., 16., INK);
-    } else if game.outcome == Outcome::Flying {
-        centered("Fly through the amber beacons", 98., 18., INK);
-    }
-    if game.recovery > 0. {
-        centered("RECOVERED AT LAST BEACON  /  -5 seconds", 148., 17., CORAL);
-    }
-    if touch {
-        draw_circle_lines(90., screen_height() - 100., 60., 2., CREAM);
-        draw_line(
-            75.,
-            screen_height() - 100.,
-            105.,
-            screen_height() - 100.,
-            1.,
-            CREAM,
-        );
-        draw_line(
-            90.,
-            screen_height() - 115.,
-            90.,
-            screen_height() - 85.,
-            1.,
-            CREAM,
-        );
-        label("SLOW", width - 100., screen_height() - 90., 19., CREAM);
-    } else {
-        centered(
-            "A D  turn    W S  climb / dive    SPACE  boost    SHIFT  slow    R  restart",
-            bottom,
-            16.,
-            CREAM,
-        );
-    }
-    if game.outcome != Outcome::Flying {
-        let y = screen_height() * 0.45;
-        draw_rectangle(0., y - 65., width, 165., Color::new(0.08, 0.17, 0.19, 0.9));
-        centered(
-            if game.outcome == Outcome::Delivered {
-                "MAIL DELIVERED"
-            } else {
-                "FLIGHT ENDED"
-            },
-            y,
-            38.,
-            CREAM,
-        );
-        centered(
-            if game.outcome == Outcome::Delivered {
-                "The north coast is connected again."
-            } else if game.hull == 0 {
-                "Your aircraft needs repairs."
-            } else {
-                "The delivery window closed."
-            },
-            y + 35.,
-            20.,
-            CREAM,
-        );
-        centered("Press R or tap to fly again", y + 71., 18., CREAM);
+        (negative, positive)
     }
 }
 fn conf() -> Conf {
@@ -495,37 +549,17 @@ ferravex_render::game!(conf, game);
 async fn game() {
     let mut demo = Demo::new();
     let mut sound = GameAudio::new();
-    let mut wing_trails: [Trail; 2] = std::array::from_fn(|_| {
-        Trail::new(TrailConfig {
-            capacity: 96,
-            lifetime: 0.9,
-            spacing: 0.5,
-            teleport_distance: 35.,
-            ..Default::default()
-        })
-        .unwrap()
-    });
-    let mut exhaust = ParticlePool::new(128);
-    let mut exhaust_emitter =
-        Emitter::new(presets::exhaust([0.68, 0.72, 0.69, 0.22]), 0x534b59).unwrap();
+    let mut presentation = FlightPresentation::new();
     let mut exhaust_renderer = ParticleRenderer::new(128).unwrap();
-    let mut flight = Flight::new();
-    let mut previous_effect_position = flight.pos;
-    let mut clock = FixedClock::new(120., 12);
+    let mut run = FlightRun::new(demo.autoplay);
+    let mut ui = Ui::new();
+    let mut activate = false;
+    let mut menu_ready = true;
     let scene = Scene::new();
     let material = LitMaterial::new().expect("portable flight material");
     let mut player_input = PlayerInput::preset("sky-courier", Preset::Flight);
     let mut reported = false;
-    let mut camera = Rig3::new(Settings3 {
-        position_half_life: 0.1,
-        target_half_life: 0.06,
-        teleport_distance: Some(35.),
-        ..Default::default()
-    })
-    .unwrap();
-    let mut previous_hull = flight.hull;
     loop {
-        ferravex_render::ui::warm_up_font_sizes(&[13, 14, 16, 17, 18, 19, 20, 22, 24, 26, 38]);
         let w = screen_width();
         let h = screen_height();
         // Keep the authored stick origin while bounding its hit region to the left half.
@@ -550,32 +584,28 @@ async fn game() {
             ])
             .unwrap();
         player_input.sample_play();
-        let touch_mode = player_input.touch_seen();
-        if player_input.pressed("restart")
-            || (flight.outcome != Outcome::Flying
-                && (player_input.pressed("confirm")
-                    || ferravex_render::input::logical_touches()
-                        .iter()
-                        .any(|t| t.phase == TouchPhase::Started)))
-        {
-            flight = Flight::new();
-            previous_effect_position = flight.pos;
-            for trail in &mut wing_trails {
-                trail.clear();
-            }
-            exhaust.clear();
-            exhaust_emitter.reset(0x534b59);
-            clock.reset();
+        let activated = std::mem::take(&mut activate);
+        let restart = player_input.pressed("restart")
+            || (activated && matches!(run.session.state(), SessionState::Won | SessionState::Lost));
+        let mut transitioned = false;
+        if restart && !player_input.controls_open() {
+            run.restart();
+            player_input.set_paused(false);
+            player_input.sample(true);
+            presentation.reset(run.flight.pos);
+            sound.reset();
             reported = false;
-            camera.cut();
-            previous_hull = flight.hull;
+            ui.cancel();
+            transitioned = true;
+        } else if activated && !player_input.controls_open() {
+            player_input.set_paused(false);
+            player_input.sample(true);
+            transitioned = run.session.start() || run.session.set_paused(false);
         }
-        let dt = if demo.autoplay {
-            demo.dt()
-        } else {
-            player_input.simulation_dt(demo.dt())
-        };
-        let steps = clock.advance(dt as f64);
+        // Explicit pause always applies; smoke autoplay remains independent of focus.
+        transitioned |= run.session.set_paused(
+            player_input.paused() || (!demo.autoplay && !player_input.gameplay_active()),
+        );
         let movement = player_input.movement();
         let human = Input {
             turn: movement.x,
@@ -583,108 +613,16 @@ async fn game() {
             boost: player_input.held("boost"),
             slow: player_input.held("brake"),
         };
-        for _ in 0..steps.steps {
-            let input = if demo.autoplay {
-                flight.autopilot()
-            } else {
-                human
-            };
-            let next = flight.next;
-            let outcome = flight.outcome;
-            flight.tick(input, steps.dt);
-            if flight.next > next {
-                sound.cue(Cue::Pickup, 0.5);
-            }
-            if flight.outcome != outcome {
-                sound.cue(
-                    if flight.outcome == Outcome::Delivered {
-                        Cue::Success
-                    } else {
-                        Cue::Failure
-                    },
-                    0.65,
-                );
-            }
-        }
-        let rotation = Quat::from_rotation_y(flight.yaw)
-            * Quat::from_rotation_x(-flight.pitch)
-            * Quat::from_rotation_z(flight.bank);
-        for (side, trail) in [-1., 1.].into_iter().zip(&mut wing_trails) {
-            let position = flight.pos + rotation * vec3(side * 5.65, 0.2, -0.4);
-            trail
-                .update(
-                    dt,
-                    (flight.outcome == Outcome::Flying && flight.speed > 28.).then_some(
-                        TrailSample {
-                            position: position.to_array(),
-                            color: [0.91, 0.93, 0.87, 0.2],
-                            width: 0.16,
-                        },
-                    ),
-                )
-                .unwrap();
-        }
-        exhaust.update(dt).unwrap();
-        exhaust_emitter
-            .set_rate(if flight.outcome == Outcome::Flying {
-                14.
-            } else {
-                0.
-            })
-            .unwrap();
-        let nozzle = EmitterTransform {
-            position: (flight.pos + rotation * vec3(0.72, -0.35, 1.8)).to_array(),
-            rotation: rotation.to_array(),
-        };
-        if flight.pos.distance(previous_effect_position) > 35. {
-            exhaust_emitter.teleport(nozzle).unwrap();
-        }
-        previous_effect_position = flight.pos;
-        exhaust_emitter.update(dt, nozzle, &mut exhaust).unwrap();
-        sound.motor(
-            flight.speed,
-            38.,
-            flight.outcome == Outcome::Flying && (demo.autoplay || player_input.gameplay_active()),
+        let frame = run.advance(
+            if transitioned { 0. } else { demo.dt() as f64 },
+            human,
+            demo.autoplay,
         );
-        if flight.hull < previous_hull {
-            sound.cue(Cue::Impact(Surface::Metal), 0.7);
-            camera.cut();
-            camera
-                .shake
-                .push(ShakeImpulse {
-                    translation: vec3(0.06, 0.04, 0.02),
-                    rotation: vec3(0.008, 0.004, 0.02),
-                    duration: 0.25,
-                    frequency: 20.,
-                })
-                .expect("hull changes bound shake layers");
-        }
-        previous_hull = flight.hull;
-        let view = camera
-            .update(
-                demo.dt(),
-                Input3 {
-                    target: Target3 {
-                        position: flight.pos,
-                        rotation: Quat::from_rotation_y(flight.yaw),
-                        velocity: flight.forward() * flight.speed,
-                    },
-                    mode: Mode3::Chase {
-                        distance: 24.,
-                        height: 10.,
-                        look_ahead: 20.,
-                        look_height: 0.,
-                        speed_distance: 0.,
-                        speed_height: 0.,
-                        prediction: 0.,
-                        level: true,
-                    },
-                    fov_y: 55_f32.to_radians(),
-                },
-                &NoObstructions,
-            )
-            .expect("valid flight camera")
-            .pose;
+        let flight = &run.flight;
+        let (view, feedback) = presentation.update(&run, &frame, demo.dt(), |cue, gain| {
+            sound.cue(cue, gain);
+        });
+        sound.motor(flight.motor.speed, 38., run.session.is_playing());
         let camera_pos = view.position;
         clear_background(SKY);
         set_camera(&Camera3D {
@@ -704,9 +642,9 @@ async fn game() {
             ambient: 0.65,
             ..Default::default()
         });
-        scene.draw(&flight, demo.time());
+        scene.draw(flight, presentation.propeller_time);
         material.end();
-        for trail in &wing_trails {
+        for trail in &presentation.wing_trails {
             draw_ribbon(
                 trail,
                 RibbonFacing::Camera {
@@ -720,7 +658,7 @@ async fn game() {
         }
         exhaust_renderer
             .draw_3d(
-                &exhaust,
+                &presentation.exhaust,
                 BillboardView::new(
                     camera_pos,
                     (view.target - camera_pos).cross(view.up),
@@ -731,7 +669,22 @@ async fn game() {
             )
             .unwrap();
         set_default_camera();
-        hud(&flight, touch_mode && !player_input.touch_customized());
+        if feedback.flash > 0. {
+            // A small edge cue, independently governed by reduced flash.
+            draw_rectangle_lines(
+                2.,
+                2.,
+                (w - 4.).max(0.),
+                (h - 4.).max(0.),
+                4.,
+                Color::new(CORAL.r, CORAL.g, CORAL.b, feedback.flash * 0.55),
+            );
+        }
+        if player_input.touch_seen() && !player_input.touch_customized() && run.session.is_playing()
+        {
+            draw_circle_lines(90., h - 100., 60., 2., CREAM);
+            draw_circle(90., h - 100., 4., CREAM);
+        }
         if demo.autoplay && flight.outcome != Outcome::Flying && !reported {
             println!(
                 "Sky Courier autoplay: {:?}; beacons={}; hull={}; remaining={:.1}s",
@@ -739,7 +692,14 @@ async fn game() {
             );
             reported = true;
         }
-        player_input.draw_settings();
+        // UI activation is handled once next frame, before any simulation work.
+        if transitioned || frame.outcome.is_some() {
+            menu_ready = false;
+        } else if !player_input.held("confirm") && !player_input.held("restart") {
+            menu_ready = true;
+        }
+        activate = hud(&run, &mut ui, &mut player_input, menu_ready).expect("bounded courier HUD");
+        player_input.draw_controls();
         if demo.finish_frame() {
             break;
         }
@@ -748,8 +708,315 @@ async fn game() {
 }
 
 #[cfg(test)]
+mod journey200_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn control_hints_follow_remaps_unbinding_and_bounded_fallbacks() {
+        use ferravex_render::input::{Binding, InputCode};
+        let mut player = PlayerInput::preset("sky-courier-hint-test", Preset::Flight);
+        let mut buffer = [0; 96];
+        assert_eq!(control_hint(&player, "boost", &mut buffer), "Space");
+        player
+            .rebind(
+                "boost",
+                vec![Binding::digital(InputCode::Key(KeyCode::B as u16))],
+            )
+            .unwrap();
+        assert_eq!(control_hint(&player, "boost", &mut buffer), "B");
+        player.rebind("brake", vec![]).unwrap();
+        assert_eq!(control_hint(&player, "brake", &mut buffer), "Unbound");
+        player
+            .rebind(
+                "pause",
+                vec![Binding::digital(InputCode::Key(KeyCode::P as u16))],
+            )
+            .unwrap();
+        assert_eq!(control_hint(&player, "pause", &mut buffer), "P");
+        player
+            .rebind(
+                "confirm",
+                vec![Binding::digital(InputCode::Key(KeyCode::C as u16))],
+            )
+            .unwrap();
+        assert_eq!(control_hint(&player, "confirm", &mut buffer), "C");
+        player
+            .rebind(
+                "boost",
+                vec![Binding::digital(InputCode::Key(KeyCode::B as u16)); 32],
+            )
+            .unwrap();
+        assert_eq!(control_hint(&player, "boost", &mut buffer), "Open Controls");
+        assert_eq!(
+            control_hint(&player, "missing", &mut buffer),
+            "Open Controls"
+        );
+        let mut buffers = [[0; 96]; 3];
+        assert_eq!(
+            movement_hint(&player, ["move_x", "move_left", "move_right"], &mut buffers),
+            ("A / Left", "D / Right")
+        );
+        player
+            .rebind(
+                "move_x",
+                vec![Binding::digital(InputCode::Key(KeyCode::J as u16))],
+            )
+            .unwrap();
+        assert_eq!(
+            movement_hint(&player, ["move_x", "move_left", "move_right"], &mut buffers),
+            ("J", "")
+        );
+        player.rebind("move_x", vec![]).unwrap();
+        assert_eq!(
+            movement_hint(&player, ["move_x", "move_left", "move_right"], &mut buffers),
+            ("A / Left", "D / Right")
+        );
+    }
+
+    #[test]
+    fn flight_status_reports_accepted_boost_slow_and_exhaustion_without_advancing_on_render() {
+        let mut run = FlightRun::new(true);
+        let boost = Input {
+            boost: true,
+            ..Default::default()
+        };
+        assert_eq!(run.flight.flight_mode(), "CRUISE");
+        run.advance(0., boost, false);
+        assert_eq!(run.flight.flight_mode(), "CRUISE");
+        run.advance(1. / 120., boost, false);
+        assert_eq!(run.flight.flight_mode(), "BOOSTING");
+        run.advance(
+            1. / 120.,
+            Input {
+                slow: true,
+                ..boost
+            },
+            false,
+        );
+        assert_eq!(run.flight.flight_mode(), "SLOW FLIGHT");
+        run.flight.boost_energy = 0.;
+        run.advance(1. / 120., boost, false);
+        assert_eq!(run.flight.flight_mode(), "RECHARGING");
+        let elapsed = run.elapsed;
+        run.session.set_paused(true);
+        run.advance(15., Input::default(), false);
+        assert_eq!(run.elapsed, elapsed);
+        run.restart();
+        assert_eq!(run.elapsed, 0.);
+        assert_eq!(run.flight.flight_mode(), "CRUISE");
+    }
+
+    #[test]
+    fn checkpoint_motor_reset_preserves_route_boost_and_penalty() {
+        let mut game = Flight::new();
+        game.pos = ROUTE[0];
+        game.tick(Input::default(), 1. / 120.);
+        assert_eq!(game.next, 1);
+        game.motor.pitch = 0.4;
+        game.motor.bank = 0.5;
+        game.motor.turn_rate = 1.;
+        game.motor.speed = 35.;
+        game.boost_energy = 0.4;
+        let before = game.remaining;
+        game.damage();
+        assert_eq!(game.pos, ROUTE[0]);
+        assert_eq!(game.next, 1);
+        assert_eq!(game.remaining, before - 5.);
+        assert_eq!(game.boost_energy, 0.4);
+        assert_eq!(
+            (
+                game.motor.pitch,
+                game.motor.bank,
+                game.motor.turn_rate,
+                game.motor.speed
+            ),
+            (0., 0., 0., 24.)
+        );
+        assert!(game.navigation().unwrap().bearing.abs() < 0.001);
+        let position = game.pos;
+        game.damage();
+        assert_eq!(game.pos, position);
+        assert_eq!(game.hull, 2);
+    }
+
+    #[test]
+    fn ready_and_pause_freeze_flight_countdown_and_feedback_without_catch_up() {
+        let mut run = FlightRun::new(false);
+        let position = run.flight.pos;
+        assert_eq!(run.session.state(), SessionState::Ready);
+        assert_eq!(run.advance(30., Input::default(), false).seconds, 0.);
+        assert_eq!(run.flight.pos, position);
+        assert_eq!(run.flight.remaining, 90.);
+        assert!(run.session.start());
+        run.flight.recovery = 2.;
+        run.flight.gate_notice = 1.;
+        run.advance(1. / 120., Input::default(), false);
+        let before = (
+            run.flight.pos,
+            run.flight.remaining,
+            run.flight.recovery,
+            run.flight.gate_notice,
+            run.session.tick(),
+        );
+        assert!(run.session.set_paused(true));
+        for _ in 0..10 {
+            let frame = run.advance(
+                10.,
+                Input {
+                    boost: true,
+                    ..Default::default()
+                },
+                false,
+            );
+            assert_eq!(frame.seconds, 0.);
+            assert_eq!(frame.gates, 0);
+            assert!(!frame.damaged);
+            assert_eq!(frame.outcome, None);
+        }
+        assert_eq!(
+            (
+                run.flight.pos,
+                run.flight.remaining,
+                run.flight.recovery,
+                run.flight.gate_notice,
+                run.session.tick()
+            ),
+            before
+        );
+        assert!(run.session.set_paused(false));
+        let frame = run.advance(1. / 120., Input::default(), false);
+        assert!((frame.seconds - 1. / 120.).abs() < 0.00001);
+        assert_eq!(run.session.tick(), before.4 + 1);
+        assert!(before.1 - run.flight.remaining < 0.01);
+    }
+
+    #[test]
+    fn retry_clears_clock_progress_and_holds_controls_until_released() {
+        let mut run = FlightRun::new(true);
+        run.advance(1. / 240., Input::default(), false);
+        run.flight.next = 3;
+        run.flight.hull = 1;
+        run.flight.remaining = 7.;
+        run.flight.recovery = 2.;
+        run.flight.gate_notice = 1.;
+        run.session.set_paused(true);
+        run.restart();
+        assert_eq!(run.session.state(), SessionState::Playing);
+        assert_eq!(run.session.tick(), 0);
+        assert_eq!(run.flight.next, 0);
+        assert_eq!(run.flight.hull, 3);
+        assert_eq!(run.flight.remaining, 90.);
+        assert_eq!(run.flight.recovery, 0.);
+        assert_eq!(run.flight.gate_notice, 0.);
+        let stale = Input {
+            turn: 1.,
+            climb: 1.,
+            boost: true,
+            slow: false,
+        };
+        assert_eq!(run.advance(1. / 240., stale, false).seconds, 0.);
+        for _ in 0..10 {
+            run.advance(1. / 60., stale, false);
+        }
+        assert_eq!(run.flight.motor.yaw, 0.);
+        assert_eq!(run.flight.motor.pitch, 0.);
+        assert_eq!(run.flight.motor.speed, 24.);
+        assert_eq!(run.flight.boost_energy, 1.);
+        run.advance(1. / 60., Input::default(), false);
+        run.advance(1. / 60., stale, false);
+        assert!(run.flight.motor.yaw > 0. && run.flight.motor.pitch > 0.);
+        assert!(run.flight.motor.speed > 24. && run.flight.boost_energy < 1.);
+        run.restart();
+        run.advance(
+            0.1,
+            Input {
+                slow: true,
+                ..Default::default()
+            },
+            false,
+        );
+        assert_eq!(run.flight.motor.speed, 24.);
+    }
+
+    #[test]
+    fn crash_penalty_can_close_delivery_window_on_the_same_tick() {
+        let mut run = FlightRun::new(true);
+        run.flight.remaining = 4.;
+        run.flight.pos.y = -21.;
+        let frame = run.advance(0.1, Input::default(), false);
+        assert!(frame.damaged);
+        assert_eq!(frame.outcome, Some(Outcome::Lost));
+        assert_eq!(run.flight.hull, 2);
+        assert_eq!(run.flight.remaining, 0.);
+        assert_eq!(run.session.state(), SessionState::Lost);
+        assert!((frame.seconds - 1. / 120.).abs() < 0.00001);
+        let position = run.flight.pos;
+        let frame = run.advance(30., Input::default(), false);
+        assert_eq!(frame.seconds, 0.);
+        assert_eq!(frame.outcome, None);
+        assert_eq!(run.flight.pos, position);
+    }
+
+    #[test]
+    fn guidance_wraps_bearings_and_countdown_never_expires_early() {
+        let mut game = Flight::new();
+        assert_eq!(game.navigation().unwrap().turn(), "ON COURSE");
+        assert_eq!(game.navigation().unwrap().climb(), "CLIMB");
+        game.pos = ROUTE[0] + vec3(10., 10., -30.);
+        assert_eq!(game.navigation().unwrap().turn(), "TURN LEFT");
+        assert_eq!(game.navigation().unwrap().climb(), "DESCEND");
+        game.motor.yaw = std::f32::consts::TAU;
+        assert_eq!(game.navigation().unwrap().turn(), "TURN LEFT");
+        game.pos = ROUTE[0] - Vec3::X * 20.;
+        assert_eq!(game.navigation().unwrap().turn(), "TURN RIGHT");
+        assert_eq!(game.navigation().unwrap().climb(), "HOLD ALTITUDE");
+        assert!((game.navigation().unwrap().distance - 20.).abs() < 0.001);
+        game.remaining = 0.001;
+        assert_eq!(game.countdown(), 1);
+        game.remaining = 60.01;
+        assert_eq!(game.countdown(), 61);
+        game.remaining = 0.;
+        assert_eq!(game.countdown(), 0);
+        game.next = ROUTE.len();
+        assert!(game.navigation().is_none());
+    }
+
+    #[test]
+    fn session_autoplay_delivers_identically_at_regular_and_irregular_frame_rates() {
+        fn deliver(pattern: &[f64]) -> FlightRun {
+            let mut run = FlightRun::new(true);
+            let mut gates = 0;
+            let mut successes = 0;
+            for frame in 0..30_000 {
+                let events = run.advance(pattern[frame % pattern.len()], Input::default(), true);
+                gates += events.gates;
+                successes += usize::from(events.outcome == Some(Outcome::Delivered));
+                if !run.session.is_playing() {
+                    break;
+                }
+            }
+            assert_eq!(run.session.state(), SessionState::Won);
+            assert_eq!(run.flight.hull, 3);
+            assert_eq!(gates, 6);
+            assert_eq!(successes, 1);
+            assert_eq!(run.advance(5., Input::default(), true).outcome, None);
+            run
+        }
+        let baseline = deliver(&[1. / 60.]);
+        for pattern in [
+            &[1. / 30.][..],
+            &[1. / 144.][..],
+            &[0., 1. / 240., 0.08, 1. / 60.][..],
+        ] {
+            let run = deliver(pattern);
+            assert_eq!(run.flight.pos, baseline.flight.pos);
+            assert_eq!(run.flight.remaining, baseline.flight.remaining);
+            assert_eq!(run.flight.motor.speed, baseline.flight.motor.speed);
+        }
+    }
 
     #[test]
     fn boost_is_a_recoverable_resource_and_slow_overrides_it() {
@@ -764,7 +1031,7 @@ mod tests {
             );
         }
         assert_eq!(game.outcome, Outcome::Flying);
-        assert!(game.boost_energy < 0.3 && game.speed < 34.);
+        assert!(game.boost_energy < 0.3 && game.motor.speed < 34.);
         let energy = game.boost_energy;
         for _ in 0..360 {
             game.tick(
@@ -777,7 +1044,7 @@ mod tests {
             );
         }
         assert!(game.boost_energy > energy + 0.3);
-        assert!(game.speed < 14.);
+        assert!(game.motor.speed < 14.);
     }
 
     #[test]
@@ -836,10 +1103,10 @@ mod tests {
         let mut game = Flight::new();
         game.next = 5;
         game.pos = ROUTE[5];
-        game.speed = 30.;
+        game.motor.speed = 30.;
         game.tick(Input::default(), 1. / 120.);
         assert_eq!(game.next, 5);
-        game.speed = 13.;
+        game.motor.speed = 13.;
         game.tick(
             Input {
                 slow: true,

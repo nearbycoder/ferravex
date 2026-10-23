@@ -1,10 +1,24 @@
 //! Kinematic upright capsules and planar boxes, shared by games and prediction.
 //! Positive Y is up. Positions are feet/sole centers. Move terrain first, then motors.
+//!
+//! [`Character::reset`] clears motion/support/jump history at checked coordinates;
+//! [`Character::teleport`] additionally resolves destination overlaps and acquires
+//! current walkable support. After either succeeds, hosts must set **both** previous
+//! and current interpolation poses to the resolved character position, including
+//! camera history on a restart. Do not interpolate across the old and new locations.
+//! Discard pending host gameplay edges on restart; neither method advances a tick.
+//! [`Motion::recovery`] separates overlap correction from gameplay movement, and
+//! [`Motion::support_motion`] reports attempted versus applied platform carry.
+//! [`check_clearance`] and [`Character::try_set_height`] never recover, snap or
+//! advance time. Height changes preserve the sole position and all motor history;
+//! the caller continues to pass the accepted shape to subsequent motor steps.
 mod geometry;
 mod motion;
 use ferravex_math::{Quat, Vec2, Vec3};
+pub use geometry::check_clearance;
 pub use motion::{
-    Character, CharacterInput, CharacterStep, JumpState, Motion, Support, move_and_slide,
+    Character, CharacterInput, CharacterStep, JumpState, Motion, Recovery, Support, SupportMotion,
+    move_and_slide,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -210,6 +224,9 @@ pub struct CharacterSettings {
     pub min_ground_normal: f32,
     pub max_iterations: u32,
     pub max_candidates: usize,
+    /// Maximum cumulative length of overlap corrections per public operation.
+    /// Reaching this limit with unresolved overlap returns an error without
+    /// committing character state. Zero permits only already-clear positions.
     pub max_recovery: f32,
     pub membership_mask: u32,
     pub speed: f32,
@@ -273,6 +290,36 @@ pub enum CharacterError {
     SweepBudget,
     UnresolvedPenetration,
 }
+/// A complete, nonpenetrating clearance query. Touching is allowed, using the
+/// motor's existing `1e-5` penetration tolerance; skin is not added to the shape.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Clearance {
+    /// All visited candidates, including sensors and excluded membership layers.
+    pub candidates: usize,
+}
+/// Failure of a clearance query or checked height change. This separate type
+/// preserves exhaustive matches on the existing [`CharacterError`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClearanceError {
+    /// Invalid shape, feet, motor state, height or candidate limit.
+    InvalidInput,
+    /// An included obstacle is malformed or unsupported for the queried shape.
+    InvalidObstacle,
+    /// More candidates were visited than the supplied limit. No partial result
+    /// authorizes a height change, even if a blocker was already encountered.
+    QueryBudget,
+    /// A complete query found penetration beyond the motor's tolerance.
+    Blocked {
+        /// Smallest stable obstacle ID among the blocking candidates.
+        obstacle: u64,
+    },
+}
+impl std::fmt::Display for ClearanceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "character clearance: {self:?}")
+    }
+}
+impl std::error::Error for ClearanceError {}
 impl std::fmt::Display for CharacterError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "character controller: {self:?}")

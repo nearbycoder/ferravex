@@ -1,4 +1,10 @@
 //! A small pinball table driven by Ferravex's original fixed-step physics world.
+//!
+//! [`PinballGame`] supplies the shared session lifecycle and render-frame input
+//! buffering; [`Table`] remains usable independently at a fixed timestep.
+mod game;
+pub use game::{PinballFeedback, PinballGame};
+
 use ferravex_physics::d2::{
     ColliderBuilder, ColliderHandle, JointBuilder, PhysicsWorld, RigidBodyBuilder, RigidBodyHandle,
     Vector,
@@ -32,7 +38,9 @@ pub const RAILS: [([f32; 2], [f32; 2]); 13] = [
     ([6.6, 10.7], [6.4, 11.3]),
 ];
 
-#[derive(Clone, Copy, Default)]
+/// Held flippers and a launch request. For [`Table::step`], launch is a one-tick
+/// command; [`PinballGame::advance`] accepts held input and buffers rising edges.
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Controls {
     pub left: bool,
     pub right: bool,
@@ -47,7 +55,20 @@ pub struct Table {
     hinges: [JointHandle; 2],
     bumpers: [ColliderHandle; 3],
     contacts: [bool; 3],
+    // Accepted contact serials let presentation observe hits without changing
+    // the simulation's debounce or replaying a suppressed flash.
+    bumper_hits: [u64; 3],
+    ball_start_score: u32,
+    last_ball_points: Option<u32>,
+    /// Simulation debounce remaining for each powered bumper. Presentation
+    /// observes accepted hits separately; accessibility must not clear this.
     pub bumper_flash: [f32; 3],
+    /// Time remaining for each bumper's readable, contact-confirmed +100 label.
+    pub bumper_notice: [f32; 3],
+    /// Time remaining for the last unsaved drain's next-ball prompt.
+    pub drain_notice: f32,
+    /// Controls actually applied to the flipper motors on the latest tick.
+    pub flipper_pressed: [bool; 2],
     pub angles: [f32; 2],
     pub score: u32,
     pub lives: u8,
@@ -147,7 +168,13 @@ impl Table {
             bumpers,
             angles,
             contacts: [false; 3],
+            bumper_hits: [0; 3],
+            ball_start_score: 0,
+            last_ball_points: None,
             bumper_flash: [0.0; 3],
+            bumper_notice: [0.0; 3],
+            drain_notice: 0.,
+            flipper_pressed: [false; 2],
             score: 0,
             lives: 3,
             waiting: true,
@@ -187,6 +214,39 @@ impl Table {
         self.lives == 0
     }
 
+    /// Points recovered on the current life, including any saved/re-served ball.
+    /// An unsaved drain banks the total and starts the next life at zero. This
+    /// is a score breakdown, not an extra bonus award; it is zero after game-over.
+    ///
+    /// ```
+    /// use salvage_pinball::{Controls, PinballGame};
+    /// let mut game = PinballGame::new(false);
+    /// assert_eq!(game.table().ball_points(), 0);
+    /// game.advance(1.0 / 120.0, Controls { launch: true, ..Default::default() });
+    /// assert_eq!(game.table().ball_points(), 0); // launching does not score
+    /// ```
+    pub fn ball_points(&self) -> u32 {
+        self.score.saturating_sub(self.ball_start_score)
+    }
+
+    /// Total recovered on the most recently drained, unsaved life. Saves leave
+    /// this unchanged; a fresh table has no completed life. Reading it consumes
+    /// no event and never awards those points a second time.
+    ///
+    /// ```
+    /// use salvage_pinball::{Controls, Table};
+    /// let mut table = Table::new();
+    /// assert_eq!(table.last_ball_points(), None);
+    /// // Put the ball past the drain and execute an actual physics tick.
+    /// table.world.bodies[table.ball].set_translation([4.9, 17.2].into(), true);
+    /// table.step(1.0 / 120.0, Controls::default());
+    /// assert_eq!(table.last_ball_points(), Some(0));
+    /// assert_eq!(table.lives, 2);
+    /// ```
+    pub fn last_ball_points(&self) -> Option<u32> {
+        self.last_ball_points
+    }
+
     /// An automatic player presses the same controls as a human, with no ball steering.
     pub fn autoplay(&self) -> Controls {
         let p = self.position();
@@ -206,14 +266,21 @@ impl Table {
         self.time += dt;
         self.ball_save = (self.ball_save - dt).max(0.);
         self.save_notice = (self.save_notice - dt).max(0.);
+        self.drain_notice = (self.drain_notice - dt).max(0.);
         for (i, pressed) in [controls.left, controls.right].into_iter().enumerate() {
+            self.flipper_pressed[i] = pressed;
             let target = if pressed {
                 if i == 0 { -0.9 } else { 0.9 }
             } else {
                 0.
             };
             self.world.joints[self.hinges[i]]
-                .set_motor(Some(JointMotor::position(target, 40., 18., 1000.)))
+                .set_motor(Some(JointMotor::position(
+                    target,
+                    if pressed { 60. } else { 40. },
+                    if pressed { 22. } else { 12. },
+                    if pressed { 1600. } else { 1000. },
+                )))
                 .unwrap();
         }
         if controls.launch && self.waiting {
@@ -233,6 +300,7 @@ impl Table {
         }
         for (i, bumper) in self.bumpers.iter().enumerate() {
             self.bumper_flash[i] = (self.bumper_flash[i] - dt).max(0.0);
+            self.bumper_notice[i] = (self.bumper_notice[i] - dt).max(0.0);
             let touching = self
                 .world
                 .raw
@@ -241,7 +309,9 @@ impl Table {
             if touching && !self.contacts[i] && self.bumper_flash[i] <= 0.0 {
                 self.score += 100;
                 self.hits += 1;
+                self.bumper_hits[i] = self.bumper_hits[i].wrapping_add(1);
                 self.bumper_flash[i] = 0.18;
+                self.bumper_notice[i] = 0.75;
                 let ball = &mut self.world.bodies[self.ball];
                 let outward = (ball.translation() - Vector::from_array(BUMPERS[i]))
                     .try_normalize()
@@ -278,8 +348,12 @@ impl Table {
                 self.saves += 1;
                 self.save_notice = 2.;
             } else {
+                self.last_ball_points = Some(self.ball_points());
+                self.ball_start_score = self.score;
                 self.lives -= 1;
                 self.save_available = true;
+                self.drain_notice = 2.5;
+                self.save_notice = 0.;
             }
             self.ball_save = 0.;
             self.drains += 1;
@@ -398,6 +472,34 @@ mod tests {
         }
         assert!(table.world.bodies[table.ball].linvel().y < -1.0);
         assert!(table.angles[0] < 0.0);
+    }
+
+    #[test]
+    fn both_flippers_attack_promptly_and_return_when_released() {
+        let mut table = Table::new();
+        for _ in 0..6 {
+            table.step(
+                DT,
+                Controls {
+                    left: true,
+                    right: true,
+                    launch: false,
+                },
+            );
+        }
+        assert!(
+            table.angles[0] < -0.15,
+            "left flipper should rise within 50ms: {:?}",
+            table.angles
+        );
+        assert!(table.angles[1].sin() < -0.15, "right tip must also rise");
+        assert_eq!(table.flipper_pressed, [true; 2]);
+        for _ in 0..30 {
+            table.step(DT, Controls::default());
+        }
+        assert!((table.angles[0] - 0.4).abs() < 0.03);
+        assert!((table.angles[1] - (std::f32::consts::PI - 0.4)).abs() < 0.03);
+        assert_eq!(table.flipper_pressed, [false; 2]);
     }
 
     #[test]

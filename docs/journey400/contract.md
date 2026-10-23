@@ -1,0 +1,17 @@
+# Journey400 working contract
+
+Read AGENTS.md, CONTRIBUTING.md, DEPENDENCIES.md, docs/AGENT_GUIDE.md, your numbered entry in docs/JOURNEY_400.md and target/journey-400/plan.json. Preserve all uncommitted Journey50/Journey200 changes and completed fixes. Journey200 tasks 186–200 still have separate integration evidence; do not relabel those as new Journey400 work.
+
+Implement the assigned concrete capability in the existing system. Inspect actual source and tests first; proposal names are sketches, not callable contracts. Preserve compatible defaults, public struct literals/exhaustive enums where possible, wire/save/replay formats, native/Wasm exports and feature-specific builds. All Rust dependencies remain first-party/std-only; Python is stdlib; browser code uses platform APIs. Report concrete manifest/root-registration needs to parent rather than editing outside ownership.
+
+Only edit assigned ownership plus inline tests or a unique tests/journey400_NNN.rs in an owning crate and target/journey-400/receipts/NNN.md. New sibling files must stay within explicitly owned directories or be reported to parent. Parent owns all other root/module registrations and shared integration/staging. Do not revert, stage, commit, branch, create PRs, deploy, schedule or delegate further. No blanket formatting, shared dist/site generation or workspace test/build runs.
+
+Use package-scoped cargo checks --offline --locked -j 2, relevant tests/features/doctests and strict scoped Clippy. Format only owned Rust files. New semantics need behavioral error/capacity/reset tests; public APIs need compiling examples. Preserve existing tests. If cross-owner work blocks compilation, record the exact command and first relevant error, continue independent work, and return the required integration handoff without patching/polling another owner. Unregistered code is not validated merely because package tests pass.
+
+Keep simulation independent of render frames, wall time and platform I/O. Consume input edges only on actual ticks, distinguish issued/executed ticks, and derive feedback from accepted events. Local menus must preserve authoritative network/replay progression. UI operates in documented logical screen units with shared visible/hit geometry, safe areas and no essential text shrunk to unreadable sizes. Preserve motion/flash independence and actual remapping.
+
+Every reusable feature needs an actual consumer handoff or runnable first-party recipe. Do not force every API into every demo. Games retain authored defaults and add optional modes where specified. Existing custom software hosts use pure composition adapters, not an accidental replacement renderer.
+
+Write the receipt with changed paths, concrete behavior, exact public signatures, compatibility decisions, exact root registration requirements, consumer handoff, commands/features/target/results, and unverified limits. Report failures honestly. Parent reviews combined output; returned does not mean fully integrated.
+
+Browser tasks use T3 preview_status then a new owned tab, explicit tabId for every action, and close only their tab. Check source/artifact hashes against the parent gate. Never fabricate a win by writing game state/memory/time. Label autoplay and synthetic DOM input distinctly; desktop resizing is not physical mobile testing, and audio counters are not listening evidence. A source fix after screenshots needs a parent rebuild and fresh visual check.

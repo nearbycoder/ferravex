@@ -16,6 +16,7 @@ pub mod content;
 pub mod demo;
 pub mod effects;
 mod font;
+pub use font::{BitmapFontMetrics, BitmapTextMetrics, FontMeasureError};
 pub mod input;
 pub mod lighting;
 pub mod material;
@@ -26,6 +27,7 @@ pub mod preferences;
 pub mod retained;
 pub mod shaders;
 pub mod skinning;
+pub mod status;
 pub mod storage;
 pub mod ui;
 pub mod visibility;
@@ -467,23 +469,9 @@ impl State {
         visible && recorded
     }
     fn test_visibility(&mut self, bounds: ferravex_graphics::Bounds, model: Mat4) -> bool {
-        use visibility::Visibility;
-        self.visibility_stats.tested += 1;
-        match visibility::classify(bounds, model, self.frustum, self.eye, self.visibility) {
-            Visibility::Visible => {
-                self.visibility_stats.visible += 1;
-                true
-            }
-            Visibility::OutsideFrustum => {
-                self.visibility_stats.frustum_culled += 1;
-                false
-            }
-            Visibility::TooDistant => {
-                self.visibility_stats.distance_culled += 1;
-                false
-            }
-            Visibility::InvalidTransform => false,
-        }
+        let result = visibility::classify(bounds, model, self.frustum, self.eye, self.visibility);
+        self.visibility_stats.record(result);
+        result == visibility::Visibility::Visible
     }
     fn default_camera(&mut self) {
         self.matrix = Mat4::orthographic_rh_gl(0., self.w as f32, self.h as f32, 0., -1., 1.);
@@ -1402,6 +1390,20 @@ macro_rules! game {
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use super::*;
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_feedback_preferences(motion: u32, flash: u32) -> u32 {
+        preferences::apply_feedback_flags(motion, flash)
+    }
+    /// Version 1: (version=1, finite text_scale in 1..=2, contrast=0|1).
+    /// Returns exactly 1 on acceptance, 0 on rejection; session-local UI only.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_ui_preferences_v1(
+        version: u32,
+        text_scale: f32,
+        contrast: u32,
+    ) -> u32 {
+        preferences::apply_ui_snapshot_v1(version, text_scale, contrast)
+    }
     #[unsafe(no_mangle)]
     pub extern "C" fn ferravex_display_scale(scale: f32) {
         set_display_scale(scale);

@@ -1,7 +1,125 @@
 <!doctype html>
-<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>3D Physics Lab · Ferravex</title>
-<style>*{box-sizing:border-box}html,body{margin:0;height:100%;background:#101a21;color:#e2ece2;font:14px system-ui}body{display:flex;flex-direction:column}nav{height:40px;flex:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 16px;border-bottom:1px solid #2c3c45}nav>a{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}nav>button{flex:none}a{color:#97c3b5;text-decoration:none}canvas{width:100%;height:calc(100% - 40px);display:block;touch-action:none;outline:none}button[data-controls],button[data-audio]{font:inherit;color:#c3d9d0;background:transparent;border:1px solid #40545b;border-radius:4px;padding:3px 9px;cursor:pointer}button[data-controls]:hover,button[data-controls]:focus-visible,button[data-audio]:hover,button[data-audio]:focus-visible{background:#293f46;outline:1px solid #97c3b5}button[data-controls]:disabled,button[data-audio]:disabled{opacity:.4;cursor:wait}nav>span{margin-left:auto;margin-right:16px}@media(max-width:540px){nav>span{display:none}}[role=status]{position:absolute;top:50%;width:100%;text-align:center;pointer-events:none}</style>
-<nav><a href="../">FERRAVEX / 3D Physics Lab</a><span>3D · Original rigid-body sandbox</span><button type="button" data-controls title="Controls (F2)" aria-pressed="false" disabled>Controls</button><button type="button" data-audio title="Enable sound" aria-pressed="false" disabled>Sound off</button></nav>
-<canvas tabindex="0" data-game="physics-3d" aria-label="3D Physics Lab game"></canvas><div role="status">Loading original Rust engine…</div>
-<script type="module" src="../runtime.js"></script></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>3D Physics Lab · Ferravex</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: #101a21; color: #e2ece2; font: 16px/1.5 system-ui; }
+    a { color: #a8d9cb; text-underline-offset: .2em; }
+    .lab-header { padding: .75rem max(1rem, env(safe-area-inset-right)) .75rem max(1rem, env(safe-area-inset-left)); border-bottom: 1px solid #40545b; }
+    h1 { margin: 0 0 .5rem; font-size: 1.25rem; }
+    /* Override the shared Details panel's fixed nav height and compact fonts. */
+    #lab-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; height: auto; }
+    #lab-toolbar a { display: inline-flex; align-items: center; min-height: 44px; padding: .25rem .5rem; }
+    #lab-toolbar button { min-height: 44px; max-width: 100%; padding: .5rem .75rem; font: inherit; color: #e2ece2; background: #18262b; border: 1px solid #647c85; border-radius: 4px; cursor: pointer; }
+    #lab-toolbar button:hover { background: #293f46; }
+    #lab-toolbar button:disabled { opacity: .55; cursor: wait; }
+    :focus-visible { outline: 3px solid #ffd38a; outline-offset: 3px; }
+    .lab-stage { position: relative; }
+    .lab-jump, .lab-scroll { display: none; }
+    #lab-actions { position: absolute; bottom: 0; scroll-margin-top: calc(100svh - 2rem); }
+    canvas { display: block; width: 100%; height: calc(100vh - 12rem); height: calc(100svh - 12rem); min-height: 22rem; touch-action: none; }
+    canvas:focus-visible { outline-offset: -4px; }
+    #lab-status { position: absolute; inset: 1rem 1rem auto; margin: 0; padding: .5rem; background: #101a21; text-align: center; pointer-events: none; overflow-wrap: anywhere; }
+    #lab-status:empty { display: none; }
+    .lab-guide { max-width: 72rem; margin: 0 auto; padding: 1rem max(1rem, env(safe-area-inset-right)) 1.5rem max(1rem, env(safe-area-inset-left)); overflow-wrap: anywhere; -webkit-user-select: text; user-select: text; }
+    .lab-guide summary { min-height: 44px; padding: .5rem 0; cursor: pointer; font-weight: 700; }
+    .lab-guide p { max-width: 75ch; }
+    .lab-guide dl { display: grid; grid-template-columns: minmax(10rem, 1fr) minmax(0, 3fr); gap: .6rem 1.5rem; }
+    .lab-guide dt { font-weight: 700; }
+    .lab-guide dd { margin: 0; }
+    kbd { font: inherit; font-weight: 700; color: #ffdda6; }
+    /* Keep instructions reachable when the shared player expands this page. */
+    body.ferravex-fullscreen { overflow: auto; }
+    @media (max-width: 540px) {
+      canvas { width: calc(100% - 24px); min-height: 40rem; }
+      .lab-scroll { display: block; position: absolute; inset: 0 0 0 auto; width: 24px; padding-top: 1rem; writing-mode: vertical-rl; background: #293f46; color: #e2ece2; touch-action: pan-y; font-size: 14px; }
+      .lab-jump { display: flex; flex-wrap: wrap; gap: .25rem 1rem; margin: 0; padding: .25rem 1rem; }
+      .lab-jump a { display: inline-flex; align-items: center; min-height: 44px; }
+      #lab-toolbar a { flex-basis: 100%; }
+      #lab-toolbar button { flex: 1 1 auto; }
+      .lab-guide dl { grid-template-columns: minmax(0, 1fr); gap: .25rem; }
+      .lab-guide dd { margin-bottom: .75rem; }
+    }
+  </style>
+</head>
+<body>
+  <header class="lab-header">
+    <h1 id="lab-title">3D Physics Lab</h1>
+    <nav id="lab-toolbar" aria-label="Lab and player tools">
+      <a href="../">All Ferravex games</a>
+      <button type="button" data-controls title="Controls (F2)" aria-pressed="false" disabled>Controls</button>
+      <button type="button" data-audio title="Enable sound" aria-pressed="false" disabled>Sound off</button>
+    </nav>
+  </header>
+  <main>
+    <p class="lab-jump" aria-label="Lab page navigation"><a href="#lab-scene">Scene</a><a href="#lab-actions">Lab actions</a><a href="#lab-guide">Guide</a></p>
+    <div id="lab-scene" class="lab-stage">
+      <canvas id="lab-canvas" tabindex="0" data-game="physics-3d" aria-labelledby="lab-title" aria-describedby="lab-help lab-navigation">Interactive 3D loading yard. Keyboard and mouse instructions follow the canvas.</canvas>
+      <aside class="lab-scroll" aria-label="Drag this strip to scroll the page">Scroll page</aside>
+      <span id="lab-actions" aria-hidden="true"></span>
+      <p id="lab-status" role="status" aria-live="polite" aria-atomic="true">Loading original Rust engine…</p>
+    </div>
+    <details id="lab-guide" class="lab-guide" open>
+      <summary>How to use the lab · default controls</summary>
+      <p id="lab-help">An interactive 3D loading yard: stack crates, drop balls and inspect their collisions. The simulation starts automatically at 120 Hz; there is no start screen or win condition. Pause to inspect the scene or advance one physics tick at a time.</p>
+      <p id="lab-navigation">Click the yard or use Tab to focus the canvas before using game keys. With Controls closed, Tab and Shift+Tab move between the canvas and page controls. Tab is reserved for page navigation here; use another key for gameplay bindings. Open Controls with its button or F2 while the canvas is focused.</p>
+      <p id="lab-bindings"><strong>The bindings below are defaults.</strong> Saved or remapped controls can differ. Open Controls to view or change your current bindings; its action names are listed below. In Controls, use Tab or arrows to choose an item and Enter to activate it. Escape cancels a binding capture; otherwise Escape or F2 closes Controls. Close Controls before tabbing back to the page.</p>
+      <dl aria-describedby="lab-bindings">
+        <dt>Orbit the camera</dt>
+        <dd>Hold the left mouse button and drag in the scene, or use <kbd>W A S D</kbd> / <kbd>arrow keys</kbd> (Left, Right, Forward / up, Back / down). The camera also works while manually paused.</dd>
+        <dt>Zoom</dt>
+        <dd>Scroll the mouse wheel over the scene (Zoom). Gamepad triggers control Zoom stick triggers.</dd>
+        <dt>Drop and select a shape</dt>
+        <dd><kbd>1</kbd> drops a crate (Drop crate); <kbd>2</kbd> drops a ball (Drop ball). Each selects that shape for repeat drops.</dd>
+        <dt>Repeat the selected drop</dt>
+        <dd><kbd>Enter</kbd> (Drop selected shape). Drops work while paused and stay frozen until stepping or resuming.</dd>
+        <dt>Pause / resume</dt>
+        <dd><kbd>Space</kbd> (Pause / menu). Escape is not the default pause key for this lab.</dd>
+        <dt>Step one tick</dt>
+        <dd><kbd>N</kbd> (Step once while paused) advances 1/120 second and stays paused. Pause first.</dd>
+        <dt>Restore the camera</dt>
+        <dd><kbd>C</kbd> (Reset orbit view) restores the view without resetting physics.</dd>
+        <dt>Reset the yard</dt>
+        <dd><kbd>R</kbd> (Restart) rebuilds the yard, restores the camera and resumes the simulation.</dd>
+        <dt>Push nearby bodies</dt>
+        <dd><kbd>F</kbd> (Impulse pulse) applies a radial kick while running, with a short cooldown.</dd>
+      </dl>
+      <p>On narrow screens, use Scene / Lab actions / Guide above the yard, or drag the right-hand Scroll page strip to move the page without orbiting. The buttons drawn along the bottom of the canvas also provide crate, ball, drop, pulse, pause/resume, step, view and reset actions. Their keyboard equivalents are listed above.</p>
+      <p>The Controls panel temporarily gates simulation and input. Returning from Controls or switching away from the browser preserves a manual pause. <strong>Details → Player tools</strong> contains presentation and accessibility preferences, screenshots and settings backups. Escape or Done closes Details and returns focus to the canvas; fullscreen may use Escape to exit first.</p>
+      <p><a href="#lab-canvas">Return to the lab canvas</a></p>
+      <noscript><p>JavaScript is required to load this interactive lab. The default controls remain available here for reference.</p></noscript>
+    </details>
+  </main>
+  <script>
+    (() => {
+      const canvas = document.querySelector('#lab-canvas');
+      const controls = document.querySelector('[data-controls]');
+      const descriptions = canvas.getAttribute('aria-describedby').split(/\s+/);
+      // The shared player adds its own help on initialization. Keep both sets of
+      // descriptions; aria-labelledby keeps the lab title ahead of its generic label.
+      const preserveDescription = () => {
+        const current = canvas.getAttribute('aria-describedby') || '';
+        const merged = [...new Set([...current.split(/\s+/).filter(Boolean), ...descriptions])].join(' ');
+        if (current !== merged) canvas.setAttribute('aria-describedby', merged);
+      };
+      new MutationObserver(preserveDescription).observe(canvas, {
+        attributes: true, attributeFilter: ['aria-describedby'],
+      });
+      // The shared input bridge listens on window. Leave native page navigation
+      // alone while retaining the renderer's Tab navigation in the Controls editor.
+      // Key releases still reach the bridge if focus moves while a key is held.
+      document.addEventListener('keydown', event => {
+        const inCanvas = event.target === canvas;
+        const editorOpen = controls.getAttribute('aria-pressed') === 'true';
+        if (!inCanvas || ((event.key === 'Tab' || event.code === 'Tab') && !editorOpen)) {
+          event.stopPropagation();
+        }
+      });
+    })();
+  </script>
+  <script type="module" src="../runtime.js"></script>
+</body>
+</html>

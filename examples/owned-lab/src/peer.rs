@@ -16,6 +16,17 @@ pub struct Peer {
     pub elapsed: f32,
 }
 impl Peer {
+    pub fn status_label(&self) -> &'static str {
+        match self.mode {
+            1 if !self.acknowledged => "Host: waiting for guest input",
+            1 if self.elapsed >= 2. => "Host: guest input stale",
+            1 => "Host: guest active",
+            2 if self.received_tick.is_none() => "Guest: waiting for host",
+            2 if self.elapsed >= 2. => "Guest: host snapshot stale",
+            2 => "Guest: predicting; host decides hits",
+            _ => "Offline training",
+        }
+    }
     pub fn set_mode(&mut self, mode: u32) {
         *self = Self {
             mode: mode.min(2),
@@ -36,11 +47,14 @@ impl Peer {
     pub fn receive(&mut self, bytes: &[u8], game: &mut Match) -> bool {
         if self.mode == 1 {
             if let Ok(ClientPacket::Input { session: 1, inputs }) = net::decode_client(bytes) {
+                let mut accepted = false;
                 for input in inputs {
-                    self.queue.push(input);
+                    accepted |= self.queue.push(input);
                 }
-                self.elapsed = 0.;
-                return true;
+                if accepted {
+                    self.elapsed = 0.;
+                }
+                return accepted;
             }
         } else if self.mode == 2
             && let Ok(ServerPacket::Snapshot(snapshot)) = net::decode_server(bytes)
@@ -75,6 +89,7 @@ impl Peer {
             }
             game.players = players;
             self.received_tick = Some(snapshot.tick);
+            self.elapsed = 0.;
             return true;
         }
         false
@@ -112,6 +127,43 @@ impl Peer {
 mod tests {
     use super::*;
     use ferravex_fps::Arena;
+    #[test]
+    fn peer_freshness_requires_new_accepted_input_or_snapshot() {
+        let mut host = Match::default();
+        host.spawn_player(0);
+        host.spawn_player(1);
+        let mut guest = Match::default();
+        guest.spawn_player(0);
+        let mut server = Peer::default();
+        server.set_mode(1);
+        let mut client = Peer::default();
+        client.set_mode(2);
+        assert_eq!(server.status_label(), "Host: waiting for guest input");
+        assert_eq!(client.status_label(), "Guest: waiting for host");
+        client.command(InputFrame::default());
+        let command = client.packet(&guest);
+        assert!(server.receive(&command, &mut host));
+        server.last = server.queue.pop_latest().unwrap();
+        server.acknowledged = true;
+        assert_eq!(server.status_label(), "Host: guest active");
+        server.elapsed = 2.;
+        assert!(!server.receive(&command, &mut host));
+        assert_eq!(server.elapsed, 2.);
+        assert_eq!(server.status_label(), "Host: guest input stale");
+        let snapshot = server.packet(&host);
+        assert!(client.receive(&snapshot, &mut guest));
+        assert_eq!(client.elapsed, 0.);
+        client.elapsed = 2.;
+        assert!(!client.receive(&snapshot, &mut guest));
+        assert_eq!(client.status_label(), "Guest: host snapshot stale");
+        host.step(&[]);
+        assert!(client.receive(&server.packet(&host), &mut guest));
+        assert_eq!(client.elapsed, 0.);
+        assert_eq!(
+            client.status_label(),
+            "Guest: predicting; host decides hits"
+        );
+    }
     #[test]
     fn short_action_survives_the_snapshot_send_interval() {
         let mut client = Peer::default();

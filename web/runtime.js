@@ -3,7 +3,7 @@ import {loadWasm,showLoadError} from './loader.js';
 import {RetainedRenderer,GpuTimer} from './retained.js';
 import {SpriteRenderer} from './effects.js';
 import {bindDetails,framebufferSize} from './details.js';
-import {configureVisuals} from './visuals.js';
+import {configureVisuals,bindVisualPreferences} from './visuals.js';
 import {bindInput} from './input.js';
 import {bindAudio} from './audio.js';
 import {bindGraphicsLifecycle} from './lifecycle.js';
@@ -46,16 +46,71 @@ initializeGraphics();
 const game=canvas.dataset.game;
 const inputPlatform=bindInput(canvas,game,()=>exports,()=>playing);
 const controlsButton=document.querySelector('[data-controls]');
+const multiplayerButton=document.querySelector('[data-multiplayer]');
 const details=bindDetails(canvas,game,()=>exports);
 const audio=bindAudio(canvas,()=>exports,{button:document.querySelector('[data-audio]')});
-controlsButton?.addEventListener('click',()=>{inputPlatform.openSettings();canvas.focus();});
+// The player owns durable choices; Wasm owns effective (possibly URL-masked) quality.
+const visuals=bindVisualPreferences(canvas,()=>{
+ if(typeof exports?.ferravex_visual_quality!=='function')throw Error('Missing visual export: ferravex_visual_quality');
+ return {...details.player?.presentationPreferences,quality:exports.ferravex_visual_quality()};
+},snapshot=>{
+ if(typeof exports?.ferravex_feedback_preferences!=='function')throw Error('Missing visual export: ferravex_feedback_preferences');
+ if(exports.ferravex_feedback_preferences(Number(snapshot.reducedMotion),Number(snapshot.reducedFlash))!==1)throw Error('Visual export rejected feedback preferences');
+},{ui:{read:()=>details.player?.uiPreferencesV1,exports:()=>exports}});
+function refreshVisuals(force=false){
+ visuals.refresh(force);
+ // Missing/rejected optional ABI is observable, never treated as applied or as a pause.
+ canvas.dataset.visualPreferencesError=visuals.error?.message??'';
+ canvas.dataset.uiPreferencesError=visuals.uiError?.message??'';
+}
+// Boot completion and presentation suspension are independent. Only permanent
+// teardown invalidates pending loads/imports; a recoverable loss keeps its boot.
+let disposed=false,bootReady=false,bootStatus=status.textContent;
+let multiplayerTools=null,multiplayerPromise=null,openMultiplayer=null;
+// Offer initial keyboard focus only while the page remains untouched. Checking
+// activeElement alone misses a chosen control that was later removed or blurred.
+const pageHasDefaultFocus=()=>!document.activeElement||document.activeElement===document.body||document.activeElement===document.documentElement;
+let bootFocusAllowed=pageHasDefaultFocus()&&document.hasFocus()&&!document.hidden;
+function cancelBootFocus(){
+ bootFocusAllowed=false;
+ document.removeEventListener('focusin',cancelBootFocus,{capture:true});
+ window.removeEventListener('blur',cancelBootFocus);
+ document.removeEventListener('visibilitychange',hideBootFocus);
+}
+function hideBootFocus(){if(document.hidden)cancelBootFocus();}
+function focusAfterBoot(){
+ const allowed=bootFocusAllowed&&!disposed&&graphics.active()&&document.hasFocus()&&!document.hidden&&canvas.isConnected!==false&&pageHasDefaultFocus()&&!document.querySelector('dialog[open]');
+ cancelBootFocus();
+ if(allowed)canvas.focus({preventScroll:true});
+}
+if(bootFocusAllowed){
+ document.addEventListener('focusin',cancelBootFocus,true);
+ window.addEventListener('blur',cancelBootFocus);
+ document.addEventListener('visibilitychange',hideBootFocus);
+}
+function teardown(){
+ if(disposed)return;disposed=true;
+ cancelBootFocus();
+ window.removeEventListener('pagehide',pageHidden);
+ controlsButton?.removeEventListener('click',openControls);
+ if(controlsButton)controlsButton.disabled=true;
+ if(openMultiplayer)multiplayerButton?.removeEventListener('click',openMultiplayer);
+ if(multiplayerButton)multiplayerButton.disabled=true;
+ multiplayerTools?.dispose?.();
+ visuals.dispose();details.player?.dispose?.();audio.dispose?.();graphics.stop();
+}
+function pageHidden(event){cancelBootFocus();if(!event.persisted)teardown();}
+window.addEventListener('pagehide',pageHidden);
+function openControls(){if(!disposed&&bootReady){inputPlatform.openSettings();canvas.focus();}}
+controlsButton?.addEventListener('click',openControls);
 document.addEventListener('visibilitychange',()=>{last=0;});
 let autoRestore=false;
 const graphics=bindGraphicsLifecycle(canvas,{
- restore(){initializeGraphics();last=0;delete canvas.dataset.gpuUs;delete canvas.dataset.gpuFrame;delete canvas.dataset.gpuDisjoint;canvas.dataset.graphicsRestores=String(++restores);},
- suspend(){exports?.ferravex_blur();audio.suspend();canvas.dataset.graphicsState='lost';status.textContent='Graphics paused. Waiting for the browser to restore the device.';if(autoRestore){autoRestore=false;setTimeout(()=>recoveryExtension?.restoreContext(),100);}},
- resume(){exports?.ferravex_focus(document.hasFocus()?1:0);audio.resume();status.textContent='';canvas.dataset.graphicsState='ready';},
- error(cause){status.textContent=`Graphics recovery failed: ${cause.message}`;console.error(cause);}
+ suspendOnPageLifecycle:true,
+ restore(){initializeGraphics();if(exports)refreshVisuals(true);last=0;delete canvas.dataset.gpuUs;delete canvas.dataset.gpuFrame;delete canvas.dataset.gpuDisjoint;canvas.dataset.graphicsRestores=String(++restores);},
+ suspend(reason){inputPlatform.suspend();audio.suspend();canvas.dataset.graphicsState=reason==='context-lost'?'lost':'suspended';status.textContent=reason==='context-lost'?'Graphics paused. Waiting for the browser to restore the device.':'Page suspended. Waiting for the browser to resume.';if(reason==='context-lost'&&autoRestore){autoRestore=false;setTimeout(()=>recoveryExtension?.restoreContext(),100);}},
+ resume(){last=0;inputPlatform.resume();audio.resume();status.textContent=bootReady?'':bootStatus;canvas.dataset.graphicsState='ready';},
+ error(cause){teardown();status.textContent=`Graphics recovery failed: ${cause.message}`;console.error(cause);}
 });
 canvas.dataset.graphicsState='ready';
 if(new URLSearchParams(location.search).has('graphics-tools')){
@@ -64,20 +119,44 @@ if(new URLSearchParams(location.search).has('graphics-tools')){
  const button=document.createElement('button');button.textContent='Test context loss and recovery';button.setAttribute('aria-label','Test context loss and recovery');button.type='button';button.style.cssText='margin-top:10px;padding:8px';const extension=recoveryExtension;button.disabled=!extension;button.addEventListener('click',()=>{autoRestore=true;recoveryExtension?.loseContext();});panel.append(button);document.body.append(panel);
 }
 
+async function boot(){
 try {
  const imports={env:{...inputPlatform.imports,ferravex_set_playing:value=>{playing=!!value;if(!playing&&document.pointerLockElement)document.exitPointerLock();}}};
- const {instance}=await loadWasm(`${game.replaceAll('-','_')}.wasm`,imports);exports=instance.exports;
+ const {instance}=await loadWasm(`${game.replaceAll('-','_')}.wasm`,imports);
+ if(disposed)return;
+ exports=instance.exports;
+ bootStatus='Starting game…';if(graphics.active())status.textContent=bootStatus;
  exports.ferravex_init();
+ if(disposed)return;
  configureVisuals(exports,location.search);
+ if(disposed)return;
+ refreshVisuals();
+ if(disposed)return;
  exports.ferravex_autoplay(new URLSearchParams(location.search).has('autoplay')?1:0);
- let multiplayerTools=null,multiplayerPromise=null;
- const ensureMultiplayer=async()=>{if(!multiplayerPromise)multiplayerPromise=import('./multiplayer-tools.js').then(m=>multiplayerTools=m.createMultiplayerTools(exports,canvas,{address:new URLSearchParams(location.search).get('connect')||undefined}));return multiplayerPromise;};
- document.querySelector('[data-multiplayer]')?.addEventListener('click',async()=>{if(multiplayerTools)multiplayerTools.toggle();else await ensureMultiplayer();});
+ if(disposed)return;
+ const ensureMultiplayer=async()=>{
+  if(disposed)return;
+  if(!multiplayerPromise)multiplayerPromise=import('./multiplayer-tools.js').then(m=>{
+   if(disposed)return;
+   return multiplayerTools=m.createMultiplayerTools(exports,canvas,{address:new URLSearchParams(location.search).get('connect')||undefined});
+  });
+  return multiplayerPromise;
+ };
+ openMultiplayer=async()=>{
+  if(disposed||!bootReady)return;
+  try{if(multiplayerTools)multiplayerTools.toggle();else await ensureMultiplayer();}
+  catch(error){if(!disposed)console.error(error);}
+ };
+ multiplayerButton?.addEventListener('click',openMultiplayer);
  if(new URLSearchParams(location.search).has('multiplayer')||new URLSearchParams(location.search).has('connect'))await ensureMultiplayer();
- let replayTools=null;if(new URLSearchParams(location.search).has('replay-tools')){replayTools=(await import('./replay-tools.js')).createReplayTools(exports,canvas);}
- let contentTools=null;if(new URLSearchParams(location.search).has('content-tools')){contentTools=(await import('./content-tools.js')).createContentTools(exports,canvas);}
- let materialTools=null;if(new URLSearchParams(location.search).has('material-tools')){materialTools=(await import('./material-tools.js')).createMaterialTools(exports);}
- status.textContent='';if(controlsButton)controlsButton.disabled=false;const mpButton=document.querySelector('[data-multiplayer]');if(mpButton)mpButton.disabled=false;canvas.focus();
+ if(disposed)return;
+ let replayTools=null;if(new URLSearchParams(location.search).has('replay-tools')){const m=await import('./replay-tools.js');if(disposed)return;replayTools=m.createReplayTools(exports,canvas);}
+ if(disposed)return;
+ let contentTools=null;if(new URLSearchParams(location.search).has('content-tools')){const m=await import('./content-tools.js');if(disposed)return;contentTools=m.createContentTools(exports,canvas);}
+ if(disposed)return;
+ let materialTools=null;if(new URLSearchParams(location.search).has('material-tools')){const m=await import('./material-tools.js');if(disposed)return;materialTools=m.createMaterialTools(exports);}
+ if(disposed)return;
+ bootReady=true;if(graphics.active())status.textContent='';if(controlsButton)controlsButton.disabled=false;if(multiplayerButton)multiplayerButton.disabled=false;focusAfterBoot();
  const loop=time=>{
   if(!graphics.active())return;
   if(details.player?.shouldRender(time)===false){graphics.schedule(loop);return;}
@@ -90,8 +169,10 @@ try {
   exports.ferravex_mp_time?.(time*1000);
   exports.ferravex_display_scale?.(dpr);
   inputPlatform.poll();
+  refreshVisuals();
   const running=exports.ferravex_frame(dt,Math.round(r.width),Math.round(r.height));
   details.ready();const controlsOpen=inputPlatform.syncPanel();audio.sync();details.update();
+  refreshVisuals(); // Queued renderer presets are processed inside ferravex_frame.
   controlsButton?.setAttribute('aria-pressed',String(controlsOpen));
   const count=exports.ferravex_vertex_count(),ptr=exports.ferravex_vertices();
   const vertices=new Float32Array(exports.memory.buffer,ptr,count*8);
@@ -130,7 +211,13 @@ try {
   canvas.dataset.materialError=retained.lastError;materialTools?.update();contentTools?.update();replayTools?.update();multiplayerTools?.update();
   details.player?.frame(time);
   if(exports.ferravex_take_graphics_reset?.()){const extension=recoveryExtension;if(extension){autoRestore=true;recoveryExtension?.loseContext();}}
-  if(running)graphics.schedule(loop);else {graphics.stop();audio.dispose();}
+  if(running)graphics.schedule(loop);else teardown();
  };
  graphics.schedule(loop);
-} catch(error) {showLoadError(error,status);console.error(error);}
+} catch(error) {
+ // A late rejection must not replace an earlier recovery failure or departed page.
+ if(disposed)return;
+ teardown();showLoadError(error,status);console.error(error);
+}
+}
+await boot();

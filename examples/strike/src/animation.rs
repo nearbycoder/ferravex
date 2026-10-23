@@ -494,6 +494,7 @@ pub struct WeaponMotion {
     fire: f32,
     was_reload: bool,
     was_alive: bool,
+    reduced_motion: bool,
 }
 impl WeaponMotion {
     pub fn new() -> Self {
@@ -614,9 +615,30 @@ impl WeaponMotion {
             fire: 1.,
             was_reload: false,
             was_alive: true,
+            reduced_motion: false,
+        }
+    }
+    pub fn set_reduced_motion(&mut self, reduced: bool) {
+        if self.reduced_motion != reduced {
+            self.reduced_motion = reduced;
+            self.fire = 1.;
+            self.was_reload = false;
+            self.player.play(0).unwrap();
         }
     }
     pub fn update(&mut self, p: &Player, dt: f32, fired: bool) -> usize {
+        if self.reduced_motion {
+            self.fire = 1.;
+            self.was_alive = p.health > 0;
+            self.was_reload = p.reload_ticks > 0;
+            self.player.play(0).unwrap();
+            self.player.advance(0., &mut self.events).unwrap();
+            self.skeleton
+                .skin_palette_into(self.player.pose(), &mut self.world, &mut self.matrices)
+                .unwrap();
+            self.palette.set(&self.matrices).unwrap();
+            return 0;
+        }
         if !self.was_alive && p.health > 0 {
             self.player.play(0).unwrap();
             self.fire = 1.;
@@ -801,6 +823,40 @@ mod tests {
             "only the future magazine-in event should fire"
         );
     }
+    #[test]
+    fn reduced_motion_clears_weapon_recoil_and_reload_even_with_zero_delta() {
+        let mut weapon = WeaponMotion::new();
+        let mut p = Player::new(0, ferravex_render::Vec3::ZERO);
+        let original = p.clone();
+        weapon.update(&p, 0., false);
+        let neutral = weapon.palette().matrices().to_vec();
+        weapon.update(&p, 0.025, true);
+        assert_ne!(weapon.palette().matrices(), neutral);
+        weapon.set_reduced_motion(true);
+        weapon.update(&p, 0., false);
+        assert_eq!(weapon.palette().matrices(), neutral);
+        weapon.update(&p, 0.025, true);
+        weapon.set_reduced_motion(false);
+        weapon.update(&p, 0., false);
+        assert_eq!(
+            weapon.palette().matrices(),
+            neutral,
+            "suppressed recoil never revives"
+        );
+        assert_eq!(p.ammo, original.ammo);
+        assert_eq!(p.position, original.position);
+        p.reload_ticks = RELOAD_TICKS;
+        weapon.update(&p, 0.5, false);
+        assert_ne!(weapon.palette().matrices(), neutral);
+        weapon.set_reduced_motion(true);
+        assert_eq!(weapon.update(&p, 0., false), 0);
+        assert_eq!(weapon.palette().matrices(), neutral);
+        assert_eq!(
+            p.reload_ticks, RELOAD_TICKS,
+            "presentation never advances reload"
+        );
+    }
+
     #[test]
     fn authored_meshes_match_rig_joint_counts_and_bind_bounds() {
         let op = crate::geometry::build_operator();

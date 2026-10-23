@@ -6,6 +6,12 @@ use ferravex_render::input::{
     touch::{Control, Output, Region},
 };
 
+// The shared formatter owns binding/device labels. Long custom profiles remain
+// bounded and direct the player to the full editor instead of showing stale keys.
+pub(super) fn hint<'a>(input: &PlayerInput, action: &str, buffer: &'a mut [u8]) -> &'a str {
+    input.format_hint(action, buffer).unwrap_or("Controls")
+}
+
 pub struct Controls {
     pub yaw: f32,
     pub pitch: f32,
@@ -79,6 +85,10 @@ impl Default for Controls {
     }
 }
 impl Controls {
+    pub fn cut(&mut self) {
+        self.input.sample(false);
+        self.interacting = false;
+    }
     pub fn prepare(&mut self, active: bool) {
         let w = screen_width();
         let h = screen_height();
@@ -147,19 +157,23 @@ impl Controls {
         let look = self.input.look(get_frame_time());
         self.yaw = (self.yaw + look.x).rem_euclid(std::f32::consts::TAU);
         self.pitch = (self.pitch - look.y).clamp(-1.45, 1.45);
-        let mut input = InputFrame {
+        InputFrame {
             yaw: self.yaw,
             pitch: self.pitch,
             move_x: movement.x,
             move_z: movement.y,
             ..Default::default()
-        };
-        for (name, flag) in [
-            ("fire", BUTTON_FIRE),
-            ("jump", BUTTON_JUMP),
-            ("reload", BUTTON_RELOAD),
-        ] {
-            let action = self.input.take(name);
+        }
+    }
+    /// Called only for an actual authority tick. The shared input journal keeps
+    /// taps through zero-tick frames and retires edges after the first catch-up tick.
+    pub fn tick(&mut self, mut input: InputFrame) -> InputFrame {
+        for (action, flag) in self
+            .input
+            .take_tick(["fire", "jump", "reload"])
+            .into_iter()
+            .zip([BUTTON_FIRE, BUTTON_JUMP, BUTTON_RELOAD])
+        {
             if action.pressed || action.value.abs() > 0.5 {
                 input.buttons |= flag;
             }
@@ -230,16 +244,146 @@ impl Controls {
         draw_circle(thumb.x, thumb.y, 18., Color::new(0.9, 0.92, 0.83, 0.22));
         if self.show_interact {
             draw_circle_lines(w - 166., h - 172., 29., 2., c);
-            draw_text("E", w - 172., h - 166., 17., c);
+            draw_text("USE", w - 181., h - 166., 17., c);
         }
         for (x, y, r, label) in [
             (w - 74., h - 96., 46., "FIRE"),
             (w - 170., h - 66., 32., "UP"),
-            (w - 64., h - 197., 29., "R"),
+            (w - 64., h - 197., 29., "LOAD"),
         ] {
             draw_circle_lines(x, y, r, 2., c);
             let size = measure_text(label, None, 17, 1.);
             draw_text(label, x - size.width * 0.5, y + 6., 17., c);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ferravex_render::input::{
+        host_frame,
+        touch::{Event, Phase},
+        touch_event,
+    };
+
+    fn controls() -> Controls {
+        let mut input = PlayerInput::transient("journey200-strike-controls");
+        for (name, id) in [("fire", 2), ("jump", 3), ("reload", 5)] {
+            input
+                .action(
+                    name,
+                    name,
+                    ActionKind::Button,
+                    vec![Binding::digital(InputCode::Touch(id))],
+                )
+                .unwrap();
+        }
+        Controls {
+            input,
+            ..Default::default()
+        }
+    }
+    fn touch(phase: Phase) {
+        touch_event(Event {
+            id: 141,
+            phase,
+            position: vec2(726., 504.),
+        });
+    }
+
+    #[test]
+    fn short_taps_survive_zero_ticks_but_not_settings_or_pause() {
+        let mut controls = controls();
+        let mut host = crate::host::Host::new(true);
+        let dt = 1. / ferravex_fps::TICK_RATE as f64;
+        host_frame(0., 800, 600, || controls.prepare(true));
+        touch(Phase::Start);
+        touch(Phase::End);
+        host_frame((dt / 2.) as f32, 800, 600, || {
+            controls.prepare(true);
+            let input = controls.sample(true);
+            assert_eq!(input.buttons, 0, "render sampling must not consume fire");
+            assert_eq!(
+                host.advance(crate::host::Mode::Practice, dt / 2., true, true)
+                    .steps,
+                0
+            );
+        });
+        host_frame((dt * 2.5) as f32, 800, 600, || {
+            controls.prepare(true);
+            let input = controls.sample(true);
+            let frame = host.advance(crate::host::Mode::Practice, dt * 2.5, true, true);
+            assert_eq!(frame.steps, 3);
+            let buttons: Vec<_> = (0..frame.steps)
+                .map(|_| controls.tick(input).buttons)
+                .collect();
+            assert_eq!(buttons, [BUTTON_FIRE, 0, 0]);
+        });
+        // A held trigger continues firing across catch-up ticks.
+        touch(Phase::Start);
+        host_frame(0., 800, 600, || {
+            controls.prepare(true);
+            let input = controls.sample(true);
+            for _ in 0..3 {
+                assert_eq!(controls.tick(input).buttons, BUTTON_FIRE);
+            }
+            // Reconcile a local menu in the same render frame: stale held
+            // buttons cannot reactivate when the menu closes.
+            controls.prepare(false);
+            controls.prepare(true);
+            assert_eq!(controls.tick(input).buttons, 0);
+        });
+        touch(Phase::End);
+        host_frame(0., 800, 600, || controls.prepare(true));
+        touch(Phase::Start);
+        touch(Phase::End);
+        host_frame(0., 800, 600, || {
+            controls.prepare(true);
+            controls.input.set_controls_open(true);
+            assert_eq!(controls.tick(InputFrame::default()).buttons, 0);
+            controls.input.set_controls_open(false);
+            assert_eq!(controls.tick(InputFrame::default()).buttons, 0);
+        });
+        // A seek/restart cut discards pending gameplay edges as well.
+        touch(Phase::Start);
+        touch(Phase::End);
+        host_frame(0., 800, 600, || {
+            controls.prepare(true);
+            controls.cut();
+            controls.sample(true);
+            assert_eq!(controls.tick(InputFrame::default()).buttons, 0);
+        });
+    }
+
+    #[test]
+    fn hints_follow_remaps_and_unbound_devices_without_consuming_taps() {
+        let mut controls = controls();
+        host_frame(0., 800, 600, || controls.prepare(true));
+        controls
+            .input
+            .rebind(
+                "reload",
+                vec![Binding::digital(InputCode::Key(KeyCode::Q as u16))],
+            )
+            .unwrap();
+        let mut text = [0; 64];
+        assert_eq!(hint(&controls.input, "reload", &mut text), "Q");
+        controls.input.rebind("reload", vec![]).unwrap();
+        assert_eq!(hint(&controls.input, "reload", &mut text), "Unbound");
+        assert_eq!(hint(&controls.input, "missing", &mut text), "Controls");
+        touch(Phase::Start);
+        touch(Phase::End);
+        host_frame(0., 800, 600, || {
+            controls.prepare(true);
+            assert_eq!(
+                controls.input.current_device(),
+                ferravex_render::input::HintDevice::Touch
+            );
+            assert_eq!(hint(&controls.input, "fire", &mut text), "Touch 2");
+            assert_eq!(hint(&controls.input, "fire", &mut []), "Controls");
+            assert_eq!(controls.tick(InputFrame::default()).buttons, BUTTON_FIRE);
+            assert_eq!(controls.tick(InputFrame::default()).buttons, 0);
+        });
     }
 }

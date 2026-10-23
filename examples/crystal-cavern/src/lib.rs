@@ -1,10 +1,27 @@
 //! A small cave expedition: recover three crystals, wake two altars, find daylight.
-use ferravex_core::FixedClock;
+//!
+//! The host uses the shared session clock; the objective graph owns puzzle rules.
+//! Inactive frames never advance the expedition timer:
+//! ```
+//! use ferravex_core::session::{GameSession, SessionState};
+//! let mut session = GameSession::new(60.0, 8, false);
+//! assert_eq!(session.state(), SessionState::Ready);
+//! session.start();
+//! assert_eq!(session.advance(1.0 / 60.0).steps, 1);
+//! session.set_paused(true);
+//! assert_eq!(session.advance(30.0).steps, 0);
+//! session.restart();
+//! assert_eq!(session.tick(), 0);
+//! ```
+use ferravex_core::session::{GameSession, SessionState};
 use ferravex_physics::character::{
     CharacterSettings, CharacterShape, Obstacle, ObstacleShape, QueryBounds, Terrain,
     move_and_slide,
 };
+use ferravex_play::ai::{Candidate, Observer, Sight, TargetSelector, VisibilityQuery, WorkBudget};
 use ferravex_play::camera::{Input3, Mode3, NoObstructions, Rig3, Settings3, Target3};
+use ferravex_play::feedback::FeedbackPolicy;
+use ferravex_play::objective::{ObjectiveProgress, ObjectiveState};
 use ferravex_render::audio::{Cue, GameAudio, Surface};
 use ferravex_render::input::{
     ActionKind, Binding, InputCode, PlayerInput, Preset,
@@ -70,6 +87,30 @@ struct Input {
     interact: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Interactable {
+    Crystal(usize),
+    Altar(u8),
+    Gate,
+}
+impl Interactable {
+    fn objective(self) -> usize {
+        match self {
+            Self::Crystal(i) => i,
+            Self::Altar(i) => 3 + usize::from(i),
+            Self::Gate => 5,
+        }
+    }
+    fn from_id(id: u64) -> Option<Self> {
+        match id {
+            1..=3 => Some(Self::Crystal(id as usize - 1)),
+            4..=5 => Some(Self::Altar(id as u8 - 4)),
+            6 => Some(Self::Gate),
+            _ => None,
+        }
+    }
+}
+
 fn objectives() -> ferravex_play::objective::ObjectiveGraph<6> {
     use ferravex_play::objective::*;
     ObjectiveGraph::new(
@@ -100,11 +141,12 @@ struct Game {
     crystals: Vec<Vec2>,
     collected: [bool; 3],
     objectives: ferravex_play::objective::ObjectiveGraph<6>,
+    focus: TargetSelector,
     switches: u8,
     gate: Aabb2,
     won: bool,
     elapsed: f32,
-    notice: &'static str,
+    notice: String,
     notice_time: f32,
 }
 impl Game {
@@ -131,11 +173,14 @@ impl Game {
             crystals,
             collected: [false; 3],
             objectives: objectives(),
+            // A challenger must be more than 20 cm closer. Range/visibility
+            // remain mandatory, and facing never restricts nearby exploration.
+            focus: TargetSelector::new(0.2).expect("finite focus margin"),
             switches: 0,
             gate: Aabb2::from_min_size(at(b'G') - vec2(TILE * 0.5, 0.175), vec2(TILE, 0.35)),
             won: false,
             elapsed: 0.0,
-            notice: "Recover three crystals. Wake the numbered altars.",
+            notice: "Recover three crystals. Wake the numbered altars.".into(),
             notice_time: 8.0,
         }
     }
@@ -143,7 +188,27 @@ impl Game {
         self.collected.iter().filter(|&&c| c).count()
     }
     fn open(&self) -> bool {
-        self.switches == 2 && self.count() == 3
+        matches!(
+            self.objectives.state(5),
+            Some(ObjectiveState::Ready | ObjectiveState::Complete)
+        )
+    }
+    fn crystal_progress(&self) -> (u16, u16) {
+        self.objectives
+            .iter()
+            .take(3)
+            .fold((0, 0), |(done, total), view| {
+                let ObjectiveProgress::Event { count, required } = view.progress else {
+                    unreachable!("crystals are authored event objectives");
+                };
+                (done + count, total + required)
+            })
+    }
+    fn completed_mask(&self) -> u64 {
+        self.objectives
+            .iter()
+            .filter(|view| view.state == ObjectiveState::Complete)
+            .fold(0, |mask, view| mask | 1 << view.index)
     }
     fn obstacles(&self) -> impl Iterator<Item = &Aabb2> {
         self.walls
@@ -158,18 +223,14 @@ impl Game {
     fn near(&self, p: Vec2) -> bool {
         self.position.distance_squared(p) < 1.7 * 1.7 && self.visible(p)
     }
-    fn message(&mut self, text: &'static str) {
-        self.notice = text;
+    fn message(&mut self, text: impl Into<String>) {
+        self.notice = text.into();
         self.notice_time = 3.5;
     }
     fn objective_event(&mut self, index: usize) {
         self.objectives
             .event(index as u16 + 1, 1, self.objectives.last_event_serial() + 1)
             .unwrap();
-        ferravex_render::performance::event(
-            ferravex_play::performance::DiagnosticKind::Objective,
-            index as f32,
-        );
         self.sync_objectives();
     }
     fn sync_objectives(&mut self) {
@@ -185,66 +246,158 @@ impl Game {
         };
         self.won = self.objectives.complete(5);
     }
-    fn interact(&mut self) {
-        for i in 0..self.crystals.len() {
-            if !self.collected[i] && self.near(self.crystals[i]) {
-                self.objective_event(i);
-                self.message(if self.count() == 3 {
-                    "All three recovered. Find altar I, then altar II."
-                } else {
-                    "Crystal recovered."
-                });
-                return;
-            }
-        }
-        if self.near(at(b'A')) {
-            if self.count() < 3 {
-                self.message("Altar I needs all three crystals.");
-            } else if self.switches == 0 {
-                self.objective_event(3);
-                self.message("Altar I awakened. The second altar is ready.");
-            }
-        } else if self.near(at(b'B')) {
-            if self.switches == 0 {
-                self.message("Wake altar I first.");
-            } else if self.switches == 1 {
-                self.objective_event(4);
-                self.message("The seal is open. Follow the daylight.");
-            }
+    fn target_position(&self, target: Interactable) -> Vec2 {
+        match target {
+            Interactable::Crystal(i) => self.crystals[i],
+            Interactable::Altar(i) => at(if i == 0 { b'A' } else { b'B' }),
+            // Query the near face, not the center of the solid closed gate.
+            Interactable::Gate => at(b'G') + vec2(0., 0.22),
         }
     }
-    fn prompt(&self) -> Option<&'static str> {
+    fn target_ready(&self, target: Interactable) -> bool {
+        self.objectives
+            .inspect(target.objective())
+            .is_some_and(|view| view.state == ObjectiveState::Ready)
+    }
+    // The prompt, world highlight and accepted interaction share one target.
+    fn target(&self) -> Option<Interactable> {
+        self.select_focus().1
+    }
+    fn select_focus(&self) -> (TargetSelector, Option<Interactable>) {
+        let mut selector = self.focus;
         if self.won {
-            return None;
+            selector.reset();
+            return (selector, None);
         }
-        if self
+        let candidates = self
             .crystals
             .iter()
             .enumerate()
-            .any(|(i, &p)| !self.collected[i] && self.near(p))
+            .filter(|(i, _)| !self.collected[*i])
+            .map(|(i, _)| Interactable::Crystal(i))
+            .chain((self.switches..2).map(Interactable::Altar))
+            .chain(std::iter::once(Interactable::Gate));
+        let candidates = candidates
+            .map(|target| Candidate {
+                id: target.objective() as u64 + 1,
+                position: world(self.target_position(target), 0.),
+                groups: 1,
+            })
+            .filter(|candidate| {
+                // Preserve the original strict interaction distance at its boundary.
+                candidate
+                    .position
+                    .distance_squared(world(self.position, 0.))
+                    < 1.7 * 1.7
+            });
+        let report = selector
+            .select_visible(
+                candidates,
+                Observer {
+                    position: world(self.position, 0.),
+                    forward: Vec3::Z,
+                },
+                Sight::new(1.7, std::f32::consts::TAU, 1).expect("cave interaction range"),
+                &mut WorkBudget::new(6, 6, 0),
+                &mut CaveVisibility(self),
+                |candidate| -candidate.position.distance(world(self.position, 0.)),
+            )
+            .expect("finite authored cave candidates");
+        debug_assert!(
+            !report.incomplete,
+            "all six cave objects fit the focus budget"
+        );
+        (
+            selector,
+            report
+                .target
+                .and_then(|target| Interactable::from_id(target.id)),
+        )
+    }
+    fn objective_hint(&self) -> String {
+        let (count, required) = self.crystal_progress();
+        match self
+            .objectives
+            .iter()
+            .find(|view| view.state != ObjectiveState::Complete)
+            .map(|view| view.index)
         {
-            Some("E  /  Recover crystal")
-        } else if self.near(at(b'A')) && self.switches == 0 {
-            Some(if self.count() == 3 {
-                "E  /  Awaken altar I"
-            } else {
-                "Altar I  /  Three crystals required"
-            })
-        } else if self.near(at(b'B')) && self.switches < 2 {
-            Some(if self.switches == 1 {
-                "E  /  Awaken altar II"
-            } else {
-                "Altar II  /  Wake altar I first"
-            })
-        } else {
-            None
+            Some(0..=2) => format!(
+                "Search the side chambers: {} / {required} crystals remain",
+                required - count
+            ),
+            Some(3) => "Find altar I in the northern chamber".into(),
+            Some(4) => "Altar I is awake. Find altar II".into(),
+            Some(_) => "Seal open. Walk through to the daylight".into(),
+            None => "Expedition complete".into(),
         }
     }
+    fn blocker(&self, target: Interactable) -> String {
+        let view = self
+            .objectives
+            .inspect(target.objective())
+            .expect("authored objective");
+        let missing = view.blockers.missing_all;
+        let (count, required) = self.crystal_progress();
+        if missing & 7 != 0 {
+            format!("Altar I locked / Three crystals required ({count} / {required} recovered)")
+        } else if missing & (1 << 3) != 0 {
+            format!("Altar II locked / Wake altar I first ({count} / {required} crystals)")
+        } else {
+            format!(
+                "Seal locked / Awaken both numbered altars ({} / 2 awake)",
+                self.switches
+            )
+        }
+    }
+    fn interact(&mut self) {
+        let (focus, target) = self.select_focus();
+        self.focus = focus;
+        let Some(target) = target else {
+            return;
+        };
+        if !self.target_ready(target) {
+            self.message(self.blocker(target));
+            return;
+        }
+        match target {
+            Interactable::Crystal(i) => {
+                self.objective_event(i);
+                self.message(match self.count() {
+                    1 => "Crystal 1 / 3 recovered. Two remain in the side chambers.",
+                    2 => "Crystal 2 / 3 recovered. One more to find.",
+                    _ => "All three recovered. Find altar I, then altar II.",
+                });
+            }
+            Interactable::Altar(0) => {
+                self.objective_event(3);
+                self.message("Altar I awakened. The second altar is ready.");
+            }
+            Interactable::Altar(_) => {
+                self.objective_event(4);
+                self.message("The seal is open. Walk through to the daylight.");
+            }
+            Interactable::Gate => self.message(self.objective_hint()),
+        }
+    }
+    fn prompt(&self, interact_hint: &str) -> Option<String> {
+        self.target().map(|target| {
+            if !self.target_ready(target) {
+                return self.blocker(target);
+            }
+            match target {
+                Interactable::Crystal(_) => format!("{interact_hint} - Recover crystal"),
+                Interactable::Altar(0) => format!("{interact_hint} - Awaken altar I"),
+                Interactable::Altar(_) => format!("{interact_hint} - Awaken altar II"),
+                Interactable::Gate => "Seal open / Walk through to daylight".into(),
+            }
+        })
+    }
     fn step(&mut self, input: Input, dt: f32) {
-        self.notice_time = (self.notice_time - dt).max(0.0);
         if self.won {
             return;
         }
+        self.notice_time = (self.notice_time - dt).max(0.0);
         self.elapsed += dt;
         self.yaw += input.turn * dt;
         let front = forward(self.yaw);
@@ -283,6 +436,7 @@ impl Game {
             self.velocity = (next - self.position) / dt;
         }
         self.position = next;
+        self.focus = self.select_focus().0;
         if input.interact {
             self.interact();
         }
@@ -290,6 +444,105 @@ impl Game {
             self.objective_event(5);
             self.message("Expedition complete.");
         }
+    }
+}
+
+#[derive(Default)]
+struct Progress {
+    completed: u64,
+    pickups: usize,
+    altars: u8,
+    won: bool,
+}
+
+// Host lifecycle stays testable without a window, audio device or renderer.
+struct Expedition {
+    game: Game,
+    session: GameSession,
+    pilot: Pilot,
+    autoplay: bool,
+    discard_frame: bool,
+}
+impl Expedition {
+    fn new(autoplay: bool) -> Self {
+        Self {
+            game: Game::new(),
+            session: GameSession::new(60., 8, autoplay),
+            pilot: Pilot::default(),
+            autoplay,
+            discard_frame: false,
+        }
+    }
+    fn start(&mut self) {
+        if self.session.start() {
+            self.discard_frame = true;
+        }
+    }
+    fn restart(&mut self) {
+        self.game = Game::new();
+        self.game
+            .message("Fresh expedition. All crystals and altars reset.");
+        self.session.restart();
+        self.pilot = Pilot::default();
+        self.discard_frame = true;
+    }
+    fn set_paused(&mut self, paused: bool) {
+        if self.session.set_paused(paused) {
+            self.game.velocity = Vec2::ZERO;
+            // A browser may deliver a long frame on refocus. Discard that frame
+            // as well as all paused frames, including its stale input edges.
+            self.discard_frame = true;
+        }
+    }
+    fn advance(&mut self, elapsed: f64, sample_input: impl FnOnce() -> Input) -> Progress {
+        let mut progress = Progress::default();
+        if !self.session.is_playing() {
+            return progress;
+        }
+        if std::mem::take(&mut self.discard_frame) {
+            return progress;
+        }
+        let frame = self.session.advance(elapsed);
+        if frame.steps == 0 {
+            return progress;
+        }
+        // Leave pending edges in PlayerInput until a real tick. Its existing
+        // focus/context handling then also clears taps across host suspension.
+        let mut input = sample_input();
+        let previous_completed = self.game.completed_mask();
+        for _ in 0..frame.steps {
+            let command = if self.autoplay {
+                self.pilot.input(&self.game)
+            } else {
+                Input {
+                    // One render edge is spent on one tick, even if another
+                    // interactable becomes reachable during catch-up.
+                    interact: std::mem::take(&mut input.interact),
+                    ..input
+                }
+            };
+            let collected = self.game.count();
+            let switches = self.game.switches;
+            self.game.step(command, frame.dt);
+            progress.pickups += self.game.count() - collected;
+            progress.altars += self.game.switches - switches;
+            if self.game.won {
+                progress.won = self.session.finish(true);
+                break;
+            }
+        }
+        progress.completed = self.game.completed_mask() & !previous_completed;
+        progress
+    }
+}
+
+struct CaveVisibility<'a>(&'a Game);
+impl VisibilityQuery for CaveVisibility<'_> {
+    fn clear(&mut self, from: Vec3, to: Vec3) -> bool {
+        !self.0.obstacles().any(|wall| {
+            wall.cast_segment(vec2(from.x, from.z), vec2(to.x, to.z))
+                .is_some()
+        })
     }
 }
 
@@ -492,6 +745,46 @@ struct Piece {
     rotation: Quat,
     wall_sides: Option<[bool; 4]>,
 }
+
+// Cosmetic phases are separate from expedition time. Suppressed time is never
+// accumulated, so resuming a preference cannot jump through hidden animation.
+// There are no transient flashes, particles, camera impulses or FeedbackController
+// in this exploration game; accepted audio remains independent of these phases.
+#[derive(Default)]
+struct Presentation {
+    motion_time: f32,
+    glow_time: f32,
+    pulse: bool,
+}
+impl Presentation {
+    fn advance(&mut self, elapsed: f32, policy: FeedbackPolicy) {
+        let dt = if elapsed.is_finite() {
+            elapsed.clamp(0., 0.25)
+        } else {
+            0.
+        };
+        if !policy.reduced_motion() {
+            self.motion_time += dt * policy.intensity();
+        }
+        self.pulse = !policy.reduced_flash() && policy.intensity() > 0.;
+        if self.pulse {
+            self.glow_time += dt * policy.intensity();
+        }
+    }
+}
+
+// Formatting is bounded and reads live bindings without consuming input. A long
+// binding list points to Controls instead of truncating into a misleading key.
+fn action_hint(input: &PlayerInput, name: &str) -> String {
+    // Leave room for the action in a 21-column, 320px overlay. Larger lists
+    // remain available in Controls rather than displacing essential guidance.
+    let mut bytes = [0; 12];
+    input
+        .format_hint(name, &mut bytes)
+        .unwrap_or("See Controls")
+        .into()
+}
+
 struct Scene {
     pulse: ShaderMaterial,
     #[cfg(not(target_arch = "wasm32"))]
@@ -657,7 +950,15 @@ impl Scene {
             daylight: Mesh3d::cuboid(vec3(2.4, 3.5, 0.08), Color::from_rgba(225, 235, 182, 255)),
         }
     }
-    fn draw(&self, game: &Game, material: &LitMaterial, eye: Vec3, time: f32) {
+    fn draw(
+        &self,
+        game: &Game,
+        material: &LitMaterial,
+        eye: Vec3,
+        presentation: &Presentation,
+        active: bool,
+    ) {
+        let time = presentation.motion_time;
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(watcher) = self.watcher.borrow_mut().as_mut()
             && let Err(error) = watcher.poll()
@@ -701,9 +1002,18 @@ impl Scene {
             ambient: 1.0,
             ..settings
         });
-        self.pulse
-            .begin([[time, 0., 0., 0.], [0.; 4], [0.; 4], [0.; 4]])
-            .unwrap();
+        // Bypass the authored pulse shader for reduced flash. Freezing its time
+        // alone still pulses as bobbing changes the shader's world.y input.
+        if presentation.pulse {
+            self.pulse
+                .begin([
+                    [presentation.glow_time, 0., 0., 0.],
+                    [0.; 4],
+                    [0.; 4],
+                    [0.; 4],
+                ])
+                .unwrap();
+        }
         for (i, &p) in game.crystals.iter().enumerate() {
             if game.collected[i] {
                 continue;
@@ -717,7 +1027,9 @@ impl Scene {
                 rotation * Quat::from_rotation_x(std::f32::consts::PI),
             );
         }
-        self.pulse.end();
+        if presentation.pulse {
+            self.pulse.end();
+        }
         for (index, marker) in b"AB".iter().enumerate() {
             let p = at(*marker);
             for bar in 0..=index {
@@ -744,14 +1056,67 @@ impl Scene {
         }
         self.daylight
             .draw(world(at(b'X') + vec2(0.0, -0.7), 1.75), Quat::IDENTITY);
+        if active && let Some(target) = game.target() {
+            let p = game.target_position(target);
+            let color = if game.target_ready(target) {
+                MINT
+            } else {
+                WARM
+            };
+            // A steady ground ring identifies the exact prompted object.
+            // Depth-tested geometry cannot reveal targets through cave walls.
+            for segment in 0..24 {
+                let point = |n: u32| {
+                    let angle = n as f32 * std::f32::consts::TAU / 24.;
+                    world(p + vec2(angle.cos(), angle.sin()) * 0.85, 0.035)
+                };
+                draw_line_3d(point(segment), point(segment + 1), color);
+            }
+        }
         material.end();
     }
 }
 
 fn text_center(text: &str, y: f32, size: u16, color: Color) {
-    let x = (screen_width() - measure_text(text, None, size, 1.0).width) * 0.5;
-    draw_text(text, x + 1.0, y + 1.0, size as f32, BLACK);
-    draw_text(text, x, y, size as f32, color);
+    let width = get_default_font()
+        .try_metrics(size, 1.)
+        .expect("nonzero HUD size")
+        .measure_line(text)
+        .expect("bounded HUD text")
+        .width
+        .max(1.);
+    let scale = ((screen_width() - 32.).max(1.) / width).min(1.);
+    let x = (screen_width() - width * scale) * 0.5;
+    for (offset, tint) in [(1., BLACK), (0., color)] {
+        draw_text_ex(
+            text,
+            x + offset,
+            y + offset,
+            TextParams {
+                font_size: size,
+                font_scale: scale,
+                color: tint,
+            },
+        );
+    }
+}
+fn wrapped_text(ui: &mut ferravex_render::ui::Ui, text: &str, top: f32, height: f32, color: Color) {
+    use ferravex_render::ui::{Align, TextStyle, UiRect};
+    ui.text(
+        UiRect {
+            min: [16., top],
+            size: [(screen_width() - 32.).max(1.), height],
+        },
+        text,
+        TextStyle {
+            size: 18.,
+            color,
+            align: Align::Center,
+            wrap: true,
+            shadow: true,
+        },
+    )
+    .expect("bounded expedition overlay");
 }
 fn window_conf() -> Conf {
     ferravex_render::window_conf("Ferravex / Crystal Cavern")
@@ -778,7 +1143,9 @@ async fn game() {
     }])
     .unwrap();
     ferravex_render::set_quality(ferravex_render::lighting::Quality::Medium);
-    let mut game = Game::new();
+    let mut expedition = Expedition::new(demo.autoplay);
+    let mut presentation = Presentation::default();
+    let mut overlay_text = ferravex_render::ui::Ui::new();
     let mut view_rig = Rig3::new(Settings3 {
         position_half_life: 0.,
         target_half_life: 0.,
@@ -788,8 +1155,6 @@ async fn game() {
     .unwrap();
     let scene = Scene::new();
     let material = LitMaterial::new().expect("Ferravex cave shader");
-    let mut clock = FixedClock::new(60.0, 8);
-    let mut pilot = Pilot::default();
     let mut pitch = -0.03_f32;
     let mut player_input = PlayerInput::preset("crystal-cavern", Preset::Explore);
     player_input.set_mouse_look_button(Some(1)).unwrap();
@@ -831,10 +1196,18 @@ async fn game() {
         )
         .unwrap();
     let mut help = true;
+    let mut confirm_requested = false;
     loop {
+        // Read on every presentation frame, before accepted feedback and draws,
+        // including Ready, Controls, paused and frames with no fixed update.
+        let policy = ferravex_render::preferences::feedback_policy();
         ferravex_render::ui::warm_up_font_sizes(&[17, 20, 22, 23, 24, 38]);
         let w = screen_width();
         let h = screen_height();
+        overlay_text.begin(
+            ferravex_render::ui::Viewport::responsive([w.max(1.), h.max(1.)], [0.; 4])
+                .expect("positive cave viewport"),
+        );
         player_input
             .set_touch_layout(&[
                 Control {
@@ -860,60 +1233,74 @@ async fn game() {
             ])
             .unwrap();
         player_input.sample_play();
-        let dt = if demo.autoplay {
-            demo.dt()
-        } else {
-            player_input.simulation_dt(demo.dt())
-        };
-        let restarted =
-            player_input.pressed("restart") || game.won && player_input.pressed("confirm");
+        let clicked_confirm = std::mem::take(&mut confirm_requested);
+        let confirm = player_input.pressed("confirm") || clicked_confirm;
+        let activate = confirm && !expedition.session.is_playing();
+        let restarted = player_input.pressed("restart")
+            || expedition.session.state() == SessionState::Won && confirm;
         if restarted {
-            game = Game::new();
-            clock.reset();
-            pilot = Pilot::default();
+            expedition.restart();
+            presentation = Presentation::default();
+            sound.reset();
             view_rig.cut();
             pitch = -0.03;
+        } else if confirm && expedition.session.state() == SessionState::Ready {
+            expedition.start();
         }
+        if restarted || activate {
+            // Suppress keys held across start/retry/resume, then restore the
+            // gameplay context. PlayerInput retains the manual pause reason.
+            player_input.set_paused(true);
+            player_input.set_paused(false);
+            player_input.sample(true);
+        }
+        expedition.set_paused(!demo.autoplay && !player_input.gameplay_active());
         if player_input.pressed("help") {
             help = !help;
         }
+        let elapsed = demo.dt();
+        let dt = if expedition.session.is_playing() && !expedition.discard_frame {
+            elapsed
+        } else {
+            0.
+        };
         let movement = player_input.movement();
         let look = player_input.look(dt);
-        if !demo.autoplay && !restarted {
-            game.yaw += look.x;
+        if !demo.autoplay && expedition.session.is_playing() && !expedition.discard_frame {
+            expedition.game.yaw += look.x;
             pitch = (pitch - look.y).clamp(-0.8, 0.8);
         }
-        let mut input = Input {
-            movement: if restarted { Vec2::ZERO } else { movement },
+        let previous_elapsed = expedition.game.elapsed;
+        let progress = expedition.advance(elapsed as f64, || Input {
+            movement,
+            interact: player_input.pressed("interact"),
             ..Default::default()
-        };
-        let frame = clock.advance(dt as f64);
-        for _ in 0..frame.steps {
-            if demo.autoplay {
-                input = pilot.input(&game);
-            } else {
-                input.interact = player_input.pressed("interact");
-            }
-            let collected = game.count();
-            let switches = game.switches;
-            let won = game.won;
-            game.step(input, frame.dt);
-            if game.count() > collected {
-                sound.cue(Cue::Pickup, 0.55);
-            }
-            if game.switches != switches {
-                sound.cue(Cue::Impact(Surface::Metal), 0.4);
-            }
-            if game.won && !won {
-                sound.cue(Cue::Success, 0.65);
+        });
+        presentation.advance(expedition.game.elapsed - previous_elapsed, policy);
+        for index in 0..6 {
+            if progress.completed & (1 << index) != 0 {
+                ferravex_render::performance::event(
+                    ferravex_play::performance::DiagnosticKind::Objective,
+                    index as f32,
+                );
             }
         }
+        if progress.pickups > 0 {
+            sound.cue(Cue::Pickup, 0.55);
+        }
+        if progress.altars > 0 {
+            sound.cue(Cue::Impact(Surface::Metal), 0.4);
+        }
+        if progress.won {
+            sound.cue(Cue::Success, 0.65);
+        }
+        let game = &expedition.game;
         sound.set_acoustics(acoustics.sample(world(game.position, 0.), false).unwrap());
         score.update(dt.min(0.25), (game.count() as f32 / 3.).clamp(0., 1.));
         sound.walk(
             world(game.position, 0.),
             true,
-            !game.won && (demo.autoplay || player_input.gameplay_active()),
+            expedition.session.is_playing(),
             Surface::Stone,
             1.45,
         );
@@ -944,54 +1331,155 @@ async fn game() {
             z_far: 80.,
             ..Default::default()
         });
-        scene.draw(&game, &material, eye, demo.time());
+        scene.draw(
+            game,
+            &material,
+            eye,
+            &presentation,
+            expedition.session.is_playing(),
+        );
         set_default_camera();
+        let use_hint = action_hint(&player_input, "interact");
+        let confirm_hint = action_hint(&player_input, "confirm");
+        let retry_hint = action_hint(&player_input, "restart");
+        let pause_hint = action_hint(&player_input, "pause");
+        let help_hint = action_hint(&player_input, "help");
+        draw_rectangle(0., 0., w, 105., Color::new(0.03, 0.08, 0.08, 0.8));
         draw_text("CRYSTAL CAVERN", 26.0, 36.0, 22.0, WARM);
-        draw_text(&format!("{} / 3", game.count()), 26.0, 63.0, 24.0, MINT);
-        if !game.won {
+        text_center(
+            &format!(
+                "Crystals {} / 3    Altars {} / 2    Seal {}",
+                game.count(),
+                game.switches,
+                if game.open() { "OPEN" } else { "LOCKED" }
+            ),
+            64.,
+            20,
+            MINT,
+        );
+        text_center(&game.objective_hint(), 90., 17, WHITE);
+        // A steady six-part bar includes walking into daylight, not just opening
+        // the seal. It reads accepted graph completion without mutating it.
+        let bar_width = (w - 32.).max(1.);
+        for view in game.objectives.iter() {
+            draw_rectangle(
+                16. + view.index as f32 * bar_width / 6.,
+                100.,
+                (bar_width / 6. - 2.).max(1.),
+                3.,
+                if view.state == ObjectiveState::Complete {
+                    MINT
+                } else {
+                    Color::new(0.2, 0.3, 0.3, 1.)
+                },
+            );
+        }
+        if expedition.session.is_playing() {
+            let target_color = game
+                .target()
+                .map_or(Color::new(0.8, 0.9, 0.85, 0.6), |target| {
+                    if game.target_ready(target) {
+                        MINT
+                    } else {
+                        WARM
+                    }
+                });
             draw_circle(
                 screen_width() * 0.5,
                 screen_height() * 0.5,
-                1.7,
-                Color::new(0.8, 0.9, 0.85, 0.6),
+                if game.target().is_some() { 3. } else { 1.7 },
+                target_color,
             );
-            if let Some(prompt) = game.prompt() {
-                text_center(prompt, screen_height() * 0.65, 23, MINT);
+            if let Some(prompt) = game.prompt(&use_hint) {
+                // Locked altar copy occupies four lines at 320px. Keep it
+                // above the notice and preserve a gap before the help rows.
+                let prompt_top = (h * 0.55).min(h - 230.).max(114.);
+                draw_rectangle(
+                    0.,
+                    prompt_top - 8.,
+                    w,
+                    88.,
+                    Color::new(0.03, 0.08, 0.08, 0.85),
+                );
+                wrapped_text(&mut overlay_text, &prompt, prompt_top, 72., target_color);
             }
             if game.notice_time > 0.0 {
-                text_center(game.notice, screen_height() - 70.0, 20, WARM);
+                wrapped_text(&mut overlay_text, &game.notice, h - 150., 72., WARM);
             }
             if help {
                 text_center(
-                    "WASD  Move    Arrows / drag  Look    E  Interact    R  Restart    H  Hide help",
-                    screen_height() - 28.0,
+                    &format!("{use_hint}: Use    {pause_hint}: Pause"),
+                    h - 56.,
                     17,
                     Color::new(0.78, 0.79, 0.74, 1.0),
                 );
+                text_center(
+                    &format!("{retry_hint}: Retry    {help_hint}: Help"),
+                    h - 34.,
+                    17,
+                    WHITE,
+                );
+                text_center("Move / look bindings: Controls (F2)", h - 12., 17, WHITE);
             }
         } else {
+            let top = (h * 0.28).max(110.).min((h - 240.).max(0.));
             draw_rectangle(
                 0.0,
-                screen_height() * 0.34,
+                top,
                 screen_width(),
-                150.0,
-                Color::new(0.03, 0.08, 0.08, 0.86),
+                240.0,
+                Color::new(0.03, 0.08, 0.08, 0.94),
             );
-            text_center("DAYLIGHT", screen_height() * 0.34 + 52.0, 38, MINT);
-            text_center(
-                &format!("Three crystals recovered  /  {:.0}s", game.elapsed),
-                screen_height() * 0.34 + 86.0,
-                22,
-                WARM,
-            );
-            text_center(
-                "R  /  Explore again",
-                screen_height() * 0.34 + 120.0,
-                20,
-                WHITE,
+            let (title, detail, action) = match expedition.session.state() {
+                SessionState::Ready => (
+                    "THE EXPEDITION",
+                    "Recover 3 crystals. Wake altar I, then II. Find daylight.".to_owned(),
+                    "Begin expedition",
+                ),
+                SessionState::Paused => (
+                    "EXPEDITION PAUSED",
+                    "Your crystals and expedition time are safe.".to_owned(),
+                    "Resume expedition",
+                ),
+                _ => (
+                    "DAYLIGHT",
+                    format!(
+                        "All 6 objectives complete. Expedition time: {:.1}s",
+                        game.elapsed
+                    ),
+                    "Explore again",
+                ),
+            };
+            text_center(title, top + 45., 38, MINT);
+            wrapped_text(&mut overlay_text, &detail, top + 62., 60., WARM);
+            let guidance = match expedition.session.state() {
+                SessionState::Ready => {
+                    format!("{use_hint}: Use nearby.\nMove/look: Controls.")
+                }
+                SessionState::Paused => {
+                    format!("{pause_hint}: Resume.\n{retry_hint}: Reset all.")
+                }
+                _ => format!("{retry_hint}: Retry.\nResets crystals,\naltars and time."),
+            };
+            wrapped_text(&mut overlay_text, &guidance, top + 120., 60., WHITE);
+            confirm_requested |= ferravex_render::ui::button_with_options(
+                Rect::new(
+                    (w - (w - 32.).clamp(1., 320.)) * 0.5,
+                    top + 184.,
+                    (w - 32.).clamp(1., 320.),
+                    44.,
+                ),
+                &format!("{confirm_hint} / {action}"),
+                ferravex_render::ui::ButtonOptions {
+                    enabled: !player_input.controls_open(),
+                    selected: true,
+                },
             );
         }
-        if player_input.touch_seen() && !player_input.touch_customized() && !game.won {
+        if player_input.touch_seen()
+            && !player_input.touch_customized()
+            && expedition.session.is_playing()
+        {
             let (origin, delta) = player_input
                 .touch_stick(0, 1)
                 .unwrap_or((vec2(90., h - 105.), Vec2::ZERO));
@@ -1006,13 +1494,18 @@ async fn game() {
             draw_circle_lines(w - 65., h - 90., 44., 2., tint);
             draw_text("USE", w - 82., h - 84., 17., tint);
         }
-        player_input.draw_settings();
+        overlay_text.finish(false);
+        // finish only resolves UI input; queued descriptions, prompts and
+        // notices need an explicit paint before the Controls overlay.
+        overlay_text.paint();
+        player_input.draw_controls();
         if demo.finish_frame() {
             break;
         }
         next_frame().await;
     }
     if demo.autoplay {
+        let game = &expedition.game;
         println!(
             "Crystal Cavern: crystals={}, altars={}, won={}, elapsed={:.2}",
             game.count(),
@@ -1024,8 +1517,253 @@ async fn game() {
 }
 
 #[cfg(test)]
+mod journey200_138;
+
+#[cfg(test)]
+mod journey200_tests;
+
+#[cfg(test)]
+mod journey200_193;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use ferravex_play::input::{ActionMap, ContextId};
+
+    fn interaction_map() -> (ActionMap, usize, InputCode) {
+        let mut map = ActionMap::default();
+        let key = InputCode::Key(KeyCode::E as u16);
+        let action = map
+            .named_action(
+                "interact",
+                ActionKind::Button,
+                ContextId::GLOBAL,
+                vec![Binding::digital(key)],
+            )
+            .unwrap();
+        (map, action, key)
+    }
+
+    fn playing() -> Expedition {
+        let mut expedition = Expedition::new(false);
+        expedition.start();
+        expedition.advance(0., Input::default);
+        expedition
+    }
+
+    #[test]
+    fn ready_and_start_do_not_charge_menu_time_or_reuse_input() {
+        let mut expedition = Expedition::new(false);
+        expedition.game.position = expedition.game.crystals[0];
+        let input = Input {
+            interact: true,
+            ..Default::default()
+        };
+        expedition.advance(90., || input);
+        assert_eq!(expedition.session.state(), SessionState::Ready);
+        assert_eq!(expedition.game.elapsed, 0.);
+        assert_eq!(expedition.game.count(), 0);
+        expedition.start();
+        expedition.advance(90., || input);
+        assert_eq!(expedition.session.tick(), 0);
+        expedition.advance(1. / 60., Input::default);
+        assert_eq!(expedition.session.tick(), 1);
+        assert_eq!(expedition.game.count(), 0);
+    }
+
+    #[test]
+    fn interaction_tap_survives_frames_without_a_tick() {
+        let mut expedition = playing();
+        expedition.game.position = expedition.game.crystals[0];
+        let (mut map, action, key) = interaction_map();
+        map.feed(key, 1.);
+        map.feed(key, 0.);
+        for _ in 0..2 {
+            expedition.advance(0.001, || Input {
+                interact: map.consume_tick(action).pressed,
+                ..Default::default()
+            });
+        }
+        assert_eq!(expedition.game.count(), 0);
+        assert!(map.peek(action).pressed);
+        let progress = expedition.advance(0.015, || Input {
+            interact: map.consume_tick(action).pressed,
+            ..Default::default()
+        });
+        assert_eq!(progress.pickups, 1);
+        assert_eq!(expedition.game.count(), 1);
+        assert!(!map.peek(action).pressed);
+    }
+
+    #[test]
+    fn one_interaction_edge_cannot_collect_multiple_targets_during_catchup() {
+        let mut expedition = playing();
+        let p = expedition.game.crystals[0];
+        expedition.game.crystals.fill(p);
+        expedition.game.position = p;
+        let input = Input {
+            interact: true,
+            ..Default::default()
+        };
+        let progress = expedition.advance(0.12, || input);
+        assert!(expedition.session.tick() > 1);
+        assert_eq!(progress.pickups, 1);
+        assert_eq!(expedition.game.count(), 1);
+        expedition.advance(0.1, Input::default);
+        assert_eq!(expedition.game.count(), 1);
+        expedition.advance(1. / 60., || input);
+        assert_eq!(expedition.game.count(), 2);
+    }
+
+    #[test]
+    fn pause_and_refocus_clear_pending_input_without_advancing_time() {
+        let mut expedition = playing();
+        expedition.game.position = expedition.game.crystals[0];
+        expedition.game.velocity = Vec2::Y * SPEED;
+        let input = Input {
+            interact: true,
+            movement: Vec2::Y,
+            ..Default::default()
+        };
+        expedition.advance(0.001, || input);
+        let position = expedition.game.position;
+        let notice_time = expedition.game.notice_time;
+        expedition.set_paused(true);
+        assert_eq!(expedition.game.velocity, Vec2::ZERO);
+        expedition.advance(120., || input);
+        assert_eq!(expedition.game.elapsed, 0.);
+        assert_eq!(expedition.game.notice_time, notice_time);
+        assert_eq!(expedition.game.position, position);
+        expedition.set_paused(false);
+        expedition.advance(120., || input);
+        assert_eq!(expedition.session.tick(), 0);
+        expedition.advance(1. / 60., Input::default);
+        assert_eq!(expedition.session.tick(), 1);
+        assert_eq!(expedition.game.count(), 0);
+        assert_eq!(expedition.game.position, position);
+    }
+
+    #[test]
+    fn focus_loss_between_render_frames_discards_a_buffered_tap() {
+        let mut expedition = playing();
+        expedition.game.position = expedition.game.crystals[0];
+        let (mut map, action, key) = interaction_map();
+        map.feed(key, 1.);
+        expedition.advance(0.001, || Input {
+            interact: map.consume_tick(action).pressed,
+            ..Default::default()
+        });
+        assert!(map.peek(action).pressed);
+        // PlayerInput clears its map on a focus-epoch change even when the host
+        // delivers no render frame while unfocused. No second latch survives.
+        map.lose_focus();
+        expedition.advance(1. / 60., || Input {
+            interact: map.consume_tick(action).pressed,
+            ..Default::default()
+        });
+        assert_eq!(expedition.game.count(), 0);
+    }
+
+    #[test]
+    fn nearest_visible_target_drives_prompt_and_accepted_collection() {
+        let mut game = Game::new();
+        let p = game.crystals[0];
+        game.crystals[1] = p + vec2(0.8, 0.);
+        game.position = p + vec2(0.65, 0.);
+        assert_eq!(game.target(), Some(Interactable::Crystal(1)));
+        assert!(game.prompt("E").unwrap().contains("Recover crystal"));
+        game.interact();
+        assert!(!game.collected[0]);
+        assert!(game.collected[1]);
+        assert!(game.notice.contains("1 / 3"));
+        let corner = center(5, 8);
+        game.position = corner + vec2(-1.65, 1.);
+        game.crystals[0] = corner + vec2(-1., 1.65);
+        // Nearby floor points separated by the authored wall's corner.
+        assert!(game.position.distance(game.crystals[0]) < 1.7);
+        assert!(!game.visible(game.crystals[0]));
+        assert_ne!(game.target(), Some(Interactable::Crystal(0)));
+    }
+
+    #[test]
+    fn altar_and_gate_prompts_explain_prerequisites_and_exit() {
+        let mut game = Game::new();
+        game.position = at(b'A');
+        assert!(!game.target_ready(game.target().unwrap()));
+        assert!(
+            game.prompt("E")
+                .unwrap()
+                .contains("Three crystals required")
+        );
+        game.interact();
+        assert_eq!(game.switches, 0);
+        for i in 0..3 {
+            game.objective_event(i);
+        }
+        assert!(game.target_ready(game.target().unwrap()));
+        assert!(game.prompt("E").unwrap().contains("Awaken altar I"));
+        game.interact();
+        assert_eq!(game.target(), None);
+        game.position = at(b'B');
+        assert!(game.prompt("E").unwrap().contains("Awaken altar II"));
+        game.interact();
+        assert!(game.open());
+        game.position = at(b'G') + vec2(0., 1.);
+        assert_eq!(game.target(), Some(Interactable::Gate));
+        assert!(game.prompt("E").unwrap().contains("Walk through"));
+        assert!(
+            !game.won,
+            "Opening the gate does not complete the expedition"
+        );
+    }
+
+    #[test]
+    fn completion_is_once_and_retry_resets_the_entire_expedition() {
+        let mut expedition = playing();
+        for i in 0..5 {
+            expedition.game.objective_event(i);
+        }
+        expedition.game.position = at(b'X');
+        let progress = expedition.advance(0.1, Input::default);
+        assert!(progress.won);
+        assert_eq!(expedition.session.state(), SessionState::Won);
+        // Catch-up stops on the winning tick, not the end of the render frame.
+        assert!((expedition.game.elapsed - 1. / 60.).abs() < 0.0001);
+        let elapsed = expedition.game.elapsed;
+        let notice_time = expedition.game.notice_time;
+        expedition.set_paused(true);
+        assert!(!expedition.advance(30., Input::default).won);
+        assert_eq!(expedition.game.elapsed, elapsed);
+        assert_eq!(expedition.game.notice_time, notice_time);
+        assert_eq!(expedition.session.state(), SessionState::Won);
+        expedition.restart();
+        assert_eq!(expedition.session.state(), SessionState::Playing);
+        assert_eq!(expedition.session.tick(), 0);
+        assert_eq!(expedition.game.count(), 0);
+        assert_eq!(expedition.game.switches, 0);
+        assert_eq!(expedition.game.elapsed, 0.);
+        assert_eq!(expedition.game.position, at(b'S'));
+        assert_eq!(expedition.game.velocity, Vec2::ZERO);
+        assert_eq!(expedition.game.yaw, 0.);
+        assert!(!expedition.game.open());
+        assert!(expedition.pilot.path.is_empty());
+        assert!(expedition.pilot.goal.is_none());
+    }
+
+    #[test]
+    fn autoplay_completes_through_the_session_with_irregular_frames() {
+        let mut expedition = Expedition::new(true);
+        for frame in 0..12000 {
+            expedition.advance([1. / 144., 1. / 30., 0.07][frame % 3], Input::default);
+            if expedition.session.state() == SessionState::Won {
+                break;
+            }
+        }
+        assert_eq!(expedition.session.state(), SessionState::Won);
+        assert_eq!(expedition.game.count(), 3);
+        assert_eq!(expedition.game.switches, 2);
+        assert!(expedition.game.elapsed < 120.);
+    }
 
     #[test]
     fn exploration_accelerates_quickly_and_release_has_a_short_stop() {

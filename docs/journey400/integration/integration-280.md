@@ -1,0 +1,9 @@
+# Journey400 280 parent integration
+
+Captured exact opt-in inspection source over validated279/284 and affine216 before281 began. Existing reexports register the APIs; no root edits or host/global export were required. Parent frozen-source commands and inventory are in `integration-280/report.json` and `source-capture.json`.
+
+Parent passed342 renderer unit/integration/doctests, zero failures with14 preexisting platform-dependent ignores, strict renderer all-target/all-feature Clippy, native all-feature facade compilation and renderer/facade Wasm compilation. These include actual hit/paint/inspection equality, unavailable full-label bounds, stale-frame removal and warmed allocation cases.
+
+Additionally compiled and executed an actual native UI exporter, then parsed its output with Python's JSON parser. It preserves u64::MAX as a decimal string, full Unicode/quote/backslash/newline label content, the separately shortened painted label and exact clipped rectangle. Short output rejection preserves all caller bytes, and success leaves the unused tail intact. Commands/fresh artifact/source hash are in `export-report.json`; raw output is `export-raw.json`. This is explicit caller opt-in metadata, not game-state export or an action backdoor.
+
+No game has been silently opted in. Both labs currently use immediate free UI helpers; they need actual retained-UI adoption before those controls can be inspected. A fresh opted-in consumer build and screenshot comparison remains pending for game integration. Logical clipped bounds do not prove ink visibility, occlusion, contrast, device readability or screen-reader behavior. No browser/GPU/device/audio/performance claim is inferred from headless geometry or JSON parsing.281 must preserve optional full-label and modal bookkeeping during transaction rollback.

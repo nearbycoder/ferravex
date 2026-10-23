@@ -35,6 +35,8 @@ pub struct EmitterDesc {
     pub rotation_jitter: f32,
     pub inherit_velocity: f32,
     pub rate: f32,
+    /// Maximum samples attempted by each update or burst call. Separate calls
+    /// do not share a budget; use [`Emitter::burst_with_budget`] to lower it.
     pub max_per_update: u16,
 }
 impl Default for EmitterDesc {
@@ -176,6 +178,36 @@ impl EmissionStats {
         self.invalid = self.invalid.saturating_add(b.invalid);
     }
 }
+/// Read-only burst admission at the pool's current occupancy.
+///
+/// `requested == admitted + dropped_budget + dropped_capacity`. Admission
+/// bounds the work attempted, not successful spawns: generated particles can
+/// still fail validation. The actual outcome is returned as [`EmissionStats`].
+/// This value reserves no slots and remains applicable only while the emitter
+/// configuration and pool occupancy are unchanged. See [`Emitter::burst_admission`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BurstAdmission {
+    /// Total demand, including particles that will be skipped.
+    pub requested: u64,
+    /// Maximum samples attempted, bounded by both budgets and available slots.
+    pub admitted: u64,
+    /// Demand beyond the smaller of the caller and configured budgets.
+    pub dropped_budget: u64,
+    /// Budgeted demand beyond the pool's currently available slots.
+    pub dropped_capacity: u64,
+}
+impl BurstAdmission {
+    fn new(count: u64, budget: u16, available: usize) -> Self {
+        let budget = count.min(u64::from(budget));
+        let admitted = budget.min(available as u64);
+        Self {
+            requested: count,
+            admitted,
+            dropped_budget: count - budget,
+            dropped_capacity: budget - admitted,
+        }
+    }
+}
 struct Random(u64);
 impl Random {
     fn new(seed: u64, sequence: u64) -> Self {
@@ -288,7 +320,7 @@ impl Emitter {
         } else {
             [0.; 3]
         };
-        let stats = self.emit(count, pool, |i| {
+        let stats = self.emit(count, self.desc.max_per_update, pool, |i| {
             let birth = if self.desc.rate > 0. {
                 ((i + 1) as f64 - old_phase) / f64::from(self.desc.rate)
             } else {
@@ -312,14 +344,88 @@ impl Emitter {
         Ok(stats)
     }
     /// Burst samples share a birth time. Continuous rate phase is unchanged.
+    /// Uses the configured per-call maximum; see [`Self::burst_with_budget`]
+    /// for a caller-supplied lower budget and detailed admission semantics.
     pub fn burst(
         &mut self,
         count: u32,
         transform: EmitterTransform,
         pool: &mut ParticlePool,
     ) -> Result<EmissionStats, ParticleError> {
+        self.burst_with_budget(count, self.desc.max_per_update, transform, pool)
+    }
+    /// Preview a burst's work and capacity limits without allocating, consuming
+    /// sequence numbers, changing statistics or reserving pool slots.
+    ///
+    /// `budget` is a per-call limit, capped by [`EmitterDesc::max_per_update`].
+    /// Zero suppresses all samples. Budget drops are counted before capacity
+    /// drops, so every requested particle belongs to exactly one category.
+    /// This query does not validate a transform or sample any particles.
+    ///
+    /// ```
+    /// use ferravex_play::particles::{BurstAdmission, Emitter, EmitterDesc, ParticlePool};
+    /// let emitter = Emitter::new(EmitterDesc::default(), 42)?;
+    /// let pool = ParticlePool::new(3);
+    /// let plan: BurstAdmission = emitter.burst_admission(10, 4, &pool);
+    /// assert_eq!((plan.admitted, plan.dropped_budget, plan.dropped_capacity), (3, 6, 1));
+    /// assert_eq!(emitter.sequence(), 0);
+    /// assert!(pool.is_empty());
+    /// # Ok::<(), ferravex_play::particles::ParticleError>(())
+    /// ```
+    pub fn burst_admission(&self, count: u32, budget: u16, pool: &ParticlePool) -> BurstAdmission {
+        BurstAdmission::new(
+            u64::from(count),
+            budget.min(self.desc.max_per_update),
+            pool.available(),
+        )
+    }
+    /// Emit an immediate burst with an additional per-call work limit.
+    ///
+    /// At most `min(count, budget, config.max_per_update, pool.available())`
+    /// samples are attempted. Excess demand is dropped without iteration or
+    /// deferred catch-up; zero budget is valid. Budgets above the configured
+    /// maximum are clamped. Multiple calls have independent budgets: callers
+    /// enforcing a shared frame budget must pass its remaining allowance.
+    ///
+    /// As with [`Self::burst`], the newest admitted sequence numbers are sampled
+    /// and **all** requested particles advance the wrapping seeded sequence,
+    /// including dropped or invalid samples. The result accounts for each
+    /// request in `spawned`, `dropped_budget`, `dropped_capacity`, `expired` or
+    /// `invalid`. Admitted samples that fail validation are not replaced.
+    ///
+    /// A non-finite or degenerate transform returns [`ParticleError::InvalidParticle`]
+    /// without mutating the emitter or pool, even with zero count or budget.
+    /// Bursts never age existing particles, change the continuous rate phase or
+    /// motion history, or allocate storage. New particles have age zero and no
+    /// inherited emitter velocity. Use [`Self::burst_admission`] to inspect the
+    /// limits beforehand; it is a snapshot, not a reservation.
+    ///
+    /// ```
+    /// use ferravex_play::particles::{Emitter, EmitterDesc, EmitterTransform, ParticlePool};
+    /// let mut emitter = Emitter::new(EmitterDesc::default(), 42)?;
+    /// let mut pool = ParticlePool::new(2);
+    /// let result = emitter.burst_with_budget(8, 3, EmitterTransform::default(), &mut pool)?;
+    /// assert_eq!((result.spawned, result.dropped_budget, result.dropped_capacity), (2, 5, 1));
+    /// assert_eq!(emitter.sequence(), 8);
+    /// let muted = emitter.burst_with_budget(5, 0, EmitterTransform::default(), &mut pool)?;
+    /// assert_eq!(muted.dropped_budget, 5);
+    /// assert_eq!(emitter.sequence(), 13);
+    /// # Ok::<(), ferravex_play::particles::ParticleError>(())
+    /// ```
+    pub fn burst_with_budget(
+        &mut self,
+        count: u32,
+        budget: u16,
+        transform: EmitterTransform,
+        pool: &mut ParticlePool,
+    ) -> Result<EmissionStats, ParticleError> {
         let transform = transform.normalized()?;
-        let stats = self.emit(u64::from(count), pool, |_| (transform, 0., [0.; 3]));
+        let stats = self.emit(
+            u64::from(count),
+            budget.min(self.desc.max_per_update),
+            pool,
+            |_| (transform, 0., [0.; 3]),
+        );
         self.sequence = self.sequence.wrapping_add(u64::from(count));
         self.total.add(stats);
         Ok(stats)
@@ -327,18 +433,18 @@ impl Emitter {
     fn emit(
         &self,
         count: u64,
+        budget: u16,
         pool: &mut ParticlePool,
         at: impl Fn(u64) -> (EmitterTransform, f32, [f32; 3]),
     ) -> EmissionStats {
-        let budget = count.min(u64::from(self.desc.max_per_update));
-        let selected = budget.min(pool.available() as u64);
+        let admission = BurstAdmission::new(count, budget, pool.available());
         let mut stats = EmissionStats {
             requested: count,
-            dropped_budget: count - budget,
-            dropped_capacity: budget - selected,
+            dropped_budget: admission.dropped_budget,
+            dropped_capacity: admission.dropped_capacity,
             ..Default::default()
         };
-        for i in count - selected..count {
+        for i in count - admission.admitted..count {
             let (transform, age, inherited) = at(i);
             let mut rng = Random::new(self.seed, self.sequence.wrapping_add(i));
             let offset = match self.desc.shape {
@@ -390,5 +496,318 @@ impl Emitter {
             }
         }
         stats
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn seeded_emitter() -> Emitter {
+        Emitter::new(
+            EmitterDesc {
+                shape: SpawnShape::Sphere { radius: 2. },
+                velocity_cone: Some(DirectionCone {
+                    axis: [0., 1., 0.],
+                    angle: 0.5,
+                    speed: [1., 3.],
+                }),
+                velocity_jitter: [0.5; 3],
+                lifetime_jitter: 0.25,
+                size_jitter: 0.5,
+                rotation_jitter: 1.,
+                max_per_update: 4,
+                ..Default::default()
+            },
+            42,
+        )
+        .unwrap()
+    }
+
+    fn assert_accounted(stats: EmissionStats) {
+        assert_eq!(
+            stats.requested,
+            stats.spawned
+                + stats.dropped_budget
+                + stats.dropped_capacity
+                + stats.expired
+                + stats.invalid
+        );
+    }
+
+    #[test]
+    fn admission_matches_zero_partial_full_and_clamped_bursts() {
+        for (count, budget, capacity, occupied, expected) in [
+            (0, 4, 2, 0, (0, 0, 0)),
+            (7, 0, 2, 0, (0, 7, 0)),
+            (7, 3, 0, 0, (0, 4, 3)),
+            (7, 3, 2, 2, (0, 4, 3)),
+            (7, 3, 2, 1, (1, 4, 2)),
+            (7, 3, 8, 0, (3, 4, 0)),
+            (7, u16::MAX, 8, 0, (4, 3, 0)),
+            (2, u16::MAX, 8, 0, (2, 0, 0)),
+            (u32::MAX, 2, 1, 0, (1, u64::from(u32::MAX) - 2, 1)),
+        ] {
+            let mut emitter = seeded_emitter();
+            let mut pool = ParticlePool::new(capacity);
+            for _ in 0..occupied {
+                pool.spawn(ParticleDesc::default()).unwrap();
+            }
+            let before = pool.iter().collect::<Vec<_>>();
+            let plan = emitter.burst_admission(count, budget, &pool);
+            assert_eq!(plan.requested, u64::from(count));
+            assert_eq!(
+                (plan.admitted, plan.dropped_budget, plan.dropped_capacity),
+                expected
+            );
+            assert_eq!(
+                plan.requested,
+                plan.admitted + plan.dropped_budget + plan.dropped_capacity
+            );
+            assert_eq!(emitter.sequence(), 0);
+            assert_eq!(emitter.stats(), EmissionStats::default());
+            assert_eq!(pool.iter().collect::<Vec<_>>(), before);
+            let result = emitter
+                .burst_with_budget(count, budget, EmitterTransform::default(), &mut pool)
+                .unwrap();
+            assert_accounted(result);
+            assert_eq!(
+                (
+                    result.spawned,
+                    result.dropped_budget,
+                    result.dropped_capacity
+                ),
+                expected
+            );
+            assert_eq!(pool.len(), occupied + plan.admitted as usize);
+            assert_eq!(emitter.sequence(), u64::from(count));
+            assert_eq!(emitter.stats(), result);
+            assert_eq!(pool.dropped(), 0);
+        }
+    }
+
+    #[test]
+    fn admission_is_a_snapshot_and_burst_rechecks_capacity() {
+        let mut emitter = seeded_emitter();
+        let mut pool = ParticlePool::new(3);
+        assert_eq!(emitter.burst_admission(4, 4, &pool).admitted, 3);
+        pool.spawn(ParticleDesc::default()).unwrap();
+        let result = emitter
+            .burst_with_budget(4, 4, EmitterTransform::default(), &mut pool)
+            .unwrap();
+        assert_eq!(result.spawned, 2);
+        assert_eq!(result.dropped_capacity, 2);
+        assert_accounted(result);
+        assert_eq!(pool.len(), 3);
+    }
+
+    #[test]
+    fn budget_drops_keep_newest_seeded_samples_and_later_sequence_after_wrap() {
+        let mut full = seeded_emitter();
+        full.sequence = u64::MAX - 2;
+        let mut partial = full.clone();
+        let mut muted = full.clone();
+        let mut full_pool = ParticlePool::new(4);
+        let mut partial_pool = ParticlePool::new(4);
+        let mut muted_pool = ParticlePool::new(4);
+        for count in [12, u32::MAX] {
+            full_pool.clear();
+            partial_pool.clear();
+            full.burst(count, EmitterTransform::default(), &mut full_pool)
+                .unwrap();
+            partial
+                .burst_with_budget(count, 2, EmitterTransform::default(), &mut partial_pool)
+                .unwrap();
+            let result = muted
+                .burst_with_budget(count, 0, EmitterTransform::default(), &mut muted_pool)
+                .unwrap();
+            assert_eq!(result.dropped_budget, u64::from(count));
+            assert!(muted_pool.is_empty());
+            assert_eq!(full.sequence(), partial.sequence());
+            assert_eq!(full.sequence(), muted.sequence());
+            assert_eq!(
+                partial_pool.iter().collect::<Vec<_>>(),
+                full_pool.iter().skip(2).collect::<Vec<_>>()
+            );
+        }
+        for (emitter, pool) in [
+            (&mut full, &mut full_pool),
+            (&mut partial, &mut partial_pool),
+            (&mut muted, &mut muted_pool),
+        ] {
+            pool.clear();
+            emitter
+                .burst_with_budget(1, 1, EmitterTransform::default(), pool)
+                .unwrap();
+            assert_accounted(emitter.stats());
+        }
+        assert_eq!(full_pool.iter().next(), partial_pool.iter().next());
+        assert_eq!(full_pool.iter().next(), muted_pool.iter().next());
+        partial.reset(42);
+        partial_pool.clear();
+        full = seeded_emitter();
+        full_pool.clear();
+        partial
+            .burst_with_budget(4, 4, EmitterTransform::default(), &mut partial_pool)
+            .unwrap();
+        full.burst(4, EmitterTransform::default(), &mut full_pool)
+            .unwrap();
+        assert_eq!(partial.stats(), full.stats());
+        assert_eq!(
+            full_pool.iter().collect::<Vec<_>>(),
+            partial_pool.iter().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn invalid_transforms_are_atomic_even_for_zero_count_or_budget() {
+        let mut emitter = seeded_emitter();
+        let mut pool = ParticlePool::new(4);
+        emitter
+            .update(0.125, EmitterTransform::at([2., 0., 0.]), &mut pool)
+            .unwrap();
+        let before = emitter.clone();
+        let particles = pool.iter().collect::<Vec<_>>();
+        for transform in [
+            EmitterTransform::at([f32::NAN, 0., 0.]),
+            EmitterTransform {
+                rotation: [0.; 4],
+                ..Default::default()
+            },
+            EmitterTransform {
+                rotation: [0., 0., 0., f32::INFINITY],
+                ..Default::default()
+            },
+        ] {
+            for (count, budget) in [(0, 4), (4, 0), (4, 4)] {
+                assert_eq!(
+                    emitter.burst_with_budget(count, budget, transform, &mut pool),
+                    Err(ParticleError::InvalidParticle)
+                );
+                assert_eq!(emitter.config(), before.config());
+                assert_eq!(emitter.sequence(), before.sequence());
+                assert_eq!(emitter.stats(), before.stats());
+                assert_eq!(emitter.phase, before.phase);
+                assert_eq!(emitter.previous, before.previous);
+                assert_eq!(pool.iter().collect::<Vec<_>>(), particles);
+            }
+        }
+    }
+
+    #[test]
+    fn admitted_samples_can_be_invalid_without_refilling_or_losing_accounting() {
+        let mut emitter = Emitter::new(
+            EmitterDesc {
+                particle: ParticleDesc {
+                    position: [f32::MAX, 0., 0.],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            42,
+        )
+        .unwrap();
+        let mut pool = ParticlePool::new(1);
+        assert_eq!(emitter.burst_admission(5, 2, &pool).admitted, 1);
+        let result = emitter
+            .burst_with_budget(5, 2, EmitterTransform::at([f32::MAX, 0., 0.]), &mut pool)
+            .unwrap();
+        assert_eq!(result.invalid, 1);
+        assert_eq!(result.spawned, 0);
+        assert_eq!(result.dropped_budget, 3);
+        assert_eq!(result.dropped_capacity, 1);
+        assert_accounted(result);
+        assert!(pool.is_empty());
+        assert_eq!(emitter.sequence(), 5);
+    }
+
+    #[test]
+    fn bursts_preserve_continuous_birth_timing_and_motion_history() {
+        let mut emitter = Emitter::new(
+            EmitterDesc {
+                rate: 4.,
+                inherit_velocity: 1.,
+                ..Default::default()
+            },
+            42,
+        )
+        .unwrap();
+        emitter.teleport(EmitterTransform::default()).unwrap();
+        let mut reference = emitter.clone();
+        let mut pool = ParticlePool::new(4);
+        let mut reference_pool = ParticlePool::new(4);
+        for (e, p) in [
+            (&mut emitter, &mut pool),
+            (&mut reference, &mut reference_pool),
+        ] {
+            assert_eq!(
+                e.update(0.125, EmitterTransform::at([1., 0., 0.]), p)
+                    .unwrap()
+                    .requested,
+                0
+            );
+        }
+        let mut burst_pool = ParticlePool::new(3);
+        burst_pool.spawn(ParticleDesc::default()).unwrap();
+        burst_pool.update(0.25).unwrap();
+        let existing = burst_pool.iter().next().unwrap();
+        emitter
+            .burst_with_budget(5, 2, EmitterTransform::at([1000., 0., 0.]), &mut burst_pool)
+            .unwrap();
+        assert_eq!(burst_pool.iter().next(), Some(existing));
+        for particle in burst_pool.iter().skip(1) {
+            assert_eq!(particle.position, [1000., 0., 0.]);
+            assert_eq!(particle.velocity, [0.; 3]);
+            assert_eq!(particle.normalized_age, 0.);
+        }
+        for (dt, x) in [(0.25, 3.), (0.125, 4.)] {
+            pool.update(dt).unwrap();
+            reference_pool.update(dt).unwrap();
+            assert_eq!(
+                emitter
+                    .update(dt, EmitterTransform::at([x, 0., 0.]), &mut pool)
+                    .unwrap(),
+                reference
+                    .update(dt, EmitterTransform::at([x, 0., 0.]), &mut reference_pool)
+                    .unwrap()
+            );
+            assert_eq!(
+                pool.iter().collect::<Vec<_>>(),
+                reference_pool.iter().collect::<Vec<_>>()
+            );
+        }
+        assert_eq!(pool.len(), 2);
+        assert_eq!(emitter.sequence(), reference.sequence() + 5);
+    }
+
+    #[test]
+    fn repeated_budgeted_bursts_reuse_pool_storage_and_never_queue_drops() {
+        let mut emitter = seeded_emitter();
+        let mut pool = ParticlePool::new(3);
+        emitter
+            .burst(3, EmitterTransform::default(), &mut pool)
+            .unwrap();
+        let storage = pool.particles.as_ptr();
+        let capacity = pool.particles.capacity();
+        for i in 0..256 {
+            pool.clear();
+            let budget = i % 5;
+            let plan = emitter.burst_admission(u32::MAX, budget, &pool);
+            let result = emitter
+                .burst_with_budget(u32::MAX, budget, EmitterTransform::default(), &mut pool)
+                .unwrap();
+            assert_eq!(result.spawned, plan.admitted);
+            assert_accounted(result);
+            assert_eq!(pool.particles.as_ptr(), storage);
+            assert_eq!(pool.particles.capacity(), capacity);
+            pool.clear();
+            assert_eq!(
+                emitter
+                    .update(0., EmitterTransform::default(), &mut pool)
+                    .unwrap(),
+                EmissionStats::default()
+            );
+            assert!(pool.is_empty());
+        }
     }
 }

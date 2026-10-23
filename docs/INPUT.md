@@ -33,6 +33,10 @@ inactive. `sample_play` provides single-player pause handling through the global
 Escape cancels a capture or closes settings. Tab/arrows/Enter and D-pad/A navigate
 the panel. F2 and Home are reserved by the runtime so settings remain reachable.
 
+Use `draw_controls()` instead of `draw_settings()` when the game paints its own
+pause card. Both draw the controls editor and customized touch controls; only
+`draw_settings()` adds the default pause banner. Input gating is unchanged.
+
 Register custom actions with `action` or `global_action`; stable ASCII names
 identify saved mappings independently of registration order. `ActionKind::Axis`
 combines held values, `Button` buffers press/release edges and `Delta` accumulates

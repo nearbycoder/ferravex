@@ -5,11 +5,16 @@ import vm from 'node:vm';
 import {bindInput} from '../../../web/input.js';
 import {framebufferSize} from '../../../web/details.js';
 import {bindGraphicsLifecycle} from '../../../web/lifecycle.js';
-import {configureVisuals} from '../../../web/visuals.js';
+import {configureVisuals,bindVisualPreferences} from '../../../web/visuals.js';
 const source=fs.readFileSync(new URL('../../../web/runtime.js',import.meta.url),'utf8').replace(/^import .*;$/gm,'');
 class Element {
-  handlers=new Map(); dataset={game:'emberline'}; width=0; height=0;
-  addEventListener(name,fn){this.handlers.set(name,fn);}
+  handlers=new Map(); listeners=new Map(); dataset={game:'emberline'}; width=0; height=0;
+  addEventListener(name,fn){
+    if(!this.listeners.has(name))this.listeners.set(name,new Set());
+    this.listeners.get(name).add(fn);
+    this.handlers.set(name,event=>{for(const listener of [...this.listeners.get(name)])listener(event);});
+  }
+  removeEventListener(name,fn){this.listeners.get(name)?.delete(fn);}
   focus(){} setPointerCapture(){} setAttribute(){}
   getBoundingClientRect(){return {left:20,top:40,width:640,height:360};}
 }
@@ -17,7 +22,11 @@ const canvas=new Element(),status=new Element(),document=new Element(),window=ne
 const gpuCalls=[];
 const gl=new Proxy({getShaderParameter:()=>true,getProgramParameter:()=>true}, {get(target,name){return target[name]??((...args)=>{gpuCalls.push([name,...args]);return {};});}});
 canvas.getContext=()=>gl;
-document.querySelector=selector=>selector==='canvas'?canvas:status;
+document.querySelector=selector=>selector==='canvas'?canvas:selector==='[role=status]'?status:null;
+document.hasFocus=()=>true;
+document.hidden=false;
+canvas.ownerDocument=document;
+document.defaultView=window;
 const calls=[];let frame;
 // Graphics resources and presentation widgets have separate tests. Keep this
 // harness focused on the real input bridge, runtime scheduling and logical DPI.
@@ -30,12 +39,17 @@ class GpuTimer {begin(){}end(){}}
 const host={window,document,navigator:{},storage:()=>({getItem:()=>null}),atob,btoa};
 const engine={memory:{buffer:new ArrayBuffer(1024)},ferravex_init(){},ferravex_autoplay(v){calls.push(['autoplay',v]);},ferravex_frame(...args){calls.push(['frame',...args]);return 1;},ferravex_clear:()=>0,ferravex_vertices:()=>0,ferravex_vertex_count:()=>0,ferravex_batches:()=>0,ferravex_batch_count:()=>0,ferravex_key:(...a)=>calls.push(['key',...a]),ferravex_button:(...a)=>calls.push(['button',...a]),ferravex_pointer:(...a)=>calls.push(['pointer',...a]),ferravex_touch:(...a)=>calls.push(['touch',...a]),ferravex_touch_mouse:()=>1,ferravex_touch_pointer:(...a)=>calls.push(['pointer',...a,0,0]),ferravex_touch_button:(...a)=>calls.push(['button',...a]),ferravex_focus(){},ferravex_resolution:()=>0,ferravex_visual_look:()=>0,ferravex_command_count:()=>0,ferravex_commands:()=>0,ferravex_culled_count:()=>0,ferravex_visible_count:()=>0,ferravex_grab:()=>0,ferravex_blur:()=>calls.push(['blur']),ferravex_wheel:(v)=>calls.push(['wheel',v])};
 engine.ferravex_details_get=()=>0;
-await vm.runInNewContext(`(async()=>{${source}\n})()`,{document,window,loadWasm:async(_url,imports)=>{engine.setPlaying=imports.env.ferravex_set_playing;return {instance:{exports:engine}};},RetainedRenderer,SpriteRenderer,GpuTimer,framebufferSize,configureVisuals,
+engine.ferravex_visual_quality=()=>2;
+let preferenceApplications=0;
+engine.ferravex_feedback_preferences=()=>{preferenceApplications++;return 1;};
+await vm.runInNewContext(`(async()=>{${source}\n})()`,{document,window,loadWasm:async(_url,imports)=>{engine.setPlaying=imports.env.ferravex_set_playing;return {instance:{exports:engine}};},RetainedRenderer,SpriteRenderer,GpuTimer,framebufferSize,configureVisuals,bindVisualPreferences,
  bindInput:(canvas,game,getExports,isPlaying)=>bindInput(canvas,game,getExports,isPlaying,host),
- bindDetails:()=>({ready(){},update(){}}),bindAudio:()=>({sync(){},suspend(){},resume(){}}),
+ bindDetails:()=>({ready(){},update(){},player:{presentationPreferences:{reducedMotion:'system',reducedFlash:false},shouldRender:()=>true,frame(){}}}),bindAudio:()=>({sync(){},suspend(){},resume(){}}),
  bindGraphicsLifecycle:(canvas,options)=>bindGraphicsLifecycle(canvas,{...options,request:fn=>{frame=fn;return 1;},cancel(){}}),
  performance:{now:()=>0},devicePixelRatio:2,location:{search:'?autoplay'},URLSearchParams,Float32Array,DataView,console,fetch:async()=>({ok:true,arrayBuffer:async()=>new ArrayBuffer(0)}),WebAssembly:{instantiate:async(_bytes,imports)=>{engine.setPlaying=imports.env.ferravex_set_playing;return {instance:{exports:engine}};}},requestAnimationFrame:fn=>frame=fn});
 assert.deepEqual(calls[0],['autoplay',1]);
+assert.equal(canvas.dataset.visualPreferencesError,'');
+assert.equal(preferenceApplications,1,'boot applies the current presentation preferences');
 const key=code=>({code,preventDefault(){}});
 window.handlers.get('keydown')(key('KeyA'));window.handlers.get('keyup')(key('KeyA'));
 assert.deepEqual(calls.slice(-2),[['key',97,1],['key',97,0]],'both edges reach Rust before a frame');
@@ -48,6 +62,7 @@ canvas.handlers.get('pointercancel')(pointer);
 assert.deepEqual(calls.slice(-2),[['button',1,0],['touch',7,3,100,60]],'cancel releases pointer and touch');
 window.handlers.get('blur')();assert.deepEqual(calls.at(-1),['blur']);
 document.hidden=true;document.handlers.get('visibilitychange')();assert.deepEqual(calls.at(-1),['blur']);
+document.hidden=false;document.handlers.get('visibilitychange')();window.handlers.get('focus')();
 engine.ferravex_touch_mouse=()=>0;calls.length=0;canvas.handlers.get('pointerdown')(pointer);
 assert.deepEqual(calls,[['pointer',100,60,0,0],['touch',7,0,100,60]],'FPS touch handling avoids synthetic firing');
 canvas.handlers.get('wheel')({deltaY:90,preventDefault(){}});assert.deepEqual(calls.at(-1),['wheel',-1]);

@@ -1,10 +1,15 @@
-use crate::geometry::rgb;
+use crate::{controls::hint, geometry::rgb};
 use ferravex_fps::{Player, RELOAD_TICKS, TICK_RATE};
+use ferravex_render::input::PlayerInput;
 use ferravex_render::prelude::*;
 use ferravex_render::ui::{Align, ButtonStyle, TextStyle, Ui, UiRect};
 
 const INK: Color = Color::new(0.94, 0.93, 0.87, 1.0);
 const MUTED: Color = Color::new(0.70, 0.74, 0.69, 1.0);
+
+#[cfg(test)]
+#[path = "journey200_196_tests.rs"]
+mod polish_tests;
 
 // Baseline-compatible labels queued in the bounded shared draw list.
 fn label(ui: &mut Ui, text: &str, x: f32, y: f32, size: f32, color: Color) {
@@ -67,12 +72,24 @@ fn formatted(
     align: Align,
     args: std::fmt::Arguments<'_>,
 ) {
+    let (rect, style) = formatted_layout(screen_width(), x, y, size, color, align);
+    ui.text_fmt(rect, style, args).unwrap();
+}
+
+pub(super) fn formatted_layout(
+    screen_width: f32,
+    x: f32,
+    y: f32,
+    size: f32,
+    color: Color,
+    align: Align,
+) -> (UiRect, TextStyle) {
     let (left, width) = match align {
-        Align::Left => (x, (screen_width() - x).max(0.)),
+        Align::Left => (x, (screen_width - x).max(0.)),
         Align::Right => (0., x.max(0.)),
         Align::Center => (0., (x * 2.).max(0.)),
     };
-    ui.text_fmt(
+    (
         UiRect {
             min: [left, y - size * 0.875],
             size: [width, size],
@@ -84,12 +101,20 @@ fn formatted(
             shadow: true,
             ..Default::default()
         },
-        args,
     )
-    .unwrap();
+}
+
+pub(super) const VITALS_SIZE: f32 = 30.;
+pub(super) fn vitals_baseline(height: f32, touch: bool, round: bool) -> f32 {
+    if touch {
+        if round { 116. } else { 42. }
+    } else {
+        height - 26.
+    }
 }
 
 pub struct HudState<'a> {
+    pub input: &'a PlayerInput,
     pub active: bool,
     pub touch_mode: bool,
     pub diagnostics: bool,
@@ -98,6 +123,7 @@ pub struct HudState<'a> {
     pub tick: u32,
     pub hit_timer: f32,
     pub shot_timer: f32,
+    pub round_phase: Option<ferravex_play::rounds::Phase>,
     pub error: &'a str,
 }
 
@@ -115,6 +141,8 @@ pub fn overlay(ui: &mut Ui, player: &Player, state: HudState<'_>) {
         let y = h * 0.5;
         if player.health > 0 {
             let spread = 4. + state.shot_timer * 45.;
+            draw_circle(x, y, 2.5, Color::new(0.02, 0.04, 0.03, 0.85));
+            draw_circle(x, y, 1., INK);
             for d in [-1., 1.] {
                 draw_line(
                     x + d * spread,
@@ -142,15 +170,24 @@ pub fn overlay(ui: &mut Ui, player: &Player, state: HudState<'_>) {
                         y + dy * 8.,
                         x + dx * 13.,
                         y + dy * 13.,
-                        1.5,
+                        4.,
+                        Color::new(0.02, 0.04, 0.03, 0.85),
+                    );
+                    draw_line(
+                        x + dx * 8.,
+                        y + dy * 8.,
+                        x + dx * 13.,
+                        y + dy * 13.,
+                        2.,
                         accent,
                     );
                 }
+                center(ui, "HIT", x, y + 36., 13., INK);
             }
         }
 
         // Touch controls occupy the lower corners; vitals move above them.
-        let baseline = if state.touch_mode { 42. } else { h - 26. };
+        let baseline = vitals_baseline(h, state.touch_mode, state.round_phase.is_some());
         let health_color = if player.health <= 25 {
             rgb(0xe69278)
         } else {
@@ -162,7 +199,7 @@ pub fn overlay(ui: &mut Ui, player: &Player, state: HudState<'_>) {
             ui,
             50.,
             baseline,
-            30.,
+            VITALS_SIZE,
             health_color,
             Align::Left,
             format_args!("{}", player.health),
@@ -173,7 +210,7 @@ pub fn overlay(ui: &mut Ui, player: &Player, state: HudState<'_>) {
             ui,
             w - 45.,
             baseline,
-            30.,
+            VITALS_SIZE,
             INK,
             Align::Right,
             format_args!("{}", player.ammo),
@@ -208,7 +245,17 @@ pub fn overlay(ui: &mut Ui, player: &Player, state: HudState<'_>) {
                 accent,
             );
         } else if player.ammo == 0 && player.health > 0 {
-            right(ui, "EMPTY", w - 28., status_y, 13., accent);
+            let mut key = [0; 64];
+            let key = hint(state.input, "reload", &mut key);
+            formatted(
+                ui,
+                w - 28.,
+                status_y,
+                13.,
+                accent,
+                Align::Right,
+                format_args!("EMPTY - RELOAD {key}"),
+            );
         }
         if player.health == 0 {
             let seconds = player.respawn_ticks as f32 / TICK_RATE as f32;
@@ -219,16 +266,20 @@ pub fn overlay(ui: &mut Ui, player: &Player, state: HudState<'_>) {
                 72.,
                 Color::new(0.055, 0.085, 0.075, 0.75),
             );
-            center(ui, "DOWN", x, y - 7., 26., INK);
-            formatted(
-                ui,
-                x,
-                y + 17.,
-                16.,
-                MUTED,
-                Align::Center,
-                format_args!("Respawning in {seconds:.1}s"),
-            );
+            center(ui, "ELIMINATED", x, y - 7., 24., INK);
+            if let Some(hint) = death_hint(state.round_phase) {
+                center(ui, hint, x, y + 17., 16., MUTED);
+            } else {
+                formatted(
+                    ui,
+                    x,
+                    y + 17.,
+                    16.,
+                    MUTED,
+                    Align::Center,
+                    format_args!("Respawning in {seconds:.1}s"),
+                );
+            }
         }
     }
     if state.diagnostics {
@@ -262,70 +313,273 @@ pub fn overlay(ui: &mut Ui, player: &Player, state: HudState<'_>) {
     }
 }
 
-pub fn menu(ui: &mut Ui, network: bool, has_played: bool) {
+fn menu_scale(width: f32, height: f32) -> f32 {
+    ((width - 32.) / 360.)
+        .min((height - 24.) / 350.)
+        .clamp(0.1, 1.)
+}
+
+// Every block below owns its full line height. The frozen Ui API already wraps
+// words; explicit line breaks keep the four authority explanations predictable.
+enum MenuItem<'a> {
+    Text(UiRect, std::fmt::Arguments<'a>, f32, Color),
+    Button(u64, UiRect, &'static str, f32, bool),
+}
+
+fn menu_explanation(mode: crate::host::Mode, has_played: bool) -> &'static str {
+    use crate::host::Mode;
+    match mode {
+        Mode::Network => "Match continues in menus.\nYou remain vulnerable.",
+        Mode::Replay => "Replay continues in menus.\nUse Pause replay to pause.",
+        Mode::Practice if has_played => "Practice paused.\nResume when you are ready.",
+        Mode::Practice => "Train against five bots.\nRespawns are automatic.",
+    }
+}
+
+// Never shrink a saved binding into unreadable text or cut its last key off.
+// The complete current profile remains in the existing Controls editor.
+pub(super) fn menu_binding<'a>(
+    input: &PlayerInput,
+    action: &str,
+    label: &str,
+    width: f32,
+    buffer: &'a mut [u8],
+) -> &'a str {
+    let key = hint(input, action, buffer);
+    let advance = measure_text("M", None, 14, 1.).width;
+    if (label.chars().count() + 2 + key.chars().count()) as f32 * advance <= width {
+        key
+    } else if (label.chars().count() + 2 + 17) as f32 * advance <= width {
+        "see Controls (F2)"
+    } else {
+        "Controls (F2)"
+    }
+}
+
+fn menu_items(
+    width: f32,
+    height: f32,
+    mode: crate::host::Mode,
+    has_played: bool,
+    touch: bool,
+    input: &PlayerInput,
+    mut emit: impl FnMut(MenuItem<'_>),
+) {
+    use crate::host::Mode;
+    // The browser reserves at least 480 logical pixels for the game. Smaller
+    // native windows retain a fitted fallback; normal/narrow layouts keep 14px
+    // guidance and 44px actions instead of scaling the entire menu by its width.
+    let scale = (width / 320.).min(height / 480.).clamp(0.1, 1.);
+    let w = width / scale;
+    let h = height / scale;
+    let compact = w < 640. || h < 560.;
+    let content_width = (w - 32.).min(if compact { 500. } else { 560. });
+    let left = if compact {
+        (w - content_width) * 0.5
+    } else {
+        (w * 0.065).min(w - content_width - 16.).max(16.)
+    };
+    let title = if compact { 28. } else { 48. * menu_scale(w, h) };
+    let secondary = mode == Mode::Replay || (mode == Mode::Practice && has_played);
+    let secondary_height = if !secondary {
+        0.
+    } else if compact || mode == Mode::Replay {
+        48.
+    } else {
+        100.
+    };
+    let content_height = title + 232. + secondary_height;
+    // Leave a separate bottom band for the existing recording/replay status.
+    let top = ((h - 150. - content_height) * 0.5).max(12.);
+    let rect = |x: f32, y: f32, width: f32, height: f32| UiRect {
+        min: [(left + x) * scale, (top + y) * scale],
+        size: [width * scale, height * scale],
+    };
+    let mut y = 0.;
+    emit(MenuItem::Text(
+        rect(0., y, content_width, title),
+        format_args!("STRIKE"),
+        title * scale,
+        INK,
+    ));
+    y += title + 2.;
+    emit(MenuItem::Text(
+        rect(0., y, content_width, 16.),
+        format_args!(
+            "{}",
+            match mode {
+                Mode::Network => "DOCKYARD / MULTIPLAYER",
+                Mode::Replay => "DOCKYARD / REPLAY",
+                Mode::Practice => "DOCKYARD / PRACTICE",
+            }
+        ),
+        16. * scale,
+        MUTED,
+    ));
+    y += 18.;
+    emit(MenuItem::Text(
+        rect(0., y, content_width, 28.),
+        format_args!("{}", menu_explanation(mode, has_played)),
+        14. * scale,
+        INK,
+    ));
+    y += 30.;
+    emit(MenuItem::Button(
+        1,
+        rect(0., y, if compact { content_width } else { 300. }, 44.),
+        match mode {
+            Mode::Replay => "Return to replay",
+            Mode::Network => "Return to match",
+            Mode::Practice if has_played => "Resume practice",
+            Mode::Practice => "Start practice",
+        },
+        20. * scale,
+        true,
+    ));
+    y += 44.;
+    if secondary {
+        y += 4.;
+        if mode == Mode::Replay {
+            emit(MenuItem::Button(
+                3,
+                rect(0., y, if compact { content_width } else { 300. }, 44.),
+                "Return to practice",
+                17. * scale,
+                false,
+            ));
+        } else if compact {
+            let column = (content_width - 8.) * 0.5;
+            emit(MenuItem::Button(
+                2,
+                rect(0., y, column, 44.),
+                "Restart",
+                17. * scale,
+                false,
+            ));
+            emit(MenuItem::Button(
+                3,
+                rect(column + 8., y, column, 44.),
+                "End practice",
+                13.5 * scale,
+                false,
+            ));
+        } else {
+            emit(MenuItem::Button(
+                2,
+                rect(0., y, 300., 44.),
+                "Restart practice",
+                17. * scale,
+                false,
+            ));
+            y += 52.;
+            emit(MenuItem::Button(
+                3,
+                rect(0., y, 300., 44.),
+                "End practice / briefing",
+                16. * scale,
+                false,
+            ));
+        }
+        y += 44.;
+    }
+    y += 4.;
+    for (action, label) in [
+        ("fire", "Fire"),
+        ("jump", "Jump"),
+        ("reload", "Reload"),
+        ("roster", "Players"),
+        ("pause", "Menu"),
+    ] {
+        let mut buffer = [0; 64];
+        let key = menu_binding(input, action, label, content_width, &mut buffer);
+        emit(MenuItem::Text(
+            rect(0., y, content_width, 14.),
+            format_args!("{label}: {key}"),
+            14. * scale,
+            MUTED,
+        ));
+        y += 14.;
+    }
+    y += 4.;
+    emit(MenuItem::Text(
+        rect(0., y, content_width, 28.),
+        format_args!("F2: move / aim / bindings\nTab/arrows + Enter: select"),
+        14. * scale,
+        MUTED,
+    ));
+    y += 32.;
+    emit(MenuItem::Text(
+        rect(0., y, content_width, 28.),
+        format_args!(
+            "{}",
+            if touch {
+                "Left move / right swipe aim\nTouch layout: F2 Controls."
+            } else if cfg!(target_arch = "wasm32") {
+                "Start or resume, then click\nthe view to capture mouse."
+            } else {
+                "Start or resume to capture\nthe mouse for aiming."
+            }
+        ),
+        14. * scale,
+        INK,
+    ));
+}
+
+pub fn menu(
+    ui: &mut Ui,
+    mode: crate::host::Mode,
+    has_played: bool,
+    touch: bool,
+    input: &PlayerInput,
+) {
     let w = screen_width();
     let h = screen_height();
-    let left = (w * 0.065).max(24.);
-    let top = ((h - 244.) * 0.5).max(24.);
-    // Fade into the scene instead of covering half the viewport with a panel.
-    let fade_width = (w * 0.58).max(350.).min(w);
     let shade = Color::new(0.04, 0.065, 0.055, 0.78);
     ui.gradient(
         UiRect {
             min: [0.; 2],
-            size: [fade_width, h],
+            size: [(w * 0.58).max(350.).min(w), h],
         },
         shade,
-        Color::new(shade.r, shade.g, shade.b, 0.),
+        Color::new(shade.r, shade.g, shade.b, if w < 640. { 0.35 } else { 0. }),
     )
     .unwrap();
-    label(ui, "STRIKE", left - 2., top + 52., 58., INK);
-    label(
-        ui,
-        if network {
-            "Dockyard / Multiplayer"
-        } else {
-            "Dockyard / Practice"
-        },
-        left,
-        top + 82.,
-        16.,
-        MUTED,
-    );
-    ui.button(
-        1,
-        UiRect {
-            min: [left, top + 110.],
-            size: [188., 44.],
-        },
-        if has_played { "Resume" } else { "Play" },
-        true,
-        ButtonStyle {
-            fill: rgb(0xd7b56d),
-            ink: rgb(0x17251f),
-            focus: INK,
-            size: 22.,
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    label(
-        ui,
-        "WASD  Move    Mouse  Aim / fire",
-        left,
-        top + 187.,
-        14.,
-        MUTED,
-    );
-    label(ui, "Space  Jump    R  Reload", left, top + 209., 14., MUTED);
-    label(
-        ui,
-        "Tab  Players    Esc  Menu",
-        left,
-        top + 231.,
-        14.,
-        MUTED,
-    );
+    menu_items(w, h, mode, has_played, touch, input, |item| match item {
+        MenuItem::Text(rect, text, size, color) => {
+            ui.text_fmt(
+                rect,
+                TextStyle {
+                    size,
+                    color,
+                    shadow: true,
+                    wrap: true,
+                    ..Default::default()
+                },
+                text,
+            )
+            .unwrap();
+        }
+        MenuItem::Button(id, rect, text, size, primary) => {
+            ui.button(
+                id,
+                rect,
+                text,
+                true,
+                ButtonStyle {
+                    fill: if primary {
+                        rgb(0xd7b56d)
+                    } else {
+                        rgb(0x263b35)
+                    },
+                    ink: if primary { rgb(0x17251f) } else { INK },
+                    focus: INK,
+                    size,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+    });
 }
 
 pub fn roster(ui: &mut Ui, players: &[Player], local_id: u8) {
@@ -369,6 +623,30 @@ pub fn roster(ui: &mut Ui, players: &[Player], local_id: u8) {
         );
     }
 }
+fn death_hint(phase: Option<ferravex_play::rounds::Phase>) -> Option<&'static str> {
+    use ferravex_play::rounds::Phase;
+    phase.map(|phase| {
+        if phase == Phase::Finished {
+            "Match complete - open Menu"
+        } else {
+            "Wait for the next round"
+        }
+    })
+}
+
+fn round_banner(phase: ferravex_play::rounds::Phase, score: [u16; 2]) -> Option<&'static str> {
+    use ferravex_play::rounds::Phase;
+    match phase {
+        Phase::PostRound => Some("ROUND COMPLETE"),
+        Phase::Finished => Some(match score[0].cmp(&score[1]) {
+            std::cmp::Ordering::Greater => "ATTACK WINS",
+            std::cmp::Ordering::Less => "DEFEND WINS",
+            std::cmp::Ordering::Equal => "MATCH COMPLETE",
+        }),
+        _ => None,
+    }
+}
+
 /// One compact objective strip; connection/tools stay in optional browser chrome.
 pub fn tactical(
     ui: &mut Ui,
@@ -376,6 +654,7 @@ pub fn tactical(
     lobby: Option<(u8, u8)>,
     id: u8,
     active: bool,
+    input: &PlayerInput,
 ) {
     use ferravex_play::rounds::{Phase, Team, Weapon};
     let w = screen_width();
@@ -400,6 +679,15 @@ pub fn tactical(
         Phase::PostRound => "ROUND OVER",
         Phase::Finished => "MATCH OVER",
     };
+    let width = (w - 16.).clamp(0., 650.);
+    ui.panel(
+        UiRect {
+            min: [(w - width) * 0.5, 30.],
+            size: [width, 57.],
+        },
+        Color::new(0.04, 0.065, 0.055, 0.88),
+    )
+    .unwrap();
     if w < 640. {
         formatted(
             ui,
@@ -469,31 +757,74 @@ pub fn tactical(
         }
     }
     if active && view.phase == Phase::Buy {
-        center(
+        let mut keys = [[0; 64]; 4];
+        let [rifle, sniper, armor, kit] = &mut keys;
+        let rifle = hint(input, "buy_rifle", rifle);
+        let sniper = hint(input, "buy_sniper", sniper);
+        let armor = hint(input, "buy_armor", armor);
+        let kit = hint(input, "buy_kit", kit);
+        formatted(
             ui,
-            if w < 640. {
-                "B RIFLE / V ARMOR / K KIT"
-            } else {
-                "B RIFLE / N SNIPER / V ARMOR / K KIT"
-            },
             w * 0.5,
             screen_height() - 78.,
             14.,
             MUTED,
+            Align::Center,
+            format_args!("RIFLE {rifle} / SNIPER {sniper} / ARMOR {armor} / KIT {kit}"),
         );
     }
-    if active && matches!(view.phase, Phase::Live | Phase::Planted) {
-        center(
-            ui,
-            if w < 640. {
-                "HOLD E INTERACT / G DROP"
-            } else {
-                "HOLD E TO PLANT / DEFUSE / PICK UP   G DROP"
+    if active && let Some(title) = round_banner(view.phase, view.score) {
+        let width = (w - 32.).clamp(0., 420.);
+        let y = (screen_height() * 0.29).max(145.);
+        ui.panel(
+            UiRect {
+                min: [(w - width) * 0.5, y - 30.],
+                size: [width, 70.],
             },
+            Color::new(0.04, 0.065, 0.055, 0.94),
+        )
+        .unwrap();
+        center(ui, title, w * 0.5, y, 24., rgb(0xd7b56d));
+        if view.phase == Phase::PostRound {
+            formatted(
+                ui,
+                w * 0.5,
+                y + 24.,
+                15.,
+                INK,
+                Align::Center,
+                format_args!(
+                    "Intermission: {}s",
+                    view.remaining_ticks.div_ceil(TICK_RATE)
+                ),
+            );
+        } else {
+            let mut key = [0; 64];
+            let key = hint(input, "pause", &mut key);
+            formatted(
+                ui,
+                w * 0.5,
+                y + 24.,
+                15.,
+                INK,
+                Align::Center,
+                format_args!("Menu {key}"),
+            );
+        }
+    }
+    if active && matches!(view.phase, Phase::Live | Phase::Planted) {
+        let mut use_key = [0; 64];
+        let mut drop_key = [0; 64];
+        let use_key = hint(input, "interact", &mut use_key);
+        let drop_key = hint(input, "drop_bomb", &mut drop_key);
+        formatted(
+            ui,
             w * 0.5,
             screen_height() - 78.,
             14.,
             MUTED,
+            Align::Center,
+            format_args!("HOLD {use_key} INTERACT / {drop_key} DROP"),
         );
     }
     if let Some((owner, progress)) = view.interaction
@@ -532,5 +863,52 @@ pub fn rule_feedback(error: ferravex_play::rounds::RuleError) -> &'static str {
         RuleError::BombUnavailable => "BOMB UNAVAILABLE",
         RuleError::Busy => "AN INTERACTION IS ALREADY IN PROGRESS",
         _ => "ACTION UNAVAILABLE",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn banners_follow_authoritative_phase_and_never_guess_round_winners() {
+        use ferravex_play::rounds::Phase;
+        assert_eq!(round_banner(Phase::Live, [2, 1]), None);
+        assert_eq!(round_banner(Phase::Buy, [2, 1]), None);
+        assert_eq!(round_banner(Phase::Planted, [2, 1]), None);
+        assert_eq!(
+            round_banner(Phase::PostRound, [2, 1]),
+            Some("ROUND COMPLETE")
+        );
+        assert_eq!(round_banner(Phase::Finished, [3, 1]), Some("ATTACK WINS"));
+        assert_eq!(round_banner(Phase::Finished, [1, 3]), Some("DEFEND WINS"));
+        assert_eq!(
+            round_banner(Phase::Finished, [3, 3]),
+            Some("MATCH COMPLETE")
+        );
+    }
+
+    #[test]
+    fn tactical_death_never_promises_a_timed_respawn_or_an_extra_round() {
+        use ferravex_play::rounds::Phase;
+        assert_eq!(death_hint(None), None);
+        assert_eq!(
+            death_hint(Some(Phase::Live)),
+            Some("Wait for the next round")
+        );
+        assert_eq!(
+            death_hint(Some(Phase::Finished)),
+            Some("Match complete - open Menu")
+        );
+    }
+
+    #[test]
+    fn briefing_and_menu_actions_fit_small_viewports() {
+        for (w, h) in [(320., 480.), (640., 360.), (240., 240.), (1440., 900.)] {
+            let scale = menu_scale(w, h);
+            assert!(360. * scale + 32. <= w + 0.001);
+            assert!(350. * scale + 24. <= h + 0.001);
+            assert!(scale > 0. && scale <= 1.);
+        }
     }
 }

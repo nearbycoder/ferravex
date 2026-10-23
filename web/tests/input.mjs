@@ -74,3 +74,243 @@ for(const event of [{isComposing:true},{keyCode:229}]){const count=calls.length;
 win.emit('keydown',{code:'KeyW'});win.emit('pagehide');assert.deepEqual(calls.at(-1),['blur']);doc.hidden=false;win.emit('pageshow');assert.deepEqual(calls.at(-1),['focus',1]);
 
 canvas.emit('pointerdown',{pointerType:'mouse',pointerId:77,clientX:20,clientY:30,button:0});canvas.emit('pointerup',{pointerType:'mouse',pointerId:77,clientX:20,clientY:30,button:0,buttons:2});const chord=calls.length;canvas.emit('lostpointercapture',{pointerId:77});assert.ok(calls.slice(chord).some(c=>c[0]==='button'&&c[1]===3&&c[2]===0),'capture loss clears remaining mouse chord buttons');
+
+// Independent fixtures model synchronous capture-loss callbacks and window
+// releases without needing a browser, timers, or a running Wasm module.
+function pointerFixture({captureFails=false,releaseFails=false,hidden=false,hasFocus=true}={}) {
+ const w=new Target(),d=new Target(),c=new Target(),events=[],captured=new Set(),released=[];
+ w.visualViewport=new Target();d.hidden=hidden;d.hasFocus=()=>hasFocus;
+ const e={ferravex_touch_mouse:()=>1,ferravex_grab:()=>0};
+ for(const name of ['key','blur','focus','touch_pointer','touch_button','touch','pointer','button','wheel','wheel_axis','pad_connected','pad_axis','pad_button'])e['ferravex_'+name]=(...args)=>events.push([name,...args]);
+ c.setPointerCapture=id=>{if(captureFails)throw Error('capture unavailable');captured.add(id);};
+ c.releasePointerCapture=id=>{
+  released.push(id);
+  if(releaseFails)throw Error('capture already gone');
+  if(captured.delete(id))c.emit('lostpointercapture',{pointerId:id});
+ };
+ const bridge=bindInput(c,'pointer-recovery',()=>e,()=>true,{...host,window:w,document:d,navigator:{getGamepads:()=>[{connected:true,axes:[],buttons:[]}]}});
+ const pointer=(type,id,extra={})=>c.emit(type,{pointerType:'touch',pointerId:id,clientX:40,clientY:60,button:0,buttons:1,movementX:0,movementY:0,...extra});
+ return {w,d,c,e,events,captured,released,bridge,pointer};
+}
+const buttonEvents=events=>events.filter(e=>e[0]==='button'||e[0]==='touch_button');
+
+// Cancellation often has button=-1 and may omit the contact's final position.
+for(const terminal of ['pointercancel','lostpointercapture']) {
+ const f=pointerFixture();
+ f.pointer('pointerdown',0);
+ f.pointer('pointermove',0,{clientX:70,clientY:90});
+ f.events.length=0;
+ f.c.emit(terminal,{pointerId:0,pointerType:'touch',button:-1,buttons:0});
+ assert.deepEqual(f.events,[['touch_button',1,0],['touch',0,3,60,70]],terminal+' uses the tracked button and latest coordinates');
+ assert.equal(f.captured.size,0);
+ f.events.length=0;
+ f.pointer('pointerup',0,{buttons:0});
+ f.pointer('pointermove',0);
+ f.c.emit('lostpointercapture',{pointerId:0});
+ assert.deepEqual(f.events,[],'terminal and stale touch events are idempotent');
+ f.pointer('pointerdown',0);
+ assert.deepEqual(f.events.at(-1),['touch_button',1,1],'a fresh contact can reuse the cancelled ID');
+}
+
+// Every finger owns its touch stream; emulated buttons remain held until the
+// last participating finger ends, including when cancellation order varies.
+for(const terminal of ['pointerup','pointercancel','lostpointercapture']) {
+ for(const first of [11,12]) {
+  const f=pointerFixture(),second=first===11?12:11;
+  f.pointer('pointerdown',11);f.pointer('pointerdown',12);
+  assert.deepEqual(buttonEvents(f.events),[['touch_button',1,1]],'two fingers produce one emulated press');
+  f.events.length=0;
+  f.c.emit(terminal,{pointerId:first,pointerType:'touch',clientX:40,clientY:60,button:-1,buttons:0});
+  assert.deepEqual(buttonEvents(f.events),[],'ending one finger preserves the other hold');
+  assert.deepEqual(f.events.at(-1),['touch',first,terminal==='pointerup'?2:3,30,40]);
+  f.pointer('pointermove',second,{clientX:60,clientY:80});
+  assert.deepEqual(f.events.at(-1),['touch',second,1,50,60]);
+  f.pointer('pointerup',second,{buttons:0});
+  assert.deepEqual(buttonEvents(f.events),[['touch_button',1,0]],'the final finger releases exactly once');
+ }
+}
+
+// A settings change during a contact must not strand or invent a mouse hold.
+{
+ const f=pointerFixture();
+ f.pointer('pointerdown',1);
+ f.e.ferravex_touch_mouse=()=>0;
+ f.pointer('pointerdown',2);
+ f.pointer('pointerup',1,{buttons:0});
+ assert.deepEqual(buttonEvents(f.events),[['touch_button',1,1],['touch_button',1,0]]);
+ f.events.length=0;
+ f.e.ferravex_touch_mouse=()=>1;
+ f.pointer('pointerup',2,{buttons:0});
+ assert.deepEqual(buttonEvents(f.events),[],'disabled-at-start touch does not invent an unmatched mouse release');
+}
+
+// Real Pointer Events use pointermove for all intermediate chord changes.
+{
+ const f=pointerFixture(),mouse={pointerType:'mouse'};
+ f.pointer('pointerdown',1,mouse);
+ f.pointer('pointermove',1,{...mouse,button:2,buttons:3});
+ f.pointer('pointermove',1,{...mouse,button:0,buttons:2});
+ f.pointer('pointerup',1,{...mouse,button:2,buttons:0});
+ assert.deepEqual(buttonEvents(f.events),[['button',1,1],['button',3,1],['button',1,0],['button',3,0]]);
+ f.events.length=0;
+ f.pointer('pointerdown',1,{...mouse,buttons:31});
+ f.c.emit('lostpointercapture',{pointerId:1});
+ assert.deepEqual(buttonEvents(f.events),[1,2,3,4,5].map(b=>['button',b,1]).concat([1,2,3,4,5].map(b=>['button',b,0])),'all five button-mask positions are mapped correctly');
+ f.events.length=0;
+ f.pointer('pointermove',1,{...mouse,buttons:31});
+ assert.deepEqual(buttonEvents(f.events),[],'an orphaned drag cannot re-press cancelled buttons');
+ f.pointer('pointerdown',1,mouse);
+ f.pointer('pointermove',1,{...mouse,buttons:0});
+ f.pointer('pointerup',1,{...mouse,buttons:0});
+ assert.deepEqual(buttonEvents(f.events),[['button',1,1],['button',1,0]],'zero-button motion recovers a missed final release');
+}
+
+// Cancelling a pen must not release an independent real mouse or touch hold.
+{
+ const f=pointerFixture();
+ f.pointer('pointerdown',1,{pointerType:'mouse'});
+ f.pointer('pointerdown',2,{pointerType:'pen',buttons:3});
+ f.pointer('pointerdown',3);
+ f.events.length=0;
+ f.c.emit('pointercancel',{pointerId:2,button:-1,buttons:0});
+ assert.deepEqual(buttonEvents(f.events),[['button',3,0]]);
+ f.pointer('pointerup',1,{pointerType:'mouse',buttons:0});
+ f.pointer('pointerup',3,{buttons:0});
+ assert.deepEqual(buttonEvents(f.events),[['button',3,0],['button',1,0],['touch_button',1,0]]);
+}
+
+// If setPointerCapture fails, a window-level terminal event still releases the
+// canvas contact; duplicate bubbled terminals and unrelated pointers are inert.
+for(const pointerType of ['touch','mouse']) {
+ for(const terminal of ['pointerup','pointercancel']) {
+  const f=pointerFixture({captureFails:true});
+  f.pointer('pointerdown',5,{pointerType});
+  f.events.length=0;
+  const event={pointerId:5,pointerType,clientX:40,clientY:60,button:terminal==='pointercancel'?-1:0,buttons:0};
+  f.w.emit(terminal,event);
+  assert.deepEqual(buttonEvents(f.events),[[pointerType==='touch'?'touch_button':'button',1,0]]);
+  const count=f.events.length;
+  f.c.emit(terminal,event);f.w.emit(terminal,event);
+  f.w.emit(terminal,{...event,pointerId:999});
+  assert.equal(f.events.length,count);
+ }
+}
+
+// Capacity is bounded by the renderer's 64-contact limit; an ignored contact
+// cannot create a move/release, and finishing one makes room for a fresh down.
+{
+ const f=pointerFixture();
+ for(let id=0;id<65;id++)f.pointer('pointerdown',id);
+ assert.equal(f.events.filter(e=>e[0]==='touch'&&e[2]===0).length,64);
+ assert.equal(f.captured.size,64);
+ f.events.length=0;
+ f.pointer('pointerdown',0);f.pointer('pointermove',64);f.pointer('pointerup',64,{buttons:0});
+ assert.deepEqual(f.events,[],'duplicate and over-capacity contacts do not enter the host stream');
+ f.pointer('pointerup',0,{buttons:0});f.pointer('pointerdown',64);
+ assert.deepEqual(f.events.at(-1),['touch',64,0,30,40]);
+ f.w.emit('resize');
+ assert.equal(f.captured.size,0);
+ f.events.length=0;f.pointer('pointerdown',65);
+ assert.deepEqual(f.events.at(-1),['touch_button',1,1]);
+}
+
+// Every reset boundary discards old contacts before releasing capture. The
+// synchronous lostpointercapture mock catches accidental reentrant releases.
+const resetCases={
+ resize:f=>f.w.emit('resize'),
+ orientation:f=>f.w.emit('orientationchange'),
+ viewport:f=>f.w.visualViewport.emit('resize'),
+ blur:f=>{f.w.emit('blur');f.w.emit('focus');},
+ pagehide:f=>{f.w.emit('pagehide');f.w.emit('pageshow');},
+ hidden:f=>{f.d.hidden=true;f.d.emit('visibilitychange');f.d.hidden=false;f.d.emit('visibilitychange');},
+ pointerlock:f=>{f.d.pointerLockElement=f.c;f.d.emit('pointerlockchange');},
+ suspend:f=>{f.bridge.suspend();f.bridge.resume();},
+};
+for(const [name,resetInput] of Object.entries(resetCases)) {
+ const f=pointerFixture();
+ f.w.emit('keydown',{code:'KeyW'});
+ f.pointer('pointerdown',1);f.pointer('pointerdown',2,{pointerType:'mouse'});
+ f.events.length=0;
+ resetInput(f);
+ assert.deepEqual(f.events,[['blur'],['focus',1]],name+' resets without queuing stale terminal edges');
+ assert.deepEqual(f.released,[1,2]);
+ assert.equal(f.captured.size,0);
+ f.events.length=0;
+ f.pointer('pointermove',1);f.pointer('pointerup',1,{buttons:0});
+ f.pointer('pointermove',2,{pointerType:'mouse'});
+ f.pointer('pointerup',2,{pointerType:'mouse',buttons:0});
+ f.c.emit('lostpointercapture',{pointerId:2});
+ f.w.emit('keydown',{code:'KeyW',repeat:true});
+ assert.deepEqual(f.events.filter(e=>e[0]!=='pointer'),[],name+' requires a fresh touch/mouse press and ignores key repeat');
+ f.pointer('pointerdown',1);f.pointer('pointerdown',2,{pointerType:'mouse'});
+ assert.deepEqual(buttonEvents(f.events),[['touch_button',1,1],['button',1,1]]);
+}
+{
+ const f=pointerFixture({releaseFails:true});
+ f.pointer('pointerdown',1);f.w.emit('resize');
+ f.events.length=0;f.c.emit('lostpointercapture',{pointerId:1});
+ assert.deepEqual(f.events,[],'capture cleanup errors cannot preserve stale host ownership');
+}
+
+// Visibility, window focus, and page suspension are independent. One resume
+// signal cannot reopen input while another reason still suppresses it.
+function assertInactive(f) {
+ f.events.length=0;
+ f.pointer('pointerdown',6);f.pointer('pointermove',6);
+ f.pointer('pointerdown',7,{pointerType:'mouse'});
+ f.pointer('pointermove',7,{pointerType:'mouse'});
+ f.w.emit('keydown',{code:'Space'});
+ f.c.emit('wheel',{deltaY:1,deltaX:1});f.bridge.poll();
+ assert.deepEqual(f.events,[],'suspended input and pad polling remain silent');
+ assert.equal(f.captured.size,0);
+ f.d.pointerLockElement=null;f.d.emit('pointerlockchange');
+ assert.deepEqual(f.events,[['blur'],['focus',0]],'background pointer unlock must not queue an Escape');
+}
+{
+ const f=pointerFixture();
+ f.w.emit('blur');f.d.hidden=true;f.d.emit('visibilitychange');
+ f.d.hidden=false;f.d.emit('visibilitychange');
+ assert.deepEqual(f.events.at(-1),['focus',0],'visibility alone cannot override window blur');
+ assertInactive(f);
+ f.d.hidden=true;f.d.emit('visibilitychange');f.w.emit('focus');
+ assert.deepEqual(f.events.at(-1),['focus',0],'window focus cannot override document hiding');
+ assertInactive(f);
+ f.w.emit('pagehide');f.d.hidden=false;f.d.emit('visibilitychange');f.w.emit('focus');
+ assert.deepEqual(f.events.at(-1),['focus',0],'focus and visibility cannot override pagehide');
+ assertInactive(f);
+ f.w.emit('pageshow');assert.deepEqual(f.events.at(-1),['focus',1]);
+ f.pointer('pointerdown',6);assert.deepEqual(f.events.at(-1),['touch_button',1,1]);
+}
+for(const initial of [{hidden:true},{hasFocus:false}]) {
+ const f=pointerFixture(initial);
+ assertInactive(f);
+ f.d.hidden=false;f.d.emit('visibilitychange');f.w.emit('focus');
+ f.pointer('pointerdown',6);assert.deepEqual(f.events.at(-1),['touch_button',1,1]);
+}
+
+// Executable use of bindInput's additive graphics-host hooks. Suspending does
+// not schedule or stop simulation; it discards host input and requires new downs.
+{
+ const f=pointerFixture(),input=f.bridge;
+ f.pointer('pointerdown',1);f.events.length=0;
+ assert.equal(input.suspend(),undefined);
+ assert.equal(input.suspend(),undefined);
+ assert.deepEqual(f.events,[['blur']],'suspend is idempotent');
+ f.w.emit('blur');f.w.emit('focus');f.w.emit('resize');f.w.emit('pageshow');
+ assertInactive(f);
+ f.events.length=0;
+ assert.equal(input.resume(),undefined);
+ assert.equal(input.resume(),undefined);
+ assert.deepEqual(f.events,[['focus',1]],'resume is idempotent');
+ f.events.length=0;f.pointer('pointermove',1);f.pointer('pointerup',1,{buttons:0});
+ assert.deepEqual(f.events,[],'resume cannot resurrect the held contact');
+ f.pointer('pointerdown',1);assert.deepEqual(f.events.at(-1),['touch_button',1,1]);
+}
+for(const interrupt of [f=>f.w.emit('blur'),f=>f.w.emit('pagehide'),f=>{f.d.hidden=true;f.d.emit('visibilitychange');}]) {
+ const f=pointerFixture();
+ f.bridge.suspend();interrupt(f);f.bridge.resume();
+ assert.deepEqual(f.events.at(-1),['focus',0],'graphics resume cannot override another suspension reason');
+ assertInactive(f);
+}
+
+console.log('Pointer cancellation, chord/multi-touch ownership, capture recovery, bounds, and suspend release gates passed.');

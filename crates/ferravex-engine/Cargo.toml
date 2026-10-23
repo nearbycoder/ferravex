@@ -8,6 +8,7 @@ default = []
 content = ["ferravex-render/content"]
 
 [dependencies]
+ferravex-core.workspace=true
 ferravex-math.workspace=true
 ferravex-ecs.workspace=true
 ferravex-dynamics.workspace=true

@@ -1,5 +1,7 @@
 //! First-party engine systems. Rust std and platform APIs are the only runtime foundations.
 #![forbid(unsafe_code)]
+/// Shared lifecycle and fixed-timestep coordination for local games.
+pub use ferravex_core::session;
 pub use ferravex_dynamics as dynamics;
 pub use ferravex_ecs as ecs;
 pub use ferravex_math as math;
@@ -14,6 +16,8 @@ pub use ferravex_play::persistence;
 pub use ferravex_play::tuning;
 pub mod ai;
 pub mod animation;
+/// Host-driven startup, fixed update, presentation and shutdown hooks.
+pub mod app;
 pub mod assets;
 pub mod audio;
 /// Shared follow, orbit, chase and first-person presentation rigs.
@@ -56,9 +60,11 @@ pub mod scheduler;
 
 /// See [`system_order`] for the system contract and examples.
 pub mod system_order;
+pub mod systems;
 
 /// See [`commands`] for the system contract and examples.
 pub mod commands;
+pub mod ecs_commands;
 
 /// See [`pool`] for the system contract and examples.
 pub mod pool;
@@ -77,6 +83,9 @@ pub mod shuffle;
 
 /// See [`snapshots`] for the system contract and examples.
 pub mod snapshots;
+
+/// Two-sample presentation history with explicit holds and discontinuities.
+pub mod interpolation;
 
 /// See [`time`] for the system contract and examples.
 pub mod time;

@@ -1,0 +1,13 @@
+# Journey400 314 parent integration
+
+Captured exact returned history and unique regression over validated315. Inventory `integration-314/source-capture.json` SHA-256 is 3b24d00e36e97c019f73c725214de21e41b7e05e13834dc52dc709dbc899284a. Active encoder317, meter275 and arena233 work is excluded. Parent independently verified byte-identical legacy bracket implementation and ClockSync/original tests; `preservation.json` records that check. Existing history registration suffices.
+
+Parent passed121 net unit/integration/doctests and37 existing FPS library tests with zero failures or ignores. Strict all-target/all-feature net/FPS Clippy, native all-feature facade compilation and net/FPS/facade all-feature Wasm compilation passed. Exact commands/logs are in `integration-314/report.json`. Actual pose/history/reset recipe executes with adjacent integer ticks above2^53, eviction, explicit range/clamp/freshness and reconnect clear.
+
+Reviewed integer-first binary search, fraction normalization and arithmetic. Invalid fractions reject even on empty/stale histories. Fraction1 carries with checked u64 addition; positive fractions at MAX are valid after all integer samples. Exact identity/range decisions do not cast absolute ticks to float. Ordered integer differences feed the approximate f64 interpolation weight; a wide gap can round alpha to0/1 without changing the Interpolated outcome. Consumers must match outcomes rather than infer exact identity from weight.
+
+Endpoint Reject/Clamp is explicit and cannot override stale/error outcomes. Freshness uses a separate caller-supplied minimum-newest authority tick, not the requested delayed presentation tick or an inferred wall clock. It does not constrain every gap or prove session identity. Capacity-retaining clear drops actual states and forgets insertion order; arbitrary state destructor effects/panics are not rolled back.
+
+Tests cover invalid/exact/normalized/extreme fractions, sparse full-u64 gaps, adjacent huge ticks, empty/single/full/wrapped storage, non-Clone state borrowing, stale precedence/equality, capacity/error compatibility, monotonic rejection, drop/clear/refill and warmed allocations. Existing legacy float bracket and smoothing remain unchanged.
+
+No FPS rendered-player consumer or clock estimate precision changed. The existing upstream render target can already lose precision when converted to f64; splitting that rounded value later cannot recover it.231/318 need a precise component source before claiming end-to-end large-tick rendering precision, and must retain player life/teleport/local-authority rules. No shared browser artifact, game state or transport changed; live browser/device/network performance acceptance remains separate.

@@ -1,7 +1,161 @@
 <!doctype html>
-<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Sky Courier · Ferravex</title>
-<style>*{box-sizing:border-box}html,body{margin:0;height:100%;background:#101a21;color:#e2ece2;font:14px system-ui}body{display:flex;flex-direction:column}nav{height:40px;flex:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 16px;border-bottom:1px solid #2c3c45}nav>a{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}nav>button{flex:none}a{color:#97c3b5;text-decoration:none}canvas{width:100%;height:calc(100% - 40px);display:block;touch-action:none;outline:none}button[data-controls],button[data-audio]{font:inherit;color:#c3d9d0;background:transparent;border:1px solid #40545b;border-radius:4px;padding:3px 9px;cursor:pointer}button[data-controls]:hover,button[data-controls]:focus-visible,button[data-audio]:hover,button[data-audio]:focus-visible{background:#293f46;outline:1px solid #97c3b5}button[data-controls]:disabled,button[data-audio]:disabled{opacity:.4;cursor:wait}nav>span{margin-left:auto;margin-right:16px}@media(max-width:540px){nav>span{display:none}}[role=status]{position:absolute;top:50%;width:100%;text-align:center;pointer-events:none}</style>
-<nav><a href="../">FERRAVEX / Sky Courier</a><span>3D · Flight delivery</span><button type="button" data-controls title="Controls (F2)" aria-pressed="false" disabled>Controls</button><button type="button" data-audio title="Enable sound" aria-pressed="false" disabled>Sound off</button></nav>
-<canvas tabindex="0" data-game="sky-courier" aria-label="Sky Courier game"></canvas><div role="status">Loading original Rust engine…</div>
-<script type="module" src="../runtime.js"></script></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Sky Courier · Ferravex</title>
+  <style>
+    * { box-sizing: border-box; }
+    html { background: #101a21; color: #e2ece2; font: 16px/1.5 system-ui; }
+    body { margin: 0; min-height: 100vh; display: flex; flex-direction: column; }
+    a { color: #b4dfcf; text-underline-offset: .2em; }
+    :focus-visible { outline: 3px solid #ffdc91; outline-offset: 3px; }
+    /* IDs keep the wrapping toolbar readable after shared player styles load. */
+    #flight-nav {
+      display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .75rem;
+      height: auto; flex: none; padding: .5rem max(.75rem, env(safe-area-inset-right))
+        .5rem max(.75rem, env(safe-area-inset-left)); border-bottom: 1px solid #40545b;
+    }
+    #flight-title { flex: 1 1 12rem; margin: 0; font-size: 1.2rem; }
+    #flight-nav > a { display: inline-flex; align-items: center; min-height: 44px; }
+    #flight-nav > button {
+      flex: none; min-height: 44px; max-width: 100%; padding: .4rem .65rem;
+      font: inherit; color: #e2ece2; background: #18262b;
+      border: 1px solid #71867f; border-radius: 4px; cursor: pointer;
+    }
+    #flight-nav > button:hover { background: #293f46; }
+    #flight-nav > button:focus-visible { outline: 3px solid #ffdc91; outline-offset: 2px; }
+    #flight-nav > button:disabled { opacity: .6; cursor: wait; }
+    main { display: flex; flex-direction: column; min-width: 0; }
+    .flight-stage { position: relative; }
+    #flight-panel-scroll { display: none; }
+    #flight-canvas {
+      display: block; width: 100%; height: clamp(320px, 70vh, 900px);
+      height: clamp(320px, 70svh, 900px); touch-action: none;
+    }
+    #flight-canvas:focus-visible { outline: 3px solid #ffdc91; outline-offset: -4px; }
+    #flight-status {
+      position: absolute; top: 45%; left: 5%; width: 90%; margin: 0;
+      padding: .75rem; text-align: center; background: #101a21ed;
+      overflow-wrap: anywhere; pointer-events: none;
+    }
+    #flight-status:empty { display: none; }
+    #flight-guide {
+      width: min(100%, 72rem); margin-inline: auto; padding: 1rem; flex: none;
+      padding-bottom: max(1rem, env(safe-area-inset-bottom));
+      overflow-wrap: anywhere; -webkit-user-select: text; user-select: text;
+    }
+    #flight-guide h2, #flight-guide h3 { margin: .25rem 0 .5rem; }
+    #flight-guide p { max-width: 78ch; }
+    .flight-bindings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
+    .flight-bindings > div { padding: .65rem .75rem; border: 1px solid #40545b; border-radius: 4px; }
+    .flight-bindings dt { font-weight: 650; }
+    .flight-bindings dd { margin: .25rem 0 0; }
+    kbd { font: inherit; font-weight: 650; }
+    #flight-guide > a { display: inline-flex; align-items: center; min-height: 44px; }
+    body.ferravex-fullscreen main { flex: 1; min-height: 0; overflow-y: auto; }
+    body.ferravex-fullscreen .flight-stage { flex: none; height: 100%; min-height: 320px; }
+    body.ferravex-fullscreen #flight-canvas { height: 100%; }
+    @media (max-width: 620px) {
+      /* Keep flight text, menu targets and shared Controls readable; short
+         pages/fullscreen scroll instead of scaling the entire HUD down. */
+      #flight-canvas { height: max(600px, 70vh); height: max(600px, 70svh); }
+      body.ferravex-fullscreen .flight-stage { min-height: 600px; }
+    }
+    @media (max-width: 620px) and (max-height: 760px) {
+      /* A full-height input canvas cannot provide browser panning. Keep an
+         ordinary page route to both ends even while it fills the viewport. */
+      #flight-panel-scroll {
+        display: flex; position: sticky; bottom: 0; z-index: 2;
+        min-height: 48px; justify-content: space-around; align-items: center;
+        background: #101a21; border-top: 1px solid #71867f;
+      }
+      #flight-panel-scroll a { display: inline-flex; align-items: center; min-height: 44px; padding-inline: .75rem; }
+      #flight-canvas { scroll-margin-bottom: 48px; }
+      body.ferravex-fullscreen .flight-stage { height: auto; }
+      body.ferravex-fullscreen #flight-canvas { height: 600px; }
+    }
+    @media (max-width: 540px) {
+      #flight-title { flex-basis: 100%; }
+      #flight-guide { padding-inline: .75rem; }
+      .flight-bindings { grid-template-columns: minmax(0, 1fr); }
+    }
+  </style>
+</head>
+<body>
+  <nav id="flight-nav" aria-label="Game navigation and player settings">
+    <h1 id="flight-title">Sky Courier</h1>
+    <a href="../">All games</a>
+    <a href="#flight-guide">Flight guide</a>
+    <button type="button" data-controls title="Controls (F2)" aria-pressed="false" disabled>Controls</button>
+    <button type="button" data-audio title="Enable sound" aria-pressed="false" disabled>Sound off</button>
+  </nav>
+  <main aria-labelledby="flight-title">
+    <div class="flight-stage">
+      <canvas id="flight-canvas" tabindex="0" data-game="sky-courier"
+        aria-label="Sky Courier flight delivery game"
+        aria-describedby="flight-objective flight-remapping flight-controls flight-navigation">
+        Sky Courier is a visual flight game. Read the flight guide below for the objective and keyboard controls.
+      </canvas>
+      <p id="flight-status" role="status" aria-live="polite" aria-atomic="true">Loading original Rust engine…</p>
+      <div id="flight-panel-scroll" role="navigation" aria-label="Flight panel scrolling">
+        <a id="flight-scroll-top" href="#flight-canvas">Panel top</a>
+        <a id="flight-scroll-bottom" href="#flight-canvas">Panel bottom</a>
+      </div>
+    </div>
+    <section id="flight-guide" tabindex="-1" aria-labelledby="flight-guide-title">
+      <h2 id="flight-guide-title">Flight guide</h2>
+      <p id="flight-objective">Fly through five amber gates in order, then make a low pass over the delivery cross at 18 metres per second or slower (about 35 knots). Deliver within 90 seconds. Three impacts end the flight; each impact also costs five seconds.</p>
+      <p id="flight-remapping"><strong>Saved or remapped controls take precedence.</strong> The keys below are defaults. Open <strong>Controls</strong> or press <kbd>F2</kbd> while focused on the game to inspect or change your current bindings. Changes save on this device when browser storage is available. Details → Player tools contains presentation and accessibility settings.</p>
+      <div id="flight-controls">
+        <h3>Default keyboard controls</h3>
+        <dl class="flight-bindings">
+          <div><dt>Start / resume / fly again</dt><dd><kbd>Enter</kbd>, or select the on-screen flight button.</dd></div>
+          <div><dt>Turn and bank</dt><dd><kbd>A</kbd> / <kbd>D</kbd> or <kbd>Left</kbd> / <kbd>Right</kbd> arrows.</dd></div>
+          <div><dt>Climb / dive</dt><dd><kbd>W</kbd> / <kbd>S</kbd> or <kbd>Up</kbd> / <kbd>Down</kbd> arrows.</dd></div>
+          <div><dt>Boost / slow flight</dt><dd><kbd>Space</kbd> boosts; either <kbd>Shift</kbd> key slows for delivery.</dd></div>
+          <div><dt>Pause / resume</dt><dd><kbd>Escape</kbd> during flight or a manual pause.</dd></div>
+          <div><dt>Restart flight</dt><dd><kbd>R</kbd> restarts immediately, including from pause.</dd></div>
+        </dl>
+        <p>Release held flight controls after starting or retrying, then press them again. The briefing and pause screens freeze the delivery timer.</p>
+      </div>
+      <p id="flight-navigation">On short screens, use <strong>Panel top</strong> and <strong>Panel bottom</strong> to reach both ends of the flight panel without dragging on the game. The page outside the game also scrolls. Pause before browsing the page. With Controls closed, <kbd>Tab</kbd> and <kbd>Shift</kbd> + <kbd>Tab</kbd> move between the game and page controls. Inside Controls, use Tab or arrow keys and Enter; <kbd>Escape</kbd> cancels a binding capture first, then closes Controls. Escape also closes Details. Fullscreen may use the first Escape to exit fullscreen.</p>
+      <a href="#flight-canvas">Return to flight</a>
+    </section>
+  </main>
+  <noscript><p>Enable JavaScript to load Sky Courier. The flight guide remains available above.</p></noscript>
+  <script type="module" id="flight-host-accessibility">
+    const canvas = document.querySelector('#flight-canvas');
+    const controls = document.querySelector('[data-controls]');
+    const descriptionIds = ['flight-objective', 'flight-remapping', 'flight-controls', 'flight-navigation'];
+    // Shared Player tools installs its own description during boot. Keep both
+    // descriptions without modifying that module or duplicating its controls.
+    const describeFlight = () => {
+      const ids = (canvas.getAttribute('aria-describedby') || '').split(/\s+/).filter(Boolean);
+      const missing = descriptionIds.filter(id => !ids.includes(id));
+      if (missing.length) canvas.setAttribute('aria-describedby', [...ids, ...missing].join(' '));
+    };
+    new MutationObserver(describeFlight).observe(canvas, {
+      attributes: true, attributeFilter: ['aria-describedby'],
+    });
+    describeFlight();
+    // Leave native link/button activation and page navigation to the browser.
+    // Key releases still reach shared input so a held flight key cannot stick.
+    for (const id of ['flight-nav', 'flight-guide', 'flight-panel-scroll']) {
+      document.getElementById(id).addEventListener('keydown', event => event.stopPropagation());
+    }
+    for (const [id, block] of [['flight-scroll-top', 'start'], ['flight-scroll-bottom', 'end']]) {
+      document.getElementById(id).addEventListener('click', event => {
+        event.preventDefault();
+        canvas.scrollIntoView({block, behavior: 'instant'});
+      });
+    }
+    canvas.addEventListener('keydown', event => {
+      // The renderer's Controls editor retains its Tab navigation/capture.
+      // Close it with Escape/F2 before tabbing back to the surrounding page.
+      if (event.key === 'Tab' && controls.getAttribute('aria-pressed') !== 'true') event.stopPropagation();
+    });
+  </script>
+  <script type="module" src="../runtime.js"></script>
+</body>
+</html>

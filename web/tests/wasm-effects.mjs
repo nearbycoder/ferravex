@@ -7,6 +7,12 @@ for(const id of ['strike','neon-swarm','dune-skimmer','pocket-rally','sky-courie
  const env={ferravex_save_len:()=>0,ferravex_save_load:()=>-1,ferravex_save_store:()=>-1,ferravex_controls_len:()=>0,ferravex_controls_load:()=>-1,ferravex_controls_store:()=>-1,ferravex_set_playing(){}};
  const e=new WebAssembly.Instance(module,{env}).exports;e.ferravex_init();e.ferravex_autoplay(id==='sky-courier'?0:1);
  const tap=code=>{e.ferravex_key(code,1);e.ferravex_key(code,0);};let sprites=false,ribbons=false,firstSprite=null,firstRibbon=null;
+ // Rally now holds the car for a three-second, 120 Hz countdown. Preserve the
+ // original 900 driving-frame budget, and verify the start emits no stale skids.
+ if(id==='pocket-rally')for(let frame=0;frame<180;frame++){
+  e.ferravex_frame(1/60,1280,720);
+  assert.equal(e.ferravex_effect_vertex_count(),0,'rally countdown holds the car without skid geometry');
+ }
  for(let frame=0;frame<900;frame++){
   if(frame===1)tap(0xff0d);
   if(frame===3){if(id==='strike')e.ferravex_button(1,1);if(id==='sky-courier')e.ferravex_key(32,1);}
@@ -17,7 +23,11 @@ for(const id of ['strike','neon-swarm','dune-skimmer','pocket-rally','sky-courie
   if(count){sprites=true;firstSprite??=frame;assert.ok(new Float32Array(e.memory.buffer,e.ferravex_sprite_instances(),count*16).every(Number.isFinite));}
   for(let i=0;i<e.ferravex_sprite_batch_count();i++){const at=e.ferravex_sprite_batches()+i*16,first=view.getUint32(at,true),n=view.getUint32(at+4,true),flags=view.getUint32(at+8,true),triangles=view.getUint32(at+12,true);assert.ok(first+n<=count&&flags<8&&triangles>=1&&triangles<=2);}
   for(let i=0;i<e.ferravex_effect_batch_count();i++){const at=e.ferravex_effect_batches()+i*12;assert.ok(view.getUint32(at,true)+view.getUint32(at+4,true)<=e.ferravex_vertex_count());assert.ok(view.getUint32(at+8,true)<8);ribbons=true;firstRibbon??=frame;}
-  if(id==='pocket-rally'&&e.ferravex_effect_vertex_count()>0){ribbons=true;firstRibbon??=frame;}
+  if(id==='pocket-rally'&&e.ferravex_effect_vertex_count()>0){
+   assert.ok(e.ferravex_effect_vertex_count()<=e.ferravex_vertex_count());
+   assert.ok(new Float32Array(e.memory.buffer,e.ferravex_vertices(),e.ferravex_vertex_count()*8).every(Number.isFinite),'rally ribbons contain finite geometry');
+   ribbons=true;firstRibbon??=frame;
+  }
   const wantRibbons=['strike','pocket-rally','sky-courier'].includes(id),wantSprites=id!=='pocket-rally';
   if((!wantRibbons||ribbons)&&(!wantSprites||sprites))break;
  }

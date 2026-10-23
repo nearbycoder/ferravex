@@ -1,0 +1,8 @@
+[
+  {
+    "id": "@@NAME@@",
+    "title": @@WINDOW_TITLE_JSON@@,
+    "description": "A @@DIMENSION@@ game: move from the blue pad to the gold beacon.",
+    "controls": "WASD, arrows or left stick move. Enter or gamepad A starts/resumes/retries. Escape or Start pauses. R restarts. F2 opens controls."
+  }
+]

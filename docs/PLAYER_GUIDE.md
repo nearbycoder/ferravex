@@ -10,7 +10,7 @@ Ctrl, Command and Alt shortcuts remain available to your browser. IME compositio
 
 ## Screenshots and sharing
 
-**Save screenshot** captures a PNG immediately after the next rendered frame. WebGL buffers are read before the browser discards them. The capture contains the game canvas, including its rendered overlays; browser dialogs and player controls outside the canvas are not included. Closing Details first is optional; the game remains paused while Details is open.
+**Save screenshot** captures a PNG immediately after the next rendered frame. WebGL buffers are read before the browser discards them. The capture contains the game canvas, including its rendered overlays; browser dialogs and player controls outside the canvas are not included. Closing Details first is optional. Local games pause while settings are open; Strike replay and connected Strike/Courtyard sessions keep progressing with local gameplay input suppressed. Use the replay panel's pause control to pause a recording.
 
 **Copy game link** includes the active palette and visual quality. It removes autoplay, development tools, URL fragments and multiplayer addresses. Resolution, player preferences and game progress are not embedded in links. If clipboard access is blocked, a selectable link appears.
 
@@ -36,7 +36,7 @@ Only settings supported by a game affect its rendering. 2D artwork retains autho
 
 **Player contrast** adds high contrast backgrounds, borders, text and focus rings to browser controls. **Player text size** enlarges the Details panel and its controls. These settings affect browser player UI; game art and in-canvas text retain their authored appearance.
 
-**Player UI motion** follows the system preference by default and offers reduced or standard UI motion. This controls browser chrome transitions, not camera shake, gameplay effects or character animation. A reduced-motion system preference remains respected by the stylesheet.
+**Game and player UI motion** follows the system preference by default and offers reduced or standard motion. Reduced motion suppresses supported cosmetic camera and effect motion as well as browser control transitions. **Reduce game flashes** independently reduces supported flashes. Both settings apply live, including while paused. Essential movement, game rules, audio and haptics retain their behavior. The [accessible gameplay guide](JOURNEY_200_ACCESSIBILITY.md) describes each demo's consumers and remaining verification limits.
 
 ## Session and connectivity
 
@@ -46,20 +46,20 @@ The connection status explains when the browser reports offline. A loaded single
 
 ## Saved preferences and backups
 
-Overlay, frame cap, contrast, text and UI motion preferences are stored per game under `ferravex.player.v1.<game-id>`. Existing Rust presentation preferences, custom input profiles and game saves use separate storage. Storage denial applies choices to the current session and reports the failure.
+Overlay, frame cap, contrast, text, game/UI motion and reduced-flash preferences are stored per game under `ferravex.player.v1.<game-id>`. Existing Rust presentation preferences, custom input profiles and game saves use separate storage. Storage denial applies choices to the current session and reports the failure.
 
-**Export player settings** downloads version 1 JSON. **Import player settings** accepts at most 4 KiB and validates all known values before applying them. The backup can be transferred between games or browsers; it contains only player UI preferences. It excludes saved progress, multiplayer credentials and input remaps.
+**Export player settings** downloads version 2 JSON. **Import player settings** accepts version 1 or 2 backups of at most 4 KiB, validates their fields, and previews changes before **Apply imported settings** or **Cancel import**. Missing settings retain their current values; version 1 does not contain the reduced-flash setting. Applying saves the complete preferences in one write. The backup can be transferred between games or browsers; it excludes saved progress, multiplayer credentials and input remaps.
 
-**Reset player settings** restores the five host preferences. Use Reset details for lighting/resolution/style. Neither action erases game progress or custom bindings. Screen wake lock and session timing are session controls and are not part of these backups.
+**Reset player settings** restores the six host preferences. Use Reset details for lighting/resolution/style. Neither action erases game progress or custom bindings. Screen wake lock and session timing are session controls and are not part of these backups.
 
 ## Loading and troubleshooting
 
 All games compile downloaded Wasm as a stream when supported. If MIME policy prevents that, the loader uses bytes from the same response. It does not download the game twice. Loading waits are bounded to 60 seconds, including stalled response bodies. Startup failures display **Retry game**, which reloads the game page.
 
-**Copy support details** copies game ID, viewport, framebuffer, frame counters and player settings. It excludes full URLs, peer addresses and saved progress. If clipboard access is unavailable, the existing **Export playtest CSV** provides engine diagnostics. Share the artifact that is relevant to the problem.
+**Copy support details** copies game ID, viewport, framebuffer, frame counters and player settings. It excludes full URLs, peer addresses and saved progress. **Download diagnostics JSON** provides a bounded runtime report without clipboard access; **Export playtest CSV** provides engine diagnostics. Share the artifact that is relevant to the problem.
 
 ## Implementation and validation
 
 The shared adapter is [player.js](../web/player.js), initialized by [details.js](../web/details.js). Input fixes live in [input.js](../web/input.js); startup recovery lives in [loader.js](../web/loader.js). The renderer, Courtyard and Orbit Breaker call the same player frame hooks after drawing.
 
-Each of the thirty changes has its own PR. The release catalog records implementation links. CI was held through the series and is run only after all thirty merges. See the [validation guide](GAME_TESTS.md) for native, Wasm and browser checks. Platform support claims remain governed by [Platforms](PLATFORMS.md).
+The [player release catalog](../website/releases/player30.json) records the earlier implementation series. [Journey200](JOURNEY_200.md) tracks the current engine and demo work. See the [validation guide](GAME_TESTS.md) for native, Wasm and browser checks. Platform support claims remain governed by [Platforms](PLATFORMS.md).

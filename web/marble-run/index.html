@@ -1,7 +1,122 @@
 <!doctype html>
-<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Marble Run · Ferravex</title>
-<style>*{box-sizing:border-box}html,body{margin:0;height:100%;background:#101a21;color:#e2ece2;font:14px system-ui}body{display:flex;flex-direction:column}nav{height:40px;flex:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 16px;border-bottom:1px solid #2c3c45}nav>a{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}nav>button{flex:none}a{color:#97c3b5;text-decoration:none}canvas{width:100%;height:calc(100% - 40px);display:block;touch-action:none;outline:none}button[data-controls],button[data-audio]{font:inherit;color:#c3d9d0;background:transparent;border:1px solid #40545b;border-radius:4px;padding:3px 9px;cursor:pointer}button[data-controls]:hover,button[data-controls]:focus-visible,button[data-audio]:hover,button[data-audio]:focus-visible{background:#293f46;outline:1px solid #97c3b5}button[data-controls]:disabled,button[data-audio]:disabled{opacity:.4;cursor:wait}nav>span{margin-left:auto;margin-right:16px}@media(max-width:540px){nav>span{display:none}}[role=status]{position:absolute;top:50%;width:100%;text-align:center;pointer-events:none}</style>
-<nav><a href="../">FERRAVEX / Marble Run</a><span>3D · Physics obstacle course</span><button type="button" data-controls title="Controls (F2)" aria-pressed="false" disabled>Controls</button><button type="button" data-audio title="Enable sound" aria-pressed="false" disabled>Sound off</button></nav>
-<canvas tabindex="0" data-game="marble-run" aria-label="Marble Run game"></canvas><div role="status">Loading original Rust engine…</div>
-<script type="module" src="../runtime.js"></script></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Marble Run · Ferravex</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: #101a21; color: #e2ece2; font: 14px/1.5 system-ui; }
+    body.marble-host { display: flex; flex-direction: column; height: 100dvh; overflow: auto; }
+    /* IDs keep the shared Details/fullscreen toolbar rules from fixing our height. */
+    #marble-toolbar { display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: 8px; height: auto; min-height: 48px; padding: 8px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left)); border-bottom: 1px solid #40545b; }
+    #marble-toolbar .host-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-right: auto; }
+    h1 { margin: 0; font-size: 18px; }
+    a { color: #b3ddcd; text-underline-offset: 3px; }
+    #marble-toolbar a { display: inline-block; min-height: 44px; padding-block: 8px; }
+    #marble-toolbar button, #marble-status button { flex: none; min-height: 44px; padding: 8px 12px; font: inherit; color: #e2ece2; background: #182b32; border: 1px solid #6b8a91; border-radius: 4px; cursor: pointer; }
+    #marble-toolbar button:hover { background: #293f46; }
+    #marble-toolbar button:disabled { opacity: .5; cursor: wait; }
+    .marble-host :focus-visible { outline: 3px solid #ffe3a3; outline-offset: 3px; }
+    #marble-toolbar :focus-visible { outline: 3px solid #ffe3a3; outline-offset: 2px; }
+    /* The shared Controls panel needs 300px plus its 24px outer inset. */
+    #marble-canvas { display: block; flex: 1 0 324px; width: 100%; min-height: 324px; height: auto; touch-action: none; }
+    #marble-canvas:focus-visible { outline: 3px solid #ffe3a3; outline-offset: -4px; }
+    #marble-status { flex: none; margin: 0; padding: 12px; text-align: center; overflow-wrap: anywhere; }
+    #marble-status:empty { display: none; }
+    .host-guide { flex: none; padding: 8px max(16px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); border-top: 1px solid #40545b; overflow-wrap: anywhere; user-select: text; }
+    .host-guide p { margin: 6px 0; }
+    .host-guide summary { min-height: 44px; padding: 10px 0; font-weight: 600; cursor: pointer; }
+    .host-guide h2 { margin: 16px 0 6px; font-size: 16px; }
+    .host-guide dl { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(0, 2fr); gap: 8px 16px; max-width: 680px; margin: 12px 0; }
+    .host-guide dt { font-weight: 600; }
+    .host-guide dd { margin: 0; }
+    kbd { font: inherit; font-weight: 600; }
+    @media (max-width: 540px) {
+      #marble-toolbar .host-title { flex-basis: 100%; }
+      #marble-toolbar button { font-size: 14px; padding-inline: 10px; }
+      .host-guide dl { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+      .host-guide dd { margin-bottom: 8px; }
+    }
+  </style>
+</head>
+<body class="marble-host">
+  <nav id="marble-toolbar" aria-label="Marble Run player">
+    <div class="host-title"><a href="../">All games</a><h1>Marble Run</h1></div>
+    <a href="#game-help">How to play</a>
+    <button type="button" data-controls title="Controls (F2 while the game is focused)" aria-pressed="false" disabled>Controls</button>
+    <button type="button" data-audio title="Enable sound" aria-pressed="false" disabled>Sound off</button>
+  </nav>
+  <canvas id="marble-canvas" tabindex="0" data-game="marble-run" aria-label="Marble Run: 3D rolling-ball obstacle course" aria-describedby="game-description keyboard-exit">Marble Run needs a browser with canvas and WebGL2 support. Game instructions follow below.</canvas>
+  <div id="marble-status" role="status" aria-live="polite" aria-atomic="true">Loading original Rust engine…</div>
+  <section class="host-guide" aria-label="Marble Run instructions">
+    <p id="game-description">Choose one of four courses. After the countdown, roll the marble, collect every crystal and reach the finish arch.</p>
+    <p id="keyboard-exit">With the game focused, press <kbd>Shift+Tab</kbd> to reach the page controls. Outside the game, <kbd>Tab</kbd> moves between page controls and instructions. Pause first if you want the trial to wait.</p>
+    <details>
+      <summary id="game-help">How to play — default keys and remapping</summary>
+      <p>Focus the game by clicking it or using Tab from the page controls. In the course picker, use arrow keys or Tab to move the selection and Enter to choose a course. The countdown starts when you choose.</p>
+      <h2>Default gameplay keys</h2>
+      <p>Saved or remapped controls can differ from these defaults. Open <strong>Controls</strong> above, or press <kbd>F2</kbd> with the game focused, to inspect your current bindings and remap actions. Changes save on this device when storage is available.</p>
+      <dl>
+        <dt>Roll</dt><dd><kbd>WASD</kbd> or <kbd>arrow keys</kbd>, relative to the camera.</dd>
+        <dt>Brake</dt><dd>Hold <kbd>Space</kbd>.</dd>
+        <dt>Course overview</dt><dd>Hold <kbd>Tab</kbd> during play.</dd>
+        <dt>Choose course</dt><dd><kbd>C</kbd> opens or closes the course picker. Choose the current course’s Resume card to keep an unfinished run.</dd>
+        <dt>Recover</dt><dd><kbd>V</kbd> returns to the latest checkpoint after GO while playing. Crystals are kept; recovery counts as a fall.</dd>
+        <dt>Restart</dt><dd><kbd>R</kbd> starts the current trial again, including the countdown.</dd>
+        <dt>Pause / resume</dt><dd><kbd>Escape</kbd> during play. Use your Pause / menu binding if remapped.</dd>
+      </dl>
+      <h2>Menus and returning to play</h2>
+      <p>In Controls, use Up/Down or Tab and Enter. Escape cancels a binding capture; otherwise Escape or F2 closes Controls. In this browser host, Shift+Tab leaves the canvas; use Up to move back in Controls.</p>
+      <p>The course picker closes with your Choose course binding (default C), or the current course’s Resume card. Closing it keeps any separate manual pause. Countdown and trial time stop while paused; resume with your Pause / menu binding when needed.</p>
+      <p><strong>Details → Player tools</strong> contains the shared accessibility preferences, screenshots and settings backups. In Details, Done or Escape closes the dialog and returns focus to the game.</p>
+    </details>
+  </section>
+  <noscript><p>JavaScript and WebAssembly are required to run Marble Run. The instructions above remain available.</p></noscript>
+  <script id="marble-keyboard-boundary">
+    // Keep browser navigation available without replacing Rust's remappable actions.
+    // Only releases that started in the game need to reach bindInput from help.
+    // Otherwise its preventDefault would cancel Space on the native disclosure.
+    const marbleCanvas = document.getElementById('marble-canvas');
+    // Shared player initialization replaces this attribute. Keep its help and
+    // the host's objective/exit instructions without repeated attribute writes.
+    const marbleDescriptionIds = ['game-description', 'keyboard-exit'];
+    const describeMarbleCanvas = () => {
+      const current = marbleCanvas.getAttribute('aria-describedby') || '';
+      const next = [...new Set([...marbleDescriptionIds, ...current.split(/\s+/).filter(Boolean)])].join(' ');
+      if (current !== next) marbleCanvas.setAttribute('aria-describedby', next);
+    };
+    new MutationObserver(describeMarbleCanvas).observe(marbleCanvas, {attributes: true, attributeFilter: ['aria-describedby']});
+    describeMarbleCanvas();
+    const marbleGameKeys = new Set();
+    let marbleKeyOverflow = false;
+    const marblePageTarget = target => target !== marbleCanvas &&
+      !target.closest?.('button,input,textarea,select,[contenteditable],dialog');
+    document.addEventListener('keydown', event => {
+      if (event.target === marbleCanvas) {
+        if (event.code === 'Tab' && event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
+          event.stopPropagation();
+        } else if (event.code && !event.repeat) {
+          // Bound bookkeeping even for synthetic events; on overflow allow
+          // releases through until blur, rather than strand a held game key.
+          if (marbleGameKeys.size < 128 && event.code.length <= 32) marbleGameKeys.add(event.code);
+          else marbleKeyOverflow = true;
+        }
+      } else if (marblePageTarget(event.target)) {
+        // The shared bridge and Details already protect form controls/dialogs.
+        // Links and the native help disclosure also need their browser defaults.
+        event.stopPropagation();
+      }
+    });
+    document.addEventListener('keyup', event => {
+      const fromGame = marbleGameKeys.delete(event.code);
+      if (!fromGame && !marbleKeyOverflow && marblePageTarget(event.target)) event.stopPropagation();
+    });
+    const clearMarbleKeys = () => { marbleGameKeys.clear(); marbleKeyOverflow = false; };
+    window.addEventListener('blur', clearMarbleKeys);
+    window.addEventListener('pagehide', clearMarbleKeys);
+    document.addEventListener('visibilitychange', () => { if (document.hidden) clearMarbleKeys(); });
+  </script>
+  <script type="module" src="../runtime.js"></script>
+</body>
+</html>

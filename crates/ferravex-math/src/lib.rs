@@ -6,8 +6,12 @@
 //! and inversion return NaNs instead of silently substituting another transform.
 #![forbid(unsafe_code)]
 
+pub mod affine;
+pub mod curves;
 mod matrix;
+pub mod projection;
 mod quaternion;
+pub mod segments;
 mod shapes;
 mod vector;
 pub use matrix::*;

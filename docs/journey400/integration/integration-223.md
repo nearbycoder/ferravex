@@ -1,0 +1,9 @@
+# Journey400 223 parent integration
+
+Captured exact returned223 source over the validated222 snapshot before224 started. The public dimensional frames/modes/read-only conversion/immediate insertion are already registered; no root or ambiguous cross-dimension alias was added. Source hashes and commands are in `integration-223/source-capture.json` and `report.json`.
+
+Parent passed353 physics tests/doctests with no failures/ignored, separate dim2/dim3 library and223 regressions, strict all-target/all-feature physics Clippy, all-feature physics/facade Wasm compilation and both single-dimension Wasm configurations. All49 doctests include the actual world-pivot and spring recipes. The earlier reset/query/shape-replacement/contact/joint regressions remain included.
+
+Parent also reproduced the reported powered long-lever limitation and independently built the same descriptor through direct local-frame authoring. Both paths produce exactly equal descriptors and61-tick results. The rotor-origin case is stable in this measurement; the off-center case has axis drift0.018339662 and anchor separation0.32229516. This establishes authoring-path equivalence, not a stability pass. No solver change is made or implied. Exact diagnostic source/commands/results are retained in `powered-report.json`; the unresolved case is handed off in `handoffs/powered-long-lever.md`.
+
+Preserve mode removes initial geometric/rest error within rounding; active motors, conflicting limits, velocities, contacts and queued targets retain ordinary effects. Sampling is a snapshot, and insertion may allocate existing storage. Lab/assembly adoption must keep that distinction and the documented handle/panic boundaries. No game default, browser artifact or solver was changed. Browser/device/audio/performance and powered long-lever stability remain unverified/unresolved.

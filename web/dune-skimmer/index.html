@@ -1,7 +1,130 @@
 <!doctype html>
-<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Dune Skimmer · Ferravex</title>
-<style>*{box-sizing:border-box}html,body{margin:0;height:100%;background:#101a21;color:#e2ece2;font:14px system-ui}body{display:flex;flex-direction:column}nav{height:40px;flex:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 16px;border-bottom:1px solid #2c3c45}nav>a{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}nav>button{flex:none}a{color:#97c3b5;text-decoration:none}canvas{width:100%;height:calc(100% - 40px);display:block;touch-action:none;outline:none}button[data-controls],button[data-audio]{font:inherit;color:#c3d9d0;background:transparent;border:1px solid #40545b;border-radius:4px;padding:3px 9px;cursor:pointer}button[data-controls]:hover,button[data-controls]:focus-visible,button[data-audio]:hover,button[data-audio]:focus-visible{background:#293f46;outline:1px solid #97c3b5}button[data-controls]:disabled,button[data-audio]:disabled{opacity:.4;cursor:wait}nav>span{margin-left:auto;margin-right:16px}@media(max-width:540px){nav>span{display:none}}[role=status]{position:absolute;top:50%;width:100%;text-align:center;pointer-events:none}</style>
-<nav><a href="../">FERRAVEX / Dune Skimmer</a><span>3D · Hover racing</span><button type="button" data-controls title="Controls (F2)" aria-pressed="false" disabled>Controls</button><button type="button" data-audio title="Enable sound" aria-pressed="false" disabled>Sound off</button></nav>
-<canvas tabindex="0" data-game="dune-skimmer" aria-label="Dune Skimmer game"></canvas><div role="status">Loading original Rust engine…</div>
-<script type="module" src="../runtime.js"></script></html>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%;background:#101a21;color:#e2ece2;font:16px/1.5 system-ui}
+body{padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)}
+a{color:#b3dfd0;text-underline-offset:.2em}
+#game-nav{height:auto;min-height:48px;display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;padding:.5rem 1rem;border-bottom:1px solid #40545b}
+#game-nav>a{display:inline-flex;align-items:center;min-height:44px;white-space:normal;overflow-wrap:anywhere}
+#game-title{flex:1 1 12rem;margin:0;font-size:1.25rem}
+#game-nav button{flex:none;min-height:44px;max-width:100%;font:inherit;color:#e2ece2;background:#18262b;border:1px solid #617871;border-radius:4px;padding:.4rem .65rem;cursor:pointer}
+#game-nav button:hover{background:#293f46}
+#game-nav button:disabled{opacity:.5;cursor:wait}
+#game-nav :focus-visible,#race-guide :focus-visible{outline:3px solid #ffdc91;outline-offset:3px}
+.race-stage{position:relative}
+#game-canvas{display:block;width:100%;height:72vh;height:min(72vh,calc(100svh - var(--game-nav-height,0px)));min-height:22rem;max-height:54rem;touch-action:none}
+#game-canvas:focus-visible{outline:3px solid #ffdc91!important;outline-offset:-4px!important}
+#load-status{position:absolute;top:40%;left:1rem;right:1rem;margin:0;padding:1rem;background:#101a21ee;text-align:center;overflow-wrap:anywhere;pointer-events:none}
+#load-status:empty{display:none}
+#race-guide{max-width:72rem;margin:auto;padding:1.25rem;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text}
+#race-guide h2{margin:0;font-size:1.35rem}
+#race-guide h3{font-size:1.1rem}
+#race-guide p{max-width:75ch}
+.race-instructions{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,22rem),1fr));gap:1.5rem}
+.race-keys{margin:0}
+.race-keys div{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.5fr);gap:.75rem;padding:.5rem 0;border-bottom:1px solid #40545b}
+.race-keys dt{font-weight:600}
+.race-keys dd{margin:0}
+kbd{font:inherit;font-weight:600}
+/* Shared fullscreen keeps the entire host; its guide must remain scrollable. */
+body#dune-host.ferravex-fullscreen{overflow-y:auto}
+@media(max-width:36rem){#game-nav{padding:.5rem}#game-title{flex-basis:100%;order:-1}#race-guide{padding:1rem}.race-keys div{grid-template-columns:1fr;gap:.15rem}}
+@media(forced-colors:active){#game-nav :focus-visible,#race-guide :focus-visible,#game-canvas:focus-visible{outline-color:Highlight!important}}
+</style>
+</head>
+<body id="dune-host">
+<nav id="game-nav" aria-label="Game and player controls">
+  <a id="catalog-link" href="../">All Ferravex games</a>
+  <h1 id="game-title">Dune Skimmer</h1>
+  <a id="guide-link" href="#race-guide-title">How to play</a>
+  <button type="button" data-controls title="Controls (F2)" aria-pressed="false" disabled>Controls</button>
+  <button type="button" data-audio title="Enable sound" aria-pressed="false" disabled>Sound off</button>
+</nav>
+<main>
+  <div class="race-stage">
+    <canvas id="game-canvas" tabindex="0" data-game="dune-skimmer" aria-label="Dune Skimmer game canvas" aria-describedby="race-help keyboard-help binding-help">Dune Skimmer is an interactive 3D hover time trial. Read How to play below for the race objective and keyboard controls. A browser with WebGL2 is required to render the game.</canvas>
+    <div id="load-status" role="status" aria-live="polite" aria-atomic="true">Loading original Rust engine…</div>
+  </div>
+  <section id="race-guide" aria-labelledby="race-guide-title">
+    <h2 id="race-guide-title" tabindex="-1">How to play</h2>
+    <p id="race-help">Race a hovercraft through a 3D desert circuit: three laps of fourteen ordered gates, for 42 gate passes. Follow the teal next gate and cross it forwards inside the opening.</p>
+    <p id="keyboard-help">The countdown starts when the game loads. Click the canvas to drive. From the canvas, <kbd>Ctrl + F6</kbd> moves focus to All Ferravex games; then <kbd>Tab</kbd> moves through page controls. Use the Return to game link below to focus the canvas again. Moving to this guide does not pause the race; use your Pause action first.</p>
+    <p id="binding-help"><strong>Keyboard defaults are listed below.</strong> Saved or remapped bindings may differ. Open <strong>Controls</strong> or press <kbd>F2</kbd> in the canvas to inspect and change your current bindings. The Controls list is the source for your active controls.</p>
+    <div class="race-instructions">
+      <section aria-labelledby="keyboard-title">
+        <h3 id="keyboard-title">Default keyboard controls</h3>
+        <dl class="race-keys">
+          <div><dt>Accelerate</dt><dd><kbd>W</kbd> or <kbd>Up arrow</kbd></dd></div>
+          <div><dt>Brake / reverse</dt><dd><kbd>S</kbd> or <kbd>Down arrow</kbd></dd></div>
+          <div><dt>Steer</dt><dd><kbd>A / D</kbd> or <kbd>Left / Right arrows</kbd></dd></div>
+          <div><dt>Boost</dt><dd><kbd>Space</kbd> or <kbd>Shift</kbd>, while accelerating</dd></div>
+          <div><dt>Pause / resume</dt><dd><kbd>Escape</kbd></dd></div>
+          <div><dt>Restart race</dt><dd><kbd>R</kbd></dd></div>
+        </dl>
+      </section>
+      <section aria-labelledby="race-tips-title">
+        <h3 id="race-tips-title">Race and menu tips</h3>
+        <p>Release boost to recharge. Depleted boost rearms above 25% energy; loose sand disables boost. Automatic recovery returns you to the last earned gate and adds three seconds. After restarting or recovering, release drive controls, then press again.</p>
+        <p>Controls uses <kbd>Tab</kbd> or <kbd>Up / Down arrows</kbd> to navigate and <kbd>Enter</kbd> to select. <kbd>Escape</kbd> cancels a pending binding capture; otherwise <kbd>Escape</kbd> or <kbd>F2</kbd> closes Controls. Close Details with Done or <kbd>Escape</kbd>. In fullscreen, <kbd>Escape</kbd> may exit fullscreen first. If the race is still paused after closing a panel, use your current Pause binding to resume.</p>
+        <p>Open <strong>Details → Player tools</strong> for screenshots, sharing and accessibility preferences.</p>
+      </section>
+    </div>
+    <p><a id="return-to-game" href="#game-canvas">Return to game</a></p>
+    <noscript><p>JavaScript is required to load this game. The instructions and All Ferravex games link remain available.</p></noscript>
+  </section>
+</main>
+<script>
+// Page navigation stays outside the window-level game input bridge. Key releases
+// still reach it, so a held drive key cannot stick after focus leaves the canvas.
+{
+  const canvas = document.getElementById('game-canvas');
+  const navigation = document.getElementById('game-nav');
+  const guide = document.getElementById('race-guide');
+  for (const region of [navigation, guide]) {
+    region.addEventListener('keydown', event => event.stopPropagation());
+  }
+  canvas.addEventListener('keydown', event => {
+    // Ctrl chords are excluded from gameplay by bindInput. Do not reserve a
+    // remappable gameplay key or take Tab/Escape away from the Controls editor.
+    if (event.key === 'F6' && event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && !event.isComposing) {
+      event.preventDefault();
+      event.stopPropagation();
+      document.getElementById('catalog-link').focus();
+    }
+  });
+  document.getElementById('guide-link').addEventListener('click', () => {
+    document.getElementById('race-guide-title').focus();
+  });
+  document.getElementById('return-to-game').addEventListener('click', () => canvas.focus());
+
+  // bindPlayer supplies another description during boot. Keep both its shared
+  // help and this game's visible objective/navigation/remapping instructions.
+  const preserveDescription = () => {
+    const current = canvas.getAttribute('aria-describedby') || '';
+    const ids = new Set(['race-help', 'keyboard-help', 'binding-help', ...current.split(/\s+/).filter(Boolean)]);
+    const description = [...ids].join(' ');
+    if (current !== description) canvas.setAttribute('aria-describedby', description);
+  };
+  new MutationObserver(preserveDescription).observe(canvas, {attributes:true, attributeFilter:['aria-describedby']});
+  preserveDescription();
+}
+</script>
+<script>
+// Reserve the real wrapped toolbar height, including shared controls added at
+// boot. Keep the canvas minimum: very short screens can still scroll the page.
+if (typeof ResizeObserver === 'function') {
+  const canvas = document.getElementById('game-canvas');
+  const navigation = document.getElementById('game-nav');
+  new ResizeObserver(() => {
+    canvas.style.setProperty('--game-nav-height', `${Math.ceil(navigation.getBoundingClientRect().height)}px`);
+  }).observe(navigation);
+}
+</script>
+<script type="module" src="../runtime.js"></script>
+</body>
+</html>

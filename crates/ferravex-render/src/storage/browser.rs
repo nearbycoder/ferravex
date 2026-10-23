@@ -1,5 +1,16 @@
-use super::*;
-#[link(wasm_import_module = "env")]
+//! Synchronous browser transport over the existing three save imports.
+//!
+//! The host reports length/missing/too-large as positive/0/-2; all other length
+//! failures and every failed load/store collapse to `Unavailable`. In particular,
+//! quota, blocked storage and corrupt base64 cannot be distinguished by this ABI.
+//! The JavaScript binding's `status()` supplies that diagnostic detail. Binary
+//! envelope/schema validation stays in `SaveData`/`Slot`, where rejected saves
+//! remain protected until an explicit reset. Never retry a failed read from the
+//! host's last-good cache or turn a failed write into a successful memory update.
+use super::{StorageError, validate};
+use ferravex_play::persistence::SaveError;
+
+#[cfg_attr(target_arch = "wasm32", link(wasm_import_module = "env"))]
 unsafe extern "C" {
     fn ferravex_save_len(
         owner: *const u8,
@@ -26,6 +37,11 @@ unsafe extern "C" {
     ) -> i32;
 }
 pub(super) fn load(owner: &str, slot: &str, limit: usize) -> Result<Option<Vec<u8>>, StorageError> {
+    // Validate at the transport boundary too, before touching the host snapshot.
+    validate(owner, slot, limit)?;
+    if limit == 0 {
+        return Err(StorageError::TooLarge);
+    }
     // SAFETY: Host receives live bounded UTF-8 slices and synchronously fills only
     // the owned output buffer. Signed errors are checked before allocating.
     let len = unsafe {
@@ -50,7 +66,13 @@ pub(super) fn load(owner: &str, slot: &str, limit: usize) -> Result<Option<Vec<u
     if len as usize > limit {
         return Err(StorageError::TooLarge);
     }
-    let mut bytes = vec![0; len as usize];
+    let mut bytes = Vec::new();
+    // Growing Wasm memory can fail even for a permitted payload. Report failure
+    // without attempting the load, which would otherwise expose a partial buffer.
+    bytes
+        .try_reserve_exact(len as usize)
+        .map_err(|_| StorageError::Unavailable)?;
+    bytes.resize(len as usize, 0);
     if unsafe {
         ferravex_save_load(
             owner.as_ptr(),
@@ -67,8 +89,14 @@ pub(super) fn load(owner: &str, slot: &str, limit: usize) -> Result<Option<Vec<u
     Ok(Some(bytes))
 }
 pub(super) fn store(owner: &str, slot: &str, bytes: &[u8]) -> Result<(), StorageError> {
+    validate(owner, slot, bytes.len())?;
+    if bytes.is_empty() {
+        // The host rejects an empty save; it is invalid input, not a storage outage.
+        return Err(StorageError::Invalid(SaveError::Capacity));
+    }
     // SAFETY: Host reads these immutable live slices synchronously without
-    // retaining pointers; the caller enforces name and payload bounds.
+    // retaining pointers. Names and payload bounds have been checked above.
+    // One atomic host store is the only mutation: no delete, fallback or retry.
     if unsafe {
         ferravex_save_store(
             owner.as_ptr(),

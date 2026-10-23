@@ -1,7 +1,109 @@
 <!doctype html>
-<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Crystal Cavern · Ferravex</title>
-<style>*{box-sizing:border-box}html,body{margin:0;height:100%;background:#101a21;color:#e2ece2;font:14px system-ui}body{display:flex;flex-direction:column}nav{height:40px;flex:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 16px;border-bottom:1px solid #2c3c45}nav>a{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}nav>button{flex:none}a{color:#97c3b5;text-decoration:none}canvas{width:100%;height:calc(100% - 40px);display:block;touch-action:none;outline:none}button[data-controls],button[data-audio]{font:inherit;color:#c3d9d0;background:transparent;border:1px solid #40545b;border-radius:4px;padding:3px 9px;cursor:pointer}button[data-controls]:hover,button[data-controls]:focus-visible,button[data-audio]:hover,button[data-audio]:focus-visible{background:#293f46;outline:1px solid #97c3b5}button[data-controls]:disabled,button[data-audio]:disabled{opacity:.4;cursor:wait}nav>span{margin-left:auto;margin-right:16px}@media(max-width:540px){nav>span{display:none}}[role=status]{position:absolute;top:50%;width:100%;text-align:center;pointer-events:none}</style>
-<nav><a href="../">FERRAVEX / Crystal Cavern</a><span>3D · Exploration puzzle</span><button type="button" data-controls title="Controls (F2)" aria-pressed="false" disabled>Controls</button><button type="button" data-audio title="Enable sound" aria-pressed="false" disabled>Sound off</button></nav>
-<canvas tabindex="0" data-game="crystal-cavern" aria-label="Crystal Cavern game"></canvas><div role="status">Loading original Rust engine…</div>
-<script type="module" src="../runtime.js"></script></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Crystal Cavern · Ferravex</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: #101a21; color: #e2ece2; font: 16px/1.5 system-ui; }
+    a { color: #b4e3d1; text-underline-offset: .2em; }
+    #cavern-navigation { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; height: auto; min-height: 56px; padding: 8px max(16px, env(safe-area-inset-right)) 8px max(16px, env(safe-area-inset-left)); border-bottom: 1px solid #40545b; }
+    #cavern-navigation a { display: inline-flex; align-items: center; min-height: 44px; }
+    #cavern-navigation h1 { flex: 1 1 180px; margin: 0; font-size: 1.15rem; }
+    #cavern-navigation button { flex: 0 0 auto; min-height: 44px; padding: 8px 12px; font: inherit; color: #e2ece2; background: #18262b; border: 1px solid #657b80; border-radius: 4px; cursor: pointer; }
+    #cavern-navigation button:hover { background: #293f46; }
+    #cavern-navigation button:disabled { opacity: .5; cursor: wait; }
+    .cavern-host :focus-visible { outline: 3px solid #efc986; outline-offset: 3px; }
+    #expedition-stage { position: relative; }
+    #expedition-canvas { display: block; width: 100%; height: 72vh; height: 72svh; min-height: 360px; touch-action: none; }
+    #expedition-canvas:focus-visible { outline: 3px solid #efc986; outline-offset: -4px; }
+    #expedition-status { position: absolute; inset: 40% 16px auto; margin: 0 auto; max-width: 40rem; padding: 12px; background: #101a21ed; text-align: center; overflow-wrap: anywhere; pointer-events: none; }
+    #expedition-status:empty { display: none; }
+    #expedition-guide { max-width: 76rem; margin: auto; padding: 20px max(20px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left)); overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+    #expedition-guide h2 { margin: 0 0 8px; font-size: 1.3rem; }
+    #expedition-guide h3 { font-size: 1.05rem; }
+    #expedition-guide p { max-width: 75ch; }
+    .expedition-bindings { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: 12px; }
+    .expedition-bindings > div { padding: 12px; border: 1px solid #40545b; border-radius: 4px; }
+    .expedition-bindings dt { font-weight: 600; }
+    .expedition-bindings dd { margin: 4px 0 0; }
+    kbd { font: inherit; font-weight: 600; }
+    /* Keep the guide reachable when the shared player expands the page. */
+    body.cavern-host.ferravex-fullscreen { overflow: auto; }
+    body.cavern-host.ferravex-large-text #expedition-guide { font-size: 1.2rem; }
+    body.cavern-host.ferravex-high-contrast #expedition-guide { background: #000; color: #fff; }
+    @media (max-width: 540px) {
+      #cavern-navigation h1 { flex-basis: calc(100% - 100px); }
+      #cavern-navigation button { font-size: .9375rem; padding-inline: 10px; }
+      #expedition-guide { padding-inline: 16px; }
+    }
+  </style>
+</head>
+<body class="cavern-host">
+  <header>
+    <nav id="cavern-navigation" aria-label="Game and player controls">
+      <a href="../">All games</a>
+      <h1 id="expedition-title">Crystal Cavern</h1>
+      <button type="button" data-controls title="Controls (F2)" aria-pressed="false" disabled>Controls</button>
+      <button type="button" data-audio title="Enable sound" aria-pressed="false" disabled>Sound off</button>
+    </nav>
+  </header>
+  <main>
+    <div id="expedition-stage">
+      <canvas id="expedition-canvas" tabindex="0" data-game="crystal-cavern" aria-label="Crystal Cavern game canvas" aria-describedby="expedition-controls expedition-keyboard expedition-remapping">
+        Crystal Cavern is a 3D exploration puzzle. The game needs JavaScript, WebAssembly and WebGL2. The expedition guide below explains its objective and keyboard controls.
+      </canvas>
+      <p id="expedition-status" role="status" aria-live="polite" aria-atomic="true">Loading original Rust engine…</p>
+    </div>
+    <section id="expedition-guide" tabindex="0" aria-labelledby="expedition-guide-title">
+      <h2 id="expedition-guide-title">Expedition guide</h2>
+      <p id="expedition-controls">Explore a 3D cavern, recover three crystals, awaken altar I then altar II, and walk through the opened seal into daylight. Interact with the highlighted nearby object; aiming directly at it is unnecessary.</p>
+      <p id="expedition-keyboard">Focus the game canvas to play. With default bindings, press <kbd>Enter</kbd> to begin, resume or explore again, and <kbd>Escape</kbd> to pause or resume. <kbd>Tab</kbd> and <kbd>Shift</kbd> + <kbd>Tab</kbd> move between the game and page controls. Pause before reading the guide.</p>
+      <h3>Default keyboard and mouse controls</h3>
+      <p id="expedition-remapping">Saved or remapped bindings may differ from these defaults and the game's on-screen hints. Open <strong>Controls</strong> or press <kbd>F2</kbd> while the canvas is focused to inspect or change your current bindings. <kbd>Tab</kbd> stays reserved for page navigation here.</p>
+      <dl class="expedition-bindings" aria-describedby="expedition-remapping">
+        <div><dt>Move and strafe</dt><dd><kbd>W</kbd> / <kbd>A</kbd> / <kbd>S</kbd> / <kbd>D</kbd></dd></div>
+        <div><dt>Look around</dt><dd>Arrow keys or left-button mouse drag. Pointer lock is not required.</dd></div>
+        <div><dt>Interact</dt><dd><kbd>E</kbd> — recover a crystal or awaken an altar.</dd></div>
+        <div><dt>Begin, resume or explore again</dt><dd><kbd>Enter</kbd> or the expedition's on-screen button.</dd></div>
+        <div><dt>Pause or resume</dt><dd><kbd>Escape</kbd></dd></div>
+        <div><dt>Restart the expedition</dt><dd><kbd>R</kbd> — clears current expedition progress.</dd></div>
+        <div><dt>Toggle the game's hint</dt><dd><kbd>H</kbd></dd></div>
+      </dl>
+      <p>In Controls, use <kbd>Up</kbd> / <kbd>Down</kbd> and <kbd>Enter</kbd> to select a binding. <kbd>Escape</kbd> cancels an active remap; otherwise it closes Controls. <kbd>F2</kbd> also closes Controls. Closing Controls preserves any manual pause.</p>
+      <p>Switching away from the browser or opening Controls pauses a normal expedition. Returning restores play unless you paused it manually. Use your current pause or confirm binding to resume.</p>
+      <p><strong>Details → Player tools</strong> contains presentation and accessibility preferences, screenshots and settings backups. Close Details with <kbd>Escape</kbd> or <strong>Done</strong> to return focus to the game.</p>
+    </section>
+    <noscript><p>JavaScript is required to load Crystal Cavern. You can still read the expedition guide and return to <a href="../">all games</a>.</p></noscript>
+  </main>
+  <script id="expedition-accessibility">
+    (() => {
+      const canvas = document.getElementById('expedition-canvas');
+      const descriptionIds = ['expedition-controls', 'expedition-keyboard', 'expedition-remapping'];
+      // bindPlayer adds its own help after boot. Retain both descriptions,
+      // without watching frame telemetry or changing the shared player panel.
+      const describe = () => {
+        const current = canvas.getAttribute('aria-describedby') || '';
+        const ids = new Set(current.split(/\s+/).filter(Boolean));
+        for (const id of descriptionIds) ids.add(id);
+        const next = [...ids].join(' ');
+        if (next !== current) canvas.setAttribute('aria-describedby', next);
+      };
+      describe();
+      new MutationObserver(describe).observe(canvas, { attributes: true, attributeFilter: ['aria-describedby'] });
+      // The shared input bridge listens on window. Keep native Tab traversal
+      // and DOM activation/scrolling intact; gameplay keys still reach it when
+      // the canvas owns focus. Fullscreen's window capture listener runs first.
+      document.addEventListener('keydown', event => {
+        if (event.key === 'Tab' || event.code === 'Tab' || event.target !== canvas) event.stopPropagation();
+      });
+      document.addEventListener('keyup', event => {
+        if (event.key === 'Tab' || event.code === 'Tab') event.stopPropagation();
+        // Other releases must reach the bridge even after focus leaves canvas.
+      });
+    })();
+  </script>
+  <script type="module" src="../runtime.js"></script>
+</body>
+</html>

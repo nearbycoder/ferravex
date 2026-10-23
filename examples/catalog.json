@@ -9,7 +9,68 @@
     "description": "Flat-shaded stone, moving operators, shared shooter simulation and browser peer sessions.",
     "controls": "WASD move \u00b7 Mouse aim \u00b7 Click fire \u00b7 Space jump \u00b7 R reload \u00b7 Escape menu",
     "image": "owned-courtyard.png",
-    "source": "examples/owned-lab/src/lib.rs"
+    "source": "examples/owned-lab/src/lib.rs",
+    "capabilities": {
+      "schema_version": 1,
+      "controls": {
+        "action_map": {
+          "evidence": [
+            {
+              "path": "examples/owned-lab/src/interactive.rs",
+              "snippet": "input: PlayerInput::preset("
+            }
+          ],
+          "note": "Wasm interactive adapter; native host input is separate."
+        }
+      },
+      "pause": {
+        "simulation": {
+          "evidence": [
+            {
+              "path": "examples/owned-lab/src/lib.rs",
+              "snippet": "self.session.set_paused(true)"
+            }
+          ],
+          "note": "Offline training only; peer sessions continue authority/prediction."
+        },
+        "local_menu": {
+          "evidence": [
+            {
+              "path": "examples/owned-lab/src/lib.rs",
+              "snippet": "if active || self.peer.mode != 0"
+            },
+            {
+              "path": "examples/owned-lab/src/lib.rs",
+              "snippet": "self.session.set_paused(false)"
+            },
+            {
+              "path": "examples/owned-lab/src/lib.rs",
+              "snippet": "let input = if active { input } else"
+            }
+          ],
+          "note": "Peer mode continues fixed ticks with neutral local commands while the menu is open."
+        }
+      },
+      "replay": {
+        "record": {
+          "evidence": [
+            {
+              "path": "examples/owned-lab/src/lib.rs",
+              "snippet": "self.replay.record(Frame {"
+            }
+          ],
+          "note": "Records input and state hashes when recording is enabled; this does not claim playback support."
+        },
+        "export": {
+          "evidence": [
+            {
+              "path": "examples/owned-lab/src/lib.rs",
+              "snippet": "self.replay.encode()"
+            }
+          ]
+        }
+      }
+    }
   },
   {
     "id": "owned-orbit",
@@ -21,7 +82,67 @@
     "description": "Clear two sectors of panels with continuous ball collision, pickups and original Rust pixel rendering.",
     "controls": "A/D or arrows move \u00b7 Space launch \u00b7 R restart \u00b7 Escape pause",
     "image": "owned-orbit.png",
-    "source": "examples/owned-orbit/README.md"
+    "source": "examples/owned-orbit/README.md",
+    "capabilities": {
+      "schema_version": 1,
+      "controls": {
+        "action_map": {
+          "evidence": [
+            {
+              "path": "examples/owned-orbit/src/interactive.rs",
+              "snippet": "let mut p = PlayerInput::new("
+            }
+          ],
+          "note": "Wasm interactive adapter; native host input is separate."
+        },
+        "keyboard": {
+          "evidence": [
+            {
+              "path": "examples/owned-orbit/src/interactive.rs",
+              "snippet": "InputCode::Key(KeyCode::A as u16)"
+            }
+          ],
+          "note": "Binding/layout in the Wasm adapter; runtime/device behavior is unverified by this audit."
+        },
+        "pointer": {
+          "evidence": [
+            {
+              "path": "examples/owned-orbit/src/interactive.rs",
+              "snippet": "InputCode::Mouse(1)"
+            }
+          ],
+          "note": "Binding/layout in the Wasm adapter; runtime/device behavior is unverified by this audit."
+        },
+        "gamepad": {
+          "evidence": [
+            {
+              "path": "examples/owned-orbit/src/interactive.rs",
+              "snippet": "InputCode::PadButton(14)"
+            }
+          ],
+          "note": "Binding/layout in the Wasm adapter; runtime/device behavior is unverified by this audit."
+        },
+        "touch": {
+          "evidence": [
+            {
+              "path": "examples/owned-orbit/src/interactive.rs",
+              "snippet": "p.set_touch_layout(&[Control"
+            }
+          ],
+          "note": "Binding/layout in the Wasm adapter; runtime/device behavior is unverified by this audit."
+        }
+      },
+      "pause": {
+        "simulation": {
+          "evidence": [
+            {
+              "path": "examples/owned-orbit/src/lib.rs",
+              "snippet": "self.session.set_paused(paused)"
+            }
+          ]
+        }
+      }
+    }
   },
   {
     "id": "emberline",
@@ -33,7 +154,30 @@
     "controls": "A/D or arrows move \u00b7 Space jump \u00b7 R restart",
     "host": "emberline",
     "image": "emberline.png",
-    "source": "examples/emberline/README.md"
+    "source": "examples/emberline/README.md",
+    "capabilities": {
+      "schema_version": 1,
+      "controls": {
+        "action_map": {
+          "evidence": [
+            {
+              "path": "examples/emberline/src/lib.rs",
+              "snippet": "let mut player_input = PlayerInput::preset("
+            }
+          ]
+        }
+      },
+      "pause": {
+        "simulation": {
+          "evidence": [
+            {
+              "path": "examples/emberline/src/lib.rs",
+              "snippet": "self.session.toggle_pause()"
+            }
+          ]
+        }
+      }
+    }
   },
   {
     "id": "neon-swarm",
@@ -45,7 +189,48 @@
     "controls": "WASD move \u00b7 Mouse aim/fire \u00b7 Space dash \u00b7 R restart",
     "host": "neon-swarm",
     "image": "neon-swarm.png",
-    "source": "examples/neon-swarm/README.md"
+    "source": "examples/neon-swarm/README.md",
+    "capabilities": {
+      "schema_version": 1,
+      "controls": {
+        "action_map": {
+          "evidence": [
+            {
+              "path": "examples/neon-swarm/src/lib.rs",
+              "snippet": "let mut player_input = PlayerInput::preset("
+            }
+          ]
+        }
+      },
+      "pause": {
+        "simulation": {
+          "evidence": [
+            {
+              "path": "examples/neon-swarm/src/run.rs",
+              "snippet": "self.session.set_paused(true)"
+            }
+          ]
+        }
+      },
+      "presentation": {
+        "feedback": {
+          "evidence": [
+            {
+              "path": "examples/neon-swarm/src/presentation.rs",
+              "snippet": "let Some(response) = self.feedback.emit(self.next_id, event)? else"
+            }
+          ]
+        },
+        "audio": {
+          "evidence": [
+            {
+              "path": "examples/neon-swarm/src/lib.rs",
+              "snippet": "sound.cue(response.cue, response.gain)"
+            }
+          ]
+        }
+      }
+    }
   },
   {
     "id": "pocket-rally",
@@ -57,7 +242,30 @@
     "controls": "WASD / arrows drive \u00b7 Space handbrake \u00b7 R restart",
     "host": "pocket-rally",
     "image": "pocket-rally.png",
-    "source": "examples/pocket-rally/README.md"
+    "source": "examples/pocket-rally/README.md",
+    "capabilities": {
+      "schema_version": 1,
+      "controls": {
+        "action_map": {
+          "evidence": [
+            {
+              "path": "examples/pocket-rally/src/lib.rs",
+              "snippet": "let mut player_input = PlayerInput::preset("
+            }
+          ]
+        }
+      },
+      "pause": {
+        "simulation": {
+          "evidence": [
+            {
+              "path": "examples/pocket-rally/src/session.rs",
+              "snippet": "self.clock.set_paused(!active)"
+            }
+          ]
+        }
+      }
+    }
   },
   {
     "id": "salvage-pinball",
@@ -69,7 +277,30 @@
     "controls": "A/D or arrows flippers \u00b7 Space launch \u00b7 R restart",
     "host": "salvage-pinball",
     "image": "salvage-pinball.png",
-    "source": "examples/salvage-pinball/README.md"
+    "source": "examples/salvage-pinball/README.md",
+    "capabilities": {
+      "schema_version": 1,
+      "controls": {
+        "action_map": {
+          "evidence": [
+            {
+              "path": "examples/salvage-pinball/src/app.rs",
+              "snippet": "let mut player_input = PlayerInput::preset("
+            }
+          ]
+        }
+      },
+      "pause": {
+        "simulation": {
+          "evidence": [
+            {
+              "path": "examples/salvage-pinball/src/game.rs",
+              "snippet": "self.session.set_paused(paused)"
+            }
+          ]
+        }
+      }
+    }
   },
   {
     "id": "orchard-guard",
@@ -82,7 +313,54 @@
     "host": "orchard-guard",
     "image": "orchard-guard.png",
     "source": "examples/orchard-guard/README.md",
-    "editable_scene": "examples/orchard-guard/content/orchard.fxscene"
+    "editable_scene": "examples/orchard-guard/content/orchard.fxscene",
+    "capabilities": {
+      "schema_version": 1,
+      "controls": {
+        "action_map": {
+          "evidence": [
+            {
+              "path": "examples/orchard-guard/src/lib.rs",
+              "snippet": "let mut player_input = PlayerInput::preset("
+            }
+          ]
+        }
+      },
+      "pause": {
+        "simulation": {
+          "evidence": [
+            {
+              "path": "examples/orchard-guard/src/host.rs",
+              "snippet": "self.session.set_paused(self.manual_pause || blocked)"
+            }
+          ]
+        }
+      },
+      "content": {
+        "authored_scene": {
+          "evidence": [
+            {
+              "path": "examples/orchard-guard/src/lib.rs",
+              "snippet": "level::Level::parse(content.current())"
+            },
+            {
+              "path": "examples/orchard-guard/src/level.rs",
+              "snippet": "Document::load(source, &schema())"
+            }
+          ],
+          "note": "Uses the existing editable_scene asset; scene validity requires the game content tests."
+        },
+        "hot_reload": {
+          "evidence": [
+            {
+              "path": "examples/orchard-guard/src/lib.rs",
+              "snippet": "content.poll(demo.dt(), |text|"
+            }
+          ],
+          "note": "ContentSource polling; host and build-feature availability require separate verification."
+        }
+      }
+    }
   },
   {
     "id": "marble-run",
@@ -95,7 +373,54 @@
     "host": "marble-run",
     "image": "marble-run.png",
     "source": "examples/marble-run/README.md",
-    "editable_scene": "examples/marble-run/content/aqueduct.fxscene"
+    "editable_scene": "examples/marble-run/content/aqueduct.fxscene",
+    "capabilities": {
+      "schema_version": 1,
+      "controls": {
+        "action_map": {
+          "evidence": [
+            {
+              "path": "examples/marble-run/src/lib.rs",
+              "snippet": "let mut player_input = PlayerInput::preset("
+            }
+          ]
+        }
+      },
+      "pause": {
+        "simulation": {
+          "evidence": [
+            {
+              "path": "examples/marble-run/src/trial.rs",
+              "snippet": "self.session.set_paused(self.picker || blocked)"
+            }
+          ]
+        }
+      },
+      "content": {
+        "authored_scene": {
+          "evidence": [
+            {
+              "path": "examples/marble-run/src/lib.rs",
+              "snippet": "level::Level::parse(content.current())"
+            },
+            {
+              "path": "examples/marble-run/src/level.rs",
+              "snippet": "Document::load(source, &schema())"
+            }
+          ],
+          "note": "Uses the existing editable_scene asset; scene validity requires the game content tests."
+        },
+        "hot_reload": {
+          "evidence": [
+            {
+              "path": "examples/marble-run/src/lib.rs",
+              "snippet": "content.poll(demo.dt(), |text|"
+            }
+          ],
+          "note": "ContentSource polling; host and build-feature availability require separate verification."
+        }
+      }
+    }
   },
   {
     "id": "dune-skimmer",
@@ -107,7 +432,30 @@
     "controls": "WASD / arrows steer \u00b7 Space boost \u00b7 R restart",
     "host": "dune-skimmer",
     "image": "dune-skimmer.png",
-    "source": "examples/dune-skimmer/README.md"
+    "source": "examples/dune-skimmer/README.md",
+    "capabilities": {
+      "schema_version": 1,
+      "controls": {
+        "action_map": {
+          "evidence": [
+            {
+              "path": "examples/dune-skimmer/src/lib.rs",
+              "snippet": "let mut player_input = PlayerInput::preset("
+            }
+          ]
+        }
+      },
+      "pause": {
+        "simulation": {
+          "evidence": [
+            {
+              "path": "examples/dune-skimmer/src/lib.rs",
+              "snippet": "trial.session.set_paused("
+            }
+          ]
+        }
+      }
+    }
   },
   {
     "id": "crystal-cavern",
@@ -119,7 +467,30 @@
     "controls": "WASD move \u00b7 Arrows look \u00b7 E interact \u00b7 R restart",
     "host": "crystal-cavern",
     "image": "crystal-cavern.png",
-    "source": "examples/crystal-cavern/README.md"
+    "source": "examples/crystal-cavern/README.md",
+    "capabilities": {
+      "schema_version": 1,
+      "controls": {
+        "action_map": {
+          "evidence": [
+            {
+              "path": "examples/crystal-cavern/src/lib.rs",
+              "snippet": "let mut player_input = PlayerInput::preset("
+            }
+          ]
+        }
+      },
+      "pause": {
+        "simulation": {
+          "evidence": [
+            {
+              "path": "examples/crystal-cavern/src/lib.rs",
+              "snippet": "self.session.set_paused(paused)"
+            }
+          ]
+        }
+      }
+    }
   },
   {
     "id": "siege-foundry",
@@ -131,7 +502,30 @@
     "controls": "Arrows aim \u00b7 Space fire \u00b7 R rebuild",
     "host": "siege-foundry",
     "image": "siege-foundry.png",
-    "source": "examples/siege-foundry/README.md"
+    "source": "examples/siege-foundry/README.md",
+    "capabilities": {
+      "schema_version": 1,
+      "controls": {
+        "action_map": {
+          "evidence": [
+            {
+              "path": "examples/siege-foundry/src/lib.rs",
+              "snippet": "let mut player_input = PlayerInput::preset("
+            }
+          ]
+        }
+      },
+      "pause": {
+        "simulation": {
+          "evidence": [
+            {
+              "path": "examples/siege-foundry/src/lib.rs",
+              "snippet": "self.session.set_paused(paused)"
+            }
+          ]
+        }
+      }
+    }
   },
   {
     "id": "sky-courier",
@@ -143,7 +537,30 @@
     "controls": "WASD / arrows fly \u00b7 Space boost \u00b7 R restart",
     "host": "sky-courier",
     "image": "sky-courier.png",
-    "source": "examples/sky-courier/README.md"
+    "source": "examples/sky-courier/README.md",
+    "capabilities": {
+      "schema_version": 1,
+      "controls": {
+        "action_map": {
+          "evidence": [
+            {
+              "path": "examples/sky-courier/src/lib.rs",
+              "snippet": "let mut player_input = PlayerInput::preset("
+            }
+          ]
+        }
+      },
+      "pause": {
+        "simulation": {
+          "evidence": [
+            {
+              "path": "examples/sky-courier/src/lib.rs",
+              "snippet": "run.session.set_paused("
+            }
+          ]
+        }
+      }
+    }
   },
   {
     "id": "strike",
@@ -155,7 +572,80 @@
     "controls": "WASD move \u00b7 Mouse aim/fire \u00b7 R reload \u00b7 Escape menu",
     "host": "strike",
     "image": "strike.png",
-    "source": "examples/strike/README.md"
+    "source": "examples/strike/README.md",
+    "capabilities": {
+      "schema_version": 1,
+      "controls": {
+        "action_map": {
+          "evidence": [
+            {
+              "path": "examples/strike/src/controls.rs",
+              "snippet": "let mut input = PlayerInput::preset("
+            }
+          ]
+        }
+      },
+      "pause": {
+        "simulation": {
+          "evidence": [
+            {
+              "path": "examples/strike/src/host.rs",
+              "snippet": "self.practice.set_paused(true)"
+            }
+          ],
+          "note": "Offline practice only; network and replay have separate clocks."
+        },
+        "local_menu": {
+          "evidence": [
+            {
+              "path": "examples/strike/src/host.rs",
+              "snippet": "Mode::Network => self.network.advance(elapsed)"
+            },
+            {
+              "path": "examples/strike/src/host.rs",
+              "snippet": "if !self.active || !available { input.move_x = 0.; input.move_z = 0.; input.buttons = 0; }"
+            }
+          ],
+          "note": "Network ticks continue while the local menu suppresses commands."
+        }
+      },
+      "replay": {
+        "record": {
+          "evidence": [
+            {
+              "path": "examples/strike/src/replay.rs",
+              "snippet": "Capture::new(game, 0, Limits::default())"
+            }
+          ],
+          "note": "Offline practice."
+        },
+        "playback": {
+          "evidence": [
+            {
+              "path": "examples/strike/src/replay.rs",
+              "snippet": "let mut p = Playback::new(tape);"
+            },
+            {
+              "path": "examples/strike/src/replay.rs",
+              "snippet": "p.step(w)"
+            }
+          ],
+          "note": "Offline practice recording; no cross-platform determinism claim."
+        },
+        "ghost": {
+          "evidence": [
+            {
+              "path": "examples/strike/src/lib.rs",
+              "snippet": "replays.ghost_sample(frame.alpha)"
+            },
+            {
+              "path": "examples/strike/src/lib.rs",
+              "snippet": "replay::draw_ghost(g)"
+            }
+          ]
+        }
+      }
+    }
   },
   {
     "id": "physics-2d",
@@ -167,7 +657,30 @@
     "controls": "Click drop \u00b7 1/2 shape \u00b7 Space pause \u00b7 R reset",
     "host": "physics-2d",
     "image": "physics-2d.png",
-    "source": "examples/physics-2d/README.md"
+    "source": "examples/physics-2d/README.md",
+    "capabilities": {
+      "schema_version": 1,
+      "controls": {
+        "action_map": {
+          "evidence": [
+            {
+              "path": "examples/physics-2d/src/lib.rs",
+              "snippet": "let mut player_input = PlayerInput::preset("
+            }
+          ]
+        }
+      },
+      "pause": {
+        "simulation": {
+          "evidence": [
+            {
+              "path": "examples/physics-2d/src/lib.rs",
+              "snippet": "self.session.toggle_pause()"
+            }
+          ]
+        }
+      }
+    }
   },
   {
     "id": "physics-3d",
@@ -179,6 +692,29 @@
     "controls": "Drag orbit \u00b7 1/2 drop \u00b7 Space pause \u00b7 R reset",
     "host": "physics-3d",
     "image": "physics-3d.png",
-    "source": "examples/physics-3d/README.md"
+    "source": "examples/physics-3d/README.md",
+    "capabilities": {
+      "schema_version": 1,
+      "controls": {
+        "action_map": {
+          "evidence": [
+            {
+              "path": "examples/physics-3d/src/lib.rs",
+              "snippet": "let mut player_input = PlayerInput::preset("
+            }
+          ]
+        }
+      },
+      "pause": {
+        "simulation": {
+          "evidence": [
+            {
+              "path": "examples/physics-3d/src/lib.rs",
+              "snippet": "self.session.toggle_pause()"
+            }
+          ]
+        }
+      }
+    }
   }
 ]

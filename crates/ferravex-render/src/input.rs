@@ -2,10 +2,13 @@
 //! PlayerInput consumes the same ordered, bounded event journal.
 use crate::prelude::*;
 pub use ferravex_play::input::*;
+pub mod calibration;
 mod platform;
 mod player;
 mod presets;
-pub use player::{CaptureDevice, ControlsStatus, PlayerInput};
+pub mod touch_layout;
+pub use player::{CaptureDevice, ControlsStatus, HintDevice, HintError, PlayerInput};
+pub use player::{VisibleHintError, VisibleTouchLabel};
 pub use presets::Preset;
 mod storage;
 pub use platform::PadState;
