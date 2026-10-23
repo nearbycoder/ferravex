@@ -1,6 +1,6 @@
 # Working in Ferravex
 
-[Journey400](docs/JOURNEY_400.md) defines tasks201–400. New numbered dispatches are paused at the user's requested stopping point;117 planned tasks are deferred. Finish and validate only the already-dispatched batch until the user resumes it.
+[Journey400](docs/JOURNEY_400.md) defines tasks 201–400. New numbered dispatches are paused at the user's requested stopping point; 117 planned tasks are deferred. Finish and validate only the already-dispatched batch until the user resumes it.
 [Journey200](docs/JOURNEY_200.md), tasks 001–200, retains its unfinished final
 integration and assigned ownership. Preserve all Journey50/Journey200 changes.
 Read the assigned journey's plan and contract; do not duplicate or overwrite an

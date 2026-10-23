@@ -1,11 +1,11 @@
 # Journey400 release stopping point
 
-The user stopped new implementation after83 of200 additional numbered tasks. All83
-implementation tasks have returned;117 planned tasks are deferred until explicitly
+The user stopped new implementation after 83 of 200 additional numbered tasks. All 83
+implementation tasks have returned; 117 planned tasks are deferred until explicitly
 resumed. A returned task is distinct from adoption in every demo or complete
 platform validation. No deferred game feature is claimed delivered.
 
-The original Journey200 batch and preserved Journey50 work are included. All15
+The original Journey200 batch and preserved Journey50 work are included. All 15
 example hosts retain their authored gameplay and their documented rendering paths.
 New library APIs have runnable recipes and targeted native checks; combined
 release verification is recorded below before merge.
@@ -23,12 +23,12 @@ See [the roadmap](JOURNEY_400.md), [portable plan](journey400/plan.json),
 
 ## Validation and limits
 
-Combined workspace checks passed4096 Rust tests/doctests (14 platform/device tests
+Combined workspace checks passed 4,096 Rust tests/doctests (14 platform/device tests
 remain ignored), strict Clippy, formatting, all-target/all-feature compilation
 and the first-party dependency audit. Source-host and Python/tooling suites pass.
-All15 release Wasm games and the generated site build pass. The first artifact
-run passed99 checks and caught one obsolete Controls click coordinate; its
-replacement keyboard-path regression now passes for all15 games, including
+All 15 release Wasm games and the generated site build pass. The first artifact
+run passed 99 checks and caught one obsolete Controls click coordinate; its
+replacement keyboard-path regression now passes for all 15 games, including
 renderer changes, saved settings and URL overrides. A final artifact matrix and
 remote CI/deployment verification are recorded by the release PR. Local native
 window/GPU checks require Xvfb, which is unavailable here; CI provides it. Detailed implementation receipts preserve

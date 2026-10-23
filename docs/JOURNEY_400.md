@@ -1,9 +1,9 @@
 # Journey400: 200 additional improvements
 
-This is the second 200-item expansion, numbered **201–400**. It preserves Journey50 and [Journey200](JOURNEY_200.md). The current release closes the dispatched batch; the remaining117 items are deferred at the user's request. Platform verification limits remain explicit. These are concrete assignments; see the [stopping-point release](STOPPING_POINT.md) for delivered scope and deferred work.
+This is the second 200-item expansion, numbered **201–400**. It preserves Journey50 and [Journey200](JOURNEY_200.md). The current release closes the dispatched batch; the remaining 117 items are deferred at the user's request. Platform verification limits remain explicit. These are concrete assignments; see the [stopping-point release](STOPPING_POINT.md) for delivered scope and deferred work.
 
 <!-- journey400-status:start -->
-**Stopping point:**83 numbered implementations returned; no numbered agents remain active. The remaining117 tasks are deferred at the user's request. Combined release verification and platform limits are recorded in [STOPPING_POINT.md](STOPPING_POINT.md). Two planning agents and a focused release review are supplementary, not numbered improvements.
+**Stopping point:** 83 numbered implementations returned; no numbered agents remain active. The remaining 117 tasks are deferred at the user's request. Combined release verification and platform limits are recorded in [STOPPING_POINT.md](STOPPING_POINT.md). Two planning agents and a focused release review are supplementary, not numbered improvements.
 <!-- journey400-status:end -->
 
 The runtime permits three active child agents alongside the parent. Each numbered item gets a distinct implementation or verification agent, dispatched in dependency waves. Existing Journey200 work shares that limit. A returned receipt is reviewed and integrated before dependent consumers rely on its API.
