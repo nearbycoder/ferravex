@@ -111,7 +111,7 @@ class SmokeTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        self.root = Path(temporary.name).resolve()
         self.binaries = self.root / 'build/debug'
         self.binaries.mkdir(parents=True)
         self.args = argparse.Namespace(profile='debug', frames=12, timeout=3,

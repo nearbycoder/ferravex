@@ -32,7 +32,7 @@ class ScaffoldFixture:
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="ferravex-scaffold-")
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
 
     def generate(self, name="moon-garden", template="2d", destination=None, **options):
         return generator.generate(name, destination or self.root / name, template, **options)

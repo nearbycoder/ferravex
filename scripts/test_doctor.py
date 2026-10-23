@@ -639,7 +639,8 @@ class BoundedProcessTests(unittest.TestCase):
     @unittest.skipUnless(os.name == "posix", "Symlinks may require privileges elsewhere")
     def test_symlink_dispatch_name_and_spaced_path_are_preserved(self):
         with tempfile.TemporaryDirectory(prefix="doctor shim ") as temporary:
-            shim = Path(temporary) / "rustc"
+            # Canonicalize the parent, preserving the rustc dispatch symlink.
+            shim = Path(temporary).resolve() / "rustc"
             shim.symlink_to(sys.executable)
             status, output, evidence = doctor._probe(
                 [str(shim), "-B", "-c", "import sys; print(sys.executable)"], 2)

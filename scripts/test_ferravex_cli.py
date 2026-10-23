@@ -22,7 +22,7 @@ class CliTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="ferravex cli ")
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
         (self.root / "examples").mkdir()
         (self.root / "scripts").mkdir()
         self.games = [

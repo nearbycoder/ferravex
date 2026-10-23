@@ -58,7 +58,7 @@ class BuildFixture(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="journey200-109-")
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name) / "checkout 'with spaces'"
+        self.root = Path(temporary.name).resolve() / "checkout 'with spaces'"
         self.root.mkdir()
         self.output = self.root / "dist/web"
         self.games = [
