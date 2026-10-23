@@ -102,13 +102,20 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: Native linker libraries for generated-template checks
+        # wasm.templates also tests and links the generated native entry points.
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev libgl1-mesa-dev
       - name: Browser hosts, actual Wasm, native authority, tooling and documentation
         run: python3 -B scripts/validate.py --mode full --group js --group wasm --group python --group site --require-complete --report target/validation/web.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: validation-web
-          path: target/validation
+          path: |
+            target/validation
+            target/journey-200/template-parity/run-*/logs-*/*.log
+            target/journey-200/template-parity/run-*/report.json
+            target/journey-200/template-parity/run-*/rustc.log
           if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         with:

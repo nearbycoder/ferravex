@@ -73,7 +73,7 @@ const pageHasDefaultFocus=()=>!document.activeElement||document.activeElement===
 let bootFocusAllowed=pageHasDefaultFocus()&&document.hasFocus()&&!document.hidden;
 function cancelBootFocus(){
  bootFocusAllowed=false;
- document.removeEventListener('focusin',cancelBootFocus,true);
+ document.removeEventListener('focusin',cancelBootFocus,{capture:true});
  window.removeEventListener('blur',cancelBootFocus);
  document.removeEventListener('visibilitychange',hideBootFocus);
 }
