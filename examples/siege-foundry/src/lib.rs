@@ -20,8 +20,10 @@ use ferravex_physics::d3::{
     ColliderBuilder, PhysicsWorld, RigidBodyBuilder, RigidBodyHandle, Vector,
 };
 use ferravex_render::audio::{Cue, GameAudio, Surface};
+#[cfg(test)]
+use ferravex_render::input::HintDevice;
 use ferravex_render::input::{
-    HintDevice, PlayerInput, Preset,
+    PlayerInput, Preset,
     touch::{Control, Output, Region},
 };
 use ferravex_render::{
@@ -736,6 +738,7 @@ fn fitted_label(text: &str, rect: Rect, size: u16, centered: bool) {
     );
 }
 
+#[cfg(test)]
 fn action_hint<'a>(input: &PlayerInput, action: &str, buffer: &'a mut [u8]) -> &'a str {
     if input.current_device() == HintDevice::Touch {
         // The preset's Touch 2/confirm channels are not installed here: this
@@ -776,23 +779,27 @@ fn draw_hud(foundry: &Foundry, layout: &HudLayout, input: &PlayerInput) {
     let w = screen_width();
     let state = foundry.session.state();
     let panel_color = Color::new(0.10, 0.14, 0.13, 0.94);
-    draw_rectangle(16.0, 12.0, (w - 96.0).min(280.0), 32.0, panel_color);
-    label(
-        &format!("TARGETS {} / {}", game.score(), GOAL),
-        28.0,
-        34.0,
-        16.0,
-        PAPER,
-    );
+    if state != SessionState::Ready {
+        draw_rectangle(16.0, 12.0, (w - 96.0).min(280.0), 32.0, panel_color);
+        label(
+            &format!("TARGETS {} / {}", game.score(), GOAL),
+            28.0,
+            34.0,
+            16.0,
+            PAPER,
+        );
+    }
     let panel = layout.panel;
     draw_rectangle(panel.x, panel.y, panel.w, panel.h, panel_color);
-    label(
-        &format!("SHOTS {} / {AMMO}", game.ammo),
-        28.0,
-        panel.y + 24.0,
-        16.0,
-        PAPER,
-    );
+    if state != SessionState::Ready {
+        label(
+            &format!("SHOTS {} / {AMMO}", game.ammo),
+            28.0,
+            panel.y + 24.0,
+            16.0,
+            PAPER,
+        );
+    }
     let feedback = &foundry.feedback;
     let status = if feedback.destruction > 0.0 {
         format!("+{} TARGETS DOWN", feedback.knocked_down)
@@ -855,44 +862,23 @@ fn draw_hud(foundry: &Foundry, layout: &HudLayout, input: &PlayerInput) {
             PAPER,
         );
     }
-    let (title, detail, action, button) = match state {
-        SessionState::Ready => (
-            "DEMOLITION RANGE",
-            "6 targets. 8 shots.",
-            "confirm",
-            "START",
-        ),
-        SessionState::Paused => (
-            "RANGE PAUSED",
-            "Shots + debris frozen.",
-            "pause",
-            if controls_open {
-                "CLOSE CONTROLS"
-            } else {
-                "RESUME"
-            },
-        ),
-        SessionState::Won => ("FOUNDRY CLEARED", "All 6 targets down.", "confirm", "AGAIN"),
-        SessionState::Lost => ("OUT OF SHOTS", "Break the supports.", "confirm", "RETRY"),
+    let (title, detail) = match state {
+        SessionState::Ready => ("DEMOLITION RANGE", "6 targets. 8 shots."),
+        SessionState::Paused => ("RANGE PAUSED", ""),
+        SessionState::Won => ("FOUNDRY CLEARED", ""),
+        SessionState::Lost => ("OUT OF SHOTS", ""),
         SessionState::Playing => return,
-    };
-    let mut hint_buffer = [0; 512];
-    let prompt = if controls_open {
-        "Close Controls first.".to_owned()
-    } else {
-        format!(
-            "{button} / {}",
-            action_hint(input, action, &mut hint_buffer)
-        )
     };
     let panel_width = (w - 32.0).min(430.0);
     let y = 104.0;
-    draw_rectangle((w - panel_width) * 0.5, y, panel_width, 112.0, panel_color);
-    for (text, offset, size) in [
-        (title, 30.0, 20),
-        (detail, 61.0, 16),
-        (prompt.as_str(), 90.0, 16),
-    ] {
+    draw_rectangle(
+        (w - panel_width) * 0.5,
+        y,
+        panel_width,
+        if detail.is_empty() { 56. } else { 82. },
+        panel_color,
+    );
+    for (text, offset, size) in [(title, 30.0, 20), (detail, 61.0, 16)] {
         fitted_label(
             text,
             Rect::new(

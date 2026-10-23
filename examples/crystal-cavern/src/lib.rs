@@ -1344,31 +1344,31 @@ async fn game() {
         let retry_hint = action_hint(&player_input, "restart");
         let pause_hint = action_hint(&player_input, "pause");
         let help_hint = action_hint(&player_input, "help");
-        draw_rectangle(0., 0., w - 64., 43., Color::new(0.03, 0.08, 0.08, 0.8));
-        draw_text(
-            &format!("GEMS {}/3  ALTARS {}/2", game.count(), game.switches),
-            16.,
-            28.,
-            14.,
-            MINT,
-        );
-        // A steady six-part bar includes walking into daylight, not just opening
-        // the seal. It reads accepted graph completion without mutating it.
-        let bar_width = (w - 96.).max(1.);
-        for view in game.objectives.iter() {
-            draw_rectangle(
-                16. + view.index as f32 * bar_width / 6.,
-                40.,
-                (bar_width / 6. - 2.).max(1.),
-                3.,
-                if view.state == ObjectiveState::Complete {
-                    MINT
-                } else {
-                    Color::new(0.2, 0.3, 0.3, 1.)
-                },
-            );
-        }
         if expedition.session.is_playing() {
+            draw_rectangle(0., 0., w - 64., 43., Color::new(0.03, 0.08, 0.08, 0.8));
+            draw_text(
+                &format!("GEMS {}/3  ALTARS {}/2", game.count(), game.switches),
+                16.,
+                28.,
+                14.,
+                MINT,
+            );
+            // A steady six-part bar includes walking into daylight, not just opening
+            // the seal. It reads accepted graph completion without mutating it.
+            let bar_width = (w - 96.).max(1.);
+            for view in game.objectives.iter() {
+                draw_rectangle(
+                    16. + view.index as f32 * bar_width / 6.,
+                    40.,
+                    (bar_width / 6. - 2.).max(1.),
+                    3.,
+                    if view.state == ObjectiveState::Complete {
+                        MINT
+                    } else {
+                        Color::new(0.2, 0.3, 0.3, 1.)
+                    },
+                );
+            }
             let target_color = game
                 .target()
                 .map_or(Color::new(0.8, 0.9, 0.85, 0.6), |target| {
@@ -1418,50 +1418,33 @@ async fn game() {
                 text_center("Move / look bindings: Controls (F2)", h - 12., 17, WHITE);
             }
         } else {
-            let top = (h * 0.28).max(110.).min((h - 240.).max(0.));
+            let top = ((h - 172.) * 0.5).max(8.);
             draw_rectangle(
                 0.0,
                 top,
                 screen_width(),
-                240.0,
+                172.0,
                 Color::new(0.03, 0.08, 0.08, 0.94),
             );
             let (title, detail, action) = match expedition.session.state() {
                 SessionState::Ready => (
                     "THE EXPEDITION",
-                    "Recover 3 crystals. Wake altar I, then II. Find daylight.".to_owned(),
+                    "3 CRYSTALS / 2 ALTARS".to_owned(),
                     "Begin expedition",
                 ),
-                SessionState::Paused => (
-                    "EXPEDITION PAUSED",
-                    "Your crystals and expedition time are safe.".to_owned(),
-                    "Resume expedition",
-                ),
+                SessionState::Paused => ("EXPEDITION PAUSED", String::new(), "Resume expedition"),
                 _ => (
                     "DAYLIGHT",
-                    format!(
-                        "All 6 objectives complete. Expedition time: {:.1}s",
-                        game.elapsed
-                    ),
+                    format!("TIME {:.1}s", game.elapsed),
                     "Explore again",
                 ),
             };
             text_center(title, top + 45., 38, MINT);
             wrapped_text(&mut overlay_text, &detail, top + 62., 60., WARM);
-            let guidance = match expedition.session.state() {
-                SessionState::Ready => {
-                    format!("{use_hint}: Use nearby.\nMove/look: Controls.")
-                }
-                SessionState::Paused => {
-                    format!("{pause_hint}: Resume.\n{retry_hint}: Reset all.")
-                }
-                _ => format!("{retry_hint}: Retry.\nResets crystals,\naltars and time."),
-            };
-            wrapped_text(&mut overlay_text, &guidance, top + 120., 60., WHITE);
             confirm_requested |= ferravex_render::ui::button_with_options(
                 Rect::new(
                     (w - (w - 32.).clamp(1., 320.)) * 0.5,
-                    top + 184.,
+                    top + 116.,
                     (w - 32.).clamp(1., 320.),
                     44.,
                 ),

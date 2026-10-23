@@ -717,7 +717,7 @@ impl App {
         } else if self.manual_pause {
             "".into()
         } else {
-            "12 HOLES. ONE GREAT ROUND.".into()
+            String::new()
         };
         label(&mut self.ui, rect(tx, y + 58., tw, 22.), &detail, 13., GOLD);
         let first = if self.round.phase == Phase::Holed {

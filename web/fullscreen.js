@@ -166,7 +166,7 @@ export function bindFullscreen(canvas,game,getExports){
  .ferravex-game button{touch-action:manipulation}
  @media(any-pointer:coarse){.ferravex-game input,.ferravex-game select,.ferravex-game textarea{font-size:16px}}
  .ferravex-fullscreen-trigger{font:inherit;color:#c3d9d0;background:#18262b;border:1px solid #40545b;border-radius:4px;padding:5px 9px;min-height:34px;cursor:pointer;flex:none}
- .ferravex-fullscreen-trigger{width:44px;min-height:44px;font-size:0!important;padding:8px;border-radius:12px}
+ .ferravex-fullscreen-trigger{display:none!important;width:44px;min-height:44px;font-size:0!important;padding:8px;border-radius:12px}
  .ferravex-fullscreen-trigger::before{content:"⛶";font:24px/1 system-ui}
  .ferravex-fullscreen-trigger:focus-visible{outline:2px solid #d6b779;outline-offset:2px}
  body:has(#controls)>.ferravex-fullscreen-trigger{position:absolute;right:288px;top:16px;z-index:6;font-size:12px}

@@ -7,6 +7,10 @@ All seventeen games and labs share browser tools for controls, presentation and 
 The small **Game menu** button opens Controls, Settings, Sound and How to play.
 Instructions and diagnostics are available on demand instead of filling the
 playfield. Games retain their scores, objectives and actionable touch controls.
+Ready and pause screens show their main action and relevant results, without
+repeating the key list or explaining that time is paused. Evergreen mechanics
+and display notes live in **How to play**. The regular page also uses the single
+menu, so Fullscreen is available there without a second toolbar button.
 
 **Fullscreen** gives the app the entire browser viewport: website navigation,
 guides and scroll rails stay outside it. The menu button remains in the top

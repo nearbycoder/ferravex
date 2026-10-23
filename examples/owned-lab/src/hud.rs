@@ -2,10 +2,7 @@
 use super::*;
 use ferravex_engine::{
     play::objective::ObjectiveProgress,
-    render::{
-        self,
-        input::{HintDevice, PlayerInput},
-    },
+    render::{self, input::PlayerInput},
 };
 
 fn fit(text: &str, width: f32, metrics: render::BitmapFontMetrics) -> &str {
@@ -53,13 +50,13 @@ fn direction(yaw: f32) -> &'static str {
     ["N", "NE", "E", "SE", "S", "SW", "W", "NW"][slot]
 }
 
-pub(super) fn draw(lab: &Lab, input: &PlayerInput, width: f32, height: f32, view: u32) {
+pub(super) fn draw(lab: &Lab, _input: &PlayerInput, width: f32, height: f32, view: u32) {
     if width < 180. || height < 260. {
         return;
     }
     let panel_width = (width - 32.).min(340.);
     let x = if width >= 800. {
-        width - panel_width - 16.
+        width - panel_width - 80.
     } else {
         16.
     };
@@ -75,37 +72,25 @@ pub(super) fn draw(lab: &Lab, input: &PlayerInput, width: f32, height: f32, view
     let line_height = metrics.line_height() + 4.;
     let tint = render::Color::new(0.94, 0.93, 0.86, 1.);
     let player = lab.game.player(0).unwrap();
-    let mut hint_buffer = [0; 256];
     let next = lab
         .training_objectives()
         .find(|view| !lab.objectives.complete(view.index));
-    let objective = if lab.peer.mode == 1 {
-        "Authority: guest input timeout 2s".to_owned()
-    } else if lab.peer.mode == 2 {
-        format!("{} commands awaiting host", lab.peer.pending.len())
+    let objective = if lab.peer.mode != 0 {
+        String::new()
     } else if let Some(next) = next {
-        let action = match next.index {
-            0 if input.current_device() == HintDevice::KeyboardMouse => "move_forward",
-            0 => "move_y",
-            2 => "reload",
-            _ => "fire",
-        };
-        let hint = input
-            .format_hint(action, &mut hint_buffer)
-            .unwrap_or("Controls");
         match next.index {
             0 => {
                 let ObjectiveProgress::Event { count, .. } = next.progress else {
                     unreachable!()
                 };
-                format!("Move {:.1}/5 m: {hint}", f32::from(count) / 100.)
+                format!("Move {:.1}/5 m", f32::from(count) / 100.)
             }
-            1 => format!("Fire a shot: {hint}"),
+            1 => "Fire a shot".to_owned(),
             2 if player.reload_ticks > 0 => {
                 format!("Reloading: {:.1}s", f32::from(player.reload_ticks) / 64.)
             }
-            2 => format!("Reload: {hint}"),
-            _ => format!("Hit an operator: {hint}"),
+            2 => "Reload".to_owned(),
+            _ => "Hit an operator".to_owned(),
         }
     } else {
         "4/4 complete - free practice".to_owned()
@@ -120,10 +105,10 @@ pub(super) fn draw(lab: &Lab, input: &PlayerInput, width: f32, height: f32, view
         )
     };
     let guide = if lab.peer.mode != 0 {
-        "Local menus keep the match live".to_owned()
+        "".to_owned()
     } else if lab.drill_notice > 0. {
         format!("Drill complete: {}/4", lab.training_mask().count_ones())
-    } else if let Some(target) = lab.target_hint {
+    } else if let Some(target) = lab.target_hint.filter(|_| lab.objectives.complete(2)) {
         let delta = target.position - player.eye_position();
         let yaw = delta.x.atan2(-delta.z);
         let offset = (yaw - player.yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
@@ -142,7 +127,7 @@ pub(super) fn draw(lab: &Lab, input: &PlayerInput, width: f32, height: f32, view
             delta.length()
         )
     } else {
-        "Find an operator in clear sight".to_owned()
+        String::new()
     };
     let lines = if compact {
         [
@@ -156,7 +141,16 @@ pub(super) fn draw(lab: &Lab, input: &PlayerInput, width: f32, height: f32, view
             "",
         ]
     } else {
-        [lab.peer_status(), &objective, &orientation, &guide]
+        [
+            if lab.peer.mode != 0 {
+                lab.peer_status()
+            } else {
+                ""
+            },
+            &objective,
+            if view == 2 { &orientation } else { "" },
+            &guide,
+        ]
     };
     let lines: Vec<_> = lines
         .into_iter()

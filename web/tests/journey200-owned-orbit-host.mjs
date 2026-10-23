@@ -134,7 +134,8 @@ test('layout preserves narrow-screen help, wrapping controls, visible focus and 
   assert.match(css, /#orbit-toolbar>button\{font-size:1rem\}/, 'retain readable labels over shared narrow-screen toolbar styles');
   assert.match(css, /\.help\{[^}]*position:static[^}]*width:100%/);
   assert.match(css, /@media\(max-width:480px\)[\s\S]*grid-template-columns:minmax\(0,1fr\)/);
-  assert.doesNotMatch(css, /details\{display:none|text-overflow:ellipsis|white-space:nowrap|overflow:hidden|outline:none/);
+  assert.match(css, /#game-state\{[^}]*clip-path:inset\(50%\)/, 'duplicate visual status remains available to assistive technology');
+  assert.doesNotMatch(css.replace(/#game-state\{[^}]*\}/, ''), /details\{display:none|text-overflow:ellipsis|white-space:nowrap|overflow:hidden|outline:none/);
   assert.match(css, /#game:focus-visible\{[^}]*outline:3px solid[^}]*!important[^}]*outline-offset:-4px/);
   assert.match(css, /button:focus-visible,a:focus-visible,summary:focus-visible\{[^}]*outline:3px solid/);
   assert.match(css, /forced-colors:active/);
@@ -156,7 +157,7 @@ function fixture() {
     constructor(tag, attrs = {}) {
       this.tag = tag; this.attributes = new Map(Object.entries(attrs)); this.handlers = new Map();
       this.parent = null; this.hidden = 'hidden' in attrs; this.disabled = 'disabled' in attrs;
-      this.open = false; this.textContent = ''; this.writes = 0; this.dataset = {};
+      this.open = false; this.textContent = ''; this.writes = 0; this.dataset = {}; this.style = {};
       this.width = Number(attrs.width); this.height = Number(attrs.height);
     }
     addEventListener(type, handler) {
@@ -169,7 +170,7 @@ function fixture() {
     closest(selector) { return selector.split(',').includes(this.tag) ? this : null; }
     focus() { document.activeElement = this; }
     getBoundingClientRect() { return {left: 0, top: 0, width: 320, height: 360}; }
-    getContext() { return {putImageData() {}}; }
+    getContext() { return {putImageData() {},fillRect: (...args) => { this.headerClear = args; }}; }
   }
   const window = new Element('window'), document = new Element('document');
   document.parent = window; document.hidden = false; document.hasFocus = () => true;
@@ -181,6 +182,7 @@ function fixture() {
   document.querySelector = selector => nodes.get(selector);
   for (const node of nodes.values()) node.parent = document;
   const canvas = nodes.get('#game'), summary = nodes.get('#orbit-help-summary'), help = nodes.get('#orbit-help');
+  canvas.parentElement = new Element('div');
   const link = new Element('a'), select = new Element('select');
   link.parent = document; select.parent = document; summary.parent = help;
   canvas.focus();
@@ -319,6 +321,9 @@ test('custom boot, framebuffer, controls overlay, phase feedback and frame sched
   assert.equal(f.overlays.length, 2);
   assert.deepEqual(f.overlays[0].slice(1), [f.engine, 640, 720]);
   assert.match(f.nodes.get('#game-state').textContent, /Ready.*Sector 1 of 2.*3 lives remaining/);
+  assert.deepEqual(f.canvas.headerClear, [0, 0, 640, 104], 'readable narrow score replaces only the bitmap metadata band');
+  assert.equal(f.nodes.get('#orbit-compact-hud').hidden, false);
+  assert.equal(f.nodes.get('#orbit-compact-hud').style.height, '52px');
   assert.deepEqual(f.calls, []);
   f.send(f.nodes.get('#pause'), 'click');
   assert.equal(f.document.activeElement, f.canvas);

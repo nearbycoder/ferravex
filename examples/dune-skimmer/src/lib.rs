@@ -471,12 +471,6 @@ fn draw_hud(race: &Race, input: &PlayerInput, waiting_for_controls: bool) {
             16,
             PALE,
         );
-        centered(
-            "IMPACTS SCRUB SPEED / NO TIME ADDED",
-            h * 0.5 + 62.,
-            12,
-            PALE,
-        );
         let mut retry_buffer = [0; 256];
         let mut confirm_buffer = [0; 256];
         let retry = binding_hint(input, "restart", &mut retry_buffer);
@@ -487,7 +481,6 @@ fn draw_hud(race: &Race, input: &PlayerInput, waiting_for_controls: bool) {
             15,
             TEAL,
         );
-        centered("OR CLICK / TAP THE GAME", h * 0.5 + 115., 12, PALE);
         return;
     }
     label(
@@ -518,7 +511,7 @@ fn draw_hud(race: &Race, input: &PlayerInput, waiting_for_controls: bool) {
         // Reuse the next-gate row before driving starts. A separate center cue
         // would overlap boost telemetry at the 352px minimum in touch mode.
         let text = if race.countdown > 0. {
-            format!("THREE LAPS / {}", race.countdown.ceil() as u32)
+            format!("{}", race.countdown.ceil() as u32)
         } else {
             "GO".to_owned()
         };
@@ -622,13 +615,12 @@ fn draw_hud(race: &Race, input: &PlayerInput, waiting_for_controls: bool) {
             // Short landscape canvases also need a single line; the compact
             // portrait case uses the next-gate row above instead.
             centered(
-                &format!("THREE LAPS / {}", race.countdown.ceil() as u32),
+                &format!("{}", race.countdown.ceil() as u32),
                 progress_y + 27.,
                 22,
                 WHITE,
             );
         } else {
-            centered("THREE LAPS THROUGH THE RUINS", h * 0.34, 20, PALE);
             centered(
                 &format!("{}", race.countdown.ceil() as u32),
                 h * 0.48,

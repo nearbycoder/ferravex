@@ -67,13 +67,13 @@ impl ScreenLayout {
                 .place(hints, [hints.size[0], 96.])
                 .unwrap()
         });
-        let card = Anchor::Center.place(safe, [440., 276.]).unwrap();
+        let card = Anchor::Center.place(safe, [440., 208.]).unwrap();
         let inside = card.inset([12.; 4]).unwrap();
         let action_height = 48_f32.min(inside.size[1]);
         let action = UiRect {
             min: [
                 inside.min[0],
-                inside.min[1] + (inside.size[1] - 96.).max(0.),
+                inside.min[1] + (inside.size[1] - 56.).max(0.),
             ],
             size: [inside.size[0], action_height],
         };
@@ -162,7 +162,7 @@ impl ScreenLayout {
         draw_circle(knob.x, knob.y, 12., CYAN);
         draw_rectangle(button.x, button.y, button.w, button.h, FLOOR);
         draw_rectangle_lines(button.x, button.y, button.w, button.h, 2., CYAN);
-        crate::label("TOUCH 7", button.x + 11., button.y + 34., 14, CYAN);
+        crate::label("DASH", button.x + 11., button.y + 34., 14, CYAN);
         set_camera(&self.canvas.camera());
         ferravex_render::set_world_colors(false);
         true
@@ -241,9 +241,9 @@ impl ScreenLayout {
             )
             .unwrap();
         }
-        if inner.size[1] >= 220. {
+        if inner.size[1] >= 140. {
             ui.text(
-                rect(inner.min[0], inner.min[1] + 42., inner.size[0], 64.),
+                rect(inner.min[0], inner.min[1] + 42., inner.size[0], 44.),
                 detail,
                 TextStyle {
                     size: 16.,
@@ -257,7 +257,7 @@ impl ScreenLayout {
             if title == "PAUSED" {
                 binding(
                     ui,
-                    rect(inner.min[0], inner.min[1] + 116., inner.size[0], ROW),
+                    rect(inner.min[0], inner.min[1] + 96., inner.size[0], ROW),
                     input,
                     "restart",
                     "RESTART",
@@ -278,23 +278,6 @@ impl ScreenLayout {
             },
         )
         .unwrap();
-        if inner.size[1] >= 180. {
-            let below = self.action.min[1] + self.action.size[1] + 8.;
-            binding(
-                ui,
-                rect(inner.min[0], below, inner.size[0], ROW),
-                input,
-                "confirm",
-                "CONFIRM",
-            );
-            line(
-                ui,
-                rect(inner.min[0], below + ROW, inner.size[0], ROW),
-                "F2 / TOOLBAR: CONTROLS",
-                TEXT,
-                MUTED,
-            );
-        }
         ui.pop_clip();
     }
 }

@@ -19,7 +19,7 @@ impl CompactHud {
         let Vec2 { x: w, y: h } = canvas.size;
         Some(Self {
             canvas,
-            card: Rect::new(12., ((h - 244.) * 0.5).max(100.), w - 24., 244.),
+            card: Rect::new(12., ((h - 208.) * 0.5).max(100.), w - 24., 208.),
             buttons: [
                 Rect::new(12., h - 72., 56., 56.),
                 Rect::new(80., h - 72., 56., 56.),
@@ -59,32 +59,32 @@ impl CompactHud {
         let collected = game.embers.iter().filter(|(_, found)| *found).count();
         let touch = input.current_device() == HintDevice::Touch;
         let defaults = touch && !input.touch_customized();
-        draw_rectangle(0., 0., w, 64., Color::new(0.08, 0.13, 0.11, 0.96));
-        label(
-            &format!(
-                "{:.2}s / LANTERNS {}/2",
-                game.trial.elapsed(),
-                game.checkpoints.index()
-            ),
-            12.,
-            28.,
-            15.,
-            CREAM,
-        );
-        fitted_centered_label(
-            &format!(
-                "{collected}/{} EMBERS / {} PTS",
-                game.embers.len(),
-                game.score.total()
-            ),
-            (w - 64.) * 0.5,
-            52.,
-            w - 88.,
-            15.,
-            ORANGE,
-        );
-
         if game.session.is_playing() {
+            draw_rectangle(0., 0., w, 64., Color::new(0.08, 0.13, 0.11, 0.96));
+            label(
+                &format!(
+                    "{:.2}s / LANTERNS {}/2",
+                    game.trial.elapsed(),
+                    game.checkpoints.index()
+                ),
+                12.,
+                28.,
+                15.,
+                CREAM,
+            );
+            fitted_centered_label(
+                &format!(
+                    "{collected}/{} EMBERS / {} PTS",
+                    game.embers.len(),
+                    game.score.total()
+                ),
+                (w - 64.) * 0.5,
+                52.,
+                w - 88.,
+                15.,
+                ORANGE,
+            );
+
             let notice = if game.respawn_notice > 0. {
                 if game.checkpoints.index() == 0 {
                     "BACK TO THE TRAILHEAD"
@@ -174,30 +174,23 @@ impl CompactHud {
                 GREEN,
             );
         } else if ready {
-            line("Light two lanterns.", 64., CREAM);
-            line("Reach the green lift.", 87., CREAM);
-            line("Embers are optional.", 116., ORANGE);
-            line("Falls return to lanterns", 139., ORANGE);
+            line("REACH THE GREEN LIFT", 72., CREAM);
         } else {
-            line("Time and progress paused", 64., CREAM);
-            // The default touch surface has a resume card, but no restart
-            // region. A registered Touch 9 binding alone is not a visible button.
             let restart = if defaults {
                 keyboard_restart_hint(input)
             } else {
-                format!("RESTART {}", restart.text())
+                format!("{} RESTART", restart.text())
             };
-            self.hint(&restart, card.y + 103.);
-            line("Resets run and embers.", 126., ORANGE);
+            self.hint(&restart, card.y + 88.);
         }
         if defaults && touch_button_matches(input, "confirm", 10) {
             line(
                 if game.won() {
-                    "TAP HERE TO RUN AGAIN"
+                    "TAP TO PLAY AGAIN"
                 } else {
-                    "TAP HERE TO CONTINUE"
+                    "TAP TO PLAY"
                 },
-                178.,
+                174.,
                 GREEN,
             );
         } else {
@@ -208,7 +201,7 @@ impl CompactHud {
             } else {
                 format!("{} / {}", confirm.text(), pause.text())
             };
-            self.hint(&keys, card.y + 168.);
+            self.hint(&keys, card.y + 160.);
             line(
                 if game.won() {
                     "TO RUN AGAIN"
@@ -217,11 +210,10 @@ impl CompactHud {
                 } else {
                     "TO RESUME"
                 },
-                190.,
+                184.,
                 GREEN,
             );
         }
-        self.hint("F2 CONTROLS / REMAP", card.y + 226.);
     }
 
     // A complete fallback remains readable instead of shrinking long remaps.
@@ -405,7 +397,7 @@ mod tests {
             "THE LIGHT CARRIES ON",
             "Time and progress paused",
             "Falls return to lanterns",
-            "TAP HERE TO RUN AGAIN",
+            "TAP TO PLAY AGAIN",
             "F2 CONTROLS / REMAP",
         ] {
             assert_eq!(hint_text(text, width), text);

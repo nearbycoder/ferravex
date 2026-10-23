@@ -832,7 +832,10 @@ async fn game() {
                     button(Rect::new(120., 590., 130., HEIGHT - 590.), 13),
                     button(Rect::new(1080., 590., WIDTH - 1080., HEIGHT - 590.), 3),
                     button(Rect::new(WIDTH - 112., 84., 96., 56.), 11),
-                    button(Rect::new(340., 220., 600., 270.), 10),
+                    button(
+                        Rect::new(260., 220., 760., if game.won() { 250. } else { 220. }),
+                        10,
+                    ),
                 ]
             },
             |hud| hud.touch_layout(),
@@ -935,119 +938,120 @@ async fn game() {
             hud.draw(&game, &player_input);
         } else {
             let collected = game.embers.iter().filter(|(_, found)| *found).count();
-            let jump = ControlHint::new(&player_input, "jump");
             let pause = ControlHint::new(&player_input, "pause");
             let restart = ControlHint::new(&player_input, "restart");
             let confirm = ControlHint::new(&player_input, "confirm");
             let tap_confirm = touch_mode
                 && !player_input.touch_customized()
                 && touch_button_matches(&player_input, "confirm", 10);
-            label("EMBERLINE", 32.0, 48.0, 28.0, CREAM);
-            let zone = if game.position().x < 900.0 {
-                "01 / THE TREELINE"
-            } else if game.position().x < 1800.0 {
-                "02 / THE OLD MILL"
-            } else {
-                "03 / THE FURNACE"
-            };
-            label(zone, 34.0, 72.0, 15.0, Color::from_hex(0xa3ab91));
-            centered_label(
-                &format!(
-                    "LANTERNS {}/2   /   REACH THE LIFT >",
-                    game.checkpoints.index()
-                ),
-                WIDTH * 0.5,
-                74.,
-                15.,
-                CREAM,
-            );
-            label(
-                &format!(
-                    "{:.2}s / SPLITS {}",
-                    game.trial.elapsed(),
-                    game.trial.splits().iter().flatten().count()
-                ),
-                520.,
-                48.,
-                19.,
-                CREAM,
-            );
-            label(
-                &format!(
-                    "{} POINTS / x{}",
-                    game.score.total(),
-                    game.score.multiplier()
-                ),
-                850.,
-                72.,
-                15.,
-                ORANGE,
-            );
-            let ember_count = format!("{collected} / {}", game.embers.len());
-            let ember_count_x = WIDTH - 32. - measure_text(&ember_count, None, 23, 1.).width;
-            diamond(vec2(ember_count_x - 20., 70.0), 8.0, ORANGE);
-            label(&ember_count, ember_count_x, 77.0, 23.0, CREAM);
-            if game.ember_inventory.count(1) >= 3 {
-                label(
-                    if game.air_jump_used {
-                        "AIR JUMP SPENT"
-                    } else {
-                        "AIR JUMP READY"
-                    },
-                    34.,
-                    105.,
-                    15.,
-                    GREEN,
-                );
-            }
-
-            if touch_mode
-                && game.session.is_playing()
-                && !player_input.touch_customized()
-                && [
-                    ("move_left", 12),
-                    ("move_right", 13),
-                    ("jump", 3),
-                    ("pause", 11),
-                ]
-                .iter()
-                .all(|(action, channel)| touch_button_matches(&player_input, action, *channel))
-            {
-                for (x, text) in [(68.0, "<"), (182.0, ">"), (1184.0, "^")] {
-                    draw_circle(x, 651.0, 38.0, Color::new(0.09, 0.14, 0.12, 0.65));
-                    label(text, x - 11.0, 663.0, 32.0, CREAM);
-                }
-                draw_rectangle(
-                    WIDTH - 112.,
-                    84.,
-                    96.,
-                    56.,
-                    Color::new(0.09, 0.14, 0.12, 0.85),
-                );
-                centered_label("PAUSE", WIDTH - 64., 118., 15., CREAM);
-            }
-            if game.respawn_notice > 0.0 || game.checkpoint_notice > 0. {
+            if game.session.is_playing() {
+                label("EMBERLINE", 32.0, 48.0, 28.0, CREAM);
+                let zone = if game.position().x < 900.0 {
+                    "01 / THE TREELINE"
+                } else if game.position().x < 1800.0 {
+                    "02 / THE OLD MILL"
+                } else {
+                    "03 / THE FURNACE"
+                };
+                label(zone, 34.0, 72.0, 15.0, Color::from_hex(0xa3ab91));
                 centered_label(
-                    if game.respawn_notice > 0. {
-                        if game.checkpoints.index() == 0 {
-                            "Back to the trailhead"
-                        } else {
-                            "Back to the lit lantern"
-                        }
-                    } else {
-                        "LANTERN LIT / Respawn point saved"
-                    },
+                    &format!(
+                        "LANTERNS {}/2   /   REACH THE LIFT >",
+                        game.checkpoints.index()
+                    ),
                     WIDTH * 0.5,
-                    112.0,
-                    19.0,
+                    74.,
+                    15.,
                     CREAM,
                 );
+                label(
+                    &format!(
+                        "{:.2}s / SPLITS {}",
+                        game.trial.elapsed(),
+                        game.trial.splits().iter().flatten().count()
+                    ),
+                    520.,
+                    48.,
+                    19.,
+                    CREAM,
+                );
+                label(
+                    &format!(
+                        "{} POINTS / x{}",
+                        game.score.total(),
+                        game.score.multiplier()
+                    ),
+                    850.,
+                    72.,
+                    15.,
+                    ORANGE,
+                );
+                let ember_count = format!("{collected} / {}", game.embers.len());
+                let ember_count_x = WIDTH - 32. - measure_text(&ember_count, None, 23, 1.).width;
+                diamond(vec2(ember_count_x - 20., 70.0), 8.0, ORANGE);
+                label(&ember_count, ember_count_x, 77.0, 23.0, CREAM);
+                if game.ember_inventory.count(1) >= 3 {
+                    label(
+                        if game.air_jump_used {
+                            "AIR JUMP SPENT"
+                        } else {
+                            "AIR JUMP READY"
+                        },
+                        34.,
+                        105.,
+                        15.,
+                        GREEN,
+                    );
+                }
+
+                if touch_mode
+                    && game.session.is_playing()
+                    && !player_input.touch_customized()
+                    && [
+                        ("move_left", 12),
+                        ("move_right", 13),
+                        ("jump", 3),
+                        ("pause", 11),
+                    ]
+                    .iter()
+                    .all(|(action, channel)| touch_button_matches(&player_input, action, *channel))
+                {
+                    for (x, text) in [(68.0, "<"), (182.0, ">"), (1184.0, "^")] {
+                        draw_circle(x, 651.0, 38.0, Color::new(0.09, 0.14, 0.12, 0.65));
+                        label(text, x - 11.0, 663.0, 32.0, CREAM);
+                    }
+                    draw_rectangle(
+                        WIDTH - 112.,
+                        84.,
+                        96.,
+                        56.,
+                        Color::new(0.09, 0.14, 0.12, 0.85),
+                    );
+                    centered_label("PAUSE", WIDTH - 64., 118., 15., CREAM);
+                }
+                if game.respawn_notice > 0.0 || game.checkpoint_notice > 0. {
+                    centered_label(
+                        if game.respawn_notice > 0. {
+                            if game.checkpoints.index() == 0 {
+                                "Back to the trailhead"
+                            } else {
+                                "Back to the lit lantern"
+                            }
+                        } else {
+                            "LANTERN LIT / Respawn point saved"
+                        },
+                        WIDTH * 0.5,
+                        112.0,
+                        19.0,
+                        CREAM,
+                    );
+                }
             }
             if matches!(
                 game.session.state(),
                 SessionState::Ready | SessionState::Paused
             ) {
-                draw_rectangle(260., 220., 760., 270., Color::new(0.08, 0.13, 0.11, 0.96));
+                draw_rectangle(260., 220., 760., 220., Color::new(0.08, 0.13, 0.11, 0.96));
                 let ready = game.session.state() == SessionState::Ready;
                 centered_label(
                     if ready {
@@ -1064,28 +1068,23 @@ async fn game() {
                     if ready {
                         "Light two lanterns. Reach the green lift."
                     } else {
-                        "Your time and progress are paused."
+                        ""
                     },
                     WIDTH * 0.5,
                     320.,
                     19.,
                     CREAM,
                 );
-                fitted_centered_label(
-                    &if ready {
-                        "Embers are optional. Falls return to a lantern.".to_owned()
-                    } else {
-                        format!(
-                            "RESTART {} / Resets the whole run and embers.",
-                            restart.text()
-                        )
-                    },
-                    WIDTH * 0.5,
-                    350.,
-                    700.,
-                    19.,
-                    ORANGE,
-                );
+                if !ready {
+                    fitted_centered_label(
+                        &format!("{} RESTART", restart.text()),
+                        WIDTH * 0.5,
+                        350.,
+                        700.,
+                        17.,
+                        ORANGE,
+                    );
+                }
                 fitted_centered_label(
                     &if tap_confirm {
                         "TAP HERE TO CONTINUE".to_owned()
@@ -1099,14 +1098,6 @@ async fn game() {
                     700.,
                     23.,
                     GREEN,
-                );
-                fitted_centered_label(
-                    &format!("JUMP {} TAP / HOLD   F2 CONTROLS", jump.text()),
-                    WIDTH * 0.5,
-                    455.,
-                    700.,
-                    15.,
-                    CREAM,
                 );
             }
             if game.won() {

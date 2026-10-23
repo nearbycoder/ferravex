@@ -156,7 +156,6 @@ fn table_render(game: &PinballGame, presentation: &Presentation, input: &PlayerI
     }
     centered("SALVAGE", p([4.5, 2.1]), 0.62 * scale, CREAM);
     centered("YARD  /  03", p([4.5, 2.65]), 0.24 * scale, MINT);
-    centered("KEEP IT IN PLAY", p([4.6, 8.9]), 0.3 * scale, MINT);
     centered(
         "RECOVER. REBOUND. REPEAT.",
         p([4.6, 9.42]),
@@ -359,13 +358,13 @@ fn table_render(game: &PinballGame, presentation: &Presentation, input: &PlayerI
         );
         let (title, detail, action) = match state {
             SessionState::Ready => (
-                "READY FOR YOUR SHIFT?",
-                "THREE BALLS / 100 PER BUMPER".to_owned(),
+                "READY",
+                String::new(),
                 format!("{launch} TO START AND LAUNCH"),
             ),
             SessionState::Paused => (
                 "TABLE PAUSED",
-                "BALL AND SAVE TIMER HELD".to_owned(),
+                String::new(),
                 if input.controls_open() {
                     "CLOSE CONTROLS TO RETURN".to_owned()
                 } else if input.paused() {

@@ -23,7 +23,7 @@ mod sim;
 use ferravex_play::particles::{RibbonFacing, Trail, TrailConfig, TrailSample};
 use ferravex_render::effects::{EffectStyle, draw_ribbon};
 use ferravex_render::{demo::Demo, prelude::*};
-use presentation::{hint, lap_comparison, text_width};
+use presentation::{lap_comparison, text_width};
 use session::{Notice, RaceSession};
 use sim::{Controls, LAPS, Pose, Race, RoadCue, Track};
 
@@ -654,14 +654,6 @@ async fn game() {
                 cx,
                 cy + 15.,
                 32.,
-                content_width,
-                CREAM,
-            );
-            text_centered(
-                &format!("Hold {} for gas", hint(&player_input, "move_forward")),
-                cx,
-                cy + 47.,
-                17.,
                 content_width,
                 CREAM,
             );

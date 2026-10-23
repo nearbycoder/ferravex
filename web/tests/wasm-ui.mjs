@@ -128,7 +128,7 @@ for(const width of [1280,390,320]){
  assert.ok(raceTime.left-gates.right>=8,'race time remains separate from gate progress');
  const [left,top]=point(countdown),[right,bottom]=point(countdown+40);
  const labels=runs(countdown+48,v.length);
- assert.equal(labels.length,3,'ready, countdown number and starting instruction are rendered');
+ assert.equal(labels.length,2,'ready and countdown are rendered without a repeated key instruction');
  for(const r of labels)assert.ok(r.left>=left+10&&r.right<=right-10&&r.top>=top+10&&r.bottom<=bottom-10,`countdown text stays inside its panel at ${width}px: ${JSON.stringify(r)}`);
  console.log(`pocket-rally actual glyph bounds, speed spacing and countdown panel passed at ${width}x${height}`);
 }

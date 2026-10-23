@@ -89,23 +89,11 @@ struct MenuLayout {
 
 fn menu_copy(state: SessionState, hull: u8) -> (&'static str, &'static str, &'static str) {
     match state {
-        SessionState::Ready => (
-            "SKY COURIER",
-            "Five gates. One coastal delivery.",
-            "START FLIGHT",
-        ),
-        SessionState::Paused => ("FLIGHT PAUSED", "Ready when you are.", "RESUME FLIGHT"),
-        SessionState::Won => (
-            "MAIL DELIVERED",
-            "The north coast is connected.",
-            "FLY AGAIN",
-        ),
-        SessionState::Lost if hull == 0 => (
-            "AIRCRAFT GROUNDED",
-            "Three impacts. Try a smoother approach.",
-            "RETRY FLIGHT",
-        ),
-        SessionState::Lost => ("TIME UP", "The next mail run is waiting.", "RETRY FLIGHT"),
+        SessionState::Ready => ("SKY COURIER", "5 GATES / 1 DELIVERY", "START FLIGHT"),
+        SessionState::Paused => ("FLIGHT PAUSED", "", "RESUME FLIGHT"),
+        SessionState::Won => ("MAIL DELIVERED", "", "FLY AGAIN"),
+        SessionState::Lost if hull == 0 => ("AIRCRAFT GROUNDED", "3 IMPACTS", "RETRY FLIGHT"),
+        SessionState::Lost => ("TIME UP", "", "RETRY FLIGHT"),
         SessionState::Playing => unreachable!(),
     }
 }

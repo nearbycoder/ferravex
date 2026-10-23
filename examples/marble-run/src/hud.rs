@@ -63,12 +63,9 @@ pub(crate) fn notice(run: &Run, trial: &Trial, player: &PlayerInput) -> Option<(
         return None;
     }
     if let Some(count) = trial.countdown() {
-        Some((
-            count.to_string(),
-            "GET READY / TIMER STARTS ON GO".to_string(),
-        ))
+        Some((count.to_string(), String::new()))
     } else if trial.showing_go() {
-        Some(("GO!".to_string(), "COLLECT EVERY CRYSTAL".to_string()))
+        Some(("GO!".to_string(), String::new()))
     } else if run.notice > 0. {
         Some(if run.recovered {
             (

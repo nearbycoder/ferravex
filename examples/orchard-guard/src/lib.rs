@@ -365,6 +365,7 @@ fn availability(status: Result<(), ActionError>, available: &str) -> String {
         Err(_) => "Unavailable right now".into(),
     }
 }
+#[cfg(test)]
 fn hint(input: &PlayerInput, action: &str) -> String {
     let mut buffer = [0; 256];
     input
@@ -407,17 +408,21 @@ fn hud_action(ui: &Ui, plots: usize) -> Option<Action> {
     })
 }
 
-fn hud(ui: &mut Ui, campaign: &Campaign, save_error: bool, input: &PlayerInput) {
+fn notice_text(message: &str) -> &str {
+    message
+        .split(". ")
+        .next()
+        .unwrap_or(message)
+        .trim_end_matches('.')
+}
+
+fn hud(ui: &mut Ui, campaign: &Campaign, save_error: bool, _input: &PlayerInput) {
     let g = &campaign.game;
+    if campaign.session.is_paused() || g.outcome != Outcome::Playing {
+        return;
+    }
     draw_rectangle(0., 0., 1200., 70., CREAM);
     label("ORCHARD GUARD", 28., 33., 28., INK);
-    label(
-        "Keep the harvest safe",
-        29.,
-        53.,
-        15.,
-        Color::from_hex(0x727b59),
-    );
     center(
         &format!("WAVE  {} / {}", g.wave, g.level.waves.len()),
         600.,
@@ -425,47 +430,6 @@ fn hud(ui: &mut Ui, campaign: &Campaign, save_error: bool, input: &PlayerInput) 
         20.,
         INK,
     );
-    let wave_status = if campaign.session.is_paused() {
-        "Paused - the orchard is safe".into()
-    } else if g.outcome == Outcome::Won {
-        "Every wave cleared. Harvest saved!".into()
-    } else if g.outcome == Outcome::Lost {
-        "Orchard lost - try a new planting plan".into()
-    } else if g.active {
-        format!("{} on path / {} still arriving", g.pests.len(), g.remaining)
-    } else if g.wave == 0 {
-        "Prepare your defenses, then send wave 1".into()
-    } else {
-        format!("Wave {} cleared - prepare for wave {}", g.wave, g.wave + 1)
-    };
-    center(&wave_status, 600., 53., 14., Color::from_hex(0x727b59));
-    if let Some(next) = g.next_wave() {
-        draw_rectangle(280., 83., 640., 58., CREAM);
-        center(
-            &format!(
-                "NEXT {}: {} PESTS / {} RUNNERS / +{} COINS",
-                next.number, next.spec.count, next.fast_count, next.spec.reward
-            ),
-            600.,
-            105.,
-            16.,
-            INK,
-        );
-        center(
-            &format!(
-                "Health {:.0}/{:.0} / speed {:.0}/{:.0} / arrive every {:.2}s",
-                next.spec.hp,
-                next.spec.hp * next.spec.fast_factor,
-                next.spec.speed,
-                next.spec.fast_speed,
-                next.spec.interval
-            ),
-            600.,
-            127.,
-            13.,
-            GREEN,
-        );
-    }
     label(&format!("{}  HEARTS", g.lives), 880., 39., 19., INK);
     draw_circle(1060., 32., 9., GOLD);
     label(&format!("{}", g.money), 1078., 39., 24., INK);
@@ -498,17 +462,6 @@ fn hud(ui: &mut Ui, campaign: &Campaign, save_error: bool, input: &PlayerInput) 
             12.,
             Color::from_hex(0x727b59),
         );
-        label(
-            if tower.kind == Kind::Frost {
-                "45% speed / nearby slow"
-            } else {
-                "Targets closest to exit"
-            },
-            28.,
-            739.,
-            12.,
-            GREEN,
-        );
         let status = g.upgrade_status(g.selected);
         let next = Tower {
             level: (tower.level + 1).min(2),
@@ -526,8 +479,7 @@ fn hud(ui: &mut Ui, campaign: &Campaign, save_error: bool, input: &PlayerInput) 
             &availability(
                 status,
                 &format!(
-                    "[{}] {:.0} damage / {:.0} range / {:.2}s",
-                    hint(input, "upgrade"),
+                    "{:.0} damage / {:.0} range / {:.2}s",
                     next.damage(),
                     next.range(),
                     next.reload()
@@ -543,41 +495,6 @@ fn hud(ui: &mut Ui, campaign: &Campaign, save_error: bool, input: &PlayerInput) 
             18.,
             INK,
         );
-        let seed_tower = Tower::planted(Kind::Seed);
-        let frost_tower = Tower::planted(Kind::Frost);
-        label(
-            &format!(
-                "Seed: {:.0} damage / {:.2}s",
-                seed_tower.damage(),
-                seed_tower.reload()
-            ),
-            28.,
-            703.,
-            12.,
-            GREEN,
-        );
-        label(
-            &format!(
-                "Frost: {:.0} damage / {:.2}s",
-                frost_tower.damage(),
-                frost_tower.reload()
-            ),
-            28.,
-            721.,
-            12.,
-            GREEN,
-        );
-        label(
-            &format!(
-                "Ranges {:.0} / {:.0}",
-                seed_tower.range(),
-                frost_tower.range()
-            ),
-            28.,
-            739.,
-            12.,
-            GREEN,
-        );
         let seed = g.build_status(g.selected, Kind::Seed);
         let frost = g.build_status(g.selected, Kind::Frost);
         button(
@@ -585,10 +502,7 @@ fn hud(ui: &mut Ui, campaign: &Campaign, save_error: bool, input: &PlayerInput) 
             1,
             Rect::new(240., 683., 190., 55.),
             &format!("SEED / {}", Kind::Seed.price()),
-            &availability(
-                seed,
-                &format!("[{}] Direct damage", hint(input, "select_one")),
-            ),
+            &availability(seed, ""),
             seed.is_ok(),
         );
         button(
@@ -596,7 +510,7 @@ fn hud(ui: &mut Ui, campaign: &Campaign, save_error: bool, input: &PlayerInput) 
             2,
             Rect::new(443., 683., 190., 55.),
             &format!("FROST / {}", Kind::Frost.price()),
-            &availability(frost, &format!("[{}] 45% speed", hint(input, "select_two"))),
+            &availability(frost, ""),
             frost.is_ok(),
         );
     }
@@ -605,33 +519,24 @@ fn hud(ui: &mut Ui, campaign: &Campaign, save_error: bool, input: &PlayerInput) 
         6,
         Rect::new(695., 683., 110., 55.),
         "PAUSE",
-        &hint(input, "pause"),
+        "",
         campaign.session.is_started(),
     );
-    button(
-        ui,
-        5,
-        Rect::new(820., 683., 110., 55.),
-        "RESTART",
-        &hint(input, "restart"),
-        true,
-    );
-    let next = g.level.waves.get(usize::from(g.wave));
+    button(ui, 5, Rect::new(820., 683., 110., 55.), "RESTART", "", true);
+    let next = g.next_wave();
     let title = if g.active {
         "WAVE ACTIVE".into()
     } else {
-        format!("SEND WAVE {}", g.wave + 1)
+        format!(
+            "SEND WAVE {}",
+            next.as_ref().map_or(g.wave + 1, |wave| wave.number)
+        )
     };
     let subtitle = if g.active {
         format!("{} pests left", g.pests.len() + usize::from(g.remaining))
     } else {
-        next.map_or_else(String::new, |w| {
-            format!(
-                "[{}] {} pests / +{} coins",
-                hint(input, "wave"),
-                w.count,
-                w.reward
-            )
+        next.map_or_else(String::new, |wave| {
+            format!("{} PESTS / {} FAST", wave.spec.count, wave.fast_count)
         })
     };
     button(
@@ -642,22 +547,13 @@ fn hud(ui: &mut Ui, campaign: &Campaign, save_error: bool, input: &PlayerInput) 
         &subtitle,
         g.wave_status().is_ok(),
     );
-    let message = if save_error {
-        "Save unavailable: keep this window open to continue your current harvest."
-    } else {
-        campaign.notice().unwrap_or_else(|| {
-        if g.towers.iter().all(Option::is_none) {
-            "No defenses yet. Select a numbered plot and plant a tower before sending a wave."
-        } else if g.active {
-            "Build and upgrade during the wave. Each stopped pest earns coins; every escape costs a heart."
-        } else {
-            &g.level.wave_hint
-        }
-    })
-    };
-    label(message, 28., 757., 14., INK);
+    if save_error {
+        label("SAVE UNAVAILABLE", 28., 757., 14., INK);
+    } else if let Some(message) = campaign.notice() {
+        label(notice_text(message), 28., 757., 14., INK);
+    }
 }
-fn overlay(ui: &mut Ui, campaign: &Campaign, input: &PlayerInput) {
+fn overlay(ui: &mut Ui, campaign: &Campaign, _input: &PlayerInput) {
     let g = &campaign.game;
     if !campaign.session.is_paused() && g.outcome == Outcome::Playing {
         return;
@@ -685,51 +581,15 @@ fn overlay(ui: &mut Ui, campaign: &Campaign, input: &PlayerInput) {
         18.,
         GREEN,
     );
-    let detail = if paused {
-        "Pests, reloads and the harvest clock are frozen.".into()
-    } else if g.outcome == Outcome::Won {
-        format!(
-            "All {} waves cleared. Plant again for a fresh run.",
-            g.level.waves.len()
-        )
-    } else {
-        format!(
-            "Reached wave {} of {}. Cover bends and mix both towers.",
-            g.wave,
-            g.level.waves.len()
-        )
-    };
-    ui.text(
-        UiRect {
-            min: [375., 350.],
-            size: [450., 44.],
-        },
-        &detail,
-        TextStyle {
-            size: 16.,
-            color: GREEN,
-            align: Align::Center,
-            wrap: true,
-            ..Default::default()
-        },
-    )
-    .unwrap();
     ui.modal(100).unwrap();
     if paused {
-        button(
-            ui,
-            7,
-            Rect::new(375., 404., 215., 55.),
-            "RESUME",
-            &format!("[{}] Back to the orchard", hint(input, "pause")),
-            true,
-        );
+        button(ui, 7, Rect::new(375., 404., 215., 55.), "RESUME", "", true);
         button(
             ui,
             8,
             Rect::new(610., 404., 215., 55.),
             "PLANT AGAIN",
-            &format!("[{}] Reset this harvest", hint(input, "restart")),
+            "",
             true,
         );
     } else {
@@ -738,7 +598,7 @@ fn overlay(ui: &mut Ui, campaign: &Campaign, input: &PlayerInput) {
             8,
             Rect::new(490., 404., 220., 55.),
             "PLANT AGAIN",
-            &format!("[{}] A fresh start", hint(input, "restart")),
+            "",
             true,
         );
     }
@@ -917,6 +777,19 @@ async fn game() {
 mod migration_tests {
     use super::*;
     use ferravex_render::input::{self, ActionKind, Binding, InputCode, PadState};
+
+    #[test]
+    fn short_notices_keep_the_event_and_exact_rejection_amounts() {
+        assert_eq!(
+            notice_text("Wave 2 sent. You can build and upgrade during the wave."),
+            "Wave 2 sent"
+        );
+        assert_eq!(notice_text("45 more coins needed."), "45 more coins needed");
+        assert_eq!(
+            notice_text("Speed 2.5 / 12 hearts"),
+            "Speed 2.5 / 12 hearts"
+        );
+    }
 
     #[test]
     fn hints_follow_remapping_reset_and_unbound_actions_without_stale_defaults() {

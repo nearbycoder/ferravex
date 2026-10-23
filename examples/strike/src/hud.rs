@@ -331,8 +331,8 @@ fn menu_explanation(mode: crate::host::Mode, has_played: bool) -> &'static str {
     match mode {
         Mode::Network => "Match continues in menus.\nYou remain vulnerable.",
         Mode::Replay => "Replay continues in menus.\nUse Pause replay to pause.",
-        Mode::Practice if has_played => "Practice paused.\nResume when you are ready.",
-        Mode::Practice => "Train against five bots.\nRespawns are automatic.",
+        Mode::Practice if has_played => "",
+        Mode::Practice => "5 BOTS",
     }
 }
 

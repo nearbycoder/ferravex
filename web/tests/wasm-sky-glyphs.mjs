@@ -110,11 +110,11 @@ function runtime(w,h,autoplay=false,config=configurations[0]) {
   }
   frame();return {e,frame,key,quads,menu,guidance,matchesGuidance,footer};
 }
-const ready=['SKY COURIER','Five gates. One coastal delivery.'];
-const paused=['FLIGHT PAUSED','Ready when you are.'];
-const won=['MAIL DELIVERED','The north coast is connected.'];
-const lost=['AIRCRAFT GROUNDED','Three impacts. Try a smoother approach.'];
-const timeout=['TIME UP','The next mail run is waiting.'];
+const ready=['SKY COURIER','5 GATES / 1 DELIVERY'];
+const paused=['FLIGHT PAUSED',''];
+const won=['MAIL DELIVERED',''];
+const lost=['AIRCRAFT GROUNDED','3 IMPACTS'];
+const timeout=['TIME UP',''];
 const summary='90 seconds / 3 hull';
 const sizes=[[1280,560],[390,600],[320,600],[320,480],[844,390]];
 for(const config of configurations) {

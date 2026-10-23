@@ -136,6 +136,9 @@ pub(super) fn hud(
     picker: bool,
 ) {
     let g = &campaign.game;
+    if campaign.session.is_paused() || g.outcome != Outcome::Playing {
+        return;
+    }
     ui.panel(area(Rect::new(0., 0., layout.screen.x, 48.)), CREAM)
         .unwrap();
     ui.panel(
@@ -275,9 +278,10 @@ pub(super) fn hud(
         );
     }
     if save_error {
-        text(ui, layout.notice, "SAVE UNAVAILABLE", INK);
+        text(ui, layout.notice, "SAVE UNAVAILABLE", CREAM);
     } else if let Some(message) = campaign.notice() {
-        text(ui, layout.notice, message, INK);
+        ui.panel(area(layout.notice), GREEN).unwrap();
+        text(ui, layout.notice, notice_text(message), CREAM);
     }
 }
 

@@ -35,7 +35,7 @@ window.emit('blur');assert.equal(paused,true,'focus loss pauses the custom host'
 nodes.get('[data-controls]').emit('click');assert.deepEqual(events.at(-1),['settings']);
 pendingFrame(5000);
 assert.equal(nodes.get('#notice').hidden,false,'pause feedback is visible after focus loss');
-assert.equal(nodes.get('#notice-title').textContent,'GAME PAUSED');
+assert.equal(nodes.get('#notice-title').textContent,'PAUSED');
 assert.equal(nodes.get('#pause').attributes.get('aria-pressed'),'true');
 assert.equal(frames.at(-1)[0],0,'focus transitions discard host elapsed time');
 window.emit('focus');assert.equal(paused,true,'focus return alone must not resume');
