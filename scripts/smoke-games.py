@@ -161,9 +161,19 @@ def _file_identity(info):
 def _same_stat_views(path_identity, handle_identity):
     # CPython on Windows reports creation time through stat(path), but change
     # time through fstat(fd). Compare each API's ctime against its own baseline.
-    # Cross-API identity, mode, size and modification time must still agree.
-    return all(value == handle_identity[key] for key, value in path_identity.items()
-               if key != "ctime_ns" or sys.platform != "win32")
+    # Path-based stat also infers execute bits from .exe/.bat/.cmd/.com suffixes;
+    # fstat cannot infer them. All other permission/type bits must still agree.
+    for key, value in path_identity.items():
+        other = handle_identity[key]
+        if sys.platform == "win32":
+            if key == "ctime_ns":
+                continue
+            if key == "mode":
+                value &= ~0o111
+                other &= ~0o111
+        if value != other:
+            return False
+    return True
 
 
 def _artifact(path, *, reject_symlink=False):

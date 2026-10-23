@@ -55,17 +55,19 @@ class CaptureTests(unittest.TestCase):
     background = bytes([10, 20, 30, 255])
     palette = [bytes([50, 60, 70, 255]), bytes([90, 100, 110, 255]), bytes([150, 160, 170, 255])]
 
-    def test_windows_stat_and_fstat_ctimes_have_separate_stable_baselines(self):
+    def test_windows_stat_and_fstat_have_separate_mode_and_ctime_baselines(self):
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / 'artifact.bin'
+            path = Path(directory) / 'artifact.exe'
             path.write_bytes(b'unchanged artifact')
+            path.chmod(0o755)
             actual_fstat = os.fstat
 
             def handle_stat(fd):
                 from types import SimpleNamespace
                 info = actual_fstat(fd)
                 return SimpleNamespace(**{key: getattr(info, key) for key in
-                    ('st_dev', 'st_ino', 'st_mode', 'st_size', 'st_mtime_ns')},
+                    ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns')},
+                    st_mode=info.st_mode & ~0o111,
                     st_ctime_ns=info.st_ctime_ns + 100)
 
             with patch.object(smoke.sys, 'platform', 'win32'), \
@@ -80,7 +82,7 @@ class CaptureTests(unittest.TestCase):
             path = Path(directory) / 'artifact.bin'
             path.write_bytes(b'original artifact')
             actual_fstat = os.fstat
-            for field in ('st_ctime_ns', 'st_mtime_ns', 'st_size', 'st_ino'):
+            for field in ('st_ctime_ns', 'st_mtime_ns', 'st_size', 'st_ino', 'st_mode'):
                 calls = 0
 
                 def changing_stat(fd):
