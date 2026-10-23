@@ -825,7 +825,7 @@ fn checked_orthographic(bounds: [f32; 6], gl: bool) -> Result<Mat4, MatrixError>
     {
         finite_input(input, &[value])?;
     }
-    for (axis, pair) in ["x", "y", "z"].into_iter().zip(bounds.chunks_exact(2)) {
+    for (axis, pair) in ["x", "y", "z"].into_iter().zip(bounds.as_chunks::<2>().0) {
         if pair[0] == pair[1] {
             return Err(MatrixError::DegenerateOrthographic { axis });
         }

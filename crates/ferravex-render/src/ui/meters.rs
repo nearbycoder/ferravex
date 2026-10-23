@@ -690,8 +690,9 @@ mod tests {
                         .filter(|v| color(v) == theme().color(ColorRole::Accent))
                         .collect();
                     assert_eq!(fills.len(), filled * 6);
-                    for (cell, vertices) in
-                        layout.cells()[..filled].iter().zip(fills.chunks_exact(6))
+                    for (cell, vertices) in layout.cells()[..filled]
+                        .iter()
+                        .zip(fills.as_chunks::<6>().0)
                     {
                         let r = cell.bounds.inset([theme().spacing().stroke; 4]).unwrap();
                         let lo = vertices

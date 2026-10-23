@@ -88,7 +88,7 @@ fn exact_maximum_shots_hits_kills_respawns_and_rejections_are_complete() {
                 rejected_shots: 0
             }
         );
-        for chunk in output.events().chunks_exact(3) {
+        for chunk in output.events().as_chunks::<3>().0 {
             assert!(matches!(
                 chunk,
                 [

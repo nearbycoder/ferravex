@@ -269,10 +269,13 @@ pub struct ActionMap {
 }
 impl Default for ActionMap {
     fn default() -> Self {
+        // Atomic::try_update is newer than the workspace Rust 1.88 minimum.
+        #[allow(deprecated)]
+        let map_id = NEXT_MAP_ID
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .expect("action map identity space exhausted");
         Self {
-            map_id: NEXT_MAP_ID
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
-                .expect("action map identity space exhausted"),
+            map_id,
             entries: Vec::new(),
             values: Vec::with_capacity(MAX_ACTIVE_CODES),
             contexts: vec!["global".into()],
