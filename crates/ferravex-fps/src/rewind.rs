@@ -5,6 +5,82 @@ use std::collections::VecDeque;
 
 /// 250 ms at 64 Hz. Client claims cannot extend the authority's rewind window.
 pub const MAX_REWIND_TICKS: u32 = 16;
+
+/// Controller continuity on an accepted authority relocation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RelocationMotion {
+    /// Zero velocity, clear grounded and reset all jump timers/held state.
+    /// Clearance does not establish support; the next actual motor tick does.
+    Reset,
+    /// Retain velocity, grounded, coyote/buffer timers and jump-held state exactly.
+    /// This deliberately permits the previous controller's jump continuity at
+    /// the new pose; it does not promise future swept clearance.
+    Preserve,
+}
+/// Dynamic occupancy is separate from exact static Arena capsule clearance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RelocationOccupancy {
+    /// Check only Arena terrain. Other players may share the destination.
+    StaticOnly,
+    /// Reject open axis-aligned player volume overlap with every other living
+    /// actor. Touching is allowed; dead/absent actors and self are ignored.
+    /// This is conservative AABB occupancy, not inter-capsule narrowphase.
+    ForbidLivingAabb,
+}
+/// Per-call authority options. Defaults reset motion, forbid living occupancy
+/// and allow ground plus all 256 bounded Arena solids as clearance candidates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RelocationOptions {
+    pub motion: RelocationMotion,
+    pub occupancy: RelocationOccupancy,
+    /// Complete static-query budget in 0..=1_000_000, including implicit ground.
+    pub max_candidates: usize,
+}
+impl Default for RelocationOptions {
+    fn default() -> Self {
+        Self {
+            motion: RelocationMotion::Reset,
+            occupancy: RelocationOccupancy::ForbidLivingAabb,
+            max_candidates: arena_authoring::MAX_SOLIDS + 1,
+        }
+    }
+}
+/// Accepted feet/aim pose and discontinuity identity for presentation handoff.
+/// Tick is the current authority tick (relocation does not execute a tick).
+/// Life is the full checked u64 generation, shared with rewind and StepTransition.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Relocation {
+    pub player: u8,
+    pub position: Vec3,
+    pub yaw: f32,
+    pub pitch: f32,
+    pub tick: u32,
+    pub life: u64,
+}
+/// Every rejection leaves all players, tick, rewind and caller output untouched.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RelocationError {
+    InvalidPlayerId,
+    UnknownPlayer,
+    PlayerDead,
+    InvalidDestination,
+    InvalidOptions,
+    InvalidState(crate::checkpoint::CheckpointError),
+    Arena(arena_authoring::ArenaAuthoringError),
+    Clearance(ferravex_physics::character::ClearanceError),
+    Occupied {
+        player: u8,
+    },
+    /// No wrapping/aliasing or global history clear: start a new host session.
+    GenerationExhausted,
+}
+impl std::fmt::Display for RelocationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "authority relocation: {self:?}")
+    }
+}
+impl std::error::Error for RelocationError {}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ShotTime {
     pub player: u8,
@@ -31,6 +107,165 @@ pub struct RewindStep {
     pub events: Vec<GameEvent>,
     /// Invalid shot times suppress firing while movement and weapon timers advance.
     pub rejected_shots: Vec<(u8, RewindError)>,
+}
+/// Fixed conservative event capacity for a checked authoritative tick.
+/// Each of at most MAX_PLAYERS actors either respawns (one event), fires (at
+/// most Shot + Hit + Killed), or does neither. Respawning cannot fire that tick,
+/// so R + 3*S <= 3*MAX_PLAYERS even when respawns are subsequently killed.
+pub const MAX_STEP_EVENTS: usize = 3 * MAX_PLAYERS;
+/// At most one invalid shot time is reported per unique roster actor per tick.
+pub const MAX_STEP_REJECTIONS: usize = MAX_PLAYERS;
+
+/// Legacy event/rejection lengths, or capacities from StepOutput::capacities.
+/// The additive inline sidecar is counted by StepOutput::transition_count, with
+/// fixed capacity StepOutput::transition_capacity; this struct stays compatible.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StepCounts {
+    pub events: usize,
+    pub rejected_shots: usize,
+}
+impl StepCounts {
+    pub(crate) fn of(output: &RewindStep) -> Self {
+        Self {
+            events: output.events.len(),
+            rejected_shots: output.rejected_shots.len(),
+        }
+    }
+}
+
+/// Preflight failures preserve the entire Match, previous output and capacities,
+/// and invoke no CombatRules hooks. Callback panics/side effects and allocation
+/// failure are outside rollback. Invalid *shot times* instead remain accepted
+/// tick results in StepOutput::rejected_shots, exactly as in RewindStep.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StepError {
+    OutputCapacity {
+        required: StepCounts,
+        provided: StepCounts,
+    },
+    /// Existing checkpoint bounds on arena, unique roster and rewind history.
+    InvalidState(crate::checkpoint::CheckpointError),
+    /// Only explicit safe-spawn stepping can produce this error.
+    Spawn(crate::spawn::Error),
+}
+impl std::fmt::Display for StepError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "authority step: {self:?}")
+    }
+}
+impl std::error::Error for StepError {}
+
+/// Caller-owned reusable authoritative tick output. Default/new reserve the
+/// fixed worst case: MAX_STEP_EVENTS and MAX_STEP_REJECTIONS, even for an empty
+/// roster. Checked stepping never grows these buffers or truncates events.
+/// A separate inline sidecar retains at most MAX_STEP_TRANSITIONS records, one
+/// aggregate per actor. Its capacity cannot be undersized and needs no allocation.
+/// See PlayerStepResult for confirmed versus speculative feedback ownership.
+/// Construction may allocate; clear and accepted warmed stepping retain capacity.
+/// CombatRules implementations retain responsibility for their own allocations.
+///
+/// The checked path accepts checkpoint-valid state (including a unique bounded
+/// roster and valid rewind history); legacy allocating wrappers still accept
+/// their original raw state and preserve their original behavior. Input lookup,
+/// first-wins duplicates, sanitization and invalid-shot suppression are unchanged
+/// on the legacy spawn path. Safe-spawn calls retain their stricter preflight.
+///
+/// This actual authority/replay consumer records complete accepted events and
+/// replays the resulting recording twice. Keep one output per authority and
+/// deliver its borrowed slices before the next accepted tick overwrites them.
+/// ```
+/// use ferravex_fps::{Arena, Match, InputFrame, StepOutput, BUTTON_FIRE, replay};
+/// use ferravex_play::replay::{Limits, Playback};
+/// use std::sync::Arc;
+/// let mut game = Match::new(Arena::default());
+/// assert!(game.spawn_player(0));
+/// assert!(game.spawn_player(1));
+/// let mut output = StepOutput::new();
+/// let capacities = output.capacities();
+/// let mut capture = replay::Capture::new(&game, 19, Limits::default()).unwrap();
+/// for sequence in 0..64 {
+///     let commands = [(0, InputFrame { sequence, buttons: BUTTON_FIRE,
+///         ..InputFrame::default() })];
+///     let counts = game.step_with_rewind_into(&commands, &[], &mut output).unwrap();
+///     assert_eq!(counts.events, output.events().len());
+///     assert!(output.rejected_shots().is_empty());
+///     capture.push(&game, &commands, &[], output.events()).unwrap();
+/// }
+/// let recording = Arc::new(capture.finish());
+/// let mut playback = Playback::new(recording);
+/// let mut world = replay::World::new(Match::new(game.arena.clone()));
+/// for _ in 0..2 {
+///     playback.reset();
+///     playback.start(&mut world).unwrap();
+///     while !playback.finished() { playback.step(&mut world).unwrap(); }
+///     assert_eq!(game.state_hash(), world.game.state_hash());
+/// }
+/// output.clear(); // End-of-session/reset: Match lifecycle remains host-owned.
+/// assert!(output.events().is_empty());
+/// assert_eq!(output.capacities(), capacities);
+/// ```
+#[derive(Debug)]
+pub struct StepOutput {
+    pub(crate) inner: RewindStep,
+    pub(crate) transitions: combat::TransitionBuffer,
+}
+impl Default for StepOutput {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl StepOutput {
+    /// Prepare full tick capacity once; see the runnable type example.
+    pub fn new() -> Self {
+        Self::with_capacity(MAX_STEP_EVENTS, MAX_STEP_REJECTIONS)
+    }
+    /// Explicit storage preparation. Insufficient actual capacity rejects every
+    /// checked step before mutation, even if that tick would produce no events.
+    pub fn with_capacity(events: usize, rejected_shots: usize) -> Self {
+        Self {
+            transitions: combat::TransitionBuffer::new(),
+            inner: RewindStep {
+                events: Vec::with_capacity(events),
+                rejected_shots: Vec::with_capacity(rejected_shots),
+            },
+        }
+    }
+    /// Complete accepted events, in the existing kernel's order.
+    pub fn events(&self) -> &[GameEvent] {
+        &self.inner.events
+    }
+    /// Invalid shot times, in roster order (ID order for explicit safe spawn).
+    pub fn rejected_shots(&self) -> &[(u8, RewindError)] {
+        &self.inner.rejected_shots
+    }
+    /// Nonempty accepted outcomes in roster order (ID order for safe spawn).
+    /// The tick and full life generation come from the authority kernel.
+    /// Consume before the next accepted step or clear. Rejected preflight keeps
+    /// the previous slice, just like events/rejections; do not dispatch it again.
+    pub fn transitions(&self) -> &[StepTransition] {
+        self.transitions.as_slice()
+    }
+    /// Number of aggregate records in the last accepted output.
+    pub fn transition_count(&self) -> usize {
+        self.transitions().len()
+    }
+    /// Fixed inline record capacity, unaffected by with_capacity or clear.
+    pub fn transition_capacity(&self) -> usize {
+        MAX_STEP_TRANSITIONS
+    }
+    /// Actual retained allocation capacities, independent of previous lengths.
+    pub fn capacities(&self) -> StepCounts {
+        StepCounts {
+            events: self.inner.events.capacity(),
+            rejected_shots: self.inner.rejected_shots.capacity(),
+        }
+    }
+    /// Discard all previous results while retaining allocations and inline storage.
+    pub fn clear(&mut self) {
+        self.transitions.clear();
+        self.inner.events.clear();
+        self.inner.rejected_shots.clear();
+    }
 }
 #[derive(Clone, Copy)]
 struct Pose {
@@ -71,6 +306,23 @@ impl RewindHistory {
             }
             *life += 1;
         }
+    }
+    // Caller preflights state and checked generation before any mutation. The
+    // same-tick frame may already exist: replace ONLY this actor's pose, leaving
+    // every other historical pose and life intact. A missing current frame is
+    // captured normally, with the same bounded ring and no extra allocation.
+    fn relocate(&mut self, tick: u32, players: &[Player], id: u8, life: u64) {
+        self.lives[id as usize] = life;
+        self.capture(tick, players);
+        let player = players.iter().find(|p| p.id == id).expect("checked actor");
+        self.frames
+            .back_mut()
+            .expect("captured current frame")
+            .players[id as usize] = Some(Pose {
+            position: player.position,
+            alive: player.is_alive(),
+            life,
+        });
     }
     pub(crate) fn capture(&mut self, tick: u32, players: &[Player]) {
         if self.frames.back().is_some_and(|f| f.tick == tick) {
@@ -113,6 +365,153 @@ impl RewindHistory {
     }
 }
 impl Match {
+    /// Relocate an existing **living** actor at an authority-owned destination.
+    /// This is neither a client input nor a respawn: health, ammo, aim, weapon
+    /// and respawn timers are retained. Dead actors reject; existing respawn
+    /// APIs own life reset. Motion policy controls velocity/ground/jump only.
+    ///
+    /// Full checkpoint state and every Arena geometry/spawn value are validated
+    /// before querying the actual FPS capsule against Arena terrain/all layers.
+    /// Destination must be finite and within the existing +/-4096 checkpoint
+    /// domain on every axis. No recovery, snap-to-ground or destination clamping
+    /// occurs. Incomplete clearance rejects even if a blocker was seen first.
+    /// Dynamic occupancy follows the explicit option; self is always ignored.
+    /// No tick/input/event/output is consumed or produced, including StepOutput's
+    /// retained sidecar. Failures do not authorize any presentation reset.
+    ///
+    /// Acceptance increments the full life/discontinuity generation exactly once
+    /// (even at the same position), invalidating this actor's pre-boundary poses.
+    /// It refreshes only this actor in an existing current-tick frame, so repeated
+    /// same-tick calls use the latest accepted pose and preserve other actors'
+    /// history. Ordinary current shots use the new live pose too. Generation
+    /// exhaustion rejects atomically; no history is globally cleared.
+    ///
+    /// Existing v5 snapshots carry only `life_epochs()`'s low32 generation.
+    /// Receivers compare equality, not ordering: an adjacent low32 wrap differs,
+    /// but 2^32 transitions between samples can alias. Same-tick network snapshots
+    /// are ignored by existing clients; publish on a later actual server tick.
+    /// A restored older checkpoint also restores its generations: reset host
+    /// presentation/confirmation state at that explicit timeline boundary.
+    ///
+    /// External relocations are **not recorded** by existing replay::Capture or
+    /// spawn::Capture input codecs. End the prior recording before relocation;
+    /// create a new Capture from the accepted checkpoint afterwards. Restore or
+    /// replay that segment from its checkpoint, never expect old input to replay
+    /// an unrecorded teleport. No event/packet/checkpoint schema changes here.
+    ///
+    /// Runnable authority acceptance and accepted-only camera handoff. An engine
+    /// host can supply `|p| { pair.snap(p); }` using its InterpolationPair and
+    /// cut/reset its camera at the same boundary (FPS has no engine dependency).
+    ///
+    /// ```
+    /// use ferravex_fps::{Arena, Match, RelocationOptions, RelocationError};
+    /// use ferravex_math::Vec3;
+    /// fn move_and_cut(game: &mut Match, destination: Vec3,
+    ///                 mut snap_camera: impl FnMut(Vec3)) -> Result<(), RelocationError> {
+    ///     let accepted = game.relocate_player(0, destination, RelocationOptions::default())?;
+    ///     assert_eq!(accepted.tick, game.tick); // No synthetic simulation tick.
+    ///     snap_camera(accepted.position); // Only after acceptance.
+    ///     Ok(())
+    /// }
+    /// let mut game = Match::new(Arena { solids: vec![], spawns: vec![Vec3::ZERO] });
+    /// assert!(game.spawn_player(0));
+    /// let mut camera = Vec3::ZERO;
+    /// let mut cuts = 0;
+    /// move_and_cut(&mut game, Vec3::X * 4., |p| { camera = p; cuts += 1; }).unwrap();
+    /// assert_eq!((camera, cuts), (Vec3::X * 4., 1));
+    /// assert!(move_and_cut(&mut game, Vec3::splat(f32::NAN), |_| cuts += 1).is_err());
+    /// assert_eq!(cuts, 1);
+    /// let mut checkpoint = Vec::new();
+    /// game.checkpoint_into(&mut checkpoint).unwrap();
+    /// let restored = Match::from_checkpoint(&checkpoint).unwrap();
+    /// assert_eq!(restored.state_hash(), game.state_hash());
+    /// // Start a fresh replay Capture here, from the accepted state.
+    /// ```
+    pub fn relocate_player(
+        &mut self,
+        id: u8,
+        destination: Vec3,
+        options: RelocationOptions,
+    ) -> Result<Relocation, RelocationError> {
+        if id as usize >= MAX_PLAYERS {
+            return Err(RelocationError::InvalidPlayerId);
+        }
+        if options.max_candidates > 1_000_000 {
+            return Err(RelocationError::InvalidOptions);
+        }
+        if !crate::checkpoint::bounded(destination, 4096.) {
+            return Err(RelocationError::InvalidDestination);
+        }
+        arena_authoring::validate_arena(
+            &self.arena,
+            arena_authoring::AuthoringOptions {
+                empty_spawns: arena_authoring::EmptySpawnPolicy::LegacyOrigin,
+                ..Default::default()
+            },
+        )
+        .map_err(RelocationError::Arena)?;
+        self.state_hash().map_err(RelocationError::InvalidState)?;
+        let index = self
+            .players
+            .iter()
+            .position(|p| p.id == id)
+            .ok_or(RelocationError::UnknownPlayer)?;
+        if !self.players[index].is_alive() {
+            return Err(RelocationError::PlayerDead);
+        }
+        let life = self
+            .rewind
+            .life(id)
+            .checked_add(1)
+            .ok_or(RelocationError::GenerationExhausted)?;
+        ferravex_physics::character::check_clearance(
+            &self.arena,
+            CharacterShape::Capsule {
+                radius: PLAYER_RADIUS,
+                height: PLAYER_HEIGHT,
+            },
+            destination,
+            u32::MAX,
+            options.max_candidates,
+        )
+        .map_err(RelocationError::Clearance)?;
+        if options.occupancy == RelocationOccupancy::ForbidLivingAabb {
+            // Ascending ID makes the reported blocker independent of roster order.
+            if let Some(player) = self
+                .players
+                .iter()
+                .filter(|p| {
+                    let delta = destination - p.position;
+                    p.id != id
+                        && p.is_alive()
+                        && delta.x.abs() < 2. * PLAYER_RADIUS
+                        && delta.z.abs() < 2. * PLAYER_RADIUS
+                        && delta.y.abs() < PLAYER_HEIGHT
+                })
+                .min_by_key(|p| p.id)
+            {
+                return Err(RelocationError::Occupied { player: player.id });
+            }
+        }
+        let player = &mut self.players[index];
+        player.position = destination;
+        if options.motion == RelocationMotion::Reset {
+            player.velocity = Vec3::ZERO;
+            player.grounded = false;
+            player.jump = JumpState::default();
+        }
+        let accepted = Relocation {
+            player: id,
+            position: destination,
+            yaw: player.yaw,
+            pitch: player.pitch,
+            tick: self.tick,
+            life,
+        };
+        self.rewind.relocate(self.tick, &self.players, id, life);
+        Ok(accepted)
+    }
+
     /// Read-only authority query using the shooter's current eye and historical
     /// target poses. Current arena solids occlude old poses. Removed players,
     /// dead targets and previous lives of a respawned/reused slot cannot be hit.
@@ -192,6 +591,176 @@ impl Match {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn journey400_240_preserves_every_other_pose_even_in_existing_current_frame() {
+        let mut game = game();
+        game.step(&[]);
+        game.step(&[]);
+        let before: Vec<_> = game
+            .rewind
+            .frames
+            .iter()
+            .map(|f| (f.tick, f.players[0].map(|p| (p.position, p.alive, p.life))))
+            .collect();
+        let life = game.rewind.life(0);
+        // Raw current edits do not rewrite another actor's retained current pose.
+        // The relocation operation must preserve it, rather than recapture all.
+        game.player_mut(0).unwrap().position.x = 1.;
+        for x in [2., 3., 4.] {
+            game.relocate_player(1, Vec3::new(x, 0., -5.), RelocationOptions::default())
+                .unwrap();
+            let after: Vec<_> = game
+                .rewind
+                .frames
+                .iter()
+                .map(|f| (f.tick, f.players[0].map(|p| (p.position, p.alive, p.life))))
+                .collect();
+            assert_eq!(after, before);
+            assert_eq!(game.rewind.life(0), life);
+            assert_eq!(
+                game.rewind.pose(game.tick, game.player(1).unwrap()),
+                Some(Vec3::new(x, 0., -5.))
+            );
+        }
+    }
+    #[test]
+    fn journey400_240_full_generation_exhaustion_rejects_without_global_history_clear() {
+        let mut game = game();
+        game.step(&[]);
+        game.rewind.lives[1] = u64::MAX - 1;
+        let accepted = game
+            .relocate_player(1, Vec3::new(0., 0., -3.), RelocationOptions::default())
+            .unwrap();
+        assert_eq!(accepted.life, u64::MAX);
+        let mut bytes = Vec::new();
+        game.checkpoint_into(&mut bytes).unwrap();
+        let mut restored = Match::from_checkpoint(&bytes).unwrap();
+        assert_eq!(
+            restored
+                .rewind_hit_query(0, restored.tick, 0., 0.)
+                .unwrap()
+                .victim,
+            Some(1)
+        );
+        let before = restored.state_hash().unwrap();
+        let frames = restored.rewind.frames.len();
+        for _ in 0..3 {
+            assert_eq!(
+                restored.relocate_player(1, Vec3::X, RelocationOptions::default()),
+                Err(RelocationError::GenerationExhausted)
+            );
+            assert_eq!(restored.state_hash().unwrap(), before);
+            assert_eq!(restored.rewind.frames.len(), frames);
+        }
+    }
+    #[test]
+    fn journey400_240_low32_wrap_keeps_full_checkpoint_generation_and_existing_v5_codec() {
+        use ferravex_net::{ServerPacket, Snapshot, decode_server, encode_server};
+        let mut game = game();
+        game.rewind.lives[1] = u64::from(u32::MAX);
+        game.tick = u32::MAX;
+        game.step(&[]); // Tick wraps, retaining both frames.
+        let old = game.tick;
+        game.step(&[]);
+        let old_epochs = game.life_epochs();
+        let accepted = game
+            .relocate_player(1, Vec3::new(0., 0., -3.), RelocationOptions::default())
+            .unwrap();
+        assert_eq!(accepted.life, 1 << 32);
+        assert_eq!(game.life_epochs()[1], 0);
+        assert_ne!(old_epochs[1], game.life_epochs()[1]); // Equality-based interpolation cuts.
+        assert_eq!(game.rewind_hit_query(0, old, 0., 0.).unwrap().victim, None);
+        let packet = ServerPacket::Snapshot(Snapshot {
+            session: 7,
+            tick: game.tick,
+            epochs: game.life_epochs(),
+            players: game.players.iter().map(Player::snapshot).collect(),
+            ..Default::default()
+        });
+        assert_eq!(
+            decode_server(&encode_server(&packet).unwrap()).unwrap(),
+            packet
+        );
+        let mut bytes = Vec::new();
+        game.checkpoint_into(&mut bytes).unwrap();
+        let mut restored = Match::from_checkpoint(&bytes).unwrap();
+        assert_eq!(restored.rewind.life(1), accepted.life);
+        assert_eq!(
+            restored
+                .rewind_hit_query(0, restored.tick, 0., 0.)
+                .unwrap()
+                .victim,
+            Some(1)
+        );
+        let next = restored
+            .relocate_player(1, Vec3::new(0., 0., -4.), RelocationOptions::default())
+            .unwrap();
+        assert_eq!(next.life, accepted.life + 1);
+        assert_eq!(restored.life_epochs()[1], 1);
+    }
+    #[test]
+    fn capacity_rejection_preserves_existing_short_output_and_allocations() {
+        let mut game = Match::default();
+        assert!(game.spawn_player(0));
+        let mut output = StepOutput::with_capacity(1, 1);
+        let event = GameEvent::Respawned { player: 0 };
+        let rejection = (0, RewindError::FutureTick);
+        output.inner.events.push(event);
+        output.inner.rejected_shots.push(rejection);
+        let capacities = output.capacities();
+        let events_ptr = output.events().as_ptr();
+        let rejected_ptr = output.rejected_shots().as_ptr();
+        let before = game.state_hash().unwrap();
+        assert!(matches!(
+            game.step_into(&[], &mut output),
+            Err(StepError::OutputCapacity { .. })
+        ));
+        assert_eq!(game.state_hash().unwrap(), before);
+        assert_eq!(output.events(), [event]);
+        assert_eq!(output.rejected_shots(), [rejection]);
+        assert_eq!(output.capacities(), capacities);
+        assert_eq!(output.events().as_ptr(), events_ptr);
+        assert_eq!(output.rejected_shots().as_ptr(), rejected_ptr);
+    }
+    #[test]
+    fn journey400_239_short_output_rejection_preserves_nonempty_inline_sidecar() {
+        for policy in [
+            None,
+            Some(spawn::Policy::new(spawn::Config::default()).unwrap()),
+        ] {
+            let mut game = Match::default();
+            assert!(game.spawn_player(0));
+            let mut output = StepOutput::new();
+            game.step_into(
+                &[(
+                    0,
+                    InputFrame {
+                        buttons: BUTTON_FIRE,
+                        ..Default::default()
+                    },
+                )],
+                &mut output,
+            )
+            .unwrap();
+            let record = output.transitions()[0];
+            // Simulate storage being replaced by an undersized caller buffer.
+            output.inner.events = vec![GameEvent::Respawned { player: 0 }];
+            let before = game.state_hash();
+            let capacities = output.capacities();
+            let pointer = output.transitions().as_ptr();
+            assert!(matches!(
+                game.step_with_spawn_policy_into(&[], &[], policy.as_ref(), &mut output),
+                Err(StepError::OutputCapacity { .. })
+            ));
+            assert_eq!(game.state_hash(), before);
+            assert_eq!(output.transitions(), [record]);
+            assert_eq!(output.transition_count(), 1);
+            assert_eq!(output.transition_capacity(), MAX_STEP_TRANSITIONS);
+            assert_eq!(output.transitions().as_ptr(), pointer);
+            assert_eq!(output.capacities(), capacities);
+            assert_eq!(output.events(), [GameEvent::Respawned { player: 0 }]);
+        }
+    }
     fn game() -> Match {
         let mut game = Match::new(Arena {
             solids: vec![],

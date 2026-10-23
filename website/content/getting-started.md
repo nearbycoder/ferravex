@@ -1,72 +1,97 @@
 # Start building with Ferravex
 
-Ferravex is an original Rust engine for compact 2D and 3D games. Start with a working example, then choose the systems your game needs.
+Ferravex is a first-party Rust foundation for compact 2D and 3D games. Start with a headless simulation, generate a small game, or run one of the fifteen catalog examples from this checkout.
 
-The recovered fifteen-example catalog is local work and has not been pushed or deployed. Use the current checkout for the renderer and games described here; a public Git revision or website may still reflect the earlier catalog. Recovery validation is in progress.
+Journey50 remains the baseline. The [Journey200 ledger](../../docs/JOURNEY_200.md) records the follow-on implementation and validation work. Source, generated artifacts and published pages can be different revisions; fresh combined browser and workspace verification is still pending. A guide or implementation receipt does not establish platform support.
 
 ## Check your local source
 
-Install a stable Rust toolchain, Git and Python 3. From the current Ferravex checkout:
+Use a Rust toolchain satisfying the workspace's `rust-version` (currently 1.88), Git and Python 3.11 or newer. Node 22 or newer is used for browser-host tests. Run these commands from the Ferravex checkout:
 
 ```sh
-python3 scripts/audit-owned.py
-cargo test --workspace --all-features --offline --locked
+python3 -B scripts/ferravex.py doctor --profile core
+python3 -B scripts/audit-owned.py
+python3 -B scripts/ferravex.py test -p ferravex-core session
+python3 -B scripts/ferravex.py list
 ```
 
-The source is MIT licensed. Every engine crate, tool and example uses only project-owned workspace crates and Rust std. The audit covers all optional features and platforms. Linux windowed games additionally need system X11/GLX libraries and a working display/graphics driver.
+The CLI selects at most two Cargo jobs and uses `--offline --locked`. Always pass `-p` for a focused `test` or `check`: omitting it selects the workspace. Add `--dry-run` to preview a command. Doctor checks prerequisites; it does not play a game.
 
-## Play in your browser
+The Rust graph, including optional, test and platform dependencies, uses only project-owned crates and Rust std. Browser and operating-system APIs are the platform boundary. The documentation site's separately pinned command menu is described in the [dependency policy](../../DEPENDENCIES.md).
 
-Build and serve the catalog locally:
+## Generate a small game
+
+From the checkout, create a new sibling directory whose parent already exists:
+
+```sh
+python3 -B scripts/ferravex.py new moon-garden ../moon-garden --template 2d --tick-rate 120 --window-title 'Moon Garden'
+cd ../moon-garden
+cargo test --offline --locked --jobs 2
+```
+
+The destination must not exist, including as an empty directory or symlink. Use `--template 3d` for a 3D view. Tick rate is finite and between 1 and 1000 Hz; it is independent of rendering frequency. The generator creates a standalone Cargo workspace, a seeded lockfile and a local `ferravex` dependency without editing this checkout's catalog or workspace.
+
+Edit `src/game.rs` for rules and `src/lib.rs` for input, rendering and UI. `ferravex.json` records generation settings and the engine path; changing its tick-rate field alone does not change the compiled game. The generated README lists controls and commands. [Template verification](../../docs/JOURNEY_200_TEMPLATES.md) records the exercised paths and limits.
+
+From the generated project, native rendering needs the platform's display and graphics libraries:
+
+```sh
+cargo run --offline --locked --jobs 2
+```
+
+For its browser host, install the Wasm standard-library target if needed, then build and serve this project's output:
 
 ```sh
 rustup target add wasm32-unknown-unknown
-python3 scripts/build-web.py release
-python3 scripts/serve-web.py --port 8000
+python3 -B scripts/build-web.py
+python3 -m http.server 8000 --bind 127.0.0.1 --directory target/web
 ```
 
-Open http://127.0.0.1:8000/ to choose an example. Restored pages include `/emberline/`, `/neon-swarm/`, `/marble-run/` and `/strike/`; Courtyard is `/owned/` and Orbit Breaker is `/owned-orbit/`. Load one game at a time. Keyboard focus, pointer lock and audio may require interaction with its play surface.
+Open http://127.0.0.1:8000/ in a WebGL2 browser. This generated-project helper stages `target/web`; the catalog builder below stages `dist/web` instead. Neither command deploys anything.
 
-The thirteen restored examples share an original WebGL2 host. Courtyard retains its separate instanced WebGL2 renderer, and Orbit Breaker presents its Rust framebuffer through Canvas2D. No JavaScript libraries, external fonts or runtime loaders are fetched.
+## Play the existing catalog
 
-## Run a native game or simulation
-
-The restored games open an original Linux X11/GLX window:
+Return to the Ferravex checkout before running these commands:
 
 ```sh
-cargo run --release -p neon-swarm
-cargo run --release -p marble-run
+python3 -B scripts/ferravex.py doctor --profile web
+python3 -B scripts/ferravex.py build-web release --jobs 2
+python3 -B scripts/serve-web.py --bind 127.0.0.1 --port 8000
 ```
 
-Courtyard and Orbit Breaker retain headless native screenshot paths:
+The Wasm target must already be installed. Open http://127.0.0.1:8000/ for the catalog. Routes include `/emberline/`, `/neon-swarm/`, `/marble-run/` and `/strike/`; Courtyard is `/owned/` and Orbit Breaker is `/owned-orbit/`. The documentation site prefixes these game routes with `/play/`. Load one game at a time; focus, pointer lock and audio may require interaction with its play surface.
+
+Thirteen examples use the shared WebGL2 runtime. Courtyard keeps its separate instanced WebGL2 host; Orbit Breaker presents its Rust framebuffer through Canvas2D. Game hosts use browser APIs directly without third-party runtime libraries or CDN loaders.
+
+For a native game, the CLI resolves the catalog ID and defaults to release:
 
 ```sh
-cargo run --release -p owned-lab -- --output /tmp/courtyard.png
-cargo run --release -p owned-orbit -- --autoplay --frames 1800 --screenshot /tmp/orbit.png
+python3 -B scripts/ferravex.py run neon-swarm
 ```
 
-Windows/macOS/iOS interactive hosts and native audio output remain unimplemented. Portable Rust core compilation is distinct from interactive device support. See [platform status](/docs/platforms/) for the boundary.
+Linux rendering needs X11/GLX and a working OpenGL driver. Windows and Apple host source exists, but its linking and device verification have separate limits. Courtyard and Orbit Breaker also have headless native paths. See [platform status](../../docs/PLATFORMS.md) and each example's README; portable Rust compilation is not interactive device verification.
 
-## Add this checkout to a Rust project
+## Use the actual APIs
 
-Point at local crates so your project uses the recovered implementation:
+The generated project already has its local dependency. For an existing Rust project alongside this checkout, the manifest excerpt is:
 
 ```toml
 [dependencies]
 ferravex = { path = "../ferravex/crates/ferravex" }
-ferravex-render = { path = "../ferravex/crates/ferravex-render" }
 ```
 
-The facade exposes math, ECS, translational dynamics, software graphics, gameplay, input, audio, assets, profiling, replay and networking. The immediate renderer owns drawing/input/frame APIs and platform submission. Physics-based restored games also depend directly on `ferravex-physics`. Copy the package structure of a restored example when adding a windowed/browser game; keep gameplay in Rust and hosts limited to platform APIs.
+Start with `ferravex::prelude` for common input, math, camera and session types. Drawing stays under `ferravex::render`; specialized systems keep their module paths. `ferravex::core::session::SessionConfig::try_new` validates session settings, and `GameSession::from_config` creates a session. `ferravex::app` supplies explicit host-driven startup, fixed-update, render and shutdown hooks.
 
-## Keep the dependency boundary visible
+Follow [your first simulation](first-game.md) for a complete headless program and the [facade quickstart](../../docs/QUICKSTART.md) for host composition. Keep simulation on fixed ticks, retain gameplay edges until a tick consumes them, and derive feedback from accepted events. Local controls or menus must not stop an authoritative match or replay clock.
 
-```sh
-python3 scripts/audit-owned.py
-```
+## Choose a focused guide
 
-This checks Cargo's complete resolved workspace across all features and platforms. There are no optional external backends. See the [dependency policy](/docs/dependencies/) and [implementation status](/docs/status/) for the exact boundaries.
+- [API migration](../../docs/MIGRATION_200.md): compatible additions and existing demo implementations.
+- [Gameplay composition](../../docs/JOURNEY_200_GAMEPLAY.md): abilities, objectives, inventory and accepted feedback.
+- [Presentation composition](../../docs/JOURNEY_200_PRESENTATION.md): control hints, measured layout, preferences and diagnostics.
+- [Save and replay debugging](../../docs/JOURNEY_200_DEBUGGING.md): fingerprints, failures and inspection.
+- [Performance evidence](../../docs/JOURNEY_200_PERFORMANCE.md): counters, reproducible measurements and limits.
+- [Accessible gameplay](../../docs/JOURNEY_200_ACCESSIBILITY.md): input, independent motion/flash choices and local menus.
+- [Coding-agent guide](../../docs/AGENT_GUIDE.md): ownership, API discovery and scoped validation.
 
-## Browser player tools
-
-Every example includes Details and Controls. The [browser player guide](../../docs/PLAYER_GUIDE.md) explains screenshots, frame limits, accessibility options, settings backups and the limits of browser APIs.
+Every browser example includes Details and Controls. The [browser player guide](../../docs/PLAYER_GUIDE.md) covers player tools; current settings backups export version 2 and accept strict version 1 or 2 imports. Motion and flash choices are independent. Actual behavior and remaining validation limits belong in the accessibility guide and Journey200 ledger.

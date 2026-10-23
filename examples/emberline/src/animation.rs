@@ -11,6 +11,8 @@ pub(super) struct EmberAnimation {
     events: EventBuffer<4>,
     facing: f32,
     grounded: bool,
+    motion_enabled: bool,
+    landing_visible: bool,
 }
 impl EmberAnimation {
     pub fn new() -> Self {
@@ -56,6 +58,8 @@ impl EmberAnimation {
             events: EventBuffer::default(),
             facing: 1.,
             grounded: true,
+            motion_enabled: true,
+            landing_visible: true,
         }
     }
     pub fn reset(&mut self) {
@@ -66,6 +70,13 @@ impl EmberAnimation {
         self.events.clear();
         self.facing = 1.;
         self.grounded = true;
+        self.landing_visible = self.motion_enabled;
+    }
+    pub fn set_motion_enabled(&mut self, enabled: bool) {
+        self.motion_enabled = enabled;
+        if !enabled {
+            self.landing_visible = false;
+        }
     }
     pub fn update(&mut self, game: &Game, dt: f32) {
         let velocity = game.velocity();
@@ -76,7 +87,7 @@ impl EmberAnimation {
             if velocity.y < 0. { 2 } else { 3 }
         } else if !self.grounded || self.state == 4 && !self.players[4].timeline().finished() {
             4
-        } else if velocity.x.abs() > 10. && !game.won {
+        } else if velocity.x.abs() > 10. && !game.won() {
             1
         } else {
             0
@@ -85,6 +96,9 @@ impl EmberAnimation {
         if next != self.state {
             self.players[next].timeline_mut().restart();
             self.state = next;
+            if next == 4 {
+                self.landing_visible = self.motion_enabled;
+            }
         }
         self.players[self.state]
             .timeline_mut()
@@ -99,7 +113,13 @@ impl EmberAnimation {
             .unwrap();
     }
     pub fn frame(&self) -> u32 {
-        self.players[self.state].frame()
+        if (!self.motion_enabled && !matches!(self.state, 2 | 3))
+            || self.state == 4 && !self.landing_visible
+        {
+            0
+        } else {
+            self.players[self.state].frame()
+        }
     }
     pub fn facing(&self) -> f32 {
         self.facing
@@ -116,8 +136,57 @@ impl EmberAnimation {
 mod tests {
     use super::*;
     #[test]
+    fn reduced_motion_keeps_footstep_timing_and_discards_old_landing_poses() {
+        let mut game = Game::new(true);
+        let mut regular = EmberAnimation::new();
+        let mut reduced = EmberAnimation::new();
+        reduced.set_motion_enabled(false);
+        game.motor.grounded = true;
+        game.motor.velocity.x = -super::super::SPEED;
+        let mut footsteps = 0;
+        for _ in 0..120 {
+            regular.update(&game, 1. / 120.);
+            reduced.update(&game, 1. / 120.);
+            assert_eq!(regular.footsteps(), reduced.footsteps());
+            footsteps += reduced.footsteps();
+            assert_eq!(reduced.frame(), 0);
+        }
+        assert_eq!(footsteps, 4);
+        assert_eq!(reduced.facing(), -1.);
+        game.motor.grounded = false;
+        game.motor.velocity.y = -20.;
+        reduced.update(&game, 1. / 120.);
+        assert_eq!(
+            reduced.frame(),
+            9,
+            "essential airborne pose remains readable"
+        );
+        game.motor.grounded = true;
+        game.motor.velocity.x = 0.;
+        reduced.update(&game, 1. / 120.);
+        assert_eq!(reduced.frame(), 0);
+        reduced.set_motion_enabled(true);
+        assert_eq!(
+            reduced.frame(),
+            0,
+            "hidden landing cannot revive on re-enable"
+        );
+        reduced.reset();
+        assert_eq!(reduced.frame(), 0);
+        game.motor.grounded = false;
+        reduced.update(&game, 1. / 120.);
+        game.motor.grounded = true;
+        reduced.update(&game, 1. / 120.);
+        assert_eq!(
+            reduced.frame(),
+            10,
+            "a new accepted landing can animate again"
+        );
+    }
+
+    #[test]
     fn sprite_states_run_air_land_pause_and_retain_facing() {
-        let mut game = Game::new();
+        let mut game = Game::new(true);
         let mut anim = EmberAnimation::new();
         game.motor.grounded = true;
         game.motor.velocity.x = -super::super::SPEED;

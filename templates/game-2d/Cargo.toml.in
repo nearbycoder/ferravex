@@ -1,0 +1,23 @@
+[package]
+name = "@@NAME@@"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+publish = false
+
+# An isolated workspace even when generated inside the Ferravex checkout.
+[workspace]
+resolver = "2"
+
+[dependencies]
+ferravex = { path = @@FACADE_TOML@@, default-features = false }
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"

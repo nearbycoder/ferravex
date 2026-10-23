@@ -68,7 +68,7 @@ pub(crate) fn distance(shape: Shape, p: Vec3, q: Quat, point: Vec3, planar: bool
         Shape::Box(h) => {
             let closest = v.clamp(-h, h);
             let delta = v - closest;
-            if delta.length_squared() > 1e-12 {
+            if delta != Vec3::ZERO {
                 (delta.length(), delta.normalize())
             } else {
                 let mut axis = 0;
@@ -87,16 +87,27 @@ pub(crate) fn distance(shape: Shape, p: Vec3, q: Quat, point: Vec3, planar: bool
         #[cfg(feature = "dim2")]
         Shape::Capsule { a, b, radius } => {
             let ab = b - a;
-            let denom = ab.length_squared();
-            let t = if denom > 1e-12 {
-                ((v - a).dot(ab) / denom).clamp(0., 1.)
+            // Wider projection also preserves very short nonzero segments.
+            let denom = (0..3).map(|i| f64::from(ab[i]).powi(2)).sum::<f64>();
+            let t = if denom > 0. {
+                ((0..3)
+                    .map(|i| f64::from(v[i] - a[i]) * f64::from(ab[i]))
+                    .sum::<f64>()
+                    / denom)
+                    .clamp(0., 1.) as f32
             } else {
                 0.
             };
             let delta = v - (a + ab * t);
             (
                 delta.length() - radius,
-                delta.try_normalize().unwrap_or(Vec3::Y),
+                // On the medial segment, an axial fallback need not reach the
+                // boundary. Choose an in-plane perpendicular (Y for a point).
+                delta.try_normalize().unwrap_or_else(|| {
+                    Vec3::new(-ab.y, ab.x, 0.)
+                        .try_normalize()
+                        .unwrap_or(Vec3::Y)
+                }),
             )
         }
         #[cfg(feature = "dim3")]

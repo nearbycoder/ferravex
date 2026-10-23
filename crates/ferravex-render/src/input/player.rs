@@ -4,6 +4,7 @@ use super::{
 };
 use ferravex_play::input::touch::{self, TouchSurface};
 mod editor;
+pub use editor::{VisibleHintError, VisibleTouchLabel};
 #[cfg(test)]
 mod tests;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,6 +21,61 @@ pub enum CaptureDevice {
     KeyboardMouse,
     Gamepad,
 }
+/// Device family used to select binding hints. Keyboard and mouse share a
+/// family because a player commonly uses both together. Controller and touch
+/// labels use the host's channel numbers, not guessed hardware glyphs.
+///
+/// ```
+/// use ferravex_render::input::PlayerInput;
+/// let input = PlayerInput::transient("hint-device");
+/// let device = input.current_device();
+/// assert_eq!(format!("{device:?}"), "KeyboardMouse");
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HintDevice {
+    KeyboardMouse,
+    Gamepad,
+    Touch,
+}
+impl HintDevice {
+    fn for_code(code: InputCode) -> Self {
+        match code {
+            InputCode::PadAxis(_) | InputCode::PadButton(_) => Self::Gamepad,
+            InputCode::Touch(_) | InputCode::TouchDelta(_) => Self::Touch,
+            _ => Self::KeyboardMouse,
+        }
+    }
+}
+
+/// A hint cannot be formatted. Both errors leave the caller's buffer unchanged.
+///
+/// ```
+/// use ferravex_render::input::{ActionKind, Binding, InputCode, PlayerInput};
+/// let mut input = PlayerInput::transient("hint-error");
+/// input.action("jump", "Jump", ActionKind::Button,
+///     vec![Binding::digital(InputCode::Key(32))]).unwrap();
+/// let mut short = [b'?'; 4];
+/// let error = input.format_hint("jump", &mut short).unwrap_err();
+/// assert_eq!(error.to_string(), "hint buffer requires 5 bytes");
+/// assert_eq!(&short, b"????");
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HintError {
+    /// An unknown action name produces [`InputError::InvalidHandle`].
+    Input(InputError),
+    /// Required UTF-8 bytes, without a trailing NUL. No partial label is written.
+    BufferTooSmall { required: usize },
+}
+impl std::fmt::Display for HintError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Input(error) => write!(f, "{error}"),
+            Self::BufferTooSmall { required } => write!(f, "hint buffer requires {required} bytes"),
+        }
+    }
+}
+impl std::error::Error for HintError {}
+
 struct ActionInfo {
     id: usize,
     name: String,
@@ -52,6 +108,8 @@ pub struct PlayerInput {
     focused: bool,
     enabled: bool,
     touch_seen: bool,
+    hint_device: HintDevice,
+    non_pad_hint_device: HintDevice,
     mouse_look_button: Option<u8>,
     selected_pad: usize,
     pad_epoch: u32,
@@ -107,6 +165,8 @@ impl PlayerInput {
             focused: true,
             enabled: true,
             touch_seen: false,
+            hint_device: HintDevice::KeyboardMouse,
+            non_pad_hint_device: HintDevice::KeyboardMouse,
             mouse_look_button: None,
             selected_pad: usize::MAX,
             pad_epoch: 0,
@@ -276,17 +336,23 @@ impl PlayerInput {
         self.status
     }
     /// Single-player convenience: a global `pause` action toggles simulation.
-    /// Network clients should call sample directly and continue their clocks.
+    /// Repeated calls in a render frame cannot replay the pause edge. Network
+    /// clients should call [`Self::sample`] directly and continue their clocks.
     pub fn sample_play(&mut self) {
         self.sample(!self.paused);
         if self.pressed("pause") {
-            self.paused = !self.paused;
+            self.set_paused(!self.paused);
             self.sample(!self.paused);
         }
     }
+    /// Set the single-player pause state immediately, discarding pending gameplay
+    /// edges/motion and touch gestures. Held buttons must release before firing.
+    /// [`Self::sample_play`] preserves this state; an explicit [`Self::sample`]
+    /// call still controls its own gameplay enablement (for example, networking).
     pub fn set_paused(&mut self, paused: bool) {
         if self.paused != paused {
             self.paused = paused;
+            self.set_enabled(!paused);
             self.map.suppress_held();
             self.surface.clear(&mut self.map);
         }
@@ -305,6 +371,34 @@ impl PlayerInput {
     }
     pub fn touch_seen(&self) -> bool {
         self.touch_seen
+    }
+    /// Last device family observed by [`Self::sample`], initially keyboard/mouse.
+    /// Fresh key/button presses, nonzero mouse motion/wheel and touch starts/moves
+    /// select their family, including in menus. Only the selected controller
+    /// counts, after reconnect/focus suppression has cleared. Stick activity
+    /// must cross `max(0.25, pad_deadzone)` or change sign above that threshold;
+    /// drift, releases and unchanged holds do not steal the hints.
+    ///
+    /// A controller slot/connection epoch change or focus/overflow reset restores
+    /// the last non-controller family on the next new render-frame sample.
+    /// Discarded events are ignored. This is a presentation preference, not a
+    /// device-availability or action-enabled query; it never consumes input.
+    ///
+    /// ```
+    /// use ferravex_render::input::PlayerInput;
+    /// let mut input = PlayerInput::transient("current-device");
+    /// let initial = input.current_device();
+    /// input.sample(false); // Menus can sample without advancing gameplay.
+    /// assert_eq!(input.current_device(), initial);
+    /// ```
+    pub fn current_device(&self) -> HintDevice {
+        self.hint_device
+    }
+    fn note_hint_device(&mut self, device: HintDevice) {
+        self.hint_device = device;
+        if device != HintDevice::Gamepad {
+            self.non_pad_hint_device = device;
+        }
     }
     pub fn simulation_dt(&self, dt: f32) -> f32 {
         if self.gameplay_active() && dt.is_finite() {
@@ -414,6 +508,44 @@ impl PlayerInput {
     }
     pub fn pressed(&mut self, name: &str) -> bool {
         self.take(name).pressed
+    }
+    /// Capture the requested actions for one simulation tick without allocating.
+    /// Share the returned array between systems: reading it does not consume
+    /// anything further. Duplicate names receive the same snapshot, and unknown
+    /// names are neutral. Only the named actions are consumed.
+    ///
+    /// Call [`Self::sample`] once per render frame, then call this once **inside**
+    /// each fixed-tick iteration. Held values persist for catch-up ticks; pending
+    /// presses, releases and relative motion appear only in the first snapshot.
+    /// Zero-tick frames retain gameplay edges. Global actions still expire at the
+    /// next sampled render frame and should usually be handled before ticking.
+    /// Like [`Self::take`], this does not poll the host or advance time. Multiple
+    /// taps before a tick coalesce into `pressed`/`released` flags, not a count.
+    ///
+    /// ```
+    /// use ferravex_render::input::{ActionKind, Binding, InputCode, PlayerInput};
+    /// let mut input = PlayerInput::transient("tick-example");
+    /// input.action("jump", "Jump", ActionKind::Button,
+    ///     vec![Binding::digital(InputCode::Key(32))]).unwrap();
+    /// // In the render loop, sample even on frames with no simulation ticks.
+    /// input.sample(true);
+    /// let fixed_steps = 3;
+    /// for _ in 0..fixed_steps {
+    ///     let [jump] = input.take_tick(["jump"]);
+    ///     // Pass this same `jump` to physics, animation, and gameplay this tick.
+    ///     if jump.pressed { /* start jumping */ }
+    /// }
+    /// ```
+    pub fn take_tick<const N: usize>(&mut self, names: [&str; N]) -> [Action; N] {
+        let mut snapshot = [Action::default(); N];
+        for (i, name) in names.iter().enumerate() {
+            snapshot[i] = if let Some(prior) = names[..i].iter().position(|other| other == name) {
+                snapshot[prior]
+            } else {
+                self.take(name)
+            };
+        }
+        snapshot
     }
     /// Mouse/touch position with a movement-stick cursor for pointing games.
     /// Real pointer movement takes over immediately; no synthetic mouse action
@@ -670,17 +802,31 @@ impl PlayerInput {
                 .feed(InputCode::PadAxis(axis as u8), self.pad_axes[axis]);
         }
     }
+    fn set_enabled(&mut self, enabled: bool) {
+        if self.enabled != enabled {
+            self.enabled = enabled;
+            // A gesture begun before or during a pause must not resume a drag.
+            self.surface.clear(&mut self.map);
+        }
+        self.map
+            .set_context(self.gameplay_active().then_some(self.gameplay))
+            .unwrap();
+    }
+    /// Sample the host event journal at most once per render frame. Repeated
+    /// calls may change gameplay enablement, and observe focus/modal changes,
+    /// but never replay the frame's events. Call after the host pumps events.
+    ///
+    /// `false` disables gameplay actions while leaving global menu actions
+    /// available. Disabling clears queued gameplay input and touch gestures;
+    /// buttons held during the pause must release before firing on resume.
+    /// Consume gameplay edges with [`Self::take_tick`] only when a tick runs.
     pub fn sample(&mut self, enabled: bool) {
         crate::edit(|s| s.input_enabled = true);
         if !self.loaded {
             self.load();
         }
         self.ensure_touch_settings();
-        self.enabled = enabled;
-        let mut events = [PlatformEvent::None; MAX_EVENTS];
         let (frame, epoch, focused, overflow, pads, requested, size, pointer) = crate::read(|s| {
-            let values = s.input.events();
-            events[..values.len()].copy_from_slice(values);
             (
                 s.frame,
                 s.input.focus_epoch,
@@ -692,13 +838,30 @@ impl PlayerInput {
                 s.mouse,
             )
         });
+        // Lifecycle changes take effect even after this frame was sampled. In
+        // particular a blur must not leave cached movement or button edges live.
+        if epoch != self.focus_epoch || !focused || overflow {
+            self.map.lose_focus();
+            self.surface.clear(&mut self.map);
+            self.pad_epoch = u32::MAX;
+        }
+        self.focus_epoch = epoch;
+        self.focused = focused && !overflow;
+        let external = crate::read(|s| s.details_open);
+        if external != self.external_details {
+            self.external_details = external;
+            self.set_controls_open(external);
+        }
+        self.set_enabled(enabled);
         if self.last_frame == Some(frame) {
-            self.map
-                .set_context(self.gameplay_active().then_some(self.gameplay))
-                .unwrap();
             return;
         }
         self.last_frame = Some(frame);
+        let mut events = [PlatformEvent::None; MAX_EVENTS];
+        crate::read(|s| {
+            let values = s.input.events();
+            events[..values.len()].copy_from_slice(values);
+        });
         if self.preferences.is_none() {
             self.preferences = Some(crate::preferences::Session::new(
                 &self.owner,
@@ -707,11 +870,6 @@ impl PlayerInput {
         }
         if self.persistent {
             self.preferences.as_mut().unwrap().sync_audio();
-        }
-        let external = crate::read(|s| s.details_open);
-        if external != self.external_details {
-            self.external_details = external;
-            self.set_controls_open(external);
         }
         if let Some(pending) = crate::edit(|s| s.pending_presentation.take()) {
             let current = self.preferences();
@@ -742,13 +900,6 @@ impl PlayerInput {
                 self.map.consume_tick(info.id);
             }
         }
-        if epoch != self.focus_epoch || !focused || overflow {
-            self.map.lose_focus();
-            self.surface.clear(&mut self.map);
-            self.pad_epoch = u32::MAX;
-        }
-        self.focus_epoch = epoch;
-        self.focused = focused && !overflow;
         if requested {
             self.set_controls_open(!self.open);
         }
@@ -759,6 +910,9 @@ impl PlayerInput {
         let pad = pads[selected];
         let fresh = selected != self.selected_pad || pad.epoch != self.pad_epoch;
         if fresh {
+            if self.hint_device == HintDevice::Gamepad {
+                self.hint_device = self.non_pad_hint_device;
+            }
             self.selected_pad = selected;
             self.pad_epoch = pad.epoch;
             self.pad_axes = [0.; 16];
@@ -789,6 +943,13 @@ impl PlayerInput {
                 PlatformEvent::Value(InputCode::Key(key), value)
                     if value >= 0.5 && (key == 0xffbf || self.open && key == 0xff1b) =>
                 {
+                    let code = InputCode::Key(key);
+                    let pressed = self.map.physical_value(code) < 0.5;
+                    self.map.feed(code, value);
+                    if !pressed {
+                        continue;
+                    }
+                    self.note_hint_device(HintDevice::KeyboardMouse);
                     if key == 0xff1b && self.capture.is_some() {
                         self.capture = None;
                         self.ui_block = true;
@@ -800,8 +961,16 @@ impl PlayerInput {
                         .unwrap();
                 }
                 PlatformEvent::Value(code, value) => {
+                    let pressed = value >= 0.5 && self.map.physical_value(code) < 0.5;
+                    if code.valid()
+                        && HintDevice::for_code(code) == HintDevice::KeyboardMouse
+                        && value.is_finite()
+                        && (pressed || code.is_delta() && value != 0.)
+                    {
+                        self.note_hint_device(HintDevice::for_code(code));
+                    }
                     changed |= self.open && self.capture_value(code, value);
-                    if self.open && self.capture.is_none() {
+                    if self.open && self.capture.is_none() && pressed {
                         match code {
                             InputCode::Key(0xff52) if value > 0.5 => self.ui_up = true,
                             InputCode::Key(0xff54) if value > 0.5 => self.ui_down = true,
@@ -818,12 +987,15 @@ impl PlayerInput {
                             _ => {}
                         }
                     }
-                    if code == InputCode::Mouse(1) && value >= 0.5 {
+                    if code == InputCode::Mouse(1) && pressed {
                         self.ui_click = true;
                     }
                     self.map.feed(code, value);
                 }
                 PlatformEvent::MouseMotion(delta) => {
+                    if delta.is_finite() && delta != Vec2::ZERO {
+                        self.note_hint_device(HintDevice::KeyboardMouse);
+                    }
                     if !self.open
                         && self
                             .mouse_look_button
@@ -840,6 +1012,12 @@ impl PlayerInput {
                 }
                 PlatformEvent::Touch(event) => {
                     self.touch_seen = true;
+                    if matches!(event.phase, touch::Phase::Start | touch::Phase::Move)
+                        && event.position.is_finite()
+                        && event.position.abs().max_element() <= 1e6
+                    {
+                        self.note_hint_device(HintDevice::Touch);
+                    }
                     if event.phase == touch::Phase::Start && self.ui_tap_len < self.ui_taps.len() {
                         self.ui_taps[self.ui_tap_len] = event.position;
                         self.ui_tap_len += 1;
@@ -860,7 +1038,16 @@ impl PlayerInput {
                 {
                     match code {
                         InputCode::PadAxis(axis) => {
+                            let previous = self.pad_axes[axis as usize];
                             self.axis_value(axis as usize, value);
+                            let threshold = self.settings.pad_deadzone.max(0.25);
+                            if self.pad_axes_suppressed & (1 << axis) == 0
+                                && value.abs() > threshold
+                                && (previous.abs() <= threshold
+                                    || previous.signum() != value.signum())
+                            {
+                                self.note_hint_device(HintDevice::Gamepad);
+                            }
                             changed |= self.open
                                 && self.pad_axes_suppressed & (1 << axis) == 0
                                 && self.capture_value(code, self.pad_axes[axis as usize]);
@@ -873,11 +1060,15 @@ impl PlayerInput {
                             if self.pad_buttons_suppressed & (1 << button) != 0 {
                                 continue;
                             }
+                            if value >= 0.5 && self.map.physical_value(code) < 0.5 {
+                                self.note_hint_device(HintDevice::Gamepad);
+                            }
                             if button == 16
                                 && value >= 0.5
                                 && !fresh
                                 && self.map.physical_value(code) < 0.5
                             {
+                                self.map.feed(code, value);
                                 self.set_controls_open(!self.open);
                                 self.map
                                     .set_context(self.gameplay_active().then_some(self.gameplay))

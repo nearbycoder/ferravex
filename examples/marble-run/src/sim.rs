@@ -21,6 +21,8 @@ pub struct Run {
     pub previous_rotation: Quat,
     pub collected: Vec<bool>,
     pub checkpoint: usize,
+    /// First accepted visit only; skipped checkpoints have no invented split.
+    pub splits: [Option<u64>; crate::level::MAX_CHECKPOINTS],
     pub elapsed: f32,
     pub falls: u32,
     pub finished: bool,
@@ -93,6 +95,7 @@ impl Run {
             previous_rotation: Quat::IDENTITY,
             collected: vec![false; level.gems.len()],
             checkpoint: 0,
+            splits: [None; crate::level::MAX_CHECKPOINTS],
             elapsed: 0.,
             falls: 0,
             finished: false,
@@ -195,6 +198,7 @@ impl Run {
             if i >= self.checkpoint && p.distance(cp.position) < self.level.tuning.checkpoint_radius
             {
                 self.checkpoint = i + 1;
+                self.splits[i] = ferravex_engine::persistence::run_micros(self.elapsed);
                 self.recovered = false;
                 self.notice = 2.;
             }
@@ -420,5 +424,42 @@ mod tests {
             );
         }
         assert!(game.physics.bodies[game.marble].linvel().length() < before * 0.2);
+    }
+
+    #[test]
+    fn accepted_checkpoint_splits_survive_recovery_and_skips_stay_unset() {
+        let mut run = Run::new();
+        run.physics.bodies[run.marble].set_translation(
+            Vector::from_array(run.level.checkpoints[0].position.to_array()),
+            true,
+        );
+        run.step(Controls::default(), 1. / 120.);
+        assert_eq!(
+            run.splits[0],
+            ferravex_engine::persistence::run_micros(run.elapsed)
+        );
+        let splits = run.splits;
+        for _ in 0..30 {
+            run.step(Controls::default(), 1. / 120.);
+        }
+        assert_eq!(
+            run.splits, splits,
+            "standing on a gate must not replace its split"
+        );
+        run.recover();
+        assert_eq!(run.splits, splits);
+        let mut retry = Run::with_level(run.level.clone());
+        assert!(retry.splits.iter().all(Option::is_none));
+        retry.physics.bodies[retry.marble].set_translation(
+            Vector::from_array(retry.level.checkpoints[1].position.to_array()),
+            true,
+        );
+        retry.step(Controls::default(), 1. / 120.);
+        assert_eq!(
+            retry.checkpoint, 2,
+            "preserve the existing non-sequential trigger rule"
+        );
+        assert_eq!(retry.splits[0], None);
+        assert!(retry.splits[1].is_some());
     }
 }

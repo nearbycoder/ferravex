@@ -17,6 +17,7 @@ mod collision;
 mod math;
 mod world;
 pub use character::{CharacterMotion, CharacterSettings};
+pub use collision::{SweepHit, SweepHitKind};
 use math::*;
 pub use world::{PhysicsWorld, StepStats};
 

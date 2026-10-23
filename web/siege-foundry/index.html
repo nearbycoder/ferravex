@@ -1,7 +1,103 @@
 <!doctype html>
-<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Siege Foundry · Ferravex</title>
-<style>*{box-sizing:border-box}html,body{margin:0;height:100%;background:#101a21;color:#e2ece2;font:14px system-ui}body{display:flex;flex-direction:column}nav{height:40px;flex:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 16px;border-bottom:1px solid #2c3c45}nav>a{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}nav>button{flex:none}a{color:#97c3b5;text-decoration:none}canvas{width:100%;height:calc(100% - 40px);display:block;touch-action:none;outline:none}button[data-controls],button[data-audio]{font:inherit;color:#c3d9d0;background:transparent;border:1px solid #40545b;border-radius:4px;padding:3px 9px;cursor:pointer}button[data-controls]:hover,button[data-controls]:focus-visible,button[data-audio]:hover,button[data-audio]:focus-visible{background:#293f46;outline:1px solid #97c3b5}button[data-controls]:disabled,button[data-audio]:disabled{opacity:.4;cursor:wait}nav>span{margin-left:auto;margin-right:16px}@media(max-width:540px){nav>span{display:none}}[role=status]{position:absolute;top:50%;width:100%;text-align:center;pointer-events:none}</style>
-<nav><a href="../">FERRAVEX / Siege Foundry</a><span>3D · Physics demolition</span><button type="button" data-controls title="Controls (F2)" aria-pressed="false" disabled>Controls</button><button type="button" data-audio title="Enable sound" aria-pressed="false" disabled>Sound off</button></nav>
-<canvas tabindex="0" data-game="siege-foundry" aria-label="Siege Foundry game"></canvas><div role="status">Loading original Rust engine…</div>
-<script type="module" src="../runtime.js"></script></html>
+<meta name="description" content="Topple six foundry targets with eight cannonballs. Aim a fixed-power arc, break the supports, and rebuild for another attempt.">
+<style>
+* { box-sizing: border-box; }
+html, body { margin: 0; background: #101a21; color: #e2ece2; font: 16px/1.5 system-ui; }
+#siege-host { display: flex; flex-direction: column; min-height: 100vh; min-height: 100dvh; }
+/* Shared Details/Fullscreen styles also size the navigation. Keep this host's
+   wrapped controls and catalog link visible after those styles are installed. */
+#siege-host > nav { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; height: auto; flex: none; padding: 8px 16px; border-bottom: 1px solid #40545b; }
+#siege-host > nav > a { display: block; flex: 1 1 16rem; min-width: 0; padding-block: 8px; white-space: normal; }
+#siege-host > nav > span { flex: none; font-size: 14px; }
+#siege-host > nav > button { flex: none; min-height: 44px; padding: 8px 12px; font: inherit; color: #e2ece2; background: #18262b; border: 1px solid #617c80; border-radius: 4px; cursor: pointer; }
+#siege-host > nav > button:hover { background: #293f46; }
+#siege-host > nav > button:disabled { opacity: .5; cursor: wait; }
+a { color: #acdaca; text-underline-offset: .2em; overflow-wrap: anywhere; }
+#siege-host :focus-visible { outline: 3px solid #ffd588; outline-offset: 3px; }
+.range-intro, .range-guide { width: min(100%, 68rem); margin-inline: auto; padding: 16px; }
+.range-intro h1 { font-size: 1.4rem; margin: 0; }
+.range-intro p { margin: 4px 0 8px; }
+#siege-host > canvas { display: block; width: 100%; height: calc(100vh - 12rem); height: calc(100dvh - 12rem); min-height: 28rem; flex: 1 0 auto; touch-action: none; background: #15232a; }
+#siege-host > canvas:focus-visible { outline-offset: -4px; }
+/* Short/zoomed fullscreen views must still scroll to the guide and toolbar. */
+#siege-host.ferravex-fullscreen { overflow: auto; }
+.range-guide { border-top: 1px solid #40545b; padding-bottom: max(24px, env(safe-area-inset-bottom)); }
+.range-guide h2 { font-size: 1.2rem; margin-top: 0; }
+.range-guide p { max-width: 75ch; }
+.range-keys { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.range-keys > div { min-width: 0; padding: 12px; border: 1px solid #40545b; border-radius: 4px; }
+.range-keys dt { font-weight: 700; }
+.range-keys dd { margin: 4px 0 0; }
+kbd { font: inherit; font-weight: 600; }
+#load-status { position: fixed; top: 45%; left: 50%; transform: translateX(-50%); width: min(90%, 36rem); padding: 16px; background: #101a21; border: 1px solid #617c80; text-align: center; pointer-events: none; }
+#load-status:empty { display: none; }
+@media (max-width: 640px) {
+  #siege-host > nav { padding: 8px; }
+  #siege-host > nav > a { flex-basis: 100%; }
+  #siege-host > nav > span { flex-basis: 100%; }
+  .range-keys { grid-template-columns: minmax(0, 1fr); }
+}
+</style>
+</head>
+<body id="siege-host">
+<nav aria-label="Game and player tools">
+  <a href="../">FERRAVEX / All games</a>
+  <span>6 targets · 8 shots</span>
+  <button type="button" data-controls title="Controls (F2 while the range is focused)" aria-pressed="false" aria-describedby="range-remapping" disabled>Controls</button>
+  <button type="button" data-audio title="Enable sound" aria-pressed="false" disabled>Sound off</button>
+</nav>
+<header class="range-intro">
+  <h1>Siege Foundry</h1>
+  <p id="range-objective">A 3D demolition range: topple all six rust-red targets with eight cannonballs. Break the sandstone supports to collapse the towers.</p>
+  <a href="#range-help">How to play and default keys</a>
+</header>
+<canvas id="siege-canvas" tabindex="0" data-game="siege-foundry" aria-label="Siege Foundry demolition range" aria-describedby="range-objective range-controls range-remapping range-focus">Siege Foundry requires JavaScript, WebAssembly and WebGL2. The range instructions and default keys are below.</canvas>
+<div id="load-status" role="status" aria-live="polite" aria-atomic="true">Loading original Rust engine…</div>
+<noscript><p class="range-intro">Enable JavaScript to play Siege Foundry. You can still read the range instructions below.</p></noscript>
+<section class="range-guide" aria-labelledby="range-help">
+  <h2 id="range-help" tabindex="-1">How to play</h2>
+  <p id="range-controls">Focus the range to use the keyboard. With default bindings, Enter or Space starts; arrows or W A S D aim; Space fires; Escape pauses or resumes; R rebuilds. Launch power is fixed at 28 metres per second: change the angle to change the arc.</p>
+  <p id="range-remapping"><strong>Saved or remapped controls take precedence over these defaults.</strong> Open Controls with the button above or F2 while the range is focused to inspect or change bindings. The editor calls starting “Play / confirm”, rebuilding “Restart”, and pausing “Pause / menu”.</p>
+  <dl class="range-keys" aria-label="Default keyboard controls">
+    <div><dt>Start or retry</dt><dd><kbd>Enter</kbd> or <kbd>Space</kbd>. Starting or retrying after a result does not fire a shot. Release, then press Fire again to shoot.</dd></div>
+    <div><dt>Aim left or right</dt><dd><kbd>Left</kbd> / <kbd>Right</kbd> arrows or <kbd>A</kbd> / <kbd>D</kbd> change the cannon heading.</dd></div>
+    <div><dt>Raise or lower the barrel</dt><dd><kbd>Up</kbd> / <kbd>Down</kbd> arrows or <kbd>W</kbd> / <kbd>S</kbd>. The dotted line previews the arc.</dd></div>
+    <div><dt>Fire</dt><dd><kbd>Space</kbd> or the in-game Fire button launches one cannonball. Wait for the 0.8-second reload, then press again; a press during reload is discarded.</dd></div>
+    <div><dt>Pause or resume</dt><dd><kbd>Escape</kbd> or the in-game Pause / Resume button. Opening Controls or Details, or leaving the browser window, suspends this single-player range. Closing the panel or returning to the window resumes only if you have not manually paused.</dd></div>
+    <div><dt>Rebuild</dt><dd><kbd>R</kbd> or the in-game Rebuild button restores the towers, original aim and all eight shots.</dd></div>
+  </dl>
+  <p>With a mouse, hold the left button and drag in the scene to aim; use Fire to shoot. The last cannonball has six seconds to settle before a loss. The in-game buttons provide Start, Again or Retry as appropriate.</p>
+  <p><strong>Inside Controls:</strong> use Tab, Shift+Tab or Up / Down to select an item, and Enter to activate it. Escape cancels a binding capture; Escape again closes the editor. F2 also closes it. Close Controls before using Tab to leave the range.</p>
+  <p id="range-focus"><strong>Page navigation:</strong> Tab or Shift+Tab moves between the range and page controls when Controls is closed. Keep Tab for page navigation when remapping game actions. Pause before reading this guide; moving focus within the page does not pause the range.</p>
+  <p><strong>Player tools:</strong> open Details → Player tools for accessibility preferences, screenshots and settings backups. Escape closes Details and returns focus to the range. In fullscreen, Escape may exit fullscreen before reaching the game.</p>
+  <a href="#siege-canvas">Return to the range</a>
+</section>
+<script id="range-navigation">
+// The shared input bridge listens on window. Let native page navigation and
+// links work without sending their key presses to the game. Controls keeps its
+// existing Tab navigation/capture while its canvas editor is open. Do not stop
+// keyup: a gameplay key must still release after focus moves to a page control.
+const rangeCanvas = document.querySelector('canvas');
+const rangeControls = document.querySelector('[data-controls]');
+// Keep the host instructions alongside help installed by the shared player.
+const rangeDescriptionIds = ['range-objective', 'range-controls', 'range-remapping', 'range-focus'];
+const describeRangeCanvas = () => {
+  const current = rangeCanvas.getAttribute('aria-describedby') || '';
+  const next = [...new Set([...rangeDescriptionIds, ...current.split(/\s+/).filter(Boolean)])].join(' ');
+  if (current !== next) rangeCanvas.setAttribute('aria-describedby', next);
+};
+new MutationObserver(describeRangeCanvas).observe(rangeCanvas, {attributes: true, attributeFilter: ['aria-describedby']});
+describeRangeCanvas();
+document.addEventListener('keydown', event => {
+  const tabLeavesRange = event.key === 'Tab' && rangeControls.getAttribute('aria-pressed') !== 'true';
+  if (event.target !== rangeCanvas || tabLeavesRange) event.stopPropagation();
+});
+</script>
+<script type="module" src="../runtime.js"></script>
+</body>
+</html>

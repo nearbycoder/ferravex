@@ -1,0 +1,1289 @@
+{
+  "schema": 1,
+  "stopping_point": "83 returned implementations;117 deferred by user",
+  "tasks": [
+    {
+      "id": 201,
+      "title": "Fixed-tick context and absolute scheduled IDs",
+      "status": "implementation-returned",
+      "receipt": "receipts/201.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-201-v1"
+    },
+    {
+      "id": 202,
+      "title": "Reusable interpolation history and presentation holds",
+      "status": "implementation-returned",
+      "receipt": "receipts/202.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-202-v1"
+    },
+    {
+      "id": 203,
+      "title": "Safe disjoint resource access",
+      "status": "implementation-returned",
+      "receipt": "receipts/203.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-203-v1"
+    },
+    {
+      "id": 204,
+      "title": "Prepared sequential system runner",
+      "status": "implementation-returned",
+      "receipt": "receipts/204.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-204-v1"
+    },
+    {
+      "id": 205,
+      "title": "Fallible deferred commands with explicit failure policy",
+      "status": "implementation-returned",
+      "receipt": "receipts/205.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-205-v1"
+    },
+    {
+      "id": 206,
+      "title": "ECS-specific deferred entity authoring",
+      "status": "implementation-returned",
+      "receipt": "receipts/206.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-206-v1"
+    },
+    {
+      "id": 207,
+      "title": "Owner-scoped tick jobs and cancellation",
+      "status": "implementation-returned",
+      "receipt": "receipts/207.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-207-v1"
+    },
+    {
+      "id": 208,
+      "title": "Disjoint mutation of pooled objects",
+      "status": "implementation-returned",
+      "receipt": "receipts/208.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-208-v1"
+    },
+    {
+      "id": 209,
+      "title": "Distance-ranked proximity queries",
+      "status": "implementation-returned",
+      "receipt": "receipts/209.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-209-v1"
+    },
+    {
+      "id": 210,
+      "title": "Optional query members",
+      "status": "implementation-returned",
+      "receipt": "receipts/210.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-210-v1"
+    },
+    {
+      "id": 211,
+      "title": "Component presence/absence filters without borrowing values",
+      "status": "implementation-returned",
+      "receipt": "receipts/211.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-211-v1"
+    },
+    {
+      "id": 212,
+      "title": "Practical actor bundles and wider queries",
+      "status": "implementation-returned",
+      "receipt": "receipts/212.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-212-v1"
+    },
+    {
+      "id": 213,
+      "title": "Prepared, bounded batch entity spawning",
+      "status": "implementation-returned",
+      "receipt": "receipts/213.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-213-v1"
+    },
+    {
+      "id": 214,
+      "title": "Explicit selected-component entity duplication",
+      "status": "implementation-returned",
+      "receipt": "receipts/214.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-214-v1"
+    },
+    {
+      "id": 215,
+      "title": "Prepared 3D projection and screen-picking rays",
+      "status": "implementation-returned",
+      "receipt": "receipts/215.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-215-v1"
+    },
+    {
+      "id": 216,
+      "title": "Prepared affine point/vector/normal transformation",
+      "status": "implementation-returned",
+      "receipt": "receipts/216.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-216-v1"
+    },
+    {
+      "id": 217,
+      "title": "Quaternion swing/twist authoring constraints",
+      "status": "implementation-returned",
+      "receipt": "receipts/217.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-217-v1"
+    },
+    {
+      "id": 218,
+      "title": "Checked closest-point and segment-pair geometry",
+      "status": "implementation-returned",
+      "receipt": "receipts/218.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-218-v1"
+    },
+    {
+      "id": 219,
+      "title": "Bounded cubic path authoring",
+      "status": "implementation-returned",
+      "receipt": "receipts/219.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-219-v1"
+    },
+    {
+      "id": 220,
+      "title": "Direct overlap and separation queries",
+      "status": "implementation-returned",
+      "receipt": "receipts/220.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-220-v1"
+    },
+    {
+      "id": 221,
+      "title": "Atomic rigid-body teleport and motion reset",
+      "status": "implementation-returned",
+      "receipt": "receipts/221.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-221-v1"
+    },
+    {
+      "id": 222,
+      "title": "Handle-preserving collider shape replacement",
+      "status": "implementation-returned",
+      "receipt": "receipts/222.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-222-v1"
+    },
+    {
+      "id": 223,
+      "title": "World-space joint-frame authoring",
+      "status": "implementation-returned",
+      "receipt": "receipts/223.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-223-v1"
+    },
+    {
+      "id": 224,
+      "title": "Atomic multi-body assembly instantiation",
+      "status": "implementation-returned",
+      "receipt": "receipts/224.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-224-v1"
+    },
+    {
+      "id": 225,
+      "title": "Body-level sensor occupancy tracker",
+      "status": "implementation-returned",
+      "receipt": "receipts/225.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-225-v1"
+    },
+    {
+      "id": 226,
+      "title": "Accepted impact aggregation across substeps",
+      "status": "implementation-returned",
+      "receipt": "receipts/226.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-226-v1"
+    },
+    {
+      "id": 227,
+      "title": "Bounded radial rigid-body impulse application",
+      "status": "implementation-returned",
+      "receipt": "receipts/227.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-227-v1"
+    },
+    {
+      "id": 228,
+      "title": "Character stance/clearance transition",
+      "status": "implementation-returned",
+      "receipt": "receipts/228.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-228-v1"
+    },
+    {
+      "id": 229,
+      "title": "Reusable acknowledged snapshot-baseline store",
+      "status": "implementation-returned",
+      "receipt": "receipts/229.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-229-v1"
+    },
+    {
+      "id": 230,
+      "title": "Transport-independent authority protocol driver",
+      "status": "implementation-returned",
+      "receipt": "receipts/230.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-230-v1"
+    },
+    {
+      "id": 231,
+      "title": "Transport-independent prediction client driver",
+      "status": "implementation-returned",
+      "receipt": "receipts/231.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-231-v1"
+    },
+    {
+      "id": 232,
+      "title": "Bounded in-memory datagram link for playable local sessions",
+      "status": "implementation-returned",
+      "receipt": "receipts/232.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-232-v2"
+    },
+    {
+      "id": 233,
+      "title": "Checked reusable arena authoring",
+      "status": "implementation-returned",
+      "receipt": "receipts/233.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-233-v1"
+    },
+    {
+      "id": 234,
+      "title": "Opt-in deterministic safe spawn selection",
+      "status": "implementation-returned",
+      "receipt": "receipts/234.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-234-v1"
+    },
+    {
+      "id": 235,
+      "title": "Configurable bot navigation domain",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 236,
+      "title": "Roster-aware practice bot targets and scheduling",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 237,
+      "title": "Reusable authoritative step output",
+      "status": "implementation-returned",
+      "receipt": "receipts/237.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-237-v1"
+    },
+    {
+      "id": 238,
+      "title": "Presentation-only prediction correction smoothing",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 239,
+      "title": "Accepted weapon-transition results for feedback",
+      "status": "implementation-returned",
+      "receipt": "receipts/239.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-239-v1"
+    },
+    {
+      "id": 240,
+      "title": "Authority-owned player relocation with history invalidation",
+      "status": "implementation-returned",
+      "receipt": "receipts/240.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-240-v1"
+    },
+    {
+      "id": 241,
+      "title": "Expiring gameplay command outcomes",
+      "status": "implementation-returned",
+      "receipt": "receipts/241.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-241-v2"
+    },
+    {
+      "id": 242,
+      "title": "Combo scoring receipts",
+      "status": "implementation-returned",
+      "receipt": "receipts/242.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-242-v1"
+    },
+    {
+      "id": 243,
+      "title": "Progression award and restore reports",
+      "status": "implementation-returned",
+      "receipt": "receipts/243.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-243-v1"
+    },
+    {
+      "id": 244,
+      "title": "Distinct weighted reward offers",
+      "status": "implementation-returned",
+      "receipt": "receipts/244.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-244-v1"
+    },
+    {
+      "id": 245,
+      "title": "Inspectable pity guarantees",
+      "status": "implementation-returned",
+      "receipt": "receipts/245.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-245-v1"
+    },
+    {
+      "id": 246,
+      "title": "Charge actions with explicit input edges",
+      "status": "implementation-returned",
+      "receipt": "receipts/246.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-246-v1"
+    },
+    {
+      "id": 247,
+      "title": "Shield recharge state and safe resizing",
+      "status": "implementation-returned",
+      "receipt": "receipts/247.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-247-v1"
+    },
+    {
+      "id": 248,
+      "title": "Stagger onset and recovery events",
+      "status": "implementation-returned",
+      "receipt": "receipts/248.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-248-v1"
+    },
+    {
+      "id": 249,
+      "title": "Projectile contact identity and outcomes",
+      "status": "implementation-returned",
+      "receipt": "receipts/249.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-249-v1"
+    },
+    {
+      "id": 250,
+      "title": "Explainable safe spawn selection",
+      "status": "implementation-returned",
+      "receipt": "receipts/250.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-250-v1"
+    },
+    {
+      "id": 251,
+      "title": "Upgrade availability and atomic choices",
+      "status": "implementation-returned",
+      "receipt": "receipts/251.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-251-v1"
+    },
+    {
+      "id": 252,
+      "title": "Segment and lap trial comparisons",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 253,
+      "title": "Pickup attraction and arrival reports",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 254,
+      "title": "Bounded multi-contact projectile traversal",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 255,
+      "title": "Platform phase transition reports",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 256,
+      "title": "Precision timing result breakdowns",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 257,
+      "title": "Stable interaction target selection",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 258,
+      "title": "Objective graph authoring diagnostics",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 259,
+      "title": "Atomic encounter group admission",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 260,
+      "title": "Navigation request replacement and fairness",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 261,
+      "title": "Priority-aware AI work scheduling",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 262,
+      "title": "Target selection policies for game rules",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 263,
+      "title": "Transactional squad cover handoff",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 264,
+      "title": "Revisioned navigation traversal overrides",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 265,
+      "title": "Safe live ability tuning",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 266,
+      "title": "Optional target-assist geometry",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 267,
+      "title": "Composable timed training challenges",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 268,
+      "title": "Deterministic trigger-zone membership",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 269,
+      "title": "Explicit record eligibility policies",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 270,
+      "title": "Shared deterministic gameplay scenario driver",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 271,
+      "title": "Reserve screen-space HUD regions around a fitted world",
+      "status": "implementation-returned",
+      "receipt": "receipts/271.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-271-v1"
+    },
+    {
+      "id": 272,
+      "title": "Content-sized rows and wrapping action groups",
+      "status": "implementation-returned",
+      "receipt": "receipts/272.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-272-v1"
+    },
+    {
+      "id": 273,
+      "title": "Reusable wrapped-text layout with measured block height",
+      "status": "implementation-returned",
+      "receipt": "receipts/273.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-273-v1"
+    },
+    {
+      "id": 274,
+      "title": "Bounded scroll regions with focus reveal",
+      "status": "implementation-returned",
+      "receipt": "receipts/274.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-274-v1"
+    },
+    {
+      "id": 275,
+      "title": "Consistent meters and segmented progress widgets",
+      "status": "implementation-returned",
+      "receipt": "receipts/275.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-275-v1"
+    },
+    {
+      "id": 276,
+      "title": "Responsive label/value and result-summary lists",
+      "status": "implementation-returned",
+      "receipt": "receipts/276.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-276-v1"
+    },
+    {
+      "id": 277,
+      "title": "Content-driven menu and results cards",
+      "status": "implementation-returned",
+      "receipt": "receipts/277.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-277-v1"
+    },
+    {
+      "id": 278,
+      "title": "One geometry description for visible HUD touch controls",
+      "status": "implementation-returned",
+      "receipt": "receipts/278.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-278-v1"
+    },
+    {
+      "id": 279,
+      "title": "Explicit UI-versus-world pointer ownership result",
+      "status": "implementation-returned",
+      "receipt": "receipts/279.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-279-v1"
+    },
+    {
+      "id": 280,
+      "title": "Read-only UI semantic and geometry inspection",
+      "status": "implementation-returned",
+      "receipt": "receipts/280.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-280-v1"
+    },
+    {
+      "id": 281,
+      "title": "Atomic multi-widget composition",
+      "status": "implementation-returned",
+      "receipt": "receipts/281.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-281-v1"
+    },
+    {
+      "id": 282,
+      "title": "Bounded accepted-event notices with priority and coalescing",
+      "status": "implementation-returned",
+      "receipt": "receipts/282.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-282-v1"
+    },
+    {
+      "id": 283,
+      "title": "Checked minimap and waypoint projection",
+      "status": "implementation-returned",
+      "receipt": "receipts/283.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-283-v1"
+    },
+    {
+      "id": 284,
+      "title": "Atomic retained instance submission",
+      "status": "implementation-returned",
+      "receipt": "receipts/284.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-284-v1"
+    },
+    {
+      "id": 285,
+      "title": "Checked numeric inspector widgets",
+      "status": "implementation-returned",
+      "receipt": "receipts/285.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-285-v1"
+    },
+    {
+      "id": 286,
+      "title": "Checked canvas fitting into reserved rectangles",
+      "status": "implementation-returned",
+      "receipt": "receipts/286.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-286-v1"
+    },
+    {
+      "id": 287,
+      "title": "Explicit camera blends and cuts",
+      "status": "implementation-returned",
+      "receipt": "receipts/287.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-287-v1"
+    },
+    {
+      "id": 288,
+      "title": "Authored camera rail sampling",
+      "status": "implementation-returned",
+      "receipt": "receipts/288.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-288-v1"
+    },
+    {
+      "id": 289,
+      "title": "Validated skeleton pose remapping",
+      "status": "implementation-returned",
+      "receipt": "receipts/289.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-289-v1"
+    },
+    {
+      "id": 290,
+      "title": "Shared UI type and contrast themes",
+      "status": "implementation-returned",
+      "receipt": "receipts/290.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-290-v1"
+    },
+    {
+      "id": 291,
+      "title": "Atomic typed action snapshots",
+      "status": "implementation-returned",
+      "receipt": "receipts/291.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-291-v1"
+    },
+    {
+      "id": 292,
+      "title": "Visible-control-aware binding hints",
+      "status": "implementation-returned",
+      "receipt": "receipts/292.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-292-v1"
+    },
+    {
+      "id": 293,
+      "title": "Checked gamepad calibration profiles",
+      "status": "implementation-returned",
+      "receipt": "receipts/293.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-293-v1"
+    },
+    {
+      "id": 294,
+      "title": "Configurable touch gesture recognition",
+      "status": "implementation-returned",
+      "receipt": "receipts/294.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-294-v1"
+    },
+    {
+      "id": 295,
+      "title": "Live in-game text and contrast preferences",
+      "status": "implementation-returned",
+      "receipt": "receipts/295.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-295-v1"
+    },
+    {
+      "id": 296,
+      "title": "Bounded semantic game-status bridge",
+      "status": "implementation-returned",
+      "receipt": "receipts/296.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-296-v1"
+    },
+    {
+      "id": 297,
+      "title": "Accepted audio cue batching",
+      "status": "implementation-returned",
+      "receipt": "receipts/297.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-297-v1"
+    },
+    {
+      "id": 298,
+      "title": "Allocation-free mixer level metering",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 299,
+      "title": "Actionable WAV decode diagnostics",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 300,
+      "title": "Optional gameplay sound captions",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 301,
+      "title": "Transactional named input profiles",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 302,
+      "title": "Native save-slot inventory and inspection",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 303,
+      "title": "Explicit transactional save migrations",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 304,
+      "title": "Source-preserving scene transform edits",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 305,
+      "title": "Schema-aware authoring completions",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 306,
+      "title": "Revision-guarded content submissions",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 307,
+      "title": "Replay import preflight without materialization",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 308,
+      "title": "Replay bookmarks and annotation sidecars",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 309,
+      "title": "Discontinuity-preserving ghost compaction",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 310,
+      "title": "Opt-in bounded runtime bug traces",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 311,
+      "title": "Borrowed reliable-send batches",
+      "status": "implementation-returned",
+      "receipt": "receipts/311.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-311-v1"
+    },
+    {
+      "id": 312,
+      "title": "Budgeted reliable receive delivery",
+      "status": "implementation-returned",
+      "receipt": "receipts/312.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-312-v1"
+    },
+    {
+      "id": 313,
+      "title": "Reusable delta encode and apply buffers",
+      "status": "implementation-returned",
+      "receipt": "receipts/313.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-313-v1"
+    },
+    {
+      "id": 314,
+      "title": "Precise network-history interpolation",
+      "status": "implementation-returned",
+      "receipt": "receipts/314.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-314-v1"
+    },
+    {
+      "id": 315,
+      "title": "Explainable clock synchronization samples",
+      "status": "implementation-returned",
+      "receipt": "receipts/315.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-315-v1"
+    },
+    {
+      "id": 316,
+      "title": "Observable network input queue admission",
+      "status": "implementation-returned",
+      "receipt": "receipts/316.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-316-v1"
+    },
+    {
+      "id": 317,
+      "title": "Caller-buffer packet encoding",
+      "status": "implementation-returned",
+      "receipt": "receipts/317.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-317-v1"
+    },
+    {
+      "id": 318,
+      "title": "Reusable client events and interpolation",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 319,
+      "title": "Network health and correction snapshots",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 320,
+      "title": "Replayable adverse-network scenario manifests",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 321,
+      "title": "Local API symbol search for coding agents",
+      "status": "implementation-returned",
+      "receipt": "receipts/321.md",
+      "taskId": "node:delegated-task:command%3Amcp%3Adf67d04c-24a5-47f4-b00a-80dc970a52ae%3Adelegate-task%3Aferravex-journey400-20261022-321-v1"
+    },
+    {
+      "id": 322,
+      "title": "Self-describing developer CLI",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 323,
+      "title": "Executable task-oriented recipe catalog",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 324,
+      "title": "Actionable engine error reference",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 325,
+      "title": "Ownership-aware narrow validation plans",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 326,
+      "title": "Content-verified validation resume",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 327,
+      "title": "Precise CLI features, targets and doctests",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 328,
+      "title": "Performance artifact provenance",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 329,
+      "title": "Reproducible benchmark scenario manifests",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 330,
+      "title": "Fresh browser artifact verification command",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 331,
+      "title": "Scene authoring lint command",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 332,
+      "title": "Scaffold input presets",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 333,
+      "title": "Scaffold optional save and replay examples",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 334,
+      "title": "Typed Wasm host-contract audit",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 335,
+      "title": "Headless game-domain content validation",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 336,
+      "title": "Freshness-aware adoption evidence dashboard",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 337,
+      "title": "Downstream API compatibility examples",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 338,
+      "title": "Generated-project health inspection",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 339,
+      "title": "Live content and shader workflow recipes",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 340,
+      "title": "Journey400 migration and agent navigation",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 341,
+      "title": "Emberline: optional lantern-spark relay",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 342,
+      "title": "Neon Swarm: one bounded upgrade choice between waves",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 343,
+      "title": "Pocket Rally: scored drift sectors",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 344,
+      "title": "Salvage Pinball: nudge with a tilt consequence",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 345,
+      "title": "Orchard Guard: player-selectable tower targeting priority",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 346,
+      "title": "Marble Run: isolated checkpoint practice",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 347,
+      "title": "Dune Skimmer: a second technical circuit",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 348,
+      "title": "Crystal Cavern: discovered-room map and player waypoint",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 349,
+      "title": "Siege Foundry: demolition with protected cargo",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 350,
+      "title": "Sky Courier: a two-stop mail itinerary",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 351,
+      "title": "Strike: timed offline combat drill with accuracy results",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 352,
+      "title": "2D Physics Lab: spring-based body dragging",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 353,
+      "title": "3D Physics Lab: controlled surface comparison experiment",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 354,
+      "title": "Courtyard: ordered cover-to-cover training route",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 355,
+      "title": "Orbit Breaker: limited sticky-paddle catch and release",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 356,
+      "title": "Emberline: shared responsive presentation adoption",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 357,
+      "title": "Neon Swarm: shared responsive presentation adoption",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 358,
+      "title": "Pocket Rally: shared responsive presentation adoption",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 359,
+      "title": "Salvage Pinball: shared responsive presentation adoption",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 360,
+      "title": "Orchard Guard: shared responsive presentation adoption",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 361,
+      "title": "Marble Run: shared responsive presentation adoption",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 362,
+      "title": "Dune Skimmer: shared responsive presentation adoption",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 363,
+      "title": "Crystal Cavern: shared responsive presentation adoption",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 364,
+      "title": "Siege Foundry: shared responsive presentation adoption",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 365,
+      "title": "Sky Courier: shared responsive presentation adoption",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 366,
+      "title": "Strike: shared responsive presentation adoption",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 367,
+      "title": "2D Physics Lab: shared responsive presentation adoption",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 368,
+      "title": "3D Physics Lab: shared responsive presentation adoption",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 369,
+      "title": "Courtyard: shared responsive presentation adoption",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 370,
+      "title": "Orbit Breaker: shared responsive presentation adoption",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 371,
+      "title": "Emberline: semantic status and new-feature controls",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 372,
+      "title": "Neon Swarm: semantic status and new-feature controls",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 373,
+      "title": "Pocket Rally: semantic status and new-feature controls",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 374,
+      "title": "Salvage Pinball: semantic status and new-feature controls",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 375,
+      "title": "Orchard Guard: semantic status and new-feature controls",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 376,
+      "title": "Marble Run: semantic status and new-feature controls",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 377,
+      "title": "Dune Skimmer: semantic status and new-feature controls",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 378,
+      "title": "Crystal Cavern: semantic status and new-feature controls",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 379,
+      "title": "Siege Foundry: semantic status and new-feature controls",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 380,
+      "title": "Sky Courier: semantic status and new-feature controls",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 381,
+      "title": "Strike: semantic status and new-feature controls",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 382,
+      "title": "2D Physics Lab: semantic status and new-feature controls",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 383,
+      "title": "3D Physics Lab: semantic status and new-feature controls",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 384,
+      "title": "Courtyard: semantic status and new-feature controls",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 385,
+      "title": "Orbit Breaker: semantic status and new-feature controls",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 386,
+      "title": "Emberline: new-feature scenarios and visual regressions",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 387,
+      "title": "Neon Swarm: new-feature scenarios and visual regressions",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 388,
+      "title": "Pocket Rally: new-feature scenarios and visual regressions",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 389,
+      "title": "Salvage Pinball: new-feature scenarios and visual regressions",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 390,
+      "title": "Orchard Guard: new-feature scenarios and visual regressions",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 391,
+      "title": "Marble Run: new-feature scenarios and visual regressions",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 392,
+      "title": "Dune Skimmer: new-feature scenarios and visual regressions",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 393,
+      "title": "Crystal Cavern: new-feature scenarios and visual regressions",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 394,
+      "title": "Siege Foundry: new-feature scenarios and visual regressions",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 395,
+      "title": "Sky Courier: new-feature scenarios and visual regressions",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 396,
+      "title": "Strike: new-feature scenarios and visual regressions",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 397,
+      "title": "2D Physics Lab: new-feature scenarios and visual regressions",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 398,
+      "title": "3D Physics Lab: new-feature scenarios and visual regressions",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 399,
+      "title": "Courtyard: new-feature scenarios and visual regressions",
+      "status": "deferred",
+      "receipt": null
+    },
+    {
+      "id": 400,
+      "title": "Orbit Breaker: new-feature scenarios and visual regressions",
+      "status": "deferred",
+      "receipt": null
+    }
+  ]
+}

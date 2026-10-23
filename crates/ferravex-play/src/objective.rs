@@ -1,5 +1,9 @@
 //! Authoritative, bounded puzzle/quest DAGs. Feed ordered accepted game events;
 //! this module does not validate world distance, visibility or inventory itself.
+//!
+//! [`ObjectiveGraph::inspect`] and [`ObjectiveGraph::iter`] expose read-only HUD
+//! and journal views. Prerequisite bits refer to declaration slots, not authored
+//! objective IDs. Inspection neither advances timers nor consumes event serials.
 use crate::persistence::{Document, SaveData, SaveError, Value};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ObjectiveError {
@@ -27,6 +31,58 @@ pub enum ObjectiveState {
     Ready,
     Complete,
     Skipped,
+}
+/// Recorded work for an objective, as exposed by [`ObjectiveGraph::inspect`].
+///
+/// Use [`ObjectiveView::state`] to determine completion: a skipped branch can
+/// retain partial progress, and competing timers can both reach their target
+/// during one step even though only the earliest one completes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ObjectiveProgress {
+    /// Accepted matching events, capped at the authored target.
+    Event { count: u16, required: u16 },
+    /// Supplied simulation time while ready, capped at the authored target.
+    Timer { elapsed: f32, seconds: f32 },
+    /// Gates have no independent counter and complete when prerequisites settle.
+    Gate,
+}
+/// Immediate unmet prerequisites and exclusive-branch selection for a view.
+///
+/// All masks use declaration slots, not [`ObjectiveSpec::id`]. These are direct
+/// blockers, not a transitive reachability analysis. Inspect the referenced slots
+/// to explain their own blockers. See [`ObjectiveGraph::iter`] for an example.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ObjectiveBlockers {
+    /// Required `all` slots that have not completed, including skipped slots.
+    pub missing_all: u64,
+    /// The full `any` mask if none of its slots has completed; otherwise zero.
+    /// Completing any one of these choices satisfies the `any` requirement.
+    pub missing_any: u64,
+    /// Skipped slots within `missing_all | missing_any`. They cannot complete
+    /// on this branch; other `missing_any` choices may still satisfy that group.
+    pub skipped_prerequisites: u64,
+    /// Declaration slot of the completed peer that excluded this objective.
+    /// Populated only for [`ObjectiveState::Skipped`]; inspection does not settle
+    /// the graph or predict future skips.
+    pub exclusive_winner: Option<usize>,
+}
+/// An owned, read-only observation returned by [`ObjectiveGraph::inspect`].
+///
+/// Later graph mutations do not update an existing view; inspect again to refresh
+/// it. A ready objective has no blockers. A complete objective also has none, so
+/// use `state` rather than empty blocker masks to decide whether work is accepted.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ObjectiveView {
+    /// Declaration slot, also used by prerequisite masks and graph queries.
+    pub index: usize,
+    /// Authored specification, including its stable ID and event/timer target.
+    pub spec: ObjectiveSpec,
+    /// The same state returned by [`ObjectiveGraph::state`].
+    pub state: ObjectiveState,
+    /// Recorded work; completion is determined by `state`.
+    pub progress: ObjectiveProgress,
+    /// Immediate blockers, including any selected exclusive peer.
+    pub blockers: ObjectiveBlockers,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ObjectiveFrame {
@@ -170,6 +226,103 @@ impl<const N: usize> ObjectiveGraph<N> {
     }
     pub fn complete(&self, i: usize) -> bool {
         self.state(i) == Some(ObjectiveState::Complete)
+    }
+    /// Inspect one declaration slot without allocating or changing the graph.
+    /// Returns `None` for any slot outside `0..N` (including `usize::MAX`).
+    /// Work is reported for locked, ready, complete and skipped objectives.
+    ///
+    /// ```
+    /// use ferravex_play::objective::{
+    ///     ObjectiveGraph, ObjectiveKind, ObjectiveProgress, ObjectiveSpec, ObjectiveState,
+    /// };
+    /// let mut graph = ObjectiveGraph::new(1, [ObjectiveSpec {
+    ///     id: 10, all: 0, any: 0, exclusive_group: 0,
+    ///     kind: ObjectiveKind::Event { id: 7, count: 3 },
+    /// }]).unwrap();
+    /// graph.event(7, 2, 1).unwrap();
+    /// let saved = graph.snapshot();
+    /// let view = graph.inspect(0).unwrap();
+    /// assert_eq!(view.spec.id, 10);
+    /// assert_eq!(view.state, ObjectiveState::Ready);
+    /// assert_eq!(view.progress, ObjectiveProgress::Event { count: 2, required: 3 });
+    /// assert_eq!(graph.snapshot(), saved);
+    /// assert_eq!(graph.last_event_serial(), 1);
+    /// assert_eq!(graph.inspect(1), None);
+    /// ```
+    pub fn inspect(&self, i: usize) -> Option<ObjectiveView> {
+        let state = self.state(i)?;
+        let spec = self.specs[i];
+        let missing_all = spec.all & !self.saved.done;
+        let missing_any = if spec.any & self.saved.done == 0 {
+            spec.any
+        } else {
+            0
+        };
+        let exclusive_winner = if state != ObjectiveState::Skipped {
+            None
+        } else {
+            self.specs.iter().enumerate().find_map(|(peer, other)| {
+                (peer != i
+                    && other.exclusive_group == spec.exclusive_group
+                    && self.saved.done & (1 << peer) != 0)
+                    .then_some(peer)
+            })
+        };
+        let progress = match spec.kind {
+            ObjectiveKind::Event { count, .. } => ObjectiveProgress::Event {
+                count: self.saved.counts[i],
+                required: count,
+            },
+            ObjectiveKind::Timer { seconds } => ObjectiveProgress::Timer {
+                elapsed: self.saved.elapsed[i],
+                seconds,
+            },
+            ObjectiveKind::Gate => ObjectiveProgress::Gate,
+        };
+        Some(ObjectiveView {
+            index: i,
+            spec,
+            state,
+            progress,
+            blockers: ObjectiveBlockers {
+                missing_all,
+                missing_any,
+                skipped_prerequisites: (missing_all | missing_any) & self.saved.skipped,
+                exclusive_winner,
+            },
+        })
+    }
+    /// Visit every objective in declaration order, including locked and skipped
+    /// objectives, without allocating or mutating progress. This order matches
+    /// prerequisite bit positions, even when dependency order differs.
+    ///
+    /// A view scans at most `N` peers to find its exclusive winner. Iterating all
+    /// views takes at most `O(N * N)` work, bounded by the graph's 64-slot limit.
+    ///
+    /// ```
+    /// use ferravex_play::objective::{
+    ///     ObjectiveGraph, ObjectiveKind, ObjectiveSpec, ObjectiveState,
+    /// };
+    /// let mut graph = ObjectiveGraph::new(1, [
+    ///     ObjectiveSpec { id: 40, all: 0, any: 0, exclusive_group: 0,
+    ///         kind: ObjectiveKind::Event { id: 7, count: 1 } },
+    ///     ObjectiveSpec { id: 90, all: 1, any: 0, exclusive_group: 0,
+    ///         kind: ObjectiveKind::Gate },
+    /// ]).unwrap();
+    /// let gate = graph.inspect(1).unwrap();
+    /// let blocker_ids = graph.iter().filter(|view|
+    ///     gate.blockers.missing_all & (1_u64 << view.index) != 0)
+    ///     .map(|view| view.spec.id);
+    /// assert!(blocker_ids.eq([40]));
+    /// graph.event(7, 1, 1).unwrap();
+    /// assert_eq!(graph.iter().len(), 2);
+    /// assert!(graph.iter().all(|view| view.state == ObjectiveState::Complete));
+    /// ```
+    pub fn iter(
+        &self,
+    ) -> impl ExactSizeIterator<Item = ObjectiveView> + DoubleEndedIterator + std::iter::FusedIterator + '_
+    {
+        (0..N).map(|i| self.inspect(i).expect("objective slot is in bounds"))
     }
     fn frame(&self, old: (u64, u64)) -> ObjectiveFrame {
         ObjectiveFrame {

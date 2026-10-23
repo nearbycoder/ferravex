@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "engine_root": @@ENGINE_JSON@@,
+  "package": "@@NAME@@",
+  "template": "@@DIMENSION@@",
+  "tick_rate": @@TICK_RATE@@,
+  "window_title": @@WINDOW_TITLE_JSON@@,
+  "generated_files": @@GENERATED_FILES_JSON@@
+}

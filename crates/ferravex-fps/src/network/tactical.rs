@@ -1,6 +1,9 @@
+use super::server_state::{DriverError, Output, Peer, ServerState};
 use super::*;
-use crate::tactical::{Mode, SessionEvent, View, decode_action, encode_action};
-use ferravex_net::{ClientExtension as CX, ServerExtension as SX};
+use crate::tactical::{Mode, SessionEvent, View, decode_action};
+#[cfg(test)]
+use ferravex_net::ClientExtension as CX;
+use ferravex_net::ServerExtension as SX;
 use ferravex_play::rounds::{self, Action, Phase, RuleError, Team};
 #[derive(Clone, Debug)]
 pub struct TacticalOptions {
@@ -24,26 +27,19 @@ impl super::super::CombatRules for Lobby {
         false
     }
 }
-impl GameServer {
-    pub fn enable_tactical(&mut self, options: TacticalOptions) -> io::Result<()> {
+impl ServerState {
+    pub fn enable_tactical(&mut self, options: TacticalOptions) -> Result<(), DriverError> {
         if !(2..=MAX_PLAYERS).contains(&options.players)
             || !self.peers.is_empty()
             || self.game.players.len() > options.players
         {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "configure a 2-16 player tactical lobby before peers join",
-            ));
+            return Err(DriverError::TacticalConfiguration);
         }
         let mut sample = Match::new(self.game.arena.clone());
         sample.spawn_player(0);
         sample.spawn_player(1);
-        Mode::new(options.config.clone(), &mut sample).map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "invalid tactical configuration",
-            )
-        })?;
+        Mode::new(options.config.clone(), &mut sample)
+            .map_err(|_| DriverError::TacticalConfiguration)?;
         self.tactical_options = Some(options);
         self.tactical = None;
         self.round_dirty = true;
@@ -58,15 +54,13 @@ impl GameServer {
             .map(|o| (self.game.players.len(), o.players))
     }
     pub fn act_local(&mut self, id: u8, action: Action) -> Result<(), RuleError> {
-        let result =
-            self.tactical
-                .as_mut()
-                .ok_or(RuleError::WrongPhase)?
-                .act(&mut self.game, id, action);
-        if result.is_ok() {
-            self.round_dirty = true;
-        }
-        result
+        apply_action(
+            &mut self.tactical,
+            &mut self.game,
+            &mut self.round_dirty,
+            id,
+            action,
+        )
     }
     /// An authority/operator restart keeps the connection and reliable sequence.
     pub fn restart_tactical(&mut self) {
@@ -92,7 +86,7 @@ impl GameServer {
                         .is_some_and(|m| m.rules.phase() == Phase::Finished))
         })
     }
-    pub(super) fn prepare_tactical(&mut self) -> io::Result<()> {
+    pub(super) fn prepare_tactical(&mut self) -> Result<(), DriverError> {
         let Some(options) = &self.tactical_options else {
             return Ok(());
         };
@@ -101,9 +95,10 @@ impl GameServer {
             return Ok(());
         }
         if self.tactical.is_none() && self.game.players.len() == options.players {
-            self.tactical = Some(Mode::new(options.config.clone(), &mut self.game).map_err(
-                |_| io::Error::new(io::ErrorKind::InvalidInput, "invalid tactical roster"),
-            )?);
+            self.tactical = Some(
+                Mode::new(options.config.clone(), &mut self.game)
+                    .map_err(|_| DriverError::TacticalConfiguration)?,
+            );
             self.round_dirty = true;
         }
         if let Some(mode) = &mut self.tactical {
@@ -170,7 +165,7 @@ impl GameServer {
             self.game.step_with_rewind(inputs, shots)
         }
     }
-    pub(super) fn round_payload(&mut self) -> io::Result<Option<Vec<u8>>> {
+    pub(super) fn round_payload(&mut self) -> Result<Option<Vec<u8>>, DriverError> {
         if let Some(mode) = &self.tactical
             && (self.round_dirty || self.game.tick.is_multiple_of(16))
         {
@@ -178,7 +173,7 @@ impl GameServer {
             return SessionEvent::Round(view)
                 .encode()
                 .map(Some)
-                .map_err(protocol_error);
+                .map_err(DriverError::Protocol);
         }
         if let Some(options) = &self.tactical_options
             && self.tactical.is_none()
@@ -191,127 +186,128 @@ impl GameServer {
             }
             .encode()
             .map(Some)
-            .map_err(protocol_error);
+            .map_err(DriverError::Protocol);
         }
         Ok(None)
     }
+}
+// The same application helper is used by operator and durable remote commands.
+fn apply_action(
+    tactical: &mut Option<Mode>,
+    game: &mut Match,
+    dirty: &mut bool,
+    id: u8,
+    action: Action,
+) -> Result<(), RuleError> {
+    let result = tactical
+        .as_mut()
+        .ok_or(RuleError::WrongPhase)?
+        .act(game, id, action);
+    if result.is_ok() {
+        *dirty = true;
+    }
+    result
+}
+impl ServerState {
     pub(super) fn receive_command(
         &mut self,
         index: usize,
         event: ferravex_net::reliable::EventPacket,
-    ) -> io::Result<()> {
+        now: Duration,
+        output: &mut Output<'_>,
+    ) -> Result<(), DriverError> {
         if decode_action(&event.payload).is_err() {
-            self.rejected_packets += 1;
+            output.report.commands_refused += 1;
+            output.report.packets_rejected += 1;
             return Ok(());
         }
         let peer = &mut self.peers[index];
-        let fresh = event.sequence >= peer.commands.next_sequence()
-            && !peer.commands.contains_buffered(event.sequence);
-        if fresh
-            && peer.events.pending() + peer.commands.buffered()
-                >= ferravex_net::reliable::EVENT_LIMIT
+        // Full sequence-window admission leaves room for the missing head even
+        // if all 255 successors precede it. Results have their own bounded cap.
+        match peer
+            .commands
+            .admit(&event, ferravex_net::reliable::EVENT_LIMIT)
         {
-            return Ok(());
-        }
-        let delivered = match peer.commands.receive(&event) {
-            Ok(v) => v,
-            Err(_) => {
-                self.rejected_packets += 1;
+            Ok(ferravex_net::reliable::Receipt::Retained) => output.report.commands_retained += 1,
+            Ok(ferravex_net::reliable::Receipt::Duplicate) => output.report.commands_duplicate += 1,
+            Err(ferravex_net::reliable::Error::Full) => {
+                output.report.commands_refused += 1;
                 return Ok(());
             }
-        };
-        peer.last_seen = Instant::now();
-        let id = peer.id;
-        let session = peer.session;
-        let addr = peer.addr;
-        for command in delivered {
-            let action = decode_action(&command.payload).expect("buffered command validated");
-            let result = self.act_local(id, action);
-            let bytes = SessionEvent::ActionResult {
-                tick: self.game.tick,
-                sequence: command.sequence,
-                result,
+            Err(_) => {
+                output.report.commands_refused += 1;
+                output.report.packets_rejected += 1;
+                return Ok(());
             }
-            .encode()
-            .map_err(protocol_error)?;
-            self.peers[index].events.queue(&bytes).map_err(|e| {
-                io::Error::other(format!("command result capacity invariant: {e:?}"))
-            })?;
         }
-        let ack = encode_server(&ServerPacket::Extension(SX::CommandAck {
-            session,
-            sequence: event.sequence,
-        }))
-        .map_err(protocol_error)?;
-        send_ok(self.socket.send_to(&ack, addr))
+        peer.last_seen = now;
+        // ACK durable receipt, independently from action execution/result sends.
+        output.packet(
+            peer.addr,
+            &ServerPacket::Extension(SX::CommandAck {
+                session: peer.session,
+                sequence: event.sequence,
+            }),
+        )?;
+        self.drain_peer_commands(index, output)
     }
-}
-impl GameClient {
-    pub fn tactical_lobby(&self) -> Option<(u8, u8)> {
-        self.lobby
-    }
-    pub fn tactical_view(&self) -> Option<&View> {
-        self.round.as_ref()
-    }
-    pub fn last_action_result(&self) -> Option<(u64, Result<(), RuleError>)> {
-        self.action_result
-    }
-    pub fn queue_action(&mut self, action: Action) -> io::Result<u64> {
-        if self.session.is_none() || self.round.is_none() {
-            return Err(io::Error::new(
-                io::ErrorKind::NotConnected,
-                "tactical session is not ready",
-            ));
-        }
-        let bytes = encode_action(action);
-        decode_action(&bytes).map_err(protocol_error)?;
-        self.commands
-            .queue(&bytes)
-            .map_err(|_| io::Error::from(io::ErrorKind::WouldBlock))
-    }
-    pub fn pending_command_count(&self) -> usize {
-        self.commands.pending()
-    }
-    pub(super) fn flush_commands(&mut self) -> io::Result<()> {
-        let Some(session) = self.session else {
-            return Ok(());
-        };
-        for event in self.commands.due(Instant::now().as_micros() / 1000, 8) {
-            let bytes = encode_client(&ClientPacket::Extension(CX::Command { session, event }))
-                .map_err(protocol_error)?;
-            send_ok(self.socket.send(&bytes))?;
+    fn flush_result(peer: &mut Peer) -> Result<(), DriverError> {
+        if let Some(result) = &peer.pending_result {
+            let bytes = result.encode().map_err(DriverError::Protocol)?;
+            // Failed queueing preserves the durable result and stops further
+            // actions. Sequence exhaustion is a deliberate explicit failure.
+            peer.events.queue(&bytes).map_err(DriverError::Reliable)?;
+            peer.pending_result = None;
         }
         Ok(())
     }
-    pub(super) fn consume_session_event(&mut self, event: SessionEvent) {
-        match event {
-            SessionEvent::Lobby {
-                players, required, ..
-            } => {
-                self.lobby = Some((players, required));
-                self.round = None;
+    fn drain_peer_commands(
+        &mut self,
+        index: usize,
+        output: &mut Output<'_>,
+    ) -> Result<(), DriverError> {
+        let peer = &mut self.peers[index];
+        Self::flush_result(peer)?;
+        for _ in 0..EVENT_SEND_BUDGET {
+            if peer.events.pending() == ferravex_net::reliable::EVENT_LIMIT {
+                break;
             }
-            SessionEvent::Gameplay(e) => self.delivered_events.push_back(e),
-            SessionEvent::Round(v) => {
-                self.lobby = None;
-                self.round = Some(v);
-                if let Some(state) = self.players.iter().find(|p| Some(p.id) == self.id) {
-                    let mut corrected = state.clone();
-                    for input in &self.pending {
-                        predict(
-                            self.round.as_ref(),
-                            &self.arena,
-                            &mut corrected,
-                            input.input,
-                        );
-                    }
-                    self.predicted = Some(corrected);
-                }
+            // The result slot and event-window space are checked BEFORE an
+            // action. The retained, fixed-size result commits before consuming
+            // the ACKed command; no speculative apply-then-refuse rollback.
+            let report = peer.commands.drain_ready(
+                1,
+                ferravex_net::reliable::EVENT_BYTES,
+                |sequence, bytes| {
+                    let action = decode_action(bytes).expect("validated before durable admission");
+                    let result = apply_action(
+                        &mut self.tactical,
+                        &mut self.game,
+                        &mut self.round_dirty,
+                        peer.id,
+                        action,
+                    );
+                    peer.pending_result = Some(SessionEvent::ActionResult {
+                        tick: self.game.tick,
+                        sequence,
+                        result,
+                    });
+                    true
+                },
+            );
+            output.report.commands_executed += report.delivered;
+            if report.delivered == 0 {
+                break;
             }
-            SessionEvent::ActionResult {
-                sequence, result, ..
-            } => self.action_result = Some((sequence, result)),
+            Self::flush_result(peer)?;
         }
+        Ok(())
+    }
+    pub(super) fn drain_commands(&mut self, output: &mut Output<'_>) -> Result<(), DriverError> {
+        for index in 0..self.peers.len() {
+            self.drain_peer_commands(index, output)?;
+        }
+        Ok(())
     }
 }
 pub(super) fn predict(round: Option<&View>, arena: &Arena, player: &mut Player, input: InputFrame) {
@@ -424,7 +420,14 @@ mod tests {
             .iter_mut()
             .find(|p| p.id == id)
             .unwrap()
-            .last_seen = Instant::now() - PEER_TIMEOUT - Duration::from_secs(1);
+            .last_seen = Duration::ZERO;
+        server.started = server.started - PEER_TIMEOUT - Duration::from_secs(1);
+        let now = server.started.elapsed();
+        for p in &mut server.state.peers {
+            if p.id != id {
+                p.last_seen = now;
+            }
+        }
         server.tick().unwrap();
         a.poll().unwrap();
         assert_eq!(a.tactical_view().unwrap().phase, Phase::Finished);

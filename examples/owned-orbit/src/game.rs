@@ -1,5 +1,8 @@
+use crate::presentation::AcceptedEvent;
 use ferravex_engine::{
     dynamics::{BodyDesc, BodyHandle, PhysicsWorld, QueryFilter, Shape},
+    events::{EventQueue, Overflow},
+    play::feedback::FeedbackPolicy,
     play::particles::{ParticleDesc, ParticlePool},
 };
 
@@ -21,6 +24,16 @@ pub enum Phase {
     Transition = 2,
     Won = 3,
     Lost = 4,
+}
+/// Brief feedback for accepted gameplay events, driven by simulation time.
+/// See [`Game::feedback`] for an example.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Feedback {
+    Launched,
+    BallSaved,
+    LifeLost,
+    SectorCleared,
+    Restarted,
 }
 #[derive(Clone, Copy, Default, Debug)]
 pub struct Input {
@@ -74,6 +87,10 @@ pub struct Game {
     drop_pity: ferravex_engine::gameplay::pity::PityCounter,
     trail_clock: f32,
     paddle_velocity: f32,
+    feedback: Option<Feedback>,
+    feedback_time: f32,
+    pub(crate) events: EventQueue<AcceptedEvent>,
+    pub(crate) policy: FeedbackPolicy,
 }
 impl Default for Game {
     fn default() -> Self {
@@ -133,9 +150,85 @@ impl Game {
             drop_pity: ferravex_engine::gameplay::pity::PityCounter::new(6).unwrap(),
             trail_clock: 0.0,
             paddle_velocity: 0.,
+            feedback: None,
+            feedback_time: 0.,
+            events: EventQueue::new(32, Overflow::EvictOldest),
+            policy: FeedbackPolicy::default(),
         };
         game.build_sector();
         game
+    }
+    /// Restore the original world and show a fresh-run acknowledgement.
+    ///
+    /// ```
+    /// use owned_orbit::game::{Feedback, Game, Phase};
+    /// let mut game = Game::new();
+    /// game.score = 500;
+    /// game.restart();
+    /// assert_eq!((game.score, game.lives, game.phase), (0, 3, Phase::Ready));
+    /// assert_eq!(game.feedback(), Some(Feedback::Restarted));
+    /// ```
+    pub fn restart(&mut self) {
+        let policy = self.policy;
+        *self = Self::new();
+        self.policy = policy;
+        self.show_feedback(Feedback::Restarted, 2.5);
+    }
+
+    // This policy is supplied by the presentation owner; simulation never reads
+    // renderer state. Clear existing cosmetics, so toggling back cannot revive them.
+    pub(crate) fn apply_policy(&mut self, policy: FeedbackPolicy) {
+        self.policy = policy;
+        if policy.reduced_motion() || policy.intensity() == 0. {
+            self.particles.clear();
+            self.trail.clear();
+            self.trail_clock = 0.;
+        }
+        if policy.reduced_flash() || policy.intensity() == 0. {
+            for block in &mut self.blocks {
+                block.flash = 0.;
+            }
+        }
+    }
+
+    pub(crate) fn armor_piercing(&self) -> bool {
+        self.charged_volley && self.phase == Phase::Playing
+    }
+
+    fn record(&mut self, event: AcceptedEvent) {
+        // Orbit drains after each fixed tick. Standalone Game users may leave
+        // presentation unconsumed indefinitely; retain only the latest 32 events.
+        let _ = self.events.send(event);
+    }
+
+    /// The current short acknowledgement, cleared by simulation time or a newer event.
+    ///
+    /// ```
+    /// use owned_orbit::game::{Feedback, Game, Input};
+    /// let mut game = Game::new();
+    /// game.tick(Input { launch: true, ..Input::default() }, 1.0 / 120.0);
+    /// assert_eq!(game.feedback(), Some(Feedback::Launched));
+    /// ```
+    pub fn feedback(&self) -> Option<Feedback> {
+        self.feedback
+    }
+
+    /// Seconds until the next sector becomes ready; zero outside the transition.
+    ///
+    /// ```
+    /// assert_eq!(owned_orbit::game::Game::new().transition_remaining(), 0.0);
+    /// ```
+    pub fn transition_remaining(&self) -> f32 {
+        if self.phase == Phase::Transition {
+            self.transition.max(0.)
+        } else {
+            0.
+        }
+    }
+
+    fn show_feedback(&mut self, feedback: Feedback, seconds: f32) {
+        self.feedback = Some(feedback);
+        self.feedback_time = seconds;
     }
     pub fn remaining(&self) -> usize {
         self.blocks.iter().filter(|block| block.health > 0).count()
@@ -175,8 +268,12 @@ impl Game {
             return;
         }
         if input.restart || input.launch && matches!(self.phase, Phase::Won | Phase::Lost) {
-            *self = Self::new();
+            self.restart();
             return;
+        }
+        self.feedback_time = (self.feedback_time - dt).max(0.);
+        if self.feedback_time == 0. {
+            self.feedback = None;
         }
         self.particles.update(dt).expect("validated delta");
         for block in &mut self.blocks {
@@ -235,6 +332,9 @@ impl Game {
                 let angle = 0.24 + (self.launch_count % 3) as f32 * 0.09;
                 let speed = self.speed() * (1. + self.serve_power * 0.2);
                 self.velocity = [angle.sin() * speed, -angle.cos() * speed];
+                self.show_feedback(Feedback::Launched, 1.4);
+                self.record(AcceptedEvent::Launch);
+                self.emit(self.ball, [0.35, 0.85, 0.79, 1.], 10);
             } else {
                 return;
             }
@@ -242,7 +342,10 @@ impl Game {
         self.move_ball(dt);
         self.update_drops(dt);
         self.trail_clock += dt;
-        if self.trail_clock >= 1.0 / 90.0 {
+        if self.trail_clock >= 1.0 / 90.0
+            && !self.policy.reduced_motion()
+            && self.policy.intensity() > 0.
+        {
             self.trail_clock = 0.0;
             if self.trail.len() == 18 {
                 self.trail.remove(0);
@@ -260,6 +363,8 @@ impl Game {
             self.chain.break_chain();
             self.trail.clear();
             self.emit(self.ball, [0.35, 0.85, 0.79, 1.], 18);
+            self.show_feedback(Feedback::BallSaved, 1.8);
+            self.record(AcceptedEvent::Save);
         } else if self.ball[1] > 677.0 {
             self.lives -= 1;
             self.precision.reset();
@@ -269,6 +374,13 @@ impl Game {
             self.drops.clear();
             self.wide_time = 0.0;
             self.resize_paddle(PADDLE_HALF);
+            self.emit([self.ball[0], 653.], [0.88, 0.68, 0.40, 1.], 16);
+            self.ball = [self.paddle_x, PADDLE_Y - 8. - BALL_RADIUS - 1.];
+            self.serve_charge.cancel();
+            self.serve_power = 0.;
+            self.charged_volley = false;
+            self.show_feedback(Feedback::LifeLost, 2.5);
+            self.record(AcceptedEvent::LifeLost);
             self.phase = if self.lives == 0 {
                 Phase::Lost
             } else {
@@ -284,6 +396,8 @@ impl Game {
             self.velocity = [0.0; 2];
             self.trail.clear();
             self.drops.clear();
+            self.show_feedback(Feedback::SectorCleared, 1.4);
+            self.record(AcceptedEvent::SectorCleared);
         }
     }
     fn speed(&self) -> f32 {
@@ -363,6 +477,7 @@ impl Game {
                 break;
             };
             self.ccd_impacts += 1;
+            self.record(AcceptedEvent::Impact);
             self.ball = [
                 hit.point[0] + hit.normal[0] * 0.025,
                 hit.point[1] + hit.normal[1] * 0.025,
@@ -388,6 +503,9 @@ impl Game {
                 self.chain.break_chain();
                 let bonus = self.precision.returned(offset).unwrap();
                 self.score = self.score.saturating_add(bonus);
+                if bonus > 0 {
+                    self.record(AcceptedEvent::Precision(bonus));
+                }
                 self.emit(
                     self.ball,
                     [0.35, 0.85, 0.79, 1.0],
@@ -421,7 +539,11 @@ impl Game {
         block.health = block
             .health
             .saturating_sub(if self.charged_volley { 2 } else { 1 });
-        block.flash = 0.13;
+        block.flash = if self.policy.reduced_flash() || self.policy.intensity() == 0. {
+            0.
+        } else {
+            0.13
+        };
         let position = block.center;
         let destroyed = block.health == 0;
         self.hits += 1;
@@ -439,6 +561,7 @@ impl Game {
                 self.drops.push(Drop { position });
             }
         }
+        self.record(AcceptedEvent::Panel(award as u32));
         self.emit(
             position,
             if destroyed {
@@ -450,6 +573,10 @@ impl Game {
         );
     }
     fn emit(&mut self, position: [f32; 2], color: [f32; 4], count: usize) {
+        if self.policy.reduced_motion() {
+            return;
+        }
+        let count = (count as f32 * self.policy.intensity()) as usize;
         for i in 0..count {
             let angle = i as f32 / count as f32 * std::f32::consts::TAU + self.time;
             let speed = 35.0 + (i % 5) as f32 * 16.0;
@@ -495,6 +622,7 @@ impl Game {
             self.resize_paddle(67.0);
             self.wide_time = 9.0;
             self.score += 50;
+            self.record(AcceptedEvent::Wide);
         }
     }
 }
@@ -513,6 +641,116 @@ fn reflect_x(x: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reduced_cosmetics_leave_the_complete_autoplay_run_unchanged() {
+        let mut standard = Game::new();
+        let mut reduced = Game::new();
+        reduced.apply_policy(FeedbackPolicy::new(true, true, 1.).unwrap());
+        for _ in 0..120 * 600 {
+            let input = standard.autoplay();
+            standard.tick(input, 1. / 120.);
+            reduced.tick(input, 1. / 120.);
+            assert_eq!(
+                (
+                    standard.phase,
+                    standard.score,
+                    standard.lives,
+                    standard.ball,
+                    standard.velocity,
+                    standard.clears,
+                    standard.saves
+                ),
+                (
+                    reduced.phase,
+                    reduced.score,
+                    reduced.lives,
+                    reduced.ball,
+                    reduced.velocity,
+                    reduced.clears,
+                    reduced.saves
+                )
+            );
+            assert_eq!(reduced.particles.len(), 0);
+            assert!(reduced.trail.is_empty());
+            assert!(reduced.blocks.iter().all(|b| b.flash == 0.));
+            if matches!(standard.phase, Phase::Won | Phase::Lost) {
+                break;
+            }
+        }
+        assert_eq!(reduced.phase, Phase::Won);
+        assert_eq!(reduced.clears, 70);
+        assert_eq!(standard.events.len(), 32);
+        assert_eq!(reduced.events.len(), 32);
+        assert!(reduced.events.dropped() > 0); // unconsumed presentation stays bounded
+    }
+
+    #[test]
+    fn new_effects_stay_disabled_until_reenabled_and_zero_intensity_retires_both_channels() {
+        let mut game = Game::new();
+        game.apply_policy(FeedbackPolicy::new(false, true, 1.).unwrap());
+        game.blocks[0].health = 2;
+        game.hit_block(0);
+        assert_eq!(game.blocks[0].flash, 0.);
+        assert!(!game.particles.is_empty());
+        game.apply_policy(FeedbackPolicy::new(true, false, 1.).unwrap());
+        game.blocks[1].health = 2;
+        game.hit_block(1);
+        assert!(game.blocks[1].flash > 0.);
+        assert_eq!(game.particles.len(), 0);
+        game.apply_policy(FeedbackPolicy::new(false, false, 0.).unwrap());
+        game.hit_block(1);
+        assert!(game.blocks.iter().all(|b| b.flash == 0.));
+        assert_eq!(game.particles.len(), 0);
+        game.apply_policy(FeedbackPolicy::default());
+        assert!(game.blocks.iter().all(|b| b.flash == 0.));
+        assert_eq!(game.particles.len(), 0);
+        game.hit_block(2);
+        assert!(!game.particles.is_empty());
+    }
+
+    #[test]
+    fn life_loss_repositions_the_serve_and_feedback_expires_without_changing_lives() {
+        let mut game = Game::new();
+        game.phase = Phase::Playing;
+        game.ball = [100., 676.];
+        game.velocity = [0., 325.];
+        game.tick(Input::default(), 1. / 120.);
+        assert_eq!(game.feedback(), Some(Feedback::LifeLost));
+        assert_eq!(game.ball, [game.paddle_x, PADDLE_Y - 15.]);
+        assert_eq!((game.lives, game.phase), (2, Phase::Ready));
+        assert_eq!(game.serve_charge.power(), 0.);
+        for _ in 0..301 {
+            game.tick(Input::default(), 1. / 120.);
+        }
+        assert_eq!(game.feedback(), None);
+        assert_eq!((game.lives, game.phase), (2, Phase::Ready));
+    }
+
+    #[test]
+    fn sector_clear_feedback_counts_down_to_a_fresh_reinforced_field() {
+        let mut game = Game::new();
+        for index in 0..35 {
+            game.hit_block(index);
+        }
+        game.phase = Phase::Playing;
+        game.tick(Input::default(), 1. / 120.);
+        assert_eq!(game.feedback(), Some(Feedback::SectorCleared));
+        assert_eq!(game.phase, Phase::Transition);
+        assert_eq!(game.transition_remaining(), 1.4);
+        let score = game.score;
+        for _ in 0..169 {
+            game.tick(Input::default(), 1. / 120.);
+        }
+        assert_eq!(
+            (game.sector, game.phase, game.remaining()),
+            (2, Phase::Ready, 35)
+        );
+        assert_eq!(game.transition_remaining(), 0.);
+        assert_eq!(game.score, score);
+        assert!(game.blocks.iter().any(|b| b.health == 2));
+        assert_eq!(game.feedback(), None);
+    }
 
     #[test]
     fn moving_paddle_adds_english_and_shallow_wall_bounces_remain_playable() {

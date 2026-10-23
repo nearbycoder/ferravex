@@ -389,9 +389,282 @@ pub fn select_target(
     sight: Sight,
     budget: &mut WorkBudget,
     query: &mut impl VisibilityQuery,
-    mut priority: impl FnMut(Candidate) -> f32,
+    priority: impl FnMut(Candidate) -> f32,
 ) -> Result<TargetSelection, AiError> {
-    let mut best: Option<(Candidate, f32)> = None;
+    let (choices, incomplete) =
+        visible_choices(candidates, observer, sight, budget, query, priority, None)?;
+    Ok(TargetSelection {
+        target: choices.best.map(|v| v.target),
+        incomplete,
+    })
+}
+
+/// Why an opt-in [`TargetSelector`] selected or released its target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TargetSelectionReason {
+    /// No eligible, finite-scored target was evaluated. See `incomplete` too.
+    NoEligibleTarget,
+    /// There was no previous target; the best evaluated target was acquired.
+    Acquired,
+    /// The previous target is still the best evaluated target.
+    RetainedBest,
+    /// A challenger did not exceed the previous target's score by the margin.
+    RetainedByHysteresis,
+    /// A challenger's score exceeded the previous target's score by the margin.
+    SwitchMarginExceeded,
+    /// Fresh sight outranks a remembered target, regardless of score margin.
+    SwitchedToVisible,
+    /// The previous target was not eligible in the evaluated set.
+    PreviousIneligible,
+}
+
+/// Constant-size explanation of one selection. Scores describe this call only.
+/// `T` is [`Candidate`] for sight selection and [`Track`] for memory selection.
+#[derive(Clone, Copy, Debug)]
+pub struct TargetSelectionReport<T> {
+    pub target: Option<T>,
+    /// Target ID held before this call, even when it is no longer eligible.
+    pub previous: Option<u64>,
+    pub reason: TargetSelectionReason,
+    /// Sight exhausted its candidate/query allowance before finishing the scan.
+    /// The result describes only the evaluated prefix, never unseen candidates.
+    pub incomplete: bool,
+    pub selected_score: Option<f32>,
+    /// Best eligible target's (ID, score), before applying hysteresis.
+    pub best: Option<(u64, f32)>,
+    /// None when the previous target was absent, rejected, deferred or unscored.
+    pub previous_score: Option<f32>,
+}
+
+/// Opt-in, allocation-free target retention using a finite, nonnegative score
+/// margin. Keep one selector per observer/selection stream and call it after
+/// sensing on actual simulation ticks. Reset it when restarting that stream.
+///
+/// Higher scores win; equal scores prefer the lower host ID on acquisition.
+/// An eligible incumbent is retained until a challenger improves its score by
+/// **strictly more** than the margin. A zero margin still retains equal scores.
+/// Scores are recomputed each call; no stale positions, scores or sight are kept.
+/// [`select_target`] and [`Memory::best`] retain their original behavior.
+///
+/// ```
+/// use ferravex_math::Vec3;
+/// use ferravex_play::ai::{
+///     Candidate, Memory, MemorySettings, Sense, TargetSelector, TargetSelectionReason,
+/// };
+/// let mut memory = Memory::new(MemorySettings::default())?;
+/// let mut selector = TargetSelector::new(0.25)?;
+/// memory.observe(Candidate { id: 9, position: Vec3::Z, groups: 1 }, Sense::Sight)?;
+/// let first = selector.select_memory(&memory, 1, |_| 1.0);
+/// assert_eq!(first.reason, TargetSelectionReason::Acquired);
+/// memory.observe(Candidate { id: 2, position: Vec3::X, groups: 1 }, Sense::Sight)?;
+/// let next = selector.select_memory(&memory, 1, |t| if t.id == 2 { 1.1 } else { 1.0 });
+/// assert_eq!(next.target.unwrap().id, 9);
+/// assert_eq!(next.best, Some((2, 1.1)));
+/// assert_eq!(next.reason, TargetSelectionReason::RetainedByHysteresis);
+/// assert_eq!(selector.current(), Some(9));
+/// selector.reset();
+/// assert_eq!(selector.current(), None);
+/// # Ok::<(), ferravex_play::ai::AiError>(())
+/// ```
+#[derive(Clone, Copy, Debug)]
+pub struct TargetSelector {
+    switch_margin: f32,
+    current: Option<u64>,
+}
+impl TargetSelector {
+    /// Rejects negative, NaN and infinite margins with `InvalidConfiguration`.
+    pub fn new(switch_margin: f32) -> Result<Self, AiError> {
+        if !switch_margin.is_finite() || switch_margin < 0. {
+            return Err(AiError::InvalidConfiguration);
+        }
+        Ok(Self {
+            switch_margin,
+            current: None,
+        })
+    }
+
+    /// Last selected ID, not a claim that the target is still alive or visible.
+    pub fn current(&self) -> Option<u64> {
+        self.current
+    }
+
+    /// Forgets target identity while preserving the configured margin.
+    pub fn reset(&mut self) {
+        self.current = None;
+    }
+
+    /// Applies hysteresis to [`select_target`]'s budgeted sight scan. Every
+    /// returned candidate passed sight **in this call**, including the incumbent.
+    /// No extra query is made to retain an incumbent outside the evaluated prefix;
+    /// hosts can put it first when budgets are small. Rejected/deferred candidates
+    /// never get scored. Non-finite scores are ignored.
+    ///
+    /// Incomplete scans can replace or clear an unevaluated incumbent. Inspect
+    /// `incomplete` before treating absence as a confirmed loss of sight. On an
+    /// input error the selected ID is unchanged, but work/query/callback effects
+    /// already performed are not rolled back. Empty input consumes no work.
+    ///
+    /// ```
+    /// use ferravex_math::Vec3;
+    /// use ferravex_play::ai::{
+    ///     Candidate, Observer, Sight, TargetSelector, Unoccluded, WorkBudget,
+    /// };
+    /// let mut selector = TargetSelector::new(0.5)?;
+    /// let observer = Observer { position: Vec3::ZERO, forward: Vec3::Z };
+    /// let sight = Sight::new(10.0, std::f32::consts::TAU, 1)?;
+    /// let candidates = [Candidate { id: 7, position: Vec3::Z, groups: 1 }];
+    /// let report = selector.select_visible(
+    ///     candidates, observer, sight, &mut WorkBudget::new(1, 1, 0),
+    ///     &mut Unoccluded, |_| 1.0,
+    /// )?;
+    /// assert_eq!(report.target.unwrap().id, 7);
+    /// assert!(!report.incomplete);
+    /// # Ok::<(), ferravex_play::ai::AiError>(())
+    /// ```
+    pub fn select_visible(
+        &mut self,
+        candidates: impl IntoIterator<Item = Candidate>,
+        observer: Observer,
+        sight: Sight,
+        budget: &mut WorkBudget,
+        query: &mut impl VisibilityQuery,
+        priority: impl FnMut(Candidate) -> f32,
+    ) -> Result<TargetSelectionReport<Candidate>, AiError> {
+        let (choices, incomplete) = visible_choices(
+            candidates,
+            observer,
+            sight,
+            budget,
+            query,
+            priority,
+            self.current,
+        )?;
+        Ok(self.finish(choices, incomplete))
+    }
+
+    /// Scores matching tracks in existing bounded memory without observing,
+    /// refreshing expiry or issuing visibility queries. Call [`Memory::advance`]
+    /// once per simulation tick before recording accepted detections and selecting.
+    /// Removed, expired or masked-out tracks cannot be retained.
+    ///
+    /// As in [`Memory::best`], fresh sight outranks remembered sight/hearing.
+    /// Within that tier, finite scores and the switch margin determine selection;
+    /// the callback can use `-(track.age as f32)` for youngest-first priority.
+    /// Each matching track is scored once; non-finite scores exclude it. Returned
+    /// tracks preserve their visibility, age and remaining lifetime. A selected
+    /// memory is awareness, not a new sight detection or permission to attack.
+    pub fn select_memory(
+        &mut self,
+        memory: &Memory,
+        mask: u32,
+        mut priority: impl FnMut(&Track) -> f32,
+    ) -> TargetSelectionReport<Track> {
+        let mut choices = SelectionChoices::new(self.current);
+        for track in memory.tracks().iter().filter(|t| t.groups & mask != 0) {
+            choices.consider(*track, track.id, priority(track), track.visible);
+        }
+        self.finish(choices, false)
+    }
+
+    fn finish<T: Copy>(
+        &mut self,
+        choices: SelectionChoices<T>,
+        incomplete: bool,
+    ) -> TargetSelectionReport<T> {
+        let previous = self.current;
+        let (selected, reason) = match (choices.best, choices.incumbent) {
+            (None, _) => (None, TargetSelectionReason::NoEligibleTarget),
+            (Some(best), None) => (
+                Some(best),
+                if previous.is_some() {
+                    TargetSelectionReason::PreviousIneligible
+                } else {
+                    TargetSelectionReason::Acquired
+                },
+            ),
+            (Some(best), Some(old)) if best.id == old.id => {
+                (Some(best), TargetSelectionReason::RetainedBest)
+            }
+            (Some(best), Some(old)) if best.visible && !old.visible => {
+                (Some(best), TargetSelectionReason::SwitchedToVisible)
+            }
+            (Some(best), Some(old))
+                if f64::from(best.score) - f64::from(old.score) > f64::from(self.switch_margin) =>
+            {
+                (Some(best), TargetSelectionReason::SwitchMarginExceeded)
+            }
+            (_, Some(old)) => (Some(old), TargetSelectionReason::RetainedByHysteresis),
+        };
+        self.current = selected.map(|v| v.id);
+        TargetSelectionReport {
+            target: selected.map(|v| v.target),
+            previous,
+            reason,
+            incomplete,
+            selected_score: selected.map(|v| v.score),
+            best: choices.best.map(|v| (v.id, v.score)),
+            previous_score: choices.incumbent.map(|v| v.score),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ScoredTarget<T> {
+    target: T,
+    id: u64,
+    score: f32,
+    visible: bool,
+}
+impl<T> ScoredTarget<T> {
+    fn outranks(&self, old: &Self) -> bool {
+        self.visible && !old.visible
+            || self.visible == old.visible
+                && (self.score > old.score || self.score == old.score && self.id < old.id)
+    }
+}
+struct SelectionChoices<T> {
+    current: Option<u64>,
+    best: Option<ScoredTarget<T>>,
+    incumbent: Option<ScoredTarget<T>>,
+}
+impl<T: Copy> SelectionChoices<T> {
+    fn new(current: Option<u64>) -> Self {
+        Self {
+            current,
+            best: None,
+            incumbent: None,
+        }
+    }
+
+    fn consider(&mut self, target: T, id: u64, score: f32, visible: bool) {
+        if !score.is_finite() {
+            return;
+        }
+        let value = ScoredTarget {
+            target,
+            id,
+            score,
+            visible,
+        };
+        if self.best.is_none_or(|old| value.outranks(&old)) {
+            self.best = Some(value);
+        }
+        if self.current == Some(id) && self.incumbent.is_none_or(|old| value.outranks(&old)) {
+            self.incumbent = Some(value);
+        }
+    }
+}
+
+fn visible_choices(
+    candidates: impl IntoIterator<Item = Candidate>,
+    observer: Observer,
+    sight: Sight,
+    budget: &mut WorkBudget,
+    query: &mut impl VisibilityQuery,
+    mut priority: impl FnMut(Candidate) -> f32,
+    current: Option<u64>,
+) -> Result<(SelectionChoices<Candidate>, bool), AiError> {
+    let mut choices = SelectionChoices::new(current);
     let mut incomplete = false;
     for target in candidates {
         match sight.test(observer, target, budget, query)? {
@@ -401,19 +674,9 @@ pub fn select_target(
             }
             Detection::Rejected => {}
             Detection::Detected => {
-                let score = priority(target);
-                if score.is_finite()
-                    && best.is_none_or(|(old, value)| {
-                        score > value || score == value && target.id < old.id
-                    })
-                {
-                    best = Some((target, score));
-                }
+                choices.consider(target, target.id, priority(target), true);
             }
         }
     }
-    Ok(TargetSelection {
-        target: best.map(|v| v.0),
-        incomplete,
-    })
+    Ok((choices, incomplete))
 }

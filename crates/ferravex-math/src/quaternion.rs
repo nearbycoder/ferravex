@@ -21,6 +21,36 @@ pub struct Quat {
     pub z: f32,
     pub w: f32,
 }
+
+/// Checked factorization of a rotation into `swing * twist` (twist acts first).
+///
+/// Both factors are normalized. `twist` rotates about the requested local axis;
+/// `swing` carries that axis to its final direction. Reconstruction agrees with
+/// the normalized input orientation, up to floating-point rounding and sign.
+///
+/// ```
+/// use ferravex_math::{Quat, SwingTwist, Vec3};
+/// let parts: SwingTwist = Quat::from_rotation_y(0.4).try_swing_twist(Vec3::Y).unwrap();
+/// assert!(!parts.is_singular);
+/// assert!(parts.swing.try_angle_between(Quat::IDENTITY).unwrap() < 1.0e-6);
+/// assert!((parts.twist_angle - 0.4).abs() < 1.0e-6);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SwingTwist {
+    /// Swing factor; applied after [`Self::twist`].
+    pub swing: Quat,
+    /// Twist factor about the normalized authored axis.
+    pub twist: Quat,
+    /// Signed shortest twist in radians, in `[-pi, pi]`.
+    pub twist_angle: f32,
+    /// True for an exact half-turn swing with underdetermined twist.
+    ///
+    /// In that case `twist` is identity, `twist_angle` is zero and `swing`
+    /// retains the entire input rotation. This is a convention, not a measured
+    /// zero twist. Near-singular rotations are not snapped to this convention.
+    pub is_singular: bool,
+}
+
 impl Default for Quat {
     fn default() -> Self {
         Self::IDENTITY
@@ -110,6 +140,131 @@ impl Quat {
         let (axis, angle) = self.to_axis_angle();
         axis * angle
     }
+
+    /// Decomposes into `swing * twist` about a local-space `twist_axis`.
+    ///
+    /// Finite nonzero quaternions and axes are normalized internally, including
+    /// very large and subnormal inputs. Zero or non-finite inputs return `None`.
+    /// Projection and angle calculations use `f64` intermediates; results are
+    /// rounded to `f32`. The operation uses no heap storage or retained state.
+    ///
+    /// The twist angle is the signed shortest angle in `[-pi, pi]`. Antipodal
+    /// inputs give the same factors and angle: choose positive `w`, or at exact
+    /// `w == 0`, choose the sign making the first nonzero component in `(x,y,z)`
+    /// positive. This also resolves exact twist half-turn ties. Reversing the
+    /// axis negates the angle (including those ties), retaining the factors.
+    /// This tie rule is local to this API; existing interpolation is unchanged.
+    ///
+    /// A singular half-turn swing has both scalar part and vector projection
+    /// onto the axis exactly zero in the wider calculation. It returns
+    /// [`SwingTwist::is_singular`] with identity twist, rather than rejecting a
+    /// valid rotation. No epsilon cutoff is applied: near this singularity the
+    /// twist is inherently sensitive to small changes. Trigonometric creation
+    /// of a nominal half turn may leave a small nonzero scalar component.
+    ///
+    /// ```
+    /// use ferravex_math::{Quat, Vec3};
+    /// let rotation = Quat::from_rotation_x(0.7) * Quat::from_rotation_z(-0.4);
+    /// let parts = rotation.try_swing_twist(Vec3::Z * 5.0).unwrap();
+    /// let reconstructed = parts.swing * parts.twist;
+    /// assert!(rotation.try_angle_between(reconstructed).unwrap() < 1.0e-6);
+    /// assert!((parts.twist_angle + 0.4).abs() < 1.0e-6);
+    /// let half_swing = Quat::from_xyzw(1.0, 0.0, 0.0, 0.0);
+    /// assert!(half_swing.try_swing_twist(Vec3::Z).unwrap().is_singular);
+    /// assert_eq!(rotation.try_swing_twist(Vec3::ZERO), None);
+    /// ```
+    pub fn try_swing_twist(self, twist_axis: Vec3) -> Option<SwingTwist> {
+        let mut q = self.try_normalized_components()?;
+        let axis = twist_axis.to_array().map(f64::from);
+        let axis_length = axis.iter().map(|v| v * v).sum::<f64>().sqrt();
+        if axis_length == 0.0 || !axis_length.is_finite() {
+            return None;
+        }
+        let axis = axis.map(|v| v / axis_length);
+        if [q[3], q[0], q[1], q[2]].into_iter().find(|v| *v != 0.0)? < 0.0 {
+            q = q.map(|v| -v);
+        }
+        let rotation = Self::from_array(q.map(|v| v as f32));
+        let projection = axis.iter().zip(q).map(|(a, v)| a * v).sum::<f64>();
+        let length = projection.hypot(q[3]);
+        if length == 0.0 {
+            return Some(SwingTwist {
+                swing: rotation,
+                twist: Self::IDENTITY,
+                twist_angle: 0.0,
+                is_singular: true,
+            });
+        }
+        let twist = Self::from_xyzw(
+            (axis[0] * projection / length) as f32,
+            (axis[1] * projection / length) as f32,
+            (axis[2] * projection / length) as f32,
+            (q[3] / length) as f32,
+        );
+        Some(SwingTwist {
+            swing: (rotation * twist.conjugate()).normalize(),
+            twist,
+            twist_angle: (2.0 * projection.atan2(q[3])) as f32,
+            is_singular: false,
+        })
+    }
+
+    /// Clamps the signed shortest twist about a local axis, preserving swing.
+    ///
+    /// Bounds are inclusive radians and must be finite with
+    /// `-f32::consts::PI <= min_angle <= max_angle <= f32::consts::PI`.
+    /// They describe an ordinary interval, not a wrapped interval across pi.
+    /// Invalid bounds, axes or rotations return `None`, even for a full range.
+    /// Uses the sign/tie/singularity conventions of [`Self::try_swing_twist`].
+    /// A singular decomposition uses its conventional zero twist; if zero lies
+    /// outside the limits, the nearest bound is applied to that swing. Inspect
+    /// the decomposition first if authoring requires a different policy.
+    ///
+    /// Returns a normalized rotation. If the rounded twist angle already lies
+    /// within the bounds, returns normalized `self` without recomposition,
+    /// preserving its sign. Otherwise returns `swing * limited_twist`, whose
+    /// sign need not match `self`. The rotated axis direction is preserved up
+    /// to floating-point rounding. Rounding can put the recovered angle outside
+    /// a bound; its error can be large arbitrarily close to a singular swing,
+    /// especially when components underflow. Exact idempotence is not guaranteed.
+    /// There is no iterative solver or state.
+    ///
+    /// This headless pose recipe aims a local Z axis, then limits authored roll
+    /// without changing the aim direction. A caller can compose the result with
+    /// its existing parent/bind-pose transform; no game behavior is selected.
+    ///
+    /// ```
+    /// use ferravex_math::{Quat, Vec3};
+    /// let aim = Quat::from_rotation_arc(Vec3::Z, Vec3::new(0.4, 0.2, 1.0));
+    /// let authored_pose = aim * Quat::from_rotation_z(1.2);
+    /// let limited_pose = authored_pose.try_clamp_twist(Vec3::Z, -0.3, 0.3).unwrap();
+    /// assert!((limited_pose * Vec3::Z).abs_diff_eq(authored_pose * Vec3::Z, 1.0e-6));
+    /// let parts = limited_pose.try_swing_twist(Vec3::Z).unwrap();
+    /// assert!((parts.twist_angle - 0.3).abs() < 1.0e-6);
+    /// assert!(parts.swing.try_angle_between(aim).unwrap() < 1.0e-6);
+    /// assert_eq!(authored_pose.try_clamp_twist(Vec3::Z, 0.3, -0.3), None);
+    /// ```
+    pub fn try_clamp_twist(self, twist_axis: Vec3, min_angle: f32, max_angle: f32) -> Option<Self> {
+        let pi = std::f32::consts::PI;
+        if !min_angle.is_finite()
+            || !max_angle.is_finite()
+            || min_angle < -pi
+            || max_angle > pi
+            || min_angle > max_angle
+        {
+            return None;
+        }
+        let parts = self.try_swing_twist(twist_axis)?;
+        let angle = parts.twist_angle.clamp(min_angle, max_angle);
+        if angle == parts.twist_angle {
+            return self.try_normalize();
+        }
+        // Apply only the twist correction. Algebraically this is swing times
+        // the limited twist, but avoids rounding swing again on small repeated
+        // boundary corrections. Right multiplication keeps the local axis fixed.
+        (self.try_normalize()? * Self::from_axis_angle(twist_axis, angle - parts.twist_angle))
+            .try_normalize()
+    }
     pub fn dot(self, rhs: Self) -> f32 {
         self.to_vec4().dot(rhs.to_vec4())
     }
@@ -190,6 +345,121 @@ impl Quat {
             .clamp(0.0, 1.0)
             .acos()
     }
+    /// Returns the shortest angular distance in **radians**, in `[0, pi]`.
+    ///
+    /// Both inputs are normalized internally. Returns `None` if either input
+    /// is zero or has a non-finite component; finite non-unit inputs, including
+    /// subnormal and very large inputs, are accepted. Antipodal quaternions
+    /// (`q` and `-q`) represent the same orientation and have zero distance.
+    ///
+    /// Unlike [`Self::angle_between`], this uses wider intermediates and chord
+    /// lengths instead of `acos(dot)`, retaining small angular differences near
+    /// identical orientations without a fixed small-angle cutoff. The returned
+    /// distance is still subject to `f32` rounding.
+    ///
+    /// ```
+    /// use ferravex_math::Quat;
+    /// use std::f32::consts::FRAC_PI_2;
+    ///
+    /// let target = Quat::from_rotation_y(FRAC_PI_2);
+    /// let distance = Quat::IDENTITY.try_angle_between(target).unwrap();
+    /// assert!((distance - FRAC_PI_2).abs() < 1.0e-6);
+    /// assert_eq!(target.try_angle_between(-target), Some(0.0));
+    /// assert_eq!(Quat::NAN.try_angle_between(target), None);
+    /// ```
+    pub fn try_angle_between(self, rhs: Self) -> Option<f32> {
+        let (_, _, half_angle) = self.try_shortest_arc(rhs)?;
+        Some((2.0 * half_angle) as f32)
+    }
+
+    /// Rotates toward `rhs` along the shortest arc by at most `max_angle`
+    /// **radians**, without overshooting (subject to floating-point rounding).
+    ///
+    /// Returns a normalized quaternion. Returns `None` if either endpoint is
+    /// zero or non-finite, or if `max_angle` is negative or non-finite. Both
+    /// endpoints are validated even for a zero step. Finite non-unit endpoints
+    /// are accepted, as in [`Self::try_angle_between`].
+    ///
+    /// A zero step returns normalized `self`. Identical and antipodal (`q`,
+    /// `-q`) orientations also return normalized `self`. Otherwise, `rhs` is
+    /// sign-adjusted to the hemisphere of `self`; a sufficient step returns
+    /// that normalized target. At an exact half turn (zero endpoint dot
+    /// product), both directions are equally short and the supplied signs
+    /// select the arc. Near-identical orientations use spherical interpolation
+    /// with no fixed small-angle cutoff or premature snap.
+    ///
+    /// `max_angle` is a per-call angular budget, not an angular speed. For
+    /// fixed-tick motion, multiply radians per second by the tick duration:
+    ///
+    /// ```
+    /// use ferravex_math::Quat;
+    ///
+    /// let target = Quat::from_rotation_y(1.0);
+    /// let radians_per_second = 2.0;
+    /// let tick_seconds = 1.0 / 60.0;
+    /// let step = radians_per_second * tick_seconds;
+    /// let next = Quat::IDENTITY.try_rotate_towards(target, step).unwrap();
+    /// let moved = Quat::IDENTITY.try_angle_between(next).unwrap();
+    /// assert!((moved - step).abs() < 1.0e-6);
+    /// assert!(next.is_normalized());
+    /// assert_eq!(next.try_rotate_towards(target, -step), None);
+    /// ```
+    pub fn try_rotate_towards(self, rhs: Self, max_angle: f32) -> Option<Self> {
+        if !max_angle.is_finite() || max_angle < 0.0 {
+            return None;
+        }
+        let (a, b, half_angle) = self.try_shortest_arc(rhs)?;
+        if max_angle == 0.0 || half_angle == 0.0 {
+            return Some(Self::from_array(a.map(|v| v as f32)));
+        }
+        let step = f64::from(max_angle) * 0.5;
+        if step >= half_angle {
+            return Some(Self::from_array(b.map(|v| v as f32)));
+        }
+        let divisor = half_angle.sin();
+        let from_weight = (half_angle - step).sin() / divisor;
+        let to_weight = step.sin() / divisor;
+        Self::from_array(std::array::from_fn(|i| {
+            (a[i] * from_weight + b[i] * to_weight) as f32
+        }))
+        .try_normalize()
+    }
+
+    // Keep normalized components in f64 through distance and interpolation:
+    // rounding them to f32 first can erase a small, representable rotation.
+    fn try_shortest_arc(self, rhs: Self) -> Option<([f64; 4], [f64; 4], f64)> {
+        let a = self.try_normalized_components()?;
+        let mut b = rhs.try_normalized_components()?;
+        if a.iter().zip(b).map(|(a, b)| a * b).sum::<f64>() < 0.0 {
+            b = b.map(|v| -v);
+        }
+        let difference = a
+            .iter()
+            .zip(b)
+            .map(|(a, b)| (a - b).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        let sum = a
+            .iter()
+            .zip(b)
+            .map(|(a, b)| (a + b).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        // Unit quaternion chord ratio is tan(physical rotation angle / 4).
+        let half_angle = (2.0 * difference.atan2(sum)).min(std::f64::consts::FRAC_PI_2);
+        Some((a, b, half_angle))
+    }
+
+    fn try_normalized_components(self) -> Option<[f64; 4]> {
+        let values = self.to_array().map(f64::from);
+        let length = values.iter().map(|v| v * v).sum::<f64>().sqrt();
+        if length > 0.0 && length.is_finite() {
+            Some(values.map(|v| v / length))
+        } else {
+            None
+        }
+    }
+
     pub fn abs_diff_eq(self, rhs: Self, tolerance: f32) -> bool {
         self.to_vec4().abs_diff_eq(rhs.to_vec4(), tolerance)
     }

@@ -1,7 +1,123 @@
 <!doctype html>
-<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Emberline · Ferravex</title>
-<style>*{box-sizing:border-box}html,body{margin:0;height:100%;background:#101a21;color:#e2ece2;font:14px system-ui}body{display:flex;flex-direction:column}nav{height:40px;flex:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 16px;border-bottom:1px solid #2c3c45}nav>a{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}nav>button{flex:none}a{color:#97c3b5;text-decoration:none}canvas{width:100%;height:calc(100% - 40px);display:block;touch-action:none;outline:none}button[data-controls],button[data-audio]{font:inherit;color:#c3d9d0;background:transparent;border:1px solid #40545b;border-radius:4px;padding:3px 9px;cursor:pointer}button[data-controls]:hover,button[data-controls]:focus-visible,button[data-audio]:hover,button[data-audio]:focus-visible{background:#293f46;outline:1px solid #97c3b5}button[data-controls]:disabled,button[data-audio]:disabled{opacity:.4;cursor:wait}nav>span{margin-left:auto;margin-right:16px}@media(max-width:540px){nav>span{display:none}}[role=status]{position:absolute;top:50%;width:100%;text-align:center;pointer-events:none}</style>
-<nav><a href="../">FERRAVEX / Emberline</a><span>2D · Platformer</span><button type="button" data-controls title="Controls (F2)" aria-pressed="false" disabled>Controls</button><button type="button" data-audio title="Enable sound" aria-pressed="false" disabled>Sound off</button></nav>
-<canvas tabindex="0" data-game="emberline" aria-label="Emberline game"></canvas><div role="status">Loading original Rust engine…</div>
-<script type="module" src="../runtime.js"></script></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Emberline · Ferravex</title>
+  <style>
+    * { box-sizing: border-box; }
+    html { background: #101a21; color: #e2ece2; font: 100%/1.6 system-ui, sans-serif; }
+    body { margin: 0; min-height: 100vh; }
+    a { color: #b4ded0; text-underline-offset: .2em; }
+    #emberline-page > nav {
+      display: flex; flex-wrap: wrap; align-items: center; gap: .5rem;
+      height: auto; padding: .5rem 1rem; border-bottom: 1px solid #40545b;
+    }
+    #emberline-page > nav > a { display: block; padding: .5rem; overflow-wrap: anywhere; }
+    #emberline-page > nav > a:first-child { margin-right: auto; }
+    #emberline-page > nav button {
+      min-height: 44px; padding: .4rem .65rem; font: inherit; cursor: pointer;
+      color: #e2ece2; background: #18262b; border: 1px solid #637b7c; border-radius: 4px;
+    }
+    #emberline-page > nav button:disabled { opacity: .55; cursor: wait; }
+    #emberline-page :focus-visible { outline: 3px solid #ffdf9a; outline-offset: 3px; }
+    #emberline-view { position: relative; height: 70vh; height: 70svh; min-height: 20rem; }
+    canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+    #emberline-page canvas:focus-visible { outline-offset: -4px; }
+    #emberline-status {
+      position: absolute; inset: 1rem 1rem auto; margin: 0; padding: .75rem;
+      background: #101a21; text-align: center; pointer-events: none;
+    }
+    #emberline-status:empty { display: none; }
+    #emberline-guide {
+      max-width: 72rem; margin: auto; padding: 1.5rem max(1rem, env(safe-area-inset-right)) 2rem max(1rem, env(safe-area-inset-left));
+      overflow-wrap: anywhere; -webkit-user-select: text; user-select: text; touch-action: auto;
+    }
+    h1, h2 { line-height: 1.25; }
+    h1 { margin: 0; font-size: 1.75rem; }
+    h2 { margin: 1.5rem 0 .75rem; font-size: 1.2rem; }
+    #emberline-guide p { max-width: 75ch; }
+    .instructions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2rem; }
+    dl { margin: 0; }
+    dl > div { padding: .65rem 0; border-bottom: 1px solid #40545b; }
+    dt { font-weight: 650; }
+    dd { margin: .25rem 0 0; }
+    kbd { font: inherit; font-weight: 600; color: #ffdf9a; }
+    #emberline-page.ferravex-fullscreen { display: flex; flex-direction: column; }
+    #emberline-page.ferravex-fullscreen > nav { flex: none; }
+    #emberline-page.ferravex-fullscreen main { flex: 1; min-height: 0; overflow: auto; }
+    @media (max-width: 40rem) {
+      #emberline-page > nav > a:first-child { flex-basis: 100%; }
+      .instructions { grid-template-columns: minmax(0, 1fr); gap: 0; }
+    }
+    @media (forced-colors: active) {
+      #emberline-page :focus-visible { outline-color: Highlight !important; }
+    }
+  </style>
+</head>
+<body id="emberline-page">
+  <nav aria-label="Game and player tools">
+    <a href="../">FERRAVEX / All games</a>
+    <a href="#emberline-guide">How to play</a>
+    <button type="button" data-controls title="Controls (F2)" aria-pressed="false" disabled>Controls</button>
+    <button type="button" data-audio title="Enable sound" aria-pressed="false" disabled>Sound off</button>
+  </nav>
+  <main>
+    <div id="emberline-view">
+      <canvas id="emberline-canvas" tabindex="0" data-game="emberline" aria-labelledby="emberline-title" aria-describedby="emberline-goal emberline-bindings emberline-navigation">
+        Emberline is a visual 2D platformer. Read How to play below for the goal, default keyboard controls and remapping guidance. Playing requires JavaScript, WebAssembly and WebGL2.
+      </canvas>
+      <p id="emberline-status" role="status" aria-live="polite" aria-atomic="true">Loading Emberline…</p>
+    </div>
+    <section id="emberline-guide" aria-labelledby="emberline-title" tabindex="-1">
+      <h1 id="emberline-title">Emberline</h1>
+      <p id="emberline-goal">A 2D platformer: carry the lantern to the green exit lift. Land beside each numbered lantern to save a checkpoint. Embers are optional; falls return you to the last lit lantern.</p>
+      <p id="emberline-bindings">The keys below are <strong>default bindings</strong>. Choose <strong>Controls</strong> or press <kbd>F2</kbd> in the game to inspect or remap your current bindings. Saved bindings take precedence over this guide.</p>
+      <div class="instructions">
+        <section aria-labelledby="emberline-keys">
+          <h2 id="emberline-keys">Default keyboard controls</h2>
+          <dl>
+            <div><dt>Start / confirm</dt><dd><kbd>Enter</kbd> starts, resumes a paused run, or retries after completion.</dd></div>
+            <div><dt>Move</dt><dd><kbd>A</kbd> / <kbd>D</kbd> or <kbd>Left</kbd> / <kbd>Right</kbd> arrow keys.</dd></div>
+            <div><dt>Jump</dt><dd><kbd>Space</kbd>, <kbd>W</kbd> or <kbd>Up</kbd>. Tap for a short hop; hold for a higher jump.</dd></div>
+            <div><dt>Pause / resume</dt><dd><kbd>Escape</kbd> during a run.</dd></div>
+            <div><dt>Restart</dt><dd><kbd>R</kbd> resets the whole run, including checkpoints and collected embers, even while paused.</dd></div>
+          </dl>
+        </section>
+        <section aria-labelledby="emberline-help">
+          <h2 id="emberline-help">Focus, menus and remapping</h2>
+          <p id="emberline-navigation">Focus the game canvas to play. Pause before moving to page controls or reading this guide. With Controls closed, <kbd>Tab</kbd> and <kbd>Shift</kbd> + <kbd>Tab</kbd> move between the game and page controls. This page reserves <kbd>Tab</kbd> for navigation; choose another key when remapping gameplay.</p>
+          <p>Inside Controls, use <kbd>Tab</kbd> or the arrow keys to select a row and <kbd>Enter</kbd> to activate it. <kbd>Escape</kbd> cancels a binding capture; press it again to close Controls. <kbd>F2</kbd> also closes Controls. Closing Controls does not resume a manually paused run.</p>
+          <p><strong>Details → Player tools</strong> contains presentation preferences, screenshots and sharing. Use <strong>Done</strong> or <kbd>Escape</kbd> to close Details and return focus to the game. Fullscreen may use <kbd>Escape</kbd> to exit first; its <strong>Exit</strong> button is also available.</p>
+          <p>For touch play, the default layout has movement, jump and pause buttons, plus a start/resume/retry card. Controls shows your current touch layout. Scroll this guide outside the game canvas.</p>
+          <p><a href="#emberline-canvas">Return to the game canvas</a></p>
+        </section>
+      </div>
+      <noscript><p>Enable JavaScript to load Emberline. The goal and keyboard guide remain available here.</p></noscript>
+    </section>
+  </main>
+  <script id="emberline-host-accessibility">
+    (() => {
+      const canvas = document.querySelector('canvas[data-game="emberline"]');
+      const controls = document.querySelector('[data-controls]');
+      const descriptions = canvas.getAttribute('aria-describedby').split(/\s+/);
+      // Player tools adds shared help. Keep that help and the game's own description.
+      const describe = () => {
+        const current = canvas.getAttribute('aria-describedby') || '';
+        const merged = [...new Set([...current.split(/\s+/).filter(Boolean), ...descriptions])].join(' ');
+        if (current !== merged) canvas.setAttribute('aria-describedby', merged);
+      };
+      new MutationObserver(describe).observe(canvas, {attributes: true, attributeFilter: ['aria-describedby']});
+      // The shared input bridge listens on window. Leave native page navigation
+      // available while preserving the renderer's Tab navigation/capture in Controls.
+      document.addEventListener('keydown', event => {
+        if (event.target !== canvas || (event.key === 'Tab' && controls.getAttribute('aria-pressed') !== 'true')) {
+          event.stopPropagation();
+        }
+      });
+      // Key releases still reach the shared bridge to clear any held gameplay input.
+    })();
+  </script>
+  <script type="module" src="../runtime.js"></script>
+</body>
+</html>

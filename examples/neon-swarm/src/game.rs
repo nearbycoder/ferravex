@@ -1,10 +1,9 @@
 pub use ferravex_core::collision::segment_circle;
 use ferravex_core::{Entity, World};
-use ferravex_play::ability::{AbilityBank, AbilitySpec, ResourcePool};
+use ferravex_play::ability::{AbilityAvailability, AbilityBank, AbilitySpec, ResourcePool};
 use ferravex_play::action::{ActionPhase, ActionSpec, ActionTimeline};
-use ferravex_play::particles::{
-    Emitter, EmitterDesc, EmitterTransform, ParticleDesc, ParticleMotion, ParticlePool,
-};
+use ferravex_play::encounter::AdmissionPreview;
+use ferravex_play::feedback::{FeedbackEvent, FeedbackKind};
 use ferravex_render::prelude::*;
 
 pub const ARENA: Rect = Rect::new(72.0, 112.0, 1136.0, 604.0);
@@ -15,6 +14,17 @@ pub const COVER: [Rect; 4] = [
     Rect::new(834.0, 514.0, 96.0, 60.0),
 ];
 pub const PLAYER_RADIUS: f32 = 15.0;
+const SPAWN_DISTANCE: f32 = 260.;
+const ENTRY_POINTS: [Vec2; 8] = [
+    vec2(100., 150.),
+    vec2(640., 150.),
+    vec2(1180., 150.),
+    vec2(100., 414.),
+    vec2(1180., 414.),
+    vec2(100., 678.),
+    vec2(640., 678.),
+    vec2(1180., 678.),
+];
 
 #[derive(Clone, Copy)]
 pub struct Position(pub Vec2);
@@ -62,6 +72,15 @@ pub struct Input {
     pub aim: Vec2,
     pub fire: bool,
     pub dash: bool,
+    /// A consumed input edge, including a press/release between simulation ticks.
+    pub dash_pressed: bool,
+}
+
+#[derive(Clone, Copy)]
+pub struct HitMarker {
+    pub position: Vec2,
+    pub remaining: f32,
+    pub lethal: bool,
 }
 
 pub struct Game {
@@ -84,11 +103,9 @@ pub struct Game {
     pub dash_cooldown: f32,
     pub dash_time: f32,
     pub hurt_time: f32,
-    pub muzzle_time: f32,
+    pub hit_marker: Option<HitMarker>,
     pub time: f32,
     pub wave_banner: f32,
-    pub particles: ParticlePool,
-    sparks: Emitter,
     ai: crate::ai::SwarmAi,
     abilities: AbilityBank<2>,
     resource: ResourcePool,
@@ -132,35 +149,9 @@ impl Game {
             dash_cooldown: 0.0,
             dash_time: 0.0,
             hurt_time: 0.0,
-            muzzle_time: 0.0,
+            hit_marker: None,
             time: 0.0,
             wave_banner: 2.7,
-            particles: ParticlePool::new(512),
-            sparks: Emitter::new(
-                EmitterDesc {
-                    particle: ParticleDesc {
-                        lifetime: 0.45,
-                        start_color: [1., 0.49, 0.34, 1.],
-                        end_color: [1., 0.2, 0.08, 0.],
-                        start_size: 3.8,
-                        end_size: 1.,
-                        ..Default::default()
-                    },
-                    motion: ParticleMotion {
-                        drag: 4.,
-                        angular_velocity: 5.,
-                        ..Default::default()
-                    },
-                    velocity_jitter: [110., 110., 0.],
-                    lifetime_jitter: 0.25,
-                    size_jitter: 0.3,
-                    rotation_jitter: std::f32::consts::PI,
-                    rate: 0.,
-                    ..Default::default()
-                },
-                0x4e454f4e,
-            )
-            .unwrap(),
             abilities: AbilityBank::new(
                 1,
                 &[
@@ -181,7 +172,7 @@ impl Game {
             director: encounter(8, 1, 0.8),
             remaining: 8,
             spawn_index: 0,
-            spawns: ferravex_play::gameplay::spawn::SpawnSelector::new(260.).unwrap(),
+            spawns: ferravex_play::gameplay::spawn::SpawnSelector::new(SPAWN_DISTANCE).unwrap(),
             intermission: 1.6,
             dash_direction: Vec2::X,
             dash_buffer: ferravex_play::gameplay::buffer::CommandBuffer::new(0.15).unwrap(),
@@ -199,6 +190,19 @@ impl Game {
 
     pub fn remaining_enemies(&self) -> u32 {
         self.remaining + self.enemy_count() as u32
+    }
+
+    /// The existing intermission clock, visible only after all wave credits and
+    /// live enemies are exhausted. A quiet gap between spawns is not a clear.
+    pub fn wave_clear_remaining(&self) -> Option<f32> {
+        (self.phase == Phase::Playing && self.remaining_enemies() == 0)
+            .then_some(self.intermission.max(0.))
+    }
+
+    /// Discard queued commands when the host pauses or loses gameplay focus.
+    pub fn clear_input_buffer(&mut self) {
+        self.dash_buffer.clear();
+        self.dash_held = false;
     }
 
     pub fn nearest_enemy(&self) -> Option<Vec2> {
@@ -231,13 +235,31 @@ impl Game {
             aim: target.unwrap_or(self.player + Vec2::X),
             fire: target.is_some(),
             dash: target.is_some_and(|p| p.distance(self.player) < 105.0),
+            ..Input::default()
         }
     }
 
+    #[cfg(test)]
     pub fn update(&mut self, input: Input, dt: f32) {
-        self.particles.update(dt).expect("validated game delta");
+        self.update_with_feedback(input, dt, |_| {});
+    }
+
+    /// Emit presentation events at accepted gameplay actions, including shield
+    /// damage and nonlethal bullet impacts. Presentation never owns game rules.
+    pub fn update_with_feedback(
+        &mut self,
+        input: Input,
+        dt: f32,
+        mut emit: impl FnMut(FeedbackEvent),
+    ) {
         if self.phase != Phase::Playing {
             return;
+        }
+        if let Some(marker) = &mut self.hit_marker {
+            marker.remaining -= dt;
+            if marker.remaining <= 0. {
+                self.hit_marker = None;
+            }
         }
         self.time += dt;
         self.score.advance(dt).unwrap();
@@ -255,14 +277,13 @@ impl Game {
         self.dash_cooldown = self.abilities.remaining(1).unwrap();
         self.dash_time = (self.dash_time - dt).max(0.0);
         self.hurt_time = (self.hurt_time - dt).max(0.0);
-        self.muzzle_time = (self.muzzle_time - dt).max(0.0);
         self.wave_banner = (self.wave_banner - dt).max(0.0);
         let direction = (input.aim - self.player).normalize_or_zero();
         if direction.length_squared() > 0.0 {
             self.facing = direction;
         }
         self.dash_buffer.advance(dt).unwrap();
-        if input.dash && !self.dash_held {
+        if input.dash_pressed || input.dash && !self.dash_held {
             self.dash_buffer.push(());
         }
         self.dash_held = input.dash;
@@ -277,6 +298,11 @@ impl Game {
             };
             self.dash_time = 0.18;
             self.dash_cooldown = self.abilities.remaining(1).unwrap();
+            emit(FeedbackEvent {
+                kind: FeedbackKind::Dash,
+                intensity: 1.,
+                position: self.player.extend(0.),
+            });
         }
         let velocity = if self.dash_time > 0.0 {
             self.dash_direction * 700.0
@@ -308,8 +334,12 @@ impl Game {
                     remaining: 1.4,
                 },
             ));
-            self.muzzle_time = 0.055;
             self.shots += 1;
+            emit(FeedbackEvent {
+                kind: FeedbackKind::Fire,
+                intensity: 1.,
+                position: self.player.extend(0.),
+            });
         }
         let alive = self.enemy_count();
         let pressure =
@@ -350,9 +380,14 @@ impl Game {
                 self.hurt_time = 0.75;
                 self.score.break_chain();
                 self.recoil = (self.player - p.0).try_normalize().unwrap_or(-self.facing) * 150.;
+                emit(FeedbackEvent {
+                    kind: FeedbackKind::Hurt,
+                    intensity: if unabsorbed == 0 { 0.55 } else { 1. },
+                    position: self.player.extend(0.),
+                });
             }
         }
-        self.update_bullets(dt);
+        self.update_bullets(dt, &mut emit);
         let mut despawn = Vec::new();
         for (id, mut p, mut pickup) in
             &mut self.world.query::<(Entity, &mut Position, &mut Pickup)>()
@@ -372,9 +407,14 @@ impl Game {
             {
                 p.0 = attraction.position;
             }
-            if p.0.distance(self.player) <= 28.0 && self.health < 100 {
+            if p.0.distance(self.player) <= 28.0 && (1..100).contains(&self.health) {
                 self.health = (self.health + 22).min(100);
                 despawn.push(id);
+                emit(FeedbackEvent {
+                    kind: FeedbackKind::Pickup,
+                    intensity: 1.,
+                    position: p.0.extend(0.),
+                });
             } else if pickup.remaining <= 0.0 {
                 despawn.push(id);
             }
@@ -400,27 +440,57 @@ impl Game {
         }
     }
 
+    /// Advisory inspection only: a moving player, occupancy or pressure can
+    /// change the next admission. Copy the selector so HUD reads cannot rotate
+    /// tie breaks, spend credits or reserve a position.
+    pub fn spawn_preview(&self) -> (AdmissionPreview, Option<Vec2>) {
+        let mut selector = self.spawns;
+        (
+            self.director.preview(1, self.enemy_count()),
+            self.choose_spawn(&mut selector),
+        )
+    }
+
+    /// Eligible zones, without predicting which tie-break will win on a later
+    /// tick. Showing the zones avoids a rapidly alternating single warning when
+    /// the unchanged simulation rotates between equally distant candidates.
+    pub fn entry_candidates(&self) -> impl Iterator<Item = Vec2> + '_ {
+        ENTRY_POINTS.into_iter().filter(|p| self.entry_safe(*p))
+    }
+
+    fn entry_safe(&self, position: Vec2) -> bool {
+        position.distance_squared(self.player) >= SPAWN_DISTANCE * SPAWN_DISTANCE
+            && self
+                .world
+                .query::<(&Position, &Enemy)>()
+                .iter()
+                .all(|(p, e)| p.0.distance(position) > e.radius + 30.)
+    }
+
+    /// The same charge/resource admission used by an actual dash activation.
+    pub fn dash_availability(&self) -> AbilityAvailability {
+        self.abilities
+            .availability(1, &self.resource, self.phase == Phase::Playing)
+            .expect("registered dash ability")
+    }
+
     fn spawn_location(&mut self) -> Option<Vec2> {
-        let candidates = [
-            vec2(100., 150.),
-            vec2(640., 150.),
-            vec2(1180., 150.),
-            vec2(100., 414.),
-            vec2(1180., 414.),
-            vec2(100., 678.),
-            vec2(640., 678.),
-            vec2(1180., 678.),
-        ];
-        let selected = self
-            .spawns
-            .choose(&candidates, self.player, |i| {
-                self.world
-                    .query::<(&Position, &Enemy)>()
-                    .iter()
-                    .all(|(p, e)| p.0.distance(candidates[i]) > e.radius + 30.)
+        let mut selector = self.spawns;
+        let position = self.choose_spawn(&mut selector);
+        self.spawns = selector;
+        position
+    }
+
+    fn choose_spawn(
+        &self,
+        selector: &mut ferravex_play::gameplay::spawn::SpawnSelector,
+    ) -> Option<Vec2> {
+        let selected = selector
+            .choose(&ENTRY_POINTS, self.player, |i| {
+                self.entry_safe(ENTRY_POINTS[i])
             })
             .unwrap();
-        selected.map(|i| candidates[i])
+        selected.map(|i| ENTRY_POINTS[i])
     }
 
     fn spawn_enemy(&mut self, p: Vec2) {
@@ -450,7 +520,7 @@ impl Game {
         ));
     }
 
-    fn update_bullets(&mut self, dt: f32) {
+    fn update_bullets(&mut self, dt: f32, emit: &mut impl FnMut(FeedbackEvent)) {
         let enemies: Vec<(Entity, Vec2, f32)> = self
             .world
             .query::<(Entity, &Position, &Enemy)>()
@@ -502,6 +572,16 @@ impl Game {
                     enemy.attack.cancel(false);
                 }
                 enemy.flash = 0.09;
+                self.hit_marker = Some(HitMarker {
+                    position: point,
+                    remaining: 0.16,
+                    lethal: enemy.health <= 0.,
+                });
+                emit(FeedbackEvent {
+                    kind: FeedbackKind::Hit,
+                    intensity: if enemy.health <= 0. { 1. } else { 0.65 },
+                    position: point.extend(0.),
+                });
                 if let Some(position) = target_position {
                     let direction = (position - self.player).normalize_or_zero();
                     enemy.knockback = (enemy.knockback
@@ -514,6 +594,9 @@ impl Game {
             }
         }
         for (id, point) in dead {
+            if let Ok(enemy) = self.world.get::<&Enemy>(id) {
+                self.ai.reset_agent(enemy.ai_slot);
+            }
             let _ = self.world.despawn(id);
             self.kills += 1;
             self.score.award(100);
@@ -524,13 +607,6 @@ impl Game {
                 self.world
                     .spawn((Position(point), Pickup { remaining: 16.0 }));
             }
-            self.sparks
-                .burst(
-                    9,
-                    EmitterTransform::at([point.x, point.y, 0.]),
-                    &mut self.particles,
-                )
-                .expect("finite hit position");
         }
     }
 }
@@ -596,7 +672,7 @@ mod tests {
                 remaining: 1.,
             },
         ));
-        game.update_bullets(0.1);
+        game.update_bullets(0.1, &mut |_| {});
         let actor = game.world.get::<&Enemy>(enemy).unwrap();
         assert_eq!(actor.health, 48.);
         assert!(actor.knockback.x > 50.);
@@ -653,7 +729,7 @@ mod tests {
                 remaining: 1.0,
             },
         ));
-        game.update_bullets(0.3);
+        game.update_bullets(0.3, &mut |_| panic!("cover rejected the hit"));
         assert_eq!(game.enemy_count(), 1);
         assert_eq!(game.world.query::<&Bullet>().iter().count(), 0);
     }
@@ -869,6 +945,95 @@ mod magnet_loop_tests {
 #[cfg(test)]
 mod safe_spawn_tests {
     use super::*;
+
+    #[test]
+    fn repeated_spawn_previews_do_not_rotate_or_spend_admissions() {
+        let mut observed = Game::new();
+        let mut baseline = Game::new();
+        assert_eq!(
+            observed.spawn_preview().0.next_available_in(),
+            Some(f64::from(0.8_f32))
+        );
+        for _ in 0..360 {
+            let before = observed.spawn_preview();
+            for _ in 0..5 {
+                assert_eq!(observed.spawn_preview(), before);
+            }
+            observed.update(Input::default(), 1. / 120.);
+            baseline.update(Input::default(), 1. / 120.);
+            assert_eq!(observed.director.credits(), baseline.director.credits());
+            assert_eq!(observed.remaining, baseline.remaining);
+            let positions = |game: &Game| {
+                game.world
+                    .query::<(&Position, &Enemy)>()
+                    .iter()
+                    .map(|(p, e)| (p.0, e.health, e.attack.phase()))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(positions(&observed), positions(&baseline));
+        }
+    }
+
+    #[test]
+    fn unsafe_entry_and_cap_are_not_misreported_as_guaranteed_spawns() {
+        let mut game = Game::new();
+        // Block every perimeter candidate, independently of the director timer.
+        for _ in 0..8 {
+            let (_, position) = game.spawn_preview();
+            game.spawn_enemy(position.unwrap());
+        }
+        assert!(game.spawn_preview().1.is_none());
+        game.director = encounter(5, 1, 0.);
+        let preview = game.spawn_preview();
+        assert!(preview.0.is_ready());
+        assert!(
+            preview.1.is_none(),
+            "admission readiness alone is not a safe position"
+        );
+        assert_eq!(game.director.credits(), 5);
+        game.director = ferravex_play::encounter::EncounterDirector::new(
+            ferravex_play::encounter::EncounterConfig {
+                credits: 5,
+                max_alive: 8,
+                interval: 0.5,
+                first_delay: 0.,
+                recovery_seconds: 1.,
+            },
+        )
+        .unwrap();
+        assert_eq!(game.spawn_preview().0.next_available_in(), None);
+        assert!(matches!(
+            game.spawn_preview().0,
+            AdmissionPreview::AliveLimit { alive: 8, limit: 8 }
+        ));
+    }
+
+    #[test]
+    fn dash_hint_reads_the_actual_admission_without_charging_or_spending() {
+        let mut game = Game::new();
+        assert!(game.dash_availability().check().is_ok());
+        assert_eq!(game.dash_availability().charges, 1);
+        game.update(
+            Input {
+                dash_pressed: true,
+                ..Default::default()
+            },
+            1. / 120.,
+        );
+        let denied = game.dash_availability();
+        assert!(denied.check().is_err());
+        assert_eq!(denied.cooldown_remaining, game.dash_cooldown);
+        for _ in 0..50 {
+            assert_eq!(game.dash_availability(), denied);
+        }
+        for _ in 0..205 {
+            game.update(Input::default(), 1. / 120.);
+        }
+        assert!(game.dash_availability().check().is_ok());
+        game.phase = Phase::Lost;
+        assert!(game.dash_availability().check().is_err());
+    }
+
     #[test]
     fn actual_admitted_enemies_spawn_at_a_safe_distance_without_losing_credits() {
         let mut g = Game::new();
@@ -912,7 +1077,7 @@ mod stagger_loop_tests {
                     remaining: 1.,
                 },
             ));
-            g.update_bullets(0.1);
+            g.update_bullets(0.1, &mut |_| {});
         }
         let id = g.world.query::<(Entity, &Enemy)>().iter().next().unwrap().0;
         let e = g.world.get::<&Enemy>(id).unwrap();
@@ -1005,5 +1170,202 @@ mod dash_buffer_tests {
             g.update(dash, 1. / 120.);
         }
         assert_eq!(g.dash_cooldown, 0., "a held button cannot repeatedly dash");
+    }
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+
+    fn stationary_target(game: &mut Game, position: Vec2, heavy: bool) -> Entity {
+        game.wave = if heavy { 2 } else { 1 };
+        game.spawn_enemy(position);
+        game.remaining = 0;
+        let id = game
+            .world
+            .query::<(Entity, &Enemy)>()
+            .iter()
+            .next()
+            .unwrap()
+            .0;
+        game.world.get::<&mut Enemy>(id).unwrap().speed = 0.;
+        id
+    }
+
+    fn bullet(game: &mut Game) {
+        game.world.spawn((
+            Position(game.player),
+            Bullet {
+                velocity: Vec2::X * 900.,
+                remaining: 1.,
+            },
+        ));
+    }
+
+    #[test]
+    fn wave_clear_requires_no_pending_or_live_drones_and_preserves_the_break() {
+        let mut game = Game::new();
+        assert!(
+            game.wave_clear_remaining().is_none(),
+            "initial spawn delay is not a clear"
+        );
+        let position = game.player + Vec2::X * 80.;
+        let enemy = stationary_target(&mut game, position, false);
+        assert!(
+            game.wave_clear_remaining().is_none(),
+            "a live drone keeps the wave active"
+        );
+        game.world.despawn(enemy).unwrap();
+        assert_eq!(game.wave_clear_remaining(), Some(1.6));
+        for _ in 0..191 {
+            game.update(Input::default(), 1. / 120.);
+            assert_eq!(game.wave, 1, "the clear banner must have its full interval");
+            assert_eq!(game.remaining_enemies(), 0);
+        }
+        for _ in 0..3 {
+            if game.wave == 1 {
+                game.update(Input::default(), 1. / 120.);
+            }
+        }
+        assert_eq!((game.wave, game.remaining_enemies()), (2, 14));
+        assert!(game.wave_clear_remaining().is_none());
+        assert_eq!(game.wave_banner, 2.4);
+        assert_eq!(
+            game.enemy_count(),
+            0,
+            "the new wave still honors spawn admission delay"
+        );
+        game.wave = 3;
+        game.remaining = 0;
+        game.intermission = 0.01;
+        game.update(Input::default(), 1. / 120.);
+        assert_eq!(game.phase, Phase::Playing);
+        game.update(Input::default(), 1. / 120.);
+        assert_eq!(game.phase, Phase::Won);
+        assert!(game.wave_clear_remaining().is_none());
+    }
+
+    #[test]
+    fn impacts_report_nonlethal_and_lethal_hits_without_double_counting_a_dead_target() {
+        let mut game = Game::new();
+        let position = game.player + Vec2::X * 80.;
+        let enemy = stationary_target(&mut game, position, true);
+        bullet(&mut game);
+        let mut events = Vec::new();
+        game.update_bullets(0.1, &mut |event| events.push(event));
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, FeedbackKind::Hit);
+        assert_eq!(game.world.get::<&Enemy>(enemy).unwrap().health, 48.);
+        let marker = game.hit_marker.unwrap();
+        assert!(!marker.lethal);
+        assert_eq!(marker.position.extend(0.), events[0].position);
+        assert_eq!(game.kills, 0);
+
+        events.clear();
+        for _ in 0..3 {
+            bullet(&mut game);
+        }
+        game.update_bullets(0.1, &mut |event| events.push(event));
+        assert_eq!(
+            events.len(),
+            2,
+            "the third impact reached an already dead target"
+        );
+        assert!(events.iter().all(|event| event.kind == FeedbackKind::Hit));
+        assert!(game.hit_marker.unwrap().lethal);
+        assert_eq!(
+            (game.enemy_count(), game.kills, game.score.total()),
+            (0, 1, 100)
+        );
+        game.update_with_feedback(Input::default(), 0.2, |_| panic!("no new impact"));
+        assert!(
+            game.hit_marker.is_none(),
+            "the marker expires in simulation time"
+        );
+    }
+
+    #[test]
+    fn shield_only_hit_and_same_tick_healing_both_emit_feedback() {
+        let mut game = Game::new();
+        let position = game.player;
+        let enemy = stationary_target(&mut game, position, false);
+        game.world
+            .get::<&mut Enemy>(enemy)
+            .unwrap()
+            .attack
+            .step(0.155, true)
+            .unwrap();
+        game.health = 90;
+        game.world
+            .spawn((Position(game.player), Pickup { remaining: 5. }));
+        let mut events = Vec::new();
+        game.update_with_feedback(Input::default(), 1. / 120., |event| events.push(event));
+        assert_eq!((game.health, game.shield.value()), (100, 6.));
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].kind, FeedbackKind::Hurt);
+        assert_eq!(events[0].intensity, 0.55);
+        assert_eq!(events[1].kind, FeedbackKind::Pickup);
+        game.update_with_feedback(Input::default(), 1. / 120., |_| {
+            panic!("continuing an attack or an already consumed pickup is not a new event")
+        });
+    }
+
+    #[test]
+    fn lethal_contact_cannot_be_undone_by_a_pickup_or_the_last_kill() {
+        let mut game = Game::new();
+        let position = game.player;
+        let enemy = stationary_target(&mut game, position, false);
+        game.world
+            .get::<&mut Enemy>(enemy)
+            .unwrap()
+            .attack
+            .step(0.155, true)
+            .unwrap();
+        game.wave = 3;
+        game.health = 5;
+        game.shield.absorb(20.).unwrap();
+        game.world
+            .spawn((Position(game.player), Pickup { remaining: 5. }));
+        bullet(&mut game);
+        let mut events = Vec::new();
+        game.update_with_feedback(Input::default(), 1. / 120., |event| events.push(event));
+        assert_eq!((game.health, game.enemy_count()), (0, 0));
+        assert_eq!(game.phase, Phase::Lost);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].kind, FeedbackKind::Hurt);
+        assert_eq!(events[1].kind, FeedbackKind::Hit);
+        assert_eq!(game.world.query::<&Pickup>().iter().count(), 1);
+        let final_state = (game.time, game.player, game.shots, game.world.len());
+        game.update_with_feedback(
+            Input {
+                fire: true,
+                dash_pressed: true,
+                movement: Vec2::X,
+                ..Input::default()
+            },
+            0.1,
+            |_| panic!("terminal games emit no combat feedback"),
+        );
+        assert_eq!(
+            (game.time, game.player, game.shots, game.world.len()),
+            final_state
+        );
+        assert_eq!(game.phase, Phase::Lost);
+    }
+
+    #[test]
+    fn rejected_fire_and_dash_requests_do_not_emit_acceptance_feedback() {
+        let mut game = Game::new();
+        let input = Input {
+            fire: true,
+            dash: true,
+            ..Input::default()
+        };
+        let mut events = Vec::new();
+        game.update_with_feedback(input, 1. / 120., |event| events.push(event.kind));
+        assert_eq!(events, [FeedbackKind::Dash, FeedbackKind::Fire]);
+        game.update_with_feedback(input, 1. / 120., |_| {
+            panic!("cooldowns reject both requests")
+        });
     }
 }

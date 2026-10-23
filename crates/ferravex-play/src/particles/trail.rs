@@ -5,6 +5,8 @@ pub struct TrailConfig {
     pub capacity: usize,
     pub lifetime: f32,
     pub spacing: f32,
+    /// Motion strictly beyond this distance starts a new segment automatically.
+    /// Use [`Trail::teleport`] for discontinuities within this distance.
     pub teleport_distance: f32,
     pub max_per_update: u16,
     pub fade_width: bool,
@@ -57,6 +59,7 @@ pub struct TrailStats {
     pub expired: u64,
     pub dropped_budget: u64,
     pub overwritten: u64,
+    /// Automatic distance breaks and accepted explicit [`Trail::teleport`] calls.
     pub teleports: u64,
 }
 impl TrailStats {
@@ -76,6 +79,8 @@ struct Point {
 /// Fixed ring, distance resampling and a current head. Capacity bounds the visible
 /// point count (including that head); one extra head value is stored separately.
 /// Stops and teleports create breaks; old segments fade naturally without bridges.
+/// Use [`Self::break_segment`] or [`Self::teleport`] for explicit discontinuities,
+/// including short respawn jumps, and [`Self::clear`] to reset all trail history.
 pub struct Trail {
     config: TrailConfig,
     points: Vec<Point>,
@@ -125,6 +130,24 @@ impl Trail {
     pub fn stats(&self) -> TrailStats {
         self.total
     }
+    /// Removes all points and resets sampling history, retaining configuration,
+    /// backing storage and cumulative statistics. The next sample starts a new
+    /// segment with no residual spacing or connection to the old position.
+    /// Call [`Self::reset_stats`] as well to reset the statistics for a new run.
+    ///
+    /// ```
+    /// use ferravex_play::particles::{Trail, TrailConfig, TrailSample, TrailStats};
+    ///
+    /// let mut trail = Trail::new(TrailConfig::default()).unwrap();
+    /// trail.update(0.0, Some(TrailSample::default())).unwrap();
+    /// trail.clear();
+    /// assert!(trail.is_empty());
+    /// assert_eq!(trail.stats().sampled, 1);
+    /// trail.reset_stats();
+    /// assert_eq!(trail.stats(), TrailStats::default());
+    /// trail.update(0.0, Some(TrailSample::default())).unwrap();
+    /// assert!(trail.iter().next().unwrap().break_before);
+    /// ```
     pub fn clear(&mut self) {
         self.start = 0;
         self.len = 0;
@@ -134,6 +157,74 @@ impl Trail {
     }
     pub fn reset_stats(&mut self) {
         self.total = TrailStats::default();
+    }
+    /// Ends the current segment without advancing time or clearing old points.
+    /// The current head is retained in the ring at age zero, subject to capacity;
+    /// existing points keep their ages. The next accepted sample starts a new
+    /// segment regardless of its distance from the old head. Spacing carry is
+    /// discarded. Repeating this call without new samples is a no-op.
+    ///
+    /// Returns the operation's statistics, also added to [`Self::stats`]. A break
+    /// does not count as a teleport. Equivalent to `update(0.0, None)`, without
+    /// delta validation or aging work.
+    ///
+    /// ```
+    /// use ferravex_play::particles::{Trail, TrailConfig, TrailSample, TrailStats};
+    ///
+    /// let mut trail = Trail::new(TrailConfig::default()).unwrap();
+    /// let sample = TrailSample { color: [1.0; 4], width: 0.2, ..Default::default() };
+    /// trail.update(0.0, Some(sample)).unwrap();
+    /// trail.break_segment();
+    /// assert_eq!(trail.break_segment(), TrailStats::default());
+    /// // Even a respawn at the same position starts a disconnected segment.
+    /// trail.update(0.0, Some(sample)).unwrap();
+    /// assert!(trail.iter().last().unwrap().break_before);
+    /// ```
+    pub fn break_segment(&mut self) -> TrailStats {
+        let mut stats = TrailStats::default();
+        self.finish_segment(0., &mut stats);
+        self.total.add(stats);
+        stats
+    }
+    /// Ends the current segment and starts a new one at `sample`, even at the
+    /// same position or below the automatic teleport distance. Retains the old
+    /// head and starts the new sample at age zero, subject to ring capacity.
+    /// Existing points keep their ages and spacing carry is discarded. This
+    /// does not advance time; use [`Self::update`] to age points normally.
+    ///
+    /// Invalid samples leave all state unchanged. An accepted call counts one
+    /// teleport, including on an empty trail. Returns the operation's statistics,
+    /// also added to [`Self::stats`]. Use [`Self::clear`] to discard old segments.
+    ///
+    /// ```
+    /// use ferravex_play::particles::{Trail, TrailConfig, TrailSample};
+    ///
+    /// let mut trail = Trail::new(TrailConfig::default()).unwrap();
+    /// let sample = TrailSample { color: [1.0; 4], width: 0.2, ..Default::default() };
+    /// trail.update(0.0, Some(sample)).unwrap();
+    /// let respawn = TrailSample { position: [0.01, 0.0, 0.0], ..sample };
+    /// assert_eq!(trail.teleport(respawn).unwrap().teleports, 1);
+    /// assert_eq!(trail.len(), 2);
+    /// assert!(trail.iter().last().unwrap().break_before);
+    /// ```
+    pub fn teleport(&mut self, sample: TrailSample) -> Result<TrailStats, TrailError> {
+        if !sample.point(false).valid() {
+            return Err(TrailError::InvalidSample);
+        }
+        let mut stats = TrailStats::default();
+        self.finish_segment(0., &mut stats);
+        self.push(sample, 0., true, &mut stats);
+        self.previous = Some(sample);
+        stats.teleports = 1;
+        self.total.add(stats);
+        Ok(stats)
+    }
+    fn finish_segment(&mut self, head_age: f64, stats: &mut TrailStats) {
+        if let Some(head) = self.head.take() {
+            self.push(head, head_age, false, stats);
+        }
+        self.previous = None;
+        self.carry = 0.;
     }
     fn push(&mut self, sample: TrailSample, age: f64, break_before: bool, stats: &mut TrailStats) {
         if age >= f64::from(self.config.lifetime) {
@@ -155,6 +246,9 @@ impl Trail {
     }
     /// None stops emission while aging existing points. Invalid input leaves the
     /// trail unchanged. New samples receive their within-frame birth ages.
+    /// Automatic teleports retain the previous head aged by `dt` and begin a
+    /// disconnected segment at the new sample. Use [`Self::teleport`] for smaller
+    /// jumps that must also break the trail.
     pub fn update(
         &mut self,
         dt: f32,
@@ -176,11 +270,7 @@ impl Trail {
             stats.expired += 1;
         }
         let Some(sample) = sample else {
-            if let Some(head) = self.head.take() {
-                self.push(head, f64::from(dt), false, &mut stats);
-            }
-            self.previous = None;
-            self.carry = 0.;
+            self.finish_segment(f64::from(dt), &mut stats);
             self.total.add(stats);
             return Ok(stats);
         };
@@ -199,10 +289,9 @@ impl Trail {
             .sum::<f64>()
             .sqrt();
         if distance > f64::from(self.config.teleport_distance) {
+            self.finish_segment(f64::from(dt), &mut stats);
             self.push(sample, 0., true, &mut stats);
             self.previous = Some(sample);
-            self.head = None;
-            self.carry = 0.;
             stats.teleports += 1;
             self.total.add(stats);
             return Ok(stats);

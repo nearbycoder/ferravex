@@ -1,12 +1,50 @@
-use ferravex_play::attributes::{EffectSet, EffectSpec};
+use ferravex_play::attributes::{EffectSet, EffectSpec, EffectStatus};
 use ferravex_play::{
-    ai::{Candidate, Observer, Sight, Unoccluded, WorkBudget, select_target},
+    ai::{Candidate, Observer, Sight, TargetSelector, Unoccluded, WorkBudget},
     navigation::{PathCursor, Route3},
 };
 use ferravex_render::prelude::*;
 
 use crate::level::Level;
 use std::sync::Arc;
+
+/// A rejected action leaves the orchard and its economy unchanged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ActionError {
+    Finished,
+    InvalidPlot,
+    Occupied,
+    Empty,
+    FullyGrown,
+    Funds { missing: u32 },
+    WaveActive,
+    NoMoreWaves,
+    Paused,
+}
+impl std::fmt::Display for ActionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Finished => f.write_str("Harvest finished. Plant again to start fresh."),
+            Self::InvalidPlot => {
+                f.write_str("Choose a round plot; paths and trees cannot hold towers.")
+            }
+            Self::Occupied => {
+                f.write_str("This plot has a tower. Choose Upgrade or select an empty plot.")
+            }
+            Self::Empty => f.write_str("Build a tower here before upgrading."),
+            Self::FullyGrown => f.write_str("Fully grown: level 3 is the maximum."),
+            Self::Funds { missing } => write!(
+                f,
+                "Need {missing} more coins. Stop pests or clear a wave to earn them."
+            ),
+            Self::WaveActive => {
+                f.write_str("Clear the pests already on their way before sending another wave.")
+            }
+            Self::NoMoreWaves => f.write_str("All authored waves have been sent."),
+            Self::Paused => f.write_str("Resume the orchard before building or sending a wave."),
+        }
+    }
+}
 pub const MAX_PESTS: usize = 32;
 pub const MAX_SHOTS: usize = 96;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,6 +74,26 @@ pub struct Tower {
     pub aim: Vec2,
 }
 impl Tower {
+    pub fn planted(kind: Kind) -> Self {
+        Self {
+            kind,
+            level: 0,
+            cooldown: 0.,
+            aim: vec2(0., -1.),
+        }
+    }
+    pub fn damage(self) -> f32 {
+        match self.kind {
+            Kind::Seed => 22. + self.level as f32 * 14.,
+            Kind::Frost => 8. + self.level as f32 * 6.,
+        }
+    }
+    pub fn reload(self) -> f32 {
+        (match self.kind {
+            Kind::Seed => 0.62,
+            Kind::Frost => 0.85,
+        }) - self.level as f32 * 0.08
+    }
     pub fn range(self) -> f32 {
         (match self.kind {
             Kind::Seed => 158.,
@@ -54,12 +112,23 @@ pub struct Pest {
     pub distance: f32,
     pub hp: f32,
     pub max_hp: f32,
-    pub slow: f32,
     pub fast: bool,
-    pub stagger: f32,
-    pub flash: f32,
+    /// Accepted direct/splash impacts, consumed only by presentation.
+    pub impacts: u32,
     cursor: PathCursor,
     effects: EffectSet<4>,
+}
+impl Pest {
+    pub fn slow(&self) -> Option<EffectStatus> {
+        self.effects.status(1)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct WavePreview {
+    pub number: u8,
+    pub spec: crate::level::Wave,
+    pub fast_count: u32,
 }
 #[derive(Clone, Debug)]
 pub struct Shot {
@@ -93,6 +162,7 @@ pub struct Game {
     spawn_timer: f32,
     next_id: u32,
     route: Route3,
+    targets: [TargetSelector; 8],
 }
 impl Game {
     #[cfg(test)]
@@ -123,42 +193,100 @@ impl Game {
             spawn_timer: 0.,
             next_id: 0,
             route,
+            targets: [TargetSelector::new(0.).unwrap(); 8],
+        }
+    }
+    /// Read authored arrivals without starting the wave or spending spawn IDs.
+    pub(super) fn next_wave(&self) -> Option<WavePreview> {
+        if self.active || self.outcome != Outcome::Playing {
+            return None;
+        }
+        let spec = *self.level.waves.get(usize::from(self.wave))?;
+        Some(WavePreview {
+            number: self.wave + 1,
+            spec,
+            fast_count: (self.next_id + u32::from(spec.count)) / spec.fast_every
+                - self.next_id / spec.fast_every,
+        })
+    }
+    /// A living, in-range target for the selected tower; never a stale ID.
+    pub(super) fn selected_target(&self) -> Option<&Pest> {
+        let tower = self.towers.get(self.selected)?.as_ref()?;
+        let id = self.targets.get(self.selected)?.current()?;
+        self.pests.iter().find(|p| {
+            u64::from(p.id) == id
+                && p.hp > 0.
+                && p.pos.distance_squared(self.level.plots[self.selected]) <= tower.range().powi(2)
+        })
+    }
+    /// Check a purchase without charging coins; shared by the HUD and mutation.
+    pub(super) fn build_status(&self, plot: usize, kind: Kind) -> Result<(), ActionError> {
+        self.playing_status()?;
+        match self.towers.get(plot) {
+            None => return Err(ActionError::InvalidPlot),
+            Some(Some(_)) => return Err(ActionError::Occupied),
+            Some(None) => {}
+        }
+        self.funds_status(kind.price())
+    }
+    fn playing_status(&self) -> Result<(), ActionError> {
+        if self.outcome == Outcome::Playing {
+            Ok(())
+        } else {
+            Err(ActionError::Finished)
+        }
+    }
+    fn funds_status(&self, cost: u32) -> Result<(), ActionError> {
+        if self.money >= cost {
+            Ok(())
+        } else {
+            Err(ActionError::Funds {
+                missing: cost - self.money,
+            })
         }
     }
     pub fn build(&mut self, plot: usize, kind: Kind) -> bool {
-        if self.outcome != Outcome::Playing
-            || plot >= self.level.plots.len()
-            || self.towers[plot].is_some()
-            || self.money < kind.price()
-        {
+        if self.build_status(plot, kind).is_err() {
             return false;
         }
         self.money -= kind.price();
-        self.towers[plot] = Some(Tower {
-            kind,
-            level: 0,
-            cooldown: 0.,
-            aim: vec2(0., -1.),
-        });
+        self.towers[plot] = Some(Tower::planted(kind));
         true
     }
-    pub fn upgrade(&mut self, plot: usize) -> bool {
-        let Some(Some(tower)) = self.towers.get_mut(plot) else {
-            return false;
+    /// Check the selected tower's next level without changing it.
+    pub(super) fn upgrade_status(&self, plot: usize) -> Result<(), ActionError> {
+        self.playing_status()?;
+        let tower = match self.towers.get(plot) {
+            None => return Err(ActionError::InvalidPlot),
+            Some(None) => return Err(ActionError::Empty),
+            Some(Some(tower)) => tower,
         };
-        if self.outcome != Outcome::Playing || tower.level >= 2 || self.money < tower.upgrade_cost()
-        {
+        if tower.level >= 2 {
+            return Err(ActionError::FullyGrown);
+        }
+        self.funds_status(tower.upgrade_cost())
+    }
+    pub fn upgrade(&mut self, plot: usize) -> bool {
+        if self.upgrade_status(plot).is_err() {
             return false;
         }
+        let tower = self.towers[plot].as_mut().unwrap();
         self.money -= tower.upgrade_cost();
         tower.level += 1;
         true
     }
+    pub(super) fn wave_status(&self) -> Result<(), ActionError> {
+        self.playing_status()?;
+        if self.active {
+            return Err(ActionError::WaveActive);
+        }
+        if usize::from(self.wave) >= self.level.waves.len() {
+            return Err(ActionError::NoMoreWaves);
+        }
+        Ok(())
+    }
     pub fn launch(&mut self) -> bool {
-        if self.active
-            || usize::from(self.wave) == self.level.waves.len()
-            || self.outcome != Outcome::Playing
-        {
+        if self.wave_status().is_err() {
             return false;
         }
         self.wave += 1;
@@ -166,6 +294,10 @@ impl Game {
         self.active = true;
         self.spawn_timer = 0.;
         true
+    }
+    /// Reconstruct spawn identity at a safe between-wave checkpoint.
+    pub(super) fn restore_spawn_sequence(&mut self) {
+        self.next_id = self.kills + self.escaped;
     }
     /// Uses the same economy/actions as human input. No currency, health or combat cheats.
     pub fn autoplay(&mut self) {
@@ -211,9 +343,7 @@ impl Game {
                     distance: 0.,
                     hp,
                     max_hp: hp,
-                    slow: 0.,
-                    stagger: 0.,
-                    flash: 0.,
+                    impacts: 0,
                     fast,
                     cursor: PathCursor::default(),
                     effects: EffectSet::new().unwrap(),
@@ -224,9 +354,6 @@ impl Game {
         }
         for pest in &mut self.pests {
             pest.effects.advance(dt).unwrap();
-            pest.slow = pest.effects.remaining(1);
-            pest.stagger = pest.effects.remaining(2);
-            pest.flash = (pest.flash - dt).max(0.);
             let speed = if pest.fast {
                 wave.fast_speed
             } else {
@@ -261,45 +388,45 @@ impl Game {
                 continue;
             };
             tower.cooldown = (tower.cooldown - dt).max(0.);
-            if tower.cooldown > 0. || self.shots.len() == MAX_SHOTS {
-                continue;
-            }
-            let selected = select_target(
-                self.pests
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, p)| p.hp > 0.)
-                    .map(|(i, p)| Candidate {
-                        id: i as u64,
+            let selected = self.targets[plot]
+                .select_visible(
+                    self.pests.iter().filter(|p| p.hp > 0.).map(|p| Candidate {
+                        id: u64::from(p.id),
                         position: p.pos.extend(0.),
                         groups: 1,
                     }),
-                Observer {
-                    position: self.level.plots[plot].extend(0.),
-                    forward: Vec3::Y,
-                },
-                Sight::new(tower.range(), std::f32::consts::TAU, 1).unwrap(),
-                &mut WorkBudget::new(MAX_PESTS as u32, MAX_PESTS as u32, 0),
-                &mut Unoccluded,
-                |candidate| self.pests[candidate.id as usize].distance,
-            )
-            .unwrap();
-            if let Some(pest) = selected.target.map(|c| &self.pests[c.id as usize]) {
+                    Observer {
+                        position: self.level.plots[plot].extend(0.),
+                        forward: Vec3::Y,
+                    },
+                    Sight::new(tower.range(), std::f32::consts::TAU, 1).unwrap(),
+                    &mut WorkBudget::new(MAX_PESTS as u32, MAX_PESTS as u32, 0),
+                    &mut Unoccluded,
+                    |candidate| {
+                        self.pests
+                            .iter()
+                            .find(|p| u64::from(p.id) == candidate.id)
+                            .unwrap()
+                            .distance
+                    },
+                )
+                .unwrap();
+            if let Some(pest) = selected
+                .target
+                .and_then(|c| self.pests.iter().find(|p| u64::from(p.id) == c.id))
+            {
                 tower.aim = (pest.pos - self.level.plots[plot]).normalize_or_zero();
+                if tower.cooldown > 0. || self.shots.len() == MAX_SHOTS {
+                    continue;
+                }
                 self.fired = self.fired.saturating_add(1);
                 self.shots.push(Shot {
                     pos: self.level.plots[plot] + tower.aim * 18.,
                     target: pest.id,
-                    damage: match tower.kind {
-                        Kind::Seed => 22. + tower.level as f32 * 14.,
-                        Kind::Frost => 8. + tower.level as f32 * 6.,
-                    },
+                    damage: tower.damage(),
                     kind: tower.kind,
                 });
-                tower.cooldown = match tower.kind {
-                    Kind::Seed => 0.62,
-                    Kind::Frost => 0.85,
-                } - tower.level as f32 * 0.08;
+                tower.cooldown = tower.reload();
             }
         }
         let mut frost_impacts = [Vec2::ZERO; MAX_SHOTS];
@@ -316,13 +443,12 @@ impl Game {
             let travel = 400. * dt;
             if delta.length_squared() <= (travel + 9.).powi(2) {
                 target.hp -= shot.damage;
-                target.flash = 0.12;
+                target.impacts = target.impacts.saturating_add(1);
                 if shot.kind == Kind::Frost {
                     target
                         .effects
                         .apply(EffectSpec::modifier(1, 0, 0.45, 1.65), 0)
                         .unwrap();
-                    target.slow = target.effects.remaining(1);
                     frost_impacts[frost_count] = target.pos;
                     frost_count += 1;
                 } else {
@@ -332,7 +458,6 @@ impl Game {
                         .effects
                         .apply(EffectSpec::modifier(2, 0, 0.35, 0.10), 0)
                         .unwrap();
-                    target.stagger = target.effects.remaining(2);
                 }
                 false
             } else {
@@ -346,8 +471,7 @@ impl Game {
                     pest.effects
                         .apply(EffectSpec::modifier(1, 0, 0.45, 1.15), 0)
                         .unwrap();
-                    pest.slow = pest.effects.remaining(1);
-                    pest.flash = pest.flash.max(0.08);
+                    pest.impacts = pest.impacts.saturating_add(1);
                 }
             }
         }
@@ -363,6 +487,9 @@ impl Game {
         if self.active && self.remaining == 0 && self.pests.is_empty() {
             self.active = false;
             self.shots.clear();
+            for target in &mut self.targets {
+                target.reset();
+            }
             self.money += wave.reward;
             if usize::from(self.wave) == self.level.waves.len() {
                 self.outcome = Outcome::Won;
@@ -373,6 +500,183 @@ impl Game {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wave_preview_matches_global_runner_cadence_without_launching() {
+        let mut game = Game::new();
+        for index in 0..game.level.waves.len() {
+            game.wave = index as u8;
+            game.kills = game.level.waves[..index]
+                .iter()
+                .map(|w| u32::from(w.count))
+                .sum();
+            game.restore_spawn_sequence();
+            let before = (game.next_id, game.money, game.time);
+            let preview = game.next_wave().unwrap();
+            assert_eq!(preview.number, index as u8 + 1);
+            for _ in 0..3 {
+                assert_eq!(game.next_wave().unwrap().fast_count, preview.fast_count);
+            }
+            assert_eq!((game.next_id, game.money, game.time), before);
+            assert!(game.launch());
+            assert!(game.next_wave().is_none());
+            for _ in 0..3000 {
+                game.step(1. / 60.);
+                if game.remaining == 0 {
+                    break;
+                }
+            }
+            assert_eq!(game.remaining, 0);
+            assert_eq!(game.pests.len(), usize::from(preview.spec.count));
+            assert_eq!(
+                game.pests.iter().filter(|p| p.fast).count() as u32,
+                preview.fast_count
+            );
+            game.pests.clear();
+            game.active = false;
+        }
+        game.outcome = Outcome::Won;
+        assert!(game.next_wave().is_none());
+    }
+
+    #[test]
+    fn target_identity_survives_reordering_and_rejects_dead_or_out_of_range_pests() {
+        let mut game = Game::new();
+        assert!(game.build(0, Kind::Seed));
+        game.launch();
+        game.step(0.);
+        game.pests[0]
+            .cursor
+            .advance(&game.route, 600., 0.25)
+            .unwrap();
+        let mut second = game.pests[0].clone();
+        second.id = 2;
+        second.cursor.advance(&game.route, 300., 0.25).unwrap();
+        game.pests.push(second);
+        game.step(0.);
+        assert_eq!(
+            game.selected_target().unwrap().id,
+            2,
+            "closest to the exit, not nearest tower"
+        );
+        let shot = &game.shots[0];
+        assert_eq!(shot.target, 2);
+        assert_eq!(shot.damage, game.towers[0].unwrap().damage());
+        assert_eq!(
+            game.towers[0].unwrap().cooldown,
+            game.towers[0].unwrap().reload()
+        );
+        game.pests.swap(0, 1);
+        game.step(0.);
+        assert_eq!(game.selected_target().unwrap().id, 2);
+        game.pests[0].hp = 0.;
+        assert!(game.selected_target().is_none());
+        game.step(0.);
+        assert_eq!(game.selected_target().unwrap().id, 1);
+        assert!(
+            game.shots.is_empty(),
+            "dead targets retire their in-flight projectiles"
+        );
+        game.pests[0].cursor = PathCursor::default();
+        game.step(0.);
+        assert!(game.selected_target().is_none());
+    }
+
+    #[test]
+    fn displayed_stats_match_each_levels_projectiles_and_reload() {
+        for kind in [Kind::Seed, Kind::Frost] {
+            let mut game = Game::new();
+            game.money = 1000;
+            game.build(0, kind);
+            game.launch();
+            game.step(0.);
+            game.pests[0].hp = 10000.;
+            game.pests[0]
+                .cursor
+                .advance(&game.route, 600., 0.25)
+                .unwrap();
+            for level in 0..3 {
+                game.towers[0].as_mut().unwrap().cooldown = 0.;
+                game.step(0.);
+                let tower = game.towers[0].unwrap();
+                assert_eq!(tower.level, level);
+                assert_eq!(game.shots.last().unwrap().damage, tower.damage());
+                assert_eq!(tower.cooldown, tower.reload());
+                if level < 2 {
+                    let before = game.money;
+                    assert!(game.upgrade(0));
+                    assert_eq!(game.money, before - tower.upgrade_cost());
+                    assert!(game.towers[0].unwrap().damage() > tower.damage());
+                    assert_eq!(game.towers[0].unwrap().range(), tower.range() + 18.);
+                    assert!(game.towers[0].unwrap().reload() < tower.reload());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rejected_actions_explain_why_without_changing_the_economy() {
+        let mut game = Game::new();
+        assert_eq!(
+            game.build_status(99, Kind::Seed),
+            Err(ActionError::InvalidPlot)
+        );
+        assert_eq!(game.upgrade_status(0), Err(ActionError::Empty));
+        assert!(game.build(0, Kind::Seed));
+        assert_eq!(
+            game.build_status(0, Kind::Frost),
+            Err(ActionError::Occupied)
+        );
+        assert!(game.upgrade(0));
+        assert_eq!(
+            game.upgrade_status(0),
+            Err(ActionError::Funds { missing: 25 })
+        );
+        assert_eq!(
+            game.build_status(1, Kind::Frost),
+            Err(ActionError::Funds { missing: 5 })
+        );
+        for _ in 0..10 {
+            assert!(!game.upgrade(0));
+        }
+        assert_eq!(game.money, 75);
+        game.money = 100;
+        assert!(game.upgrade(0));
+        assert_eq!(game.upgrade_status(0), Err(ActionError::FullyGrown));
+        assert!(game.launch());
+        assert_eq!(game.wave_status(), Err(ActionError::WaveActive));
+        game.outcome = Outcome::Lost;
+        assert_eq!(game.upgrade_status(0), Err(ActionError::Finished));
+        assert_eq!(game.build_status(1, Kind::Seed), Err(ActionError::Finished));
+        assert_eq!(game.wave_status(), Err(ActionError::Finished));
+    }
+
+    #[test]
+    fn clearing_a_wave_pays_its_reward_once_and_clears_projectiles() {
+        let mut game = Game::new();
+        game.autoplay();
+        for _ in 0..7200 {
+            game.step(1. / 60.);
+            if !game.active {
+                break;
+            }
+        }
+        assert_eq!(game.outcome, Outcome::Playing);
+        assert!(!game.active);
+        assert_eq!(game.wave, 1);
+        assert!(game.shots.is_empty() && game.pests.is_empty());
+        let expected = game.level.money - Kind::Seed.price()
+            + game.kills * game.level.kill_reward
+            + game.level.waves[0].reward;
+        assert_eq!(game.money, expected);
+        for _ in 0..120 {
+            game.step(1. / 60.);
+        }
+        assert_eq!(
+            game.money, expected,
+            "idle ticks must not pay the wave again"
+        );
+    }
 
     #[test]
     fn frost_splashes_slow_nearby_pests_without_duplicate_damage() {
@@ -394,7 +698,11 @@ mod tests {
         game.step(1. / 120.);
         assert_eq!(game.pests[0].hp, before - 8.);
         assert_eq!(game.pests[1].hp, neighbor_hp);
-        assert!(game.pests.iter().all(|p| p.slow > 1. && p.flash > 0.));
+        assert!(
+            game.pests
+                .iter()
+                .all(|p| p.slow().is_some_and(|s| s.remaining_seconds > 1.) && p.impacts > 0)
+        );
     }
 
     #[test]

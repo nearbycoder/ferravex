@@ -1,3 +1,8 @@
+use ferravex_play::{
+    navigation::{Route3, RouteProjection},
+    persistence::{RecordBook, RecordDelta, run_micros},
+    racing::DriverRecovery,
+};
 use ferravex_render::prelude::*;
 
 pub const ROAD_HALF: f32 = 33.0;
@@ -7,6 +12,15 @@ const GATES: usize = 16;
 
 pub struct Track {
     pub points: Vec<Vec2>,
+    route: Route3,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RoadCue {
+    Straight,
+    Left,
+    Right,
+    WrongWay,
 }
 impl Track {
     pub fn new() -> Self {
@@ -24,7 +38,7 @@ impl Track {
             vec2(520., 390.),
             vec2(350., 530.),
         ];
-        let points = (0..SAMPLES)
+        let points: Vec<Vec2> = (0..SAMPLES)
             .map(|i| {
                 let k = i / 16;
                 let t = (i % 16) as f32 / 16.;
@@ -40,24 +54,47 @@ impl Track {
                     + (-a + 3. * b - 3. * c + d) * t * t * t)
             })
             .collect();
-        Self { points }
+        let mut route = Route3::new(SAMPLES).expect("bounded rally circuit");
+        route
+            .set_closed(&points.iter().map(|p| p.extend(0.)).collect::<Vec<_>>())
+            .expect("finite authored circuit");
+        Self { points, route }
     }
     pub fn tangent(&self, index: usize) -> Vec2 {
         (self.points[(index + 1) % SAMPLES] - self.points[(index + SAMPLES - 1) % SAMPLES])
             .normalize()
     }
+    pub fn project(&self, position: Vec2) -> RouteProjection {
+        self.route
+            .project(position.extend(0.))
+            .expect("finite rally position")
+            .expect("nonempty rally circuit")
+    }
     pub fn nearest(&self, p: Vec2) -> (usize, f32) {
-        let mut best = (0, f32::MAX);
-        for i in 0..SAMPLES {
-            let a = self.points[i];
-            let ab = self.points[(i + 1) % SAMPLES] - a;
-            let t = ((p - a).dot(ab) / ab.length_squared()).clamp(0., 1.);
-            let distance = p.distance(a + ab * t);
-            if distance < best.1 {
-                best = (i, distance);
-            }
+        let hit = self.project(p);
+        (hit.segment, hit.distance_to_route as f32)
+    }
+    /// Geometry is guidance only; ordered gate crossings remain authoritative.
+    pub fn road_cue(&self, car: &Car) -> RoadCue {
+        let hit = self.project(car.pose.position);
+        let forward = Vec2::from_angle(car.pose.angle);
+        let tangent = hit.direction.truncate();
+        if forward.dot(tangent) < -0.5 || car.velocity.dot(tangent) < -5. {
+            return RoadCue::WrongWay;
         }
-        best
+        let ahead = self
+            .route
+            .sample(hit.distance + f64::from((car.velocity.length() * 0.5).clamp(65., 125.)))
+            .expect("bounded rally lookahead")
+            .expect("nonempty rally circuit");
+        let turn = tangent.perp_dot(ahead.direction.truncate());
+        if turn > 0.25 {
+            RoadCue::Right // The circuit uses Y-down display coordinates.
+        } else if turn < -0.25 {
+            RoadCue::Left
+        } else {
+            RoadCue::Straight
+        }
     }
     pub fn gate(&self, gate: usize) -> (Vec2, Vec2) {
         let i = gate * SAMPLES / GATES;
@@ -186,6 +223,7 @@ pub struct Race {
     pub total_time: f32,
     pub best_time: Option<f32>,
     pub last_lap: Option<f32>,
+    pub last_comparison: Option<RecordDelta>,
     pub best_ghost: Vec<Pose>,
     recording: Vec<Pose>,
     ghost_track: Option<ferravex_play::replay::ghost::GhostTrack>,
@@ -203,6 +241,7 @@ impl Race {
             total_time: 0.,
             best_time: None,
             last_lap: None,
+            last_comparison: None,
             best_ghost: Vec::new(),
             recording: vec![Car::new(track).pose],
             ghost_track: None,
@@ -213,6 +252,16 @@ impl Race {
     }
     pub fn finished(&self) -> bool {
         self.laps >= LAPS
+    }
+    /// Gates cleared on the current lap, including the finish on a completed race.
+    pub fn checkpoints_passed(&self) -> usize {
+        if self.finished() {
+            GATES
+        } else if self.next_gate == 0 {
+            GATES - 1
+        } else {
+            self.next_gate - 1
+        }
     }
     pub fn reset(&mut self, track: &Track) {
         let tuning = self.car.tuning;
@@ -226,7 +275,12 @@ impl Race {
         self.ghost_track = ghost_track;
     }
     pub fn step(&mut self, track: &Track, controls: Controls, dt: f32) {
-        if self.finished() || !dt.is_finite() || dt <= 0. {
+        if self.finished()
+            || !dt.is_finite()
+            || dt <= 0.
+            || !controls.throttle.is_finite()
+            || !controls.steer.is_finite()
+        {
             return;
         }
         let dt = dt.min(1. / 30.);
@@ -243,6 +297,7 @@ impl Race {
             if self.next_gate == 0 {
                 self.laps += 1;
                 self.last_lap = Some(self.lap_time);
+                self.last_comparison = compare_lap(self.best_time, self.lap_time);
                 if self.best_time.is_none_or(|best| self.lap_time < best) {
                     self.best_time = Some(self.lap_time);
                     self.best_ghost.clone_from(&self.recording);
@@ -260,11 +315,16 @@ impl Race {
         if self.best_ghost.is_empty() || self.finished() {
             return None;
         }
-        let time = self.lap_time * 20.;
+        // Recorded keys are six simulation ticks apart. Integer division avoids
+        // accumulated f32 lap-time drift at exact ghost keys and endpoints.
+        let tick = self.lap_ticks / 6;
+        let alpha = (self.lap_ticks % 6) as f32 / 6.;
         let sample = self
             .ghost_track
             .as_ref()?
-            .sample(time.floor() as u64, time.fract())?;
+            .sample_checked(tick, alpha)
+            .ok()?
+            .sample()?; // Hide missing/truncated history; never clamp a parked ghost.
         let heading = sample.rotation * Vec3::X;
         Some(Pose {
             position: vec2(sample.position.x, sample.position.y),
@@ -289,6 +349,11 @@ impl Race {
             }
         }
         self.ghost_track = Some(track);
+    }
+    pub fn driver_reversing(&self) -> bool {
+        self.driver
+            .status()
+            .is_some_and(|status| status.recovery == DriverRecovery::Reversing)
     }
     /// Pure pursuit driver feeds the exact same controls and vehicle model as a human.
     pub fn autopilot(&mut self, track: &Track) -> Controls {
@@ -315,9 +380,172 @@ impl Race {
     }
 }
 
+/// Compare only an accepted lap with the best before that lap. The temporary
+/// one-entry book supplies shared microsecond comparison semantics without
+/// replacing the existing f32 record authority or changing the saved ghost.
+fn compare_lap(previous: Option<f32>, completed: f32) -> Option<RecordDelta> {
+    let mut book = RecordBook::default();
+    if let Some(previous) = previous {
+        book.record("lap", 0, 0, Some(run_micros(previous)?)).ok()?;
+    }
+    book.compare("lap", 0, 0, Some(run_micros(completed)?))
+        .ok()?
+        .time_us
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_projection_matches_the_authored_road_and_closes_the_seam() {
+        let track = Track::new();
+        // Compare with the original f32 road-distance calculation on/off road.
+        for index in 0..SAMPLES {
+            let a = track.points[index];
+            let b = track.points[(index + 1) % SAMPLES];
+            let tangent = (b - a).normalize();
+            let normal = vec2(-tangent.y, tangent.x);
+            for offset in [-60., -33.5, -32.5, 0., 32.5, 33.5, 60.] {
+                let p = a.lerp(b, 0.4) + normal * offset;
+                let legacy = (0..SAMPLES)
+                    .map(|i| {
+                        let start = track.points[i];
+                        let ab = track.points[(i + 1) % SAMPLES] - start;
+                        let t = ((p - start).dot(ab) / ab.length_squared()).clamp(0., 1.);
+                        p.distance(start + ab * t)
+                    })
+                    .fold(f32::MAX, f32::min);
+                let hit = track.project(p);
+                assert!((hit.distance_to_route as f32 - legacy).abs() < 0.0002);
+                assert_eq!(hit.distance_to_route as f32 > ROAD_HALF, legacy > ROAD_HALF);
+                assert!(track.nearest(hit.position.truncate()).1 < 0.0002);
+            }
+        }
+        assert_eq!(track.project(track.points[0]).progress, 0.);
+        let closing = track.points[SAMPLES - 1].lerp(track.points[0], 0.5);
+        let hit = track.project(closing);
+        assert_eq!(hit.segment, SAMPLES - 1);
+        assert!(hit.progress > 0.99 && hit.progress < 1.);
+    }
+
+    #[test]
+    fn bend_and_wrong_way_guidance_observes_geometry_without_awarding_progress() {
+        let track = Track::new();
+        let mut race = Race::new(&track);
+        let mut left = false;
+        let mut right = false;
+        for index in 0..SAMPLES {
+            let a = track.points[index];
+            let b = track.points[(index + 1) % SAMPLES];
+            let tangent = (b - a).normalize();
+            race.car.pose = Pose {
+                position: a.lerp(b, 0.5),
+                angle: tangent.y.atan2(tangent.x),
+            };
+            race.car.velocity = tangent * 100.;
+            let cue = track.road_cue(&race.car);
+            left |= cue == RoadCue::Left;
+            right |= cue == RoadCue::Right;
+            assert_ne!(cue, RoadCue::WrongWay);
+            race.car.pose.angle += std::f32::consts::PI;
+            assert_eq!(track.road_cue(&race.car), RoadCue::WrongWay);
+            race.car.pose.angle -= std::f32::consts::PI;
+            race.car.velocity = -tangent * 30.;
+            assert_eq!(track.road_cue(&race.car), RoadCue::WrongWay);
+        }
+        assert!(
+            left && right,
+            "the authored circuit contains both kinds of bends"
+        );
+        assert_eq!((race.laps, race.next_gate, race.ticks), (0, 1, 0));
+        assert!(race.last_comparison.is_none());
+    }
+
+    #[test]
+    fn ghost_uses_recorded_tick_cadence_and_hides_after_the_last_key() {
+        let track = Track::new();
+        let mut race = Race::new(&track);
+        race.best_ghost = vec![
+            Pose {
+                position: vec2(100., 100.),
+                angle: 0.,
+            },
+            Pose {
+                position: vec2(160., 100.),
+                angle: 0.,
+            },
+        ];
+        race.rebuild_ghost();
+        // Even a mismatched presentation timer cannot skew a recorded tick.
+        race.lap_time = 999.;
+        for (ticks, x) in [(0, 100.), (3, 130.), (6, 160.)] {
+            race.lap_ticks = ticks;
+            assert!((race.ghost().unwrap().position.x - x).abs() < 0.0001);
+        }
+        race.lap_ticks = 7;
+        assert!(race.ghost().is_none());
+        race.reset(&track);
+        assert_eq!(race.ghost().unwrap().position, vec2(100., 100.));
+    }
+
+    #[test]
+    fn actual_laps_compare_against_the_previous_best_and_restart_clears_summary() {
+        let track = Track::new();
+        let mut race = Race::new(&track);
+        let mut accepted = 0;
+        for _ in 0..24000 {
+            let (lap, best) = (race.laps, race.best_time);
+            let controls = race.autopilot(&track);
+            race.step(&track, controls, 1. / 120.);
+            if race.laps > lap {
+                accepted += 1;
+                let summary = race.last_comparison.unwrap();
+                assert_eq!(summary.previous, best.and_then(run_micros));
+                assert_eq!(summary.value, run_micros(race.last_lap.unwrap()).unwrap());
+                assert_eq!(
+                    summary.delta,
+                    summary
+                        .previous
+                        .map(|prior| i128::from(summary.value) - i128::from(prior))
+                );
+                assert_eq!(summary.comparison.is_new_best(), race.best_time != best);
+            }
+            if race.finished() {
+                break;
+            }
+        }
+        assert_eq!(accepted, 3);
+        let best = race.best_time;
+        race.reset(&track);
+        assert_eq!(race.best_time, best);
+        assert!(race.last_comparison.is_none());
+        assert!(!race.driver_reversing());
+    }
+
+    #[test]
+    fn invalid_controls_do_not_poison_projection_or_advance_the_race() {
+        let track = Track::new();
+        let mut race = Race::new(&track);
+        for controls in [
+            Controls {
+                throttle: f32::NAN,
+                ..Default::default()
+            },
+            Controls {
+                steer: f32::INFINITY,
+                ..Default::default()
+            },
+        ] {
+            race.step(&track, controls, 1. / 120.);
+        }
+        assert_eq!(race.ticks, 0);
+        assert_eq!(race.car.pose.position, track.points[0]);
+        assert!(race.car.velocity.is_finite());
+        assert!(race.last_comparison.is_none());
+        race.step(&track, Controls::default(), 1. / 120.);
+        assert_eq!(race.ticks, 1);
+    }
 
     #[test]
     fn handbrake_retains_slip_and_boundary_impacts_preserve_a_slide() {
@@ -373,6 +601,31 @@ mod tests {
             race.step(&track, Controls::default(), 1. / 120.);
             assert_eq!(race.next_gate, expected);
             assert_eq!(race.laps, 0);
+        }
+    }
+    #[test]
+    fn hud_progress_requires_every_gate_and_resets_only_after_a_valid_lap() {
+        let track = Track::new();
+        let mut race = Race::new(&track);
+        assert_eq!(race.checkpoints_passed(), 0);
+        for lap in 1..=LAPS {
+            for gate in (1..GATES).chain(std::iter::once(0)) {
+                let (p, tangent) = track.gate(gate);
+                race.car.pose.position = p - tangent;
+                race.car.pose.angle = tangent.y.atan2(tangent.x);
+                race.car.velocity = tangent * 240.;
+                race.step(&track, Controls::default(), 1. / 120.);
+                if gate == 0 {
+                    assert_eq!(race.laps, lap);
+                    assert_eq!(
+                        race.checkpoints_passed(),
+                        if lap == LAPS { GATES } else { 0 }
+                    );
+                } else {
+                    assert_eq!(race.checkpoints_passed(), gate);
+                    assert_eq!(race.laps, lap - 1);
+                }
+            }
         }
     }
     #[test]

@@ -1,7 +1,116 @@
 <!doctype html>
-<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Pocket Rally · Ferravex</title>
-<style>*{box-sizing:border-box}html,body{margin:0;height:100%;background:#101a21;color:#e2ece2;font:14px system-ui}body{display:flex;flex-direction:column}nav{height:40px;flex:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 16px;border-bottom:1px solid #2c3c45}nav>a{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}nav>button{flex:none}a{color:#97c3b5;text-decoration:none}canvas{width:100%;height:calc(100% - 40px);display:block;touch-action:none;outline:none}button[data-controls],button[data-audio]{font:inherit;color:#c3d9d0;background:transparent;border:1px solid #40545b;border-radius:4px;padding:3px 9px;cursor:pointer}button[data-controls]:hover,button[data-controls]:focus-visible,button[data-audio]:hover,button[data-audio]:focus-visible{background:#293f46;outline:1px solid #97c3b5}button[data-controls]:disabled,button[data-audio]:disabled{opacity:.4;cursor:wait}nav>span{margin-left:auto;margin-right:16px}@media(max-width:540px){nav>span{display:none}}[role=status]{position:absolute;top:50%;width:100%;text-align:center;pointer-events:none}</style>
-<nav><a href="../">FERRAVEX / Pocket Rally</a><span>2D · Rally time trial</span><button type="button" data-controls title="Controls (F2)" aria-pressed="false" disabled>Controls</button><button type="button" data-audio title="Enable sound" aria-pressed="false" disabled>Sound off</button></nav>
-<canvas tabindex="0" data-game="pocket-rally" aria-label="Pocket Rally game"></canvas><div role="status">Loading original Rust engine…</div>
-<script type="module" src="../runtime.js"></script></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Pocket Rally · Ferravex</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: #101a21; color: #e2ece2; font: 16px/1.5 system-ui; }
+    #pocket-rally-host { height: 100vh; height: 100dvh; display: flex; flex-direction: column; }
+    /* Keep the shared Details/Fullscreen buttons in the wrapping toolbar. */
+    #pocket-rally-host nav { height: auto; flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; padding: .5rem max(.75rem, env(safe-area-inset-right)) .5rem max(.75rem, env(safe-area-inset-left)); border-bottom: 1px solid #40545b; }
+    #pocket-rally-host nav a { display: inline-flex; align-items: center; min-height: 44px; padding: .25rem; }
+    a { color: #b5dfcf; text-underline-offset: .2em; }
+    h1 { flex: 1 1 10rem; margin: 0; font-size: 1.125rem; }
+    #pocket-rally-host nav button, #rally-help-toggle { flex: none; max-width: 100%; min-height: 44px; padding: .5rem .75rem; border: 1px solid #667f85; border-radius: 4px; background: #18262b; color: #e2ece2; font: inherit; cursor: pointer; }
+    #pocket-rally-host nav button:hover, #rally-help-toggle:hover { background: #293f46; }
+    #pocket-rally-host nav button:disabled { opacity: .55; cursor: wait; }
+    #pocket-rally-host :focus-visible { outline: 3px solid #ffdb92; outline-offset: 3px; }
+    #rally-game { position: relative; flex: 1 0 16rem; min-width: 0; }
+    #rally-canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; touch-action: none; }
+    #rally-canvas:focus-visible { outline-offset: -4px; }
+    #rally-status { position: absolute; top: 45%; left: 0; width: 100%; margin: 0; padding: 1rem; text-align: center; pointer-events: none; }
+    #rally-status:not(:empty) { background: #101a21ee; }
+    #rally-help { flex: none; padding: .75rem max(.75rem, env(safe-area-inset-right)) max(.75rem, env(safe-area-inset-bottom)) max(.75rem, env(safe-area-inset-left)); border-top: 1px solid #40545b; }
+    #rally-guide { max-width: 76rem; margin: 0 auto; overflow-wrap: anywhere; -webkit-user-select: text; user-select: text; }
+    #rally-guide h2 { font-size: 1.125rem; margin: 1rem 0 .5rem; }
+    #rally-guide p, #rally-guide dl { margin: .5rem 0 1rem; }
+    #rally-guide dt { font-weight: 600; }
+    #rally-guide dd { margin: 0 0 .75rem; }
+    kbd { display: inline-block; padding: 0 .3rem; border: 1px solid #667f85; border-radius: 3px; background: #22343c; color: #fff; font: inherit; }
+    .rally-guide-columns { display: grid; gap: 0 2rem; }
+    @media (min-width: 48rem) { .rally-guide-columns { grid-template-columns: 1fr 1fr; } }
+    @media (max-width: 36rem) { #pocket-rally-host nav h1 { flex-basis: calc(100% - 7rem); } }
+    @media (forced-colors: active) { #pocket-rally-host :focus-visible { outline-color: Highlight; } }
+  </style>
+</head>
+<body id="pocket-rally-host">
+  <nav aria-label="Game and player tools">
+    <a href="../">All games</a>
+    <h1 id="rally-title">Pocket Rally</h1>
+    <button type="button" data-controls title="Controls (F2)" aria-pressed="false" disabled>Controls</button>
+    <button type="button" data-audio title="Enable sound" aria-pressed="false" disabled>Sound off</button>
+  </nav>
+  <main id="rally-game" aria-labelledby="rally-title">
+    <canvas id="rally-canvas" tabindex="0" data-game="pocket-rally" aria-label="Pocket Rally game canvas" aria-labelledby="rally-title" aria-describedby="rally-objective rally-focus rally-bindings">
+      Pocket Rally is a graphical rally time trial. JavaScript and WebGL2 are required to play. Open How to race below for the race objective and keyboard help.
+    </canvas>
+    <p id="rally-status" role="status" aria-live="polite" aria-atomic="true">Loading Pocket Rally — three laps, sixteen gates per lap…</p>
+  </main>
+  <footer id="rally-help">
+    <button id="rally-help-toggle" type="button" aria-expanded="false" aria-controls="rally-guide">How to race · keyboard and focus help</button>
+    <section id="rally-guide" aria-label="How to race" hidden>
+      <p id="rally-objective">A top-down rally time trial: clear sixteen marked gates in order on each of three laps. The race starts automatically with a 3, 2, 1, GO countdown. Grass slows the car; a translucent ghost shows your best lap.</p>
+      <p id="rally-focus">Focus the game canvas to drive. Tab leaves the race canvas; Shift+Tab leaves it even while Controls is open. Pause before reading this guide; opening the guide does not pause the race.</p>
+      <p id="rally-bindings">The keys below are defaults. Saved bindings may differ. Open Controls (F2 while the canvas is focused) to view or change your current keyboard and gamepad bindings.</p>
+      <div class="rally-guide-columns">
+        <section aria-labelledby="rally-defaults-title">
+          <h2 id="rally-defaults-title">Default keyboard controls</h2>
+          <dl>
+            <dt>Steer left / right</dt><dd><kbd>A</kbd> / <kbd>D</kbd> or <kbd>Left arrow</kbd> / <kbd>Right arrow</kbd></dd>
+            <dt>Accelerate</dt><dd><kbd>W</kbd> or <kbd>Up arrow</kbd></dd>
+            <dt>Brake / reverse</dt><dd><kbd>S</kbd> or <kbd>Down arrow</kbd></dd>
+            <dt>Handbrake</dt><dd><kbd>Space</kbd> — listed as “Brake / slow” in Controls.</dd>
+            <dt>Pause / resume</dt><dd><kbd>Escape</kbd> while driving.</dd>
+            <dt>Restart race</dt><dd><kbd>R</kbd>; after the finish, <kbd>Enter</kbd> also starts another race. Restart keeps your best lap and ghost.</dd>
+          </dl>
+        </section>
+        <section aria-labelledby="rally-menus-title">
+          <h2 id="rally-menus-title">Controls, menus and focus</h2>
+          <p>In Controls, use arrow keys or Tab to choose an item and Enter to select it. Escape cancels a pending rebind first; otherwise it closes Controls. F2 also toggles Controls.</p>
+          <p>Details contains presentation settings and Player tools, including text size, contrast and reduced motion. Done or Escape closes Details and returns focus to the canvas. The Sound button enables game audio.</p>
+          <p>Use Tab and Shift+Tab to move between page buttons, this help button and the game. Page buttons use their normal Enter and Space actions. The All games link returns to the local game catalog.</p>
+        </section>
+      </div>
+    </section>
+    <noscript><p>JavaScript is required to play Pocket Rally and open its controls. You can return to All games above.</p></noscript>
+  </footer>
+  <script>
+    (() => {
+      const canvas = document.getElementById('rally-canvas');
+      const controls = document.querySelector('[data-controls]');
+      const guide = document.getElementById('rally-guide');
+      const help = document.getElementById('rally-help-toggle');
+      help.addEventListener('click', () => {
+        guide.hidden = !guide.hidden;
+        help.setAttribute('aria-expanded', String(!guide.hidden));
+      });
+
+      // The shared input bridge handles keys at window level. Keep native link
+      // activation and a way out of the canvas without replacing game bindings.
+      document.querySelector('nav').addEventListener('keydown', event => {
+        if (event.target.closest('a')) event.stopPropagation();
+      });
+      canvas.addEventListener('keydown', event => {
+        if (event.code === 'Tab' && (event.shiftKey || controls.getAttribute('aria-pressed') !== 'true')) {
+          event.stopPropagation();
+        }
+      });
+
+      // bindPlayer installs its own description. Retain that shared help and
+      // these game-specific references, including if player setup runs later.
+      const describe = () => {
+        const current = canvas.getAttribute('aria-describedby') || '';
+        const ids = new Set(current.split(/\s+/).filter(Boolean));
+        for (const id of ['rally-objective', 'rally-focus', 'rally-bindings']) ids.add(id);
+        const next = [...ids].join(' ');
+        if (current !== next) canvas.setAttribute('aria-describedby', next);
+      };
+      new MutationObserver(describe).observe(canvas, { attributes: true, attributeFilter: ['aria-describedby'] });
+      describe();
+    })();
+  </script>
+  <script type="module" src="../runtime.js"></script>
+</body>
+</html>

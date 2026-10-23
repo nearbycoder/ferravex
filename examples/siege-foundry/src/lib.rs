@@ -1,18 +1,36 @@
 //! A compact destruction range: all knockdowns come from rigid-body contacts.
-use ferravex_core::FixedClock;
+//!
+//! The host uses a shared session to gate fixed physics ticks. Starting or
+//! rebuilding never fires a shot; only a fresh Fire edge can spend ammunition.
+//!
+//! ```
+//! use ferravex_core::session::{GameSession, SessionState};
+//! let mut session = GameSession::new(120.0, 12, false);
+//! assert!(session.start());
+//! let frame = session.advance(1.0 / 60.0);
+//! assert_eq!(frame.steps, 2);
+//! assert!(session.finish(true));
+//! assert_eq!(session.state(), SessionState::Won);
+//! assert_eq!(session.advance(1.0).steps, 0);
+//! session.restart(); // The host also rebuilds bodies, ammunition and feedback.
+//! assert_eq!(session.tick(), 0);
+//! ```
+use ferravex_core::session::{GameSession, SessionState};
 use ferravex_physics::d3::{
     ColliderBuilder, PhysicsWorld, RigidBodyBuilder, RigidBodyHandle, Vector,
 };
 use ferravex_render::audio::{Cue, GameAudio, Surface};
 use ferravex_render::input::{
-    PlayerInput, Preset,
+    HintDevice, PlayerInput, Preset,
     touch::{Control, Output, Region},
 };
 use ferravex_render::{
     demo::Demo,
     mesh::Mesh3d,
+    preferences,
     prelude::*,
     shaders::{LitMaterial, LitSettings},
+    ui::{self, ButtonOptions},
 };
 
 #[cfg(test)]
@@ -20,6 +38,8 @@ const DT: f32 = 1.0 / 120.0;
 const AMMO: u8 = 8;
 const GOAL: usize = 6;
 const SPEED: f32 = 28.0;
+const RELOAD: f32 = 0.8;
+const SETTLE: f32 = 6.0;
 const PIVOT: Vec3 = Vec3::new(0.0, 1.3, 15.0);
 const SKY: Color = Color::from_rgba(173, 177, 161, 255);
 const INK: Color = Color::from_rgba(34, 40, 39, 255);
@@ -183,7 +203,7 @@ impl Range {
     }
 
     fn fire(&mut self) -> bool {
-        if self.phase != Phase::Aiming || self.cooldown > 0.0 || self.ammo == 0 {
+        if !self.can_fire() {
             return false;
         }
         let direction = self.direction();
@@ -203,12 +223,20 @@ impl Range {
             previous_position: muzzle,
         });
         self.ammo -= 1;
-        self.cooldown = 0.8;
+        self.cooldown = RELOAD;
         self.since_shot = 0.0;
         true
     }
 
+    fn can_fire(&self) -> bool {
+        self.phase == Phase::Aiming && self.cooldown <= 0.0 && self.ammo > 0
+    }
+
     fn step(&mut self, dt: f32) {
+        // A result is final: late debris must not change a loss into a win.
+        if self.phase != Phase::Aiming {
+            return;
+        }
         self.elapsed += dt;
         self.since_shot += dt;
         self.cooldown = (self.cooldown - dt).max(0.0);
@@ -235,7 +263,7 @@ impl Range {
         }
         if self.score() == GOAL {
             self.phase = Phase::Won;
-        } else if self.ammo == 0 && self.since_shot > 6.0 {
+        } else if self.ammo == 0 && self.since_shot > SETTLE {
             self.phase = Phase::Lost;
         }
     }
@@ -271,6 +299,173 @@ impl Range {
         } else {
             false
         }
+    }
+}
+
+#[derive(Default)]
+struct Feedback {
+    shot: f32,
+    destruction: f32,
+    knocked_down: usize,
+    rebuilt: f32,
+    recoil: f32,
+    motion_scale: f32,
+}
+
+impl Feedback {
+    fn sync_preferences(&mut self) {
+        let policy = preferences::feedback_policy();
+        self.apply_motion(policy.reduced_motion(), policy.intensity());
+        // This range has no flash, camera shake or particle channels. Static
+        // confirmations and target colors remain visible under either policy.
+    }
+
+    fn apply_motion(&mut self, reduced: bool, intensity: f32) {
+        self.motion_scale = if reduced { 0.0 } else { intensity };
+        if self.motion_scale == 0.0 {
+            // Forget the old pose impulse, including during paused/zero ticks.
+            self.recoil = 0.0;
+        }
+    }
+
+    fn accepted_shot(&mut self) {
+        self.shot = 1.0;
+        self.rebuilt = 0.0;
+        self.recoil = if self.motion_scale > 0.0 { 0.3 } else { 0.0 };
+    }
+
+    fn barrel_offset(&self) -> f32 {
+        self.recoil * self.motion_scale
+    }
+
+    fn step(&mut self, dt: f32) {
+        self.shot = (self.shot - dt).max(0.0);
+        self.destruction = (self.destruction - dt).max(0.0);
+        self.rebuilt = (self.rebuilt - dt).max(0.0);
+        self.recoil = (self.recoil - dt * 1.2).max(0.0);
+    }
+}
+
+#[derive(Default)]
+struct FrameFeedback {
+    alpha: f32,
+    fired: bool,
+    destroyed: usize,
+    outcome: Option<Phase>,
+}
+
+#[derive(Default)]
+struct TickInput {
+    fire: bool,
+    aim: Vec2,
+}
+
+/// Session host shared by interactive play and headless tests. Presentation
+/// policy is read here, outside the range's fixed physics and gameplay rules.
+struct Foundry {
+    range: Range,
+    session: GameSession,
+    pending_fire: bool,
+    feedback: Feedback,
+}
+
+impl Foundry {
+    fn new(autoplay: bool) -> Self {
+        Self {
+            range: Range::new(),
+            session: GameSession::new(120.0, 12, autoplay),
+            pending_fire: false,
+            feedback: Feedback::default(),
+        }
+    }
+
+    fn rebuild(&mut self) {
+        self.range = Range::new();
+        self.session.restart();
+        self.pending_fire = false;
+        self.feedback = Feedback {
+            rebuilt: 1.8,
+            ..Feedback::default()
+        };
+    }
+
+    fn set_paused(&mut self, paused: bool) {
+        self.session.set_paused(paused);
+        if paused {
+            self.pending_fire = false;
+        }
+    }
+
+    fn queue_fire(&mut self) {
+        // Ignore reload/terminal presses instead of deferring an unwanted shot.
+        if self.session.is_playing() && self.range.can_fire() {
+            self.pending_fire = true;
+        }
+    }
+
+    #[cfg(test)]
+    fn advance(&mut self, elapsed: f64, autoplay: bool) -> FrameFeedback {
+        self.advance_input(elapsed, autoplay, TickInput::default)
+    }
+
+    fn advance_input(
+        &mut self,
+        elapsed: f64,
+        autoplay: bool,
+        mut input: impl FnMut() -> TickInput,
+    ) -> FrameFeedback {
+        // Presentation settings are sampled even when session.advance produces
+        // no ticks (ready, paused, controls, results, or a high render rate).
+        self.feedback.sync_preferences();
+        let frame = self.session.advance(elapsed);
+        let mut events = FrameFeedback {
+            alpha: frame.alpha,
+            ..FrameFeedback::default()
+        };
+        for _ in 0..frame.steps {
+            self.feedback.step(frame.dt);
+            let input = input();
+            if !autoplay {
+                self.range.yaw =
+                    (self.range.yaw + input.aim.x * frame.dt * 0.33).clamp(-0.55, 0.55);
+                self.range.elevation =
+                    (self.range.elevation + input.aim.y * frame.dt * 0.2).clamp(0.025, 0.65);
+                if input.fire {
+                    self.queue_fire();
+                }
+            }
+            if autoplay && self.range.autoplay() {
+                self.queue_fire();
+            }
+            if std::mem::take(&mut self.pending_fire) && self.range.fire() {
+                self.feedback.accepted_shot();
+                events.fired = true;
+            }
+            let before = self.range.score();
+            self.range.step(frame.dt);
+            let destroyed = self.range.score() - before;
+            if destroyed > 0 {
+                self.feedback.knocked_down = if self.feedback.destruction > 0.0 {
+                    self.feedback.knocked_down + destroyed
+                } else {
+                    destroyed
+                };
+                self.feedback.destruction = 2.0;
+                events.destroyed += destroyed;
+            }
+            if self.range.phase != Phase::Aiming {
+                self.session.finish(self.range.phase == Phase::Won);
+                self.pending_fire = false;
+                events.outcome = Some(self.range.phase);
+                break;
+            }
+        }
+        if !self.session.is_playing() {
+            // Show the current pose when frozen, not the prior tick's pose.
+            events.alpha = 1.0;
+        }
+        self.range.refresh_preview(frame.steps > 0);
+        events
     }
 }
 
@@ -318,19 +513,11 @@ impl Art {
         }
     }
 
-    fn draw(&self, game: &Range, alpha: f32, material: &LitMaterial) {
-        let eye = vec3(23.0, 18.0, 28.0);
-        set_camera(&Camera3D {
-            position: eye,
-            target: vec3(0.0, 1.5, 3.5),
-            up: Vec3::Y,
-            fovy: 43.0_f32.to_radians(),
-            z_near: 0.1,
-            z_far: 130.0,
-            ..Default::default()
-        });
+    fn draw(&self, game: &Range, alpha: f32, recoil: f32, material: &LitMaterial) {
+        let camera = RangeCamera::new(screen_width(), screen_height());
+        set_camera(&camera);
         material.begin(LitSettings {
-            camera_position: eye,
+            camera_position: camera.eye,
             fog_color: SKY,
             fog_start: 40.0,
             fog_end: 100.0,
@@ -390,7 +577,6 @@ impl Art {
                 Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
             );
         }
-        let recoil = (game.cooldown - 0.55).max(0.0) * 1.2;
         self.barrel.draw(PIVOT + direction * (0.3 - recoil), q);
         self.muzzle.draw(PIVOT + direction * (1.515 - recoil), q);
         material.end();
@@ -410,6 +596,92 @@ impl Art {
     }
 }
 
+/// Fits the authored range between the HUD panels without moving the eye,
+/// changing depth/fog, or coupling the view to moving debris or player aim.
+struct RangeCamera {
+    matrix: Mat4,
+    eye: Vec3,
+}
+
+impl RangeCamera {
+    fn new(w: f32, h: f32) -> Self {
+        let base = Camera3D {
+            position: vec3(23.0, 18.0, 28.0),
+            target: vec3(0.0, 1.5, 3.5),
+            up: Vec3::Y,
+            fovy: 43.0_f32.to_radians(),
+            z_near: 0.1,
+            z_far: 130.0,
+            ..Default::default()
+        };
+        let matrix = base.matrix(w, h);
+        let scene = HudLayout::new(w, h).scene;
+        let mut low = vec2(f32::INFINITY, f32::INFINITY);
+        let mut high = vec2(f32::NEG_INFINITY, f32::NEG_INFINITY);
+        // Standing towers, cannon including every legal muzzle direction, and
+        // the low arcs that reach the supports. The decoration may extend under
+        // the HUD; flying balls/debris never cause camera motion.
+        for (min, max) in [
+            (vec3(-4.6, 0.0, -4.6), vec3(4.6, 4.81, -3.4)),
+            (vec3(-1.4, 0.0, 13.0), vec3(1.4, 3.0, 16.4)),
+        ] {
+            for x in [min.x, max.x] {
+                for y in [min.y, max.y] {
+                    for z in [min.z, max.z] {
+                        let p = matrix.project_point3(vec3(x, y, z));
+                        let p = vec2((p.x + 1.0) * w * 0.5, (1.0 - p.y) * h * 0.5);
+                        low = low.min(p);
+                        high = high.max(p);
+                    }
+                }
+            }
+        }
+        let scale = (scene.w / (high.x - low.x))
+            .min(scene.h / (high.y - low.y))
+            .min(1.0);
+        // Smallest translation that contains the fitted bounds. In particular,
+        // an already fitting desktop view retains its original composition.
+        let shift_axis = |low: f32, high: f32, start: f32, size: f32| {
+            if low * scale < start {
+                start - low * scale
+            } else if high * scale > start + size {
+                start + size - high * scale
+            } else {
+                0.0
+            }
+        };
+        let shift = vec2(
+            shift_axis(low.x, high.x, scene.x, scene.w),
+            shift_axis(low.y, high.y, scene.y, scene.h),
+        );
+        let offset = vec3(
+            scale - 1.0 + 2.0 * shift.x / w,
+            1.0 - scale - 2.0 * shift.y / h,
+            0.0,
+        );
+        Self {
+            matrix: Mat4::from_translation(offset)
+                * Mat4::from_scale(vec3(scale, scale, 1.0))
+                * matrix,
+            eye: base.position,
+        }
+    }
+}
+
+impl Camera for RangeCamera {
+    fn matrix(&self, _: f32, _: f32) -> Mat4 {
+        self.matrix
+    }
+
+    fn depth(&self) -> bool {
+        true
+    }
+
+    fn position(&self) -> Option<Vec3> {
+        Some(self.eye)
+    }
+}
+
 fn label(text: &str, x: f32, y: f32, size: f32, color: Color) {
     draw_text(
         text,
@@ -421,26 +693,279 @@ fn label(text: &str, x: f32, y: f32, size: f32, color: Color) {
     draw_text(text, x, y, size, color);
 }
 
-fn button(rect: Rect, title: &str, enabled: bool) -> bool {
-    let pointer = Vec2::from(mouse_position());
-    let hover = rect.contains(pointer);
-    draw_rectangle(
-        rect.x,
-        rect.y,
-        rect.w,
-        rect.h,
-        if hover && enabled { RUST } else { STEEL },
-    );
-    let size = 19;
-    let width = measure_text(title, None, size, 1.0).width;
-    label(
+fn clicked(rect: Rect) -> bool {
+    rect.contains(Vec2::from(mouse_position())) && is_mouse_button_pressed(MouseButton::Left)
+}
+
+fn button(rect: Rect, title: &str, enabled: bool) {
+    // Keep click-on-press input resolution before simulation; the common helper
+    // supplies the matching disabled/hover palette and bounded label sizing.
+    let _ = ui::button_with_options(
+        rect,
         title,
-        rect.x + (rect.w - width) * 0.5,
-        rect.y + rect.h * 0.5 + 7.0,
-        size as f32,
-        if enabled { PAPER } else { GRAY },
+        ButtonOptions {
+            enabled,
+            selected: false,
+        },
     );
-    enabled && hover && is_mouse_button_pressed(MouseButton::Left)
+}
+
+fn fitted_label(text: &str, rect: Rect, size: u16, centered: bool) {
+    let metrics = get_default_font()
+        .try_metrics(size, 1.0)
+        .expect("HUD font size");
+    let fitted =
+        ui::fit_label(text, rect.w.max(0.0), metrics.glyph_advance()).expect("finite HUD bounds");
+    let x = rect.x
+        + if centered {
+            (rect.w - fitted.width) * 0.5
+        } else {
+            0.0
+        };
+    label(fitted.prefix, x, rect.y, f32::from(size), PAPER);
+    let prefix_width = metrics
+        .measure_line(fitted.prefix)
+        .expect("bounded HUD label")
+        .width;
+    label(
+        fitted.suffix,
+        x + prefix_width,
+        rect.y,
+        f32::from(size),
+        PAPER,
+    );
+}
+
+fn action_hint<'a>(input: &PlayerInput, action: &str, buffer: &'a mut [u8]) -> &'a str {
+    if input.current_device() == HintDevice::Touch {
+        // The preset's Touch 2/confirm channels are not installed here: this
+        // range uses its visible pointer buttons and a look-only touch region.
+        return "on-screen button";
+    }
+    // Never silently advertise a default binding after a remap or format error.
+    input.format_hint(action, buffer).unwrap_or("See Controls")
+}
+
+struct HudLayout {
+    compact: bool,
+    scene: Rect,
+    panel: Rect,
+    fire: Rect,
+    rebuild: Rect,
+    pause: Rect,
+}
+
+impl HudLayout {
+    fn new(w: f32, h: f32) -> Self {
+        let compact = w < 700.0;
+        let height = if compact { 196.0 } else { 148.0 };
+        let panel = Rect::new(16.0, h - height - 16.0, w - 32.0, height);
+        let width = (panel.w - 48.0) / 3.0;
+        let y = panel.y + panel.h - 54.0;
+        Self {
+            compact,
+            scene: Rect::new(16.0, 96.0, w - 32.0, (panel.y - 104.0).max(1.0)),
+            panel,
+            fire: Rect::new(32.0, y, width, 44.0),
+            rebuild: Rect::new(40.0 + width, y, width, 44.0),
+            pause: Rect::new(48.0 + width * 2.0, y, width, 44.0),
+        }
+    }
+}
+
+fn draw_hud(foundry: &Foundry, layout: &HudLayout, input: &PlayerInput) {
+    let game = &foundry.range;
+    let controls_open = input.controls_open();
+    let w = screen_width();
+    let state = foundry.session.state();
+    let panel_color = Color::new(0.10, 0.14, 0.13, 0.94);
+    draw_rectangle(16.0, 16.0, w - 32.0, 72.0, panel_color);
+    fitted_label(
+        "SIEGE FOUNDRY",
+        Rect::new(28.0, 43.0, w - 120.0, 24.0),
+        18,
+        false,
+    );
+    fitted_label(
+        "Topple 6 targets",
+        Rect::new(28.0, 69.0, w - 56.0, 20.0),
+        16,
+        false,
+    );
+    label(
+        &format!("{} / {}", game.score(), GOAL),
+        w - 88.0,
+        43.0,
+        16.0,
+        PAPER,
+    );
+    let panel = layout.panel;
+    draw_rectangle(panel.x, panel.y, panel.w, panel.h, panel_color);
+    let aim = format!(
+        "YAW {:+.0} / ELEV {:.1}",
+        game.yaw.to_degrees(),
+        game.elevation.to_degrees()
+    );
+    let power = format!("POWER {SPEED:.0} m/s - fixed");
+    fitted_label(
+        &aim,
+        Rect::new(28.0, panel.y + 25.0, panel.w - 24.0, 20.0),
+        16,
+        false,
+    );
+    label(
+        &power,
+        if layout.compact { 28.0 } else { 330.0 },
+        panel.y + if layout.compact { 48.0 } else { 25.0 },
+        16.0,
+        PAPER,
+    );
+    let ammo_y = panel.y + if layout.compact { 74.0 } else { 51.0 };
+    let ammo_label = format!("AMMO {} / {AMMO}", game.ammo);
+    label(&ammo_label, 28.0, ammo_y, 16.0, PAPER);
+    let ammo_start = 28. + measure_text(&ammo_label, None, 16, 1.).width + 15.;
+    for i in 0..AMMO {
+        let x = ammo_start + f32::from(i) * 16.0;
+        draw_circle(
+            x,
+            ammo_y - 6.0,
+            5.0,
+            if i < game.ammo { PAPER } else { STEEL },
+        );
+    }
+    let feedback = &foundry.feedback;
+    let status = if feedback.destruction > 0.0 {
+        format!("+{} TARGETS DOWN", feedback.knocked_down)
+    } else if feedback.shot > 0.0 {
+        format!("SHOT {} AWAY", AMMO - game.ammo)
+    } else if feedback.rebuilt > 0.0 {
+        "REBUILT: 8 SHOTS READY".into()
+    } else if game.ammo == 0 && game.phase == Phase::Aiming {
+        format!("SETTLING {:.1}s", (SETTLE - game.since_shot).max(0.0))
+    } else if game.cooldown > 0.0 {
+        format!("RELOADING {:.1}s", game.cooldown)
+    } else {
+        "Aim low at supports.".into()
+    };
+    fitted_label(
+        &status,
+        Rect::new(
+            28.0,
+            panel.y + if layout.compact { 103.0 } else { 77.0 },
+            panel.w - 24.0,
+            20.0,
+        ),
+        16,
+        false,
+    );
+    let mut hint_buffer = [0; 512];
+    let fire_hint = format!("FIRE: {}", action_hint(input, "fire", &mut hint_buffer));
+    if layout.compact {
+        fitted_label(
+            &fire_hint,
+            Rect::new(28.0, panel.y + 126.0, panel.w - 24.0, 20.0),
+            16,
+            false,
+        );
+    } else if w >= 900.0 {
+        fitted_label(
+            &fire_hint,
+            Rect::new(400.0, panel.y + 77.0, w - 428.0, 20.0),
+            16,
+            false,
+        );
+    }
+    let fire_title = match state {
+        SessionState::Ready => "START",
+        SessionState::Won => "AGAIN",
+        SessionState::Lost => "RETRY",
+        SessionState::Paused => "PAUSED",
+        SessionState::Playing if game.ammo == 0 => "EMPTY",
+        SessionState::Playing if game.cooldown > 0.0 => "LOADING",
+        SessionState::Playing => "FIRE",
+    };
+    let fire_enabled = !controls_open
+        && match state {
+            SessionState::Ready | SessionState::Won | SessionState::Lost => true,
+            SessionState::Playing => game.can_fire(),
+            SessionState::Paused => false,
+        };
+    button(layout.fire, fire_title, fire_enabled);
+    button(layout.rebuild, "REBUILD", !controls_open);
+    button(
+        layout.pause,
+        if foundry.session.is_paused() {
+            "RESUME"
+        } else {
+            "PAUSE"
+        },
+        !controls_open && matches!(state, SessionState::Playing | SessionState::Paused),
+    );
+    if game.cooldown > 0.0 {
+        draw_rectangle(
+            layout.fire.x,
+            layout.fire.y + layout.fire.h + 5.0,
+            layout.fire.w,
+            3.0,
+            STEEL,
+        );
+        draw_rectangle(
+            layout.fire.x,
+            layout.fire.y + layout.fire.h + 5.0,
+            layout.fire.w * (1.0 - game.cooldown / RELOAD),
+            3.0,
+            PAPER,
+        );
+    }
+    let (title, detail, action, button) = match state {
+        SessionState::Ready => (
+            "DEMOLITION RANGE",
+            "6 targets. 8 shots.",
+            "confirm",
+            "START",
+        ),
+        SessionState::Paused => (
+            "RANGE PAUSED",
+            "Shots + debris frozen.",
+            "pause",
+            if controls_open {
+                "CLOSE CONTROLS"
+            } else {
+                "RESUME"
+            },
+        ),
+        SessionState::Won => ("FOUNDRY CLEARED", "All 6 targets down.", "confirm", "AGAIN"),
+        SessionState::Lost => ("OUT OF SHOTS", "Break the supports.", "confirm", "RETRY"),
+        SessionState::Playing => return,
+    };
+    let prompt = if controls_open {
+        "Close Controls first.".to_owned()
+    } else {
+        format!(
+            "{button} / {}",
+            action_hint(input, action, &mut hint_buffer)
+        )
+    };
+    let panel_width = (w - 32.0).min(430.0);
+    let y = 104.0;
+    draw_rectangle((w - panel_width) * 0.5, y, panel_width, 112.0, panel_color);
+    for (text, offset, size) in [
+        (title, 30.0, 20),
+        (detail, 61.0, 16),
+        (prompt.as_str(), 90.0, 16),
+    ] {
+        fitted_label(
+            text,
+            Rect::new(
+                (w - panel_width) * 0.5 + 12.0,
+                y + offset,
+                panel_width - 24.0,
+                24.0,
+            ),
+            size,
+            true,
+        );
+    }
 }
 
 fn window_conf() -> Conf {
@@ -449,170 +974,123 @@ fn window_conf() -> Conf {
 
 ferravex_render::game!(window_conf, game);
 async fn game() {
-    let mut game = Range::new();
+    let mut demo = Demo::new();
+    let mut foundry = Foundry::new(demo.autoplay);
     let art = Art::new();
     let material = LitMaterial::new().expect("Ferravex lit material");
-    let mut demo = Demo::new();
     let mut sound = GameAudio::new();
-    let mut clock = FixedClock::new(120.0, 12);
-    let mut pending_fire = false;
     let mut player_input = PlayerInput::preset("siege-foundry", Preset::Turret);
     player_input.set_mouse_look_button(Some(1)).unwrap();
     loop {
-        ferravex_render::ui::warm_up_font_sizes(&[16, 17, 18, 19, 23, 26, 28, 36]);
-        let h = screen_height();
+        ferravex_render::ui::warm_up_font_sizes(&[16, 19, 20, 23]);
+        let layout = HudLayout::new(screen_width(), screen_height());
         player_input
             .set_touch_layout(&[Control {
-                region: Region::Rect(Rect::new(0., 90., screen_width(), (h - 190.).max(1.))),
+                region: Region::Rect(Rect::new(
+                    0.0,
+                    90.0,
+                    screen_width(),
+                    (layout.panel.y - 90.0).max(1.0),
+                )),
                 output: Output::Look { x: 0, y: 1 },
             }])
             .unwrap();
-        player_input.sample_play();
-        let dt = if demo.autoplay {
-            demo.dt()
-        } else {
-            player_input.simulation_dt(demo.dt())
-        };
-        let pointer = Vec2::from(mouse_position());
-        let w = screen_width();
-        let h = screen_height();
-        let compact = w < 640.0;
-        if player_input.pressed("restart")
-            || game.phase != Phase::Aiming && player_input.pressed("confirm")
+        // Resolve pointer pause before sampling, so keyboard and pointer resume
+        // both re-enable the gameplay context on this frame.
+        if !demo.autoplay
+            && !player_input.controls_open()
+            && matches!(
+                foundry.session.state(),
+                SessionState::Playing | SessionState::Paused
+            )
+            && clicked(layout.pause)
         {
-            game = Range::new();
-            clock.reset();
-            pending_fire = false;
+            player_input.set_paused(!foundry.session.is_paused());
         }
-        if game.phase == Phase::Aiming {
-            let movement = player_input.movement();
-            game.yaw += movement.x * dt * 0.33;
-            game.elevation += movement.y * dt * 0.2;
-            let look = player_input.look(dt);
-            if pointer.y > 90. && pointer.y < h - 100. || player_input.touch_active() {
+        player_input.sample_play();
+        let dt = demo.dt();
+        let active = demo.autoplay || player_input.gameplay_active() && !player_input.paused();
+        let controls_open = player_input.controls_open();
+        let confirm = player_input.pressed("confirm");
+        let rebuild = player_input.pressed("restart") || !controls_open && clicked(layout.rebuild);
+        // Drain relative look while inactive, including the rebuild frame.
+        let look = player_input.look(dt);
+        let state = foundry.session.state();
+        let pointer_fire = !controls_open && clicked(layout.fire);
+        // Fire doubles as a menu action only outside play. During play, leave
+        // its edge in PlayerInput until an actual simulation tick consumes it.
+        let menu_fire = if state != SessionState::Playing || rebuild {
+            player_input.pressed("fire")
+        } else {
+            false
+        };
+        let restarted = rebuild
+            || matches!(state, SessionState::Won | SessionState::Lost)
+                && (confirm || menu_fire || pointer_fire);
+        let started = state == SessionState::Ready && (confirm || menu_fire || pointer_fire);
+        if restarted {
+            foundry.rebuild();
+            player_input.set_paused(false);
+            sound.reset();
+        } else if started {
+            foundry.session.start();
+            player_input.set_paused(false);
+        } else {
+            foundry.set_paused(!active);
+        }
+        if foundry.session.is_playing() && active && !restarted && !started {
+            let game = &mut foundry.range;
+            let pointer = Vec2::from(mouse_position());
+            if pointer.y > 90.0 && pointer.y < layout.panel.y || player_input.touch_active() {
                 game.yaw += look.x * 0.7;
                 game.elevation -= look.y * 0.45;
             }
             game.yaw = game.yaw.clamp(-0.55, 0.55);
             game.elevation = game.elevation.clamp(0.025, 0.65);
-            pending_fire |= player_input.pressed("fire");
-            if demo.autoplay {
-                pending_fire |= game.autoplay();
+            if pointer_fire {
+                foundry.queue_fire();
             }
         }
-        if !player_input.gameplay_active() && !demo.autoplay {
-            pending_fire = false;
-        }
-        let frame = clock.advance(dt as f64);
-        for _ in 0..frame.steps {
-            if pending_fire {
-                if game.fire() {
-                    sound.cue(Cue::Fire, 0.8);
-                }
-                pending_fire = false;
-            }
-            let score = game.score();
-            let phase = game.phase;
-            game.step(frame.dt);
-            if game.score() > score {
-                sound.cue(Cue::Impact(Surface::Metal), 0.6);
-            }
-            if game.phase != phase {
-                sound.cue(
-                    if game.phase == Phase::Won {
-                        Cue::Success
-                    } else {
-                        Cue::Failure
-                    },
-                    0.65,
-                );
-            }
-        }
-        game.refresh_preview(frame.steps > 0);
-        clear_background(SKY);
-        art.draw(&game, frame.alpha, &material);
-        label("SIEGE FOUNDRY", 28.0, 37.0, 26.0, INK);
-        label("Topple the six rust-red blocks.", 28.0, 61.0, 18.0, INK);
-        label(
-            &format!("{} / {} DOWN", game.score(), GOAL),
-            28.0,
-            if compact { 97.0 } else { h - 57.0 },
-            23.0,
-            PAPER,
-        );
-        label(&format!("{} SHOTS", game.ammo), 28.0, h - 30.0, 19.0, PAPER);
-        let fire_rect = Rect::new(w - 146.0, h - 74.0, 118.0, 44.0);
-        let reset_rect = Rect::new(w - 274.0, h - 74.0, 118.0, 44.0);
-        pending_fire |= button(
-            fire_rect,
-            if game.cooldown > 0.0 {
-                "LOADING"
+        let events = foundry.advance_input(
+            if restarted || started {
+                0.0
             } else {
-                "FIRE"
+                f64::from(dt)
             },
-            game.ammo > 0
-                && game.cooldown <= 0.0
-                && game.phase == Phase::Aiming
-                && player_input.gameplay_active(),
+            demo.autoplay,
+            || TickInput {
+                fire: player_input.take_tick(["fire"])[0].pressed,
+                aim: player_input.movement(),
+            },
         );
-        if button(reset_rect, "REBUILD", true) {
-            game = Range::new();
-            clock.reset();
-            pending_fire = false;
+        if events.fired {
+            sound.cue(Cue::Fire, 0.8);
         }
-        if compact && game.phase == Phase::Aiming {
-            label("Drag to aim; tap Fire.", 28.0, 149.0, 16.0, INK);
+        if events.destroyed > 0 {
+            sound.cue(Cue::Impact(Surface::Metal), 0.6);
         }
-        if w > 720.0 {
-            label(
-                "Arrows / drag: aim    Space: fire    R: rebuild",
-                28.0,
-                h - 102.0,
-                17.0,
-                PAPER,
-            );
-            label(
-                &format!("ELEV {:.1}°", game.elevation.to_degrees()),
-                w - 146.0,
-                h - 90.0,
-                17.0,
-                INK,
+        if let Some(outcome) = events.outcome {
+            sound.cue(
+                if outcome == Phase::Won {
+                    Cue::Success
+                } else {
+                    Cue::Failure
+                },
+                0.65,
             );
         }
-        if game.phase != Phase::Aiming {
-            let text = if game.phase == Phase::Won {
-                "FOUNDRY CLEARED"
-            } else {
-                "OUT OF SHOTS"
-            };
-            let result_size = if compact { 28 } else { 36 };
-            let bounds = measure_text(text, None, result_size, 1.0);
-            let panel_width = (w - 32.0).min(380.0);
-            draw_rectangle(
-                (w - panel_width) * 0.5,
-                96.0,
-                panel_width,
-                86.0,
-                Color::new(0.12, 0.16, 0.15, 0.92),
-            );
-            label(
-                text,
-                (w - bounds.width) * 0.5,
-                133.0,
-                result_size as f32,
-                PAPER,
-            );
-            let detail = if compact {
-                "Rebuild to play again."
-            } else if game.phase == Phase::Won {
-                "Every target brought down. Rebuild to play again."
-            } else {
-                "Adjust the low arc, then rebuild to try again."
-            };
-            let width = measure_text(detail, None, 16, 1.0).width;
-            label(detail, (w - width) * 0.5, 161.0, 16.0, PAPER);
+        clear_background(SKY);
+        art.draw(
+            &foundry.range,
+            events.alpha,
+            foundry.feedback.barrel_offset(),
+            &material,
+        );
+        draw_hud(&foundry, &layout, &player_input);
+        // The range supplies its own pause panel; retain the shared editor.
+        if !player_input.paused() || controls_open {
+            player_input.draw_settings();
         }
-        player_input.draw_settings();
         if demo.finish_frame() {
             break;
         }
@@ -621,8 +1099,230 @@ async fn game() {
 }
 
 #[cfg(test)]
+mod journey200_tests;
+
+#[cfg(test)]
+mod journey200_194;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tick_input_is_not_read_while_ready_paused_or_on_zero_tick_frames() {
+        let mut foundry = Foundry::new(false);
+        let mut calls = 0;
+        let mut fire = true;
+        let mut input = || {
+            calls += 1;
+            TickInput {
+                fire: std::mem::take(&mut fire),
+                aim: Vec2::ZERO,
+            }
+        };
+        foundry.advance_input(1.0, false, &mut input);
+        foundry.session.start();
+        foundry.advance_input(0.001, false, &mut input);
+        foundry.set_paused(true);
+        foundry.advance_input(1.0, false, &mut input);
+        foundry.set_paused(false);
+        let events = foundry.advance_input(0.05, false, &mut input);
+        assert!(events.fired);
+        assert_eq!(calls, 6);
+        assert!(!fire);
+        assert_eq!(foundry.range.shots.len(), 1);
+        assert_eq!(foundry.range.ammo, AMMO - 1);
+    }
+
+    #[test]
+    fn player_input_taps_survive_zero_ticks_and_reload_rejection_is_not_buffered() {
+        use ferravex_render::input::{self, ActionKind, Binding, InputCode, PadState};
+        let mut player = PlayerInput::transient("journey200-139-ticks");
+        player
+            .action(
+                "fire",
+                "Fire",
+                ActionKind::Button,
+                vec![Binding::digital(InputCode::PadButton(7))],
+            )
+            .unwrap();
+        let mut pad = PadState {
+            connected: true,
+            ..Default::default()
+        };
+        let mut foundry = Foundry::new(true);
+        foundry.range.yaw = 0.5;
+        let mut frame = |dt, button| {
+            pad.buttons[7] = button;
+            assert!(input::gamepad_sample(0, pad));
+            input::host_frame(dt as f32, 320, 448, || {
+                player.sample_play();
+                foundry
+                    .advance_input(dt, false, || TickInput {
+                        fire: player.take_tick(["fire"])[0].pressed,
+                        aim: Vec2::ZERO,
+                    })
+                    .fired
+            })
+        };
+        // Connect released first, then press/release entirely before a tick.
+        assert!(!frame(0.0, 0.0));
+        assert!(!frame(0.001, 1.0));
+        assert!(!frame(0.001, 0.0));
+        assert!(frame(0.05, 0.0));
+        assert!(!frame(0.001, 1.0));
+        assert!(!frame(0.1, 0.0)); // Rejected at the tick while still loading.
+        for _ in 0..10 {
+            assert!(!frame(0.1, 0.0));
+        }
+        assert!(frame(0.01, 1.0)); // Only a fresh ready press fires again.
+        assert_eq!(foundry.range.ammo, AMMO - 2);
+        assert_eq!(foundry.range.shots.len(), 2);
+        assert!(input::gamepad_sample(0, PadState::default()));
+    }
+
+    #[test]
+    fn held_aim_uses_equal_fixed_ticks_at_30_60_and_144_hz() {
+        let mut reference = None;
+        for fps in [30, 60, 144] {
+            let mut foundry = Foundry::new(true);
+            for _ in 0..fps {
+                foundry.advance_input(1.0 / f64::from(fps), false, || TickInput {
+                    fire: false,
+                    aim: vec2(0.5, 0.25),
+                });
+            }
+            assert_eq!(foundry.session.tick(), 120);
+            let aim = (foundry.range.yaw, foundry.range.elevation);
+            assert!(aim.0 > 0.16 && aim.0 < 0.17);
+            assert!(aim.1 > 0.17 && aim.1 < 0.19);
+            if let Some(reference) = reference {
+                assert_eq!(aim, reference);
+            }
+            reference = Some(aim);
+        }
+    }
+
+    #[test]
+    fn motion_policy_cancels_old_recoil_without_erasing_shot_confirmation() {
+        let mut feedback = Feedback::default();
+        feedback.apply_motion(false, 1.0);
+        feedback.accepted_shot();
+        assert_eq!(feedback.barrel_offset(), 0.3);
+        feedback.apply_motion(false, 0.5);
+        assert_eq!(feedback.barrel_offset(), 0.15);
+        // No time need pass: changing policy while paused must retire the pose.
+        feedback.apply_motion(true, 1.0);
+        assert_eq!(feedback.barrel_offset(), 0.0);
+        assert_eq!(feedback.shot, 1.0);
+        feedback.apply_motion(false, 1.0);
+        assert_eq!(feedback.barrel_offset(), 0.0);
+        feedback.apply_motion(true, 1.0);
+        feedback.accepted_shot();
+        feedback.apply_motion(false, 1.0);
+        assert_eq!(
+            feedback.barrel_offset(),
+            0.0,
+            "disabled shots cannot revive"
+        );
+        feedback.accepted_shot();
+        assert!(feedback.barrel_offset() > 0.0);
+        feedback.apply_motion(false, 0.0);
+        feedback.apply_motion(false, 1.0);
+        assert_eq!(feedback.barrel_offset(), 0.0);
+    }
+
+    #[test]
+    fn ready_paused_and_terminal_frames_sample_shared_presentation_policy() {
+        preferences::set_feedback_policy(Default::default());
+        let mut foundry = Foundry::new(false);
+        for state in [
+            SessionState::Ready,
+            SessionState::Playing,
+            SessionState::Paused,
+            SessionState::Won,
+        ] {
+            match state {
+                SessionState::Playing => {
+                    foundry.session.start();
+                }
+                SessionState::Paused => foundry.set_paused(true),
+                SessionState::Won => {
+                    foundry.session.finish(true);
+                }
+                _ => {}
+            }
+            foundry.feedback.motion_scale = 0.25;
+            foundry.advance(0.0, false);
+            assert_eq!(foundry.feedback.motion_scale, 1.0, "{state:?}");
+            assert_eq!(foundry.session.tick(), 0);
+            assert_eq!(foundry.range.ammo, AMMO);
+        }
+    }
+
+    #[test]
+    fn hud_hints_follow_remaps_unbound_actions_and_bounded_buffer_errors() {
+        use ferravex_render::input::{ActionKind, Binding, InputCode};
+        let mut player = PlayerInput::transient("journey200-139-hints");
+        player
+            .action(
+                "fire",
+                "Fire",
+                ActionKind::Button,
+                vec![Binding::digital(InputCode::Key(32))],
+            )
+            .unwrap();
+        let mut buffer = [0; 512];
+        assert_eq!(action_hint(&player, "fire", &mut buffer), "Space");
+        player
+            .rebind("fire", vec![Binding::digital(InputCode::Key(b'f' as u16))])
+            .unwrap();
+        assert_eq!(action_hint(&player, "fire", &mut buffer), "F");
+        player.rebind("fire", vec![]).unwrap();
+        assert_eq!(action_hint(&player, "fire", &mut buffer), "Unbound");
+        assert_eq!(action_hint(&player, "fire", &mut []), "See Controls");
+        assert_eq!(action_hint(&player, "missing", &mut buffer), "See Controls");
+    }
+
+    #[test]
+    fn narrow_hud_keeps_controls_and_fixed_size_text_inside_panels() {
+        let metrics = get_default_font().try_metrics(16, 1.0).unwrap();
+        for width in [320.0, 390.0, 700.0, 1280.0] {
+            let layout = HudLayout::new(width, 448.0);
+            let mut last_right = layout.panel.x;
+            for rect in [layout.fire, layout.rebuild, layout.pause] {
+                assert!(rect.x >= last_right);
+                assert!(rect.x + rect.w <= layout.panel.x + layout.panel.w);
+                assert!(rect.y >= layout.panel.y);
+                assert!(rect.y + rect.h <= layout.panel.y + layout.panel.h);
+                assert!(rect.h >= 44.0);
+                last_right = rect.x + rect.w;
+            }
+            assert!(
+                layout.panel.y > 216.0,
+                "result panel must not cover buttons"
+            );
+            for text in [
+                "YAW -32 / ELEV 37.2",
+                "POWER 28 m/s - fixed",
+                "REBUILT: 8 SHOTS READY",
+                "SETTLING 6.0s",
+            ] {
+                let measured = metrics.measure_line(text).unwrap();
+                assert_eq!(measured.unsupported_glyphs, 0);
+                assert!(measured.width <= layout.panel.w - 24.0, "{text}: {width}");
+            }
+            let long_hint = "FIRE: Left Shift / Right Shift / Space / Enter";
+            let fitted =
+                ui::fit_label(long_hint, layout.panel.w - 24.0, metrics.glyph_advance()).unwrap();
+            assert!(fitted.width <= layout.panel.w - 24.0);
+            assert_eq!(
+                metrics.measure_line(fitted.prefix).unwrap().width
+                    + metrics.measure_line(fitted.suffix).unwrap().width,
+                fitted.width
+            );
+        }
+    }
 
     #[test]
     fn trajectory_preview_stops_at_real_tower_geometry_and_reuses_storage() {
@@ -677,43 +1377,233 @@ mod tests {
 
     #[test]
     fn autoplay_wins_through_ballistic_contacts() {
-        let mut game = Range::new();
-        for _ in 0..(30.0 / DT) as usize {
-            if game.autoplay() {
-                game.fire();
+        for fps in [30, 144] {
+            let mut foundry = Foundry::new(true);
+            let mut fired = 0;
+            let mut destroyed = 0;
+            let mut outcomes = 0;
+            for _ in 0..30 * fps {
+                let events = foundry.advance(1.0 / f64::from(fps), true);
+                fired += usize::from(events.fired);
+                destroyed += events.destroyed;
+                outcomes += usize::from(events.outcome.is_some());
+                if foundry.session.state() == SessionState::Won {
+                    break;
+                }
             }
-            game.step(DT);
-            if game.phase == Phase::Won {
-                break;
-            }
+            let game = &foundry.range;
+            assert_eq!(game.score(), GOAL, "{fps} FPS, ammo {}", game.ammo);
+            assert_eq!(game.phase, Phase::Won);
+            assert_eq!(foundry.session.state(), SessionState::Won);
+            assert!(game.ammo > 0);
+            assert!(fired > 0);
+            assert_eq!(fired, game.shots.len());
+            assert_eq!(destroyed, GOAL);
+            assert_eq!(outcomes, 1);
         }
-        assert_eq!(
-            game.score(),
-            GOAL,
-            "score {}, ammo {}",
-            game.score(),
-            game.ammo
-        );
-        assert_eq!(game.phase, Phase::Won);
-        assert!(game.ammo > 0);
-        assert!(!game.shots.is_empty());
     }
 
     #[test]
-    fn shot_input_survives_zero_step_render_frame() {
-        let mut clock = FixedClock::new(120.0, 12);
-        let mut game = Range::new();
-        let mut pending = true;
-        assert_eq!(clock.advance(0.001).steps, 0);
-        let frame = clock.advance(0.008);
-        for _ in 0..frame.steps {
-            if pending {
-                game.fire();
-                pending = false;
-            }
-            game.step(frame.dt);
+    fn shot_input_survives_zero_step_frame_and_is_consumed_once_during_catchup() {
+        let mut foundry = Foundry::new(true);
+        foundry.range.yaw = 0.5;
+        foundry.queue_fire();
+        assert!(!foundry.advance(0.001, false).fired);
+        assert!(foundry.pending_fire);
+        assert_eq!(foundry.range.ammo, AMMO);
+        assert!(foundry.advance(0.05, false).fired);
+        assert!(!foundry.pending_fire);
+        assert_eq!(foundry.range.ammo, AMMO - 1);
+        for _ in 0..20 {
+            assert!(!foundry.advance(0.1, false).fired);
         }
-        assert_eq!(game.ammo, AMMO - 1);
-        assert!(!pending);
+        assert_eq!(foundry.range.shots.len(), 1);
+    }
+
+    #[test]
+    fn ready_session_cannot_spend_ammo_or_accumulate_physics_time() {
+        let mut foundry = Foundry::new(false);
+        foundry.queue_fire();
+        let events = foundry.advance(50.0, false);
+        assert!(!events.fired);
+        assert_eq!(foundry.range.elapsed, 0.0);
+        assert_eq!(foundry.range.ammo, AMMO);
+        assert_eq!(foundry.session.tick(), 0);
+        assert!(foundry.session.start());
+        assert!(!foundry.advance(1.0 / 120.0, false).fired);
+        assert_eq!(foundry.session.tick(), 1);
+        foundry.queue_fire();
+        assert!(foundry.advance(1.0 / 120.0, false).fired);
+    }
+
+    #[test]
+    fn rejected_reload_edge_does_not_fire_later_or_refresh_feedback() {
+        let mut foundry = Foundry::new(true);
+        foundry.range.yaw = 0.5;
+        foundry.queue_fire();
+        assert!(foundry.advance(1.0 / 120.0, false).fired);
+        let shot_feedback = foundry.feedback.shot;
+        foundry.queue_fire();
+        assert!(!foundry.pending_fire);
+        assert_eq!(foundry.feedback.shot, shot_feedback);
+        for _ in 0..12 {
+            assert!(!foundry.advance(0.1, false).fired);
+        }
+        assert_eq!(foundry.range.ammo, AMMO - 1);
+        assert_eq!(foundry.feedback.shot, 0.0);
+        foundry.queue_fire();
+        assert!(foundry.advance(1.0 / 120.0, false).fired);
+    }
+
+    #[test]
+    fn pause_clears_buffered_input_and_freezes_reload_feedback_and_physics() {
+        let mut foundry = Foundry::new(true);
+        foundry.queue_fire();
+        foundry.advance(0.001, false);
+        foundry.set_paused(true);
+        foundry.queue_fire();
+        assert!(!foundry.pending_fire);
+        foundry.advance(10.0, false);
+        assert_eq!(foundry.range.elapsed, 0.0);
+        foundry.set_paused(false);
+        assert!(!foundry.advance(1.0 / 120.0, false).fired);
+        assert_eq!(foundry.session.tick(), 1);
+        foundry.queue_fire();
+        foundry.advance(1.0 / 120.0, false);
+        let before = (
+            foundry.range.elapsed,
+            foundry.range.cooldown,
+            foundry.feedback.shot,
+        );
+        let handle = foundry.range.shots[0].handle;
+        let position = foundry.range.physics.bodies[handle].translation();
+        let tick = foundry.session.tick();
+        foundry.set_paused(true);
+        let events = foundry.advance(60.0, true);
+        assert_eq!(events.alpha, 1.0);
+        assert!(!events.fired);
+        assert_eq!(
+            before,
+            (
+                foundry.range.elapsed,
+                foundry.range.cooldown,
+                foundry.feedback.shot
+            )
+        );
+        assert_eq!(position, foundry.range.physics.bodies[handle].translation());
+        assert_eq!(tick, foundry.session.tick());
+    }
+
+    #[test]
+    fn rebuild_restores_resources_and_drops_input_clock_and_feedback_debt() {
+        let mut foundry = Foundry::new(true);
+        foundry.range.yaw = 0.4;
+        foundry.range.elevation = 0.6;
+        foundry.queue_fire();
+        foundry.advance(0.05, false);
+        assert_eq!(foundry.range.physics.bodies.len(), 14);
+        for _ in 0..9 {
+            foundry.advance(0.1, false);
+        }
+        foundry.range.blocks[3].down = true;
+        foundry.feedback.destruction = 1.0;
+        foundry.feedback.knocked_down = 1;
+        foundry.queue_fire();
+        assert!(foundry.pending_fire);
+        foundry.rebuild();
+        let game = &foundry.range;
+        assert_eq!(foundry.session.state(), SessionState::Playing);
+        assert_eq!(foundry.session.tick(), 0);
+        assert_eq!(game.ammo, AMMO);
+        assert_eq!(game.score(), 0);
+        assert_eq!(game.phase, Phase::Aiming);
+        assert!(game.shots.is_empty());
+        assert_eq!(game.physics.bodies.len(), 13);
+        assert_eq!(game.physics.colliders.len(), 13);
+        assert_eq!(game.yaw, 0.0);
+        assert_eq!(game.elevation, 0.13);
+        assert_eq!(
+            (game.elapsed, game.cooldown, game.since_shot),
+            (0.0, 0.0, 0.0)
+        );
+        assert!(game.preview.is_empty());
+        assert!(game.preview_hit.is_none());
+        assert!(!foundry.pending_fire);
+        assert_eq!(
+            (foundry.feedback.shot, foundry.feedback.destruction),
+            (0.0, 0.0)
+        );
+        assert_eq!(foundry.feedback.knocked_down, 0);
+        assert!(foundry.feedback.rebuilt > 0.0);
+        assert!(!foundry.advance(0.001, false).fired);
+        assert_eq!(foundry.session.tick(), 0);
+        assert_eq!(foundry.range.elapsed, 0.0);
+        foundry.set_paused(true);
+        foundry.rebuild();
+        assert_eq!(foundry.session.state(), SessionState::Playing);
+        assert_eq!(foundry.range.ammo, AMMO);
+    }
+
+    #[test]
+    fn last_shot_gets_full_settling_time_before_loss() {
+        let mut foundry = Foundry::new(true);
+        foundry.range.yaw = 0.5;
+        while foundry.range.ammo > 0 {
+            foundry.queue_fire();
+            foundry.advance(1.0 / 120.0, false);
+            if foundry.range.ammo > 0 {
+                for _ in 0..9 {
+                    foundry.advance(0.1, false);
+                }
+            }
+        }
+        for _ in 0..59 {
+            foundry.advance(0.1, false);
+        }
+        assert_eq!(foundry.session.state(), SessionState::Playing);
+        assert_eq!(foundry.range.phase, Phase::Aiming);
+        let events = foundry.advance(0.1, false);
+        assert_eq!(events.outcome, Some(Phase::Lost));
+        assert_eq!(foundry.session.state(), SessionState::Lost);
+        assert!(!foundry.range.fire());
+    }
+
+    #[test]
+    fn terminal_result_is_emitted_once_and_stops_remaining_catchup_steps() {
+        for won in [true, false] {
+            let mut foundry = Foundry::new(true);
+            if won {
+                for block in &mut foundry.range.blocks {
+                    block.down = block.target;
+                }
+            } else {
+                foundry.range.ammo = 0;
+                foundry.range.since_shot = SETTLE;
+            }
+            let phase = if won { Phase::Won } else { Phase::Lost };
+            let events = foundry.advance(0.1, false);
+            assert_eq!(events.outcome, Some(phase));
+            assert_eq!(events.alpha, 1.0);
+            assert_eq!(foundry.range.elapsed, DT);
+            let handle = foundry.range.blocks[3].handle;
+            let position = foundry.range.physics.bodies[handle].translation();
+            for block in &mut foundry.range.blocks {
+                block.down = block.target;
+            }
+            foundry.queue_fire();
+            assert!(!foundry.advance(1.0, true).fired);
+            assert!(foundry.advance(1.0, true).outcome.is_none());
+            foundry.range.step(DT);
+            assert_eq!(
+                foundry.range.phase, phase,
+                "a late knockdown cannot reverse a verdict"
+            );
+            assert_eq!(foundry.range.elapsed, DT);
+            assert_eq!(position, foundry.range.physics.bodies[handle].translation());
+            foundry.rebuild();
+            assert_eq!(foundry.session.state(), SessionState::Playing);
+            assert_eq!(foundry.range.ammo, AMMO);
+            assert_eq!(foundry.range.score(), 0);
+        }
     }
 }

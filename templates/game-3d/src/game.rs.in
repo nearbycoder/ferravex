@@ -1,0 +1,227 @@
+//! Renderer-independent game rules. Inputs are held directions sampled once per
+//! frame; discrete actions (start, pause, restart) are applied once by the host.
+use ferravex::{
+    core::{FrameStep, session::GameSession},
+    math::{Vec2, vec2},
+};
+
+pub(crate) const START: Vec2 = vec2(-4.0, 0.0);
+pub(crate) const GOAL: Vec2 = vec2(4.0, 0.0);
+pub(crate) const BOUNDS: Vec2 = vec2(6.0, 3.0);
+
+/// A small, testable game: move from the blue starting pad to the gold beacon.
+/// Coordinates are ground-plane units; positive Y means forward/up.
+///
+/// ```
+/// use @@CRATE@@::Game;
+/// use ferravex::{core::session::SessionState, math::Vec2};
+/// let mut game = Game::new(false);
+/// assert!(game.start());
+/// let frame = game.advance(1.0 / Game::TICK_RATE_HZ, Vec2::X);
+/// assert_eq!(frame.steps, 1);
+/// assert!(game.position().x > -4.0);
+/// let _draw_position = game.render_position(frame.alpha);
+/// assert!(game.toggle_pause());
+/// assert_eq!(game.session().state(), SessionState::Paused);
+/// assert_eq!(game.advance(20.0, Vec2::X).steps, 0);
+/// game.restart();
+/// assert_eq!(game.session().tick(), 0);
+/// assert_eq!(game.position().x, -4.0);
+/// ```
+pub struct Game {
+    session: GameSession,
+    previous: Vec2,
+    position: Vec2,
+}
+
+impl Game {
+    /// Configured simulation frequency, independent of the renderer's frame rate.
+    /// Set at generation by `--tick-rate`; keep edits finite and in `1..=1000`.
+    /// See the headless example on [`Game`] for advancing exactly one tick.
+    pub const TICK_RATE_HZ: f64 = @@TICK_RATE@@;
+
+    /// Begin Ready, or Playing when autoplay is enabled.
+    /// Simulation runs at [`Self::TICK_RATE_HZ`], with at most eight ticks per frame.
+    pub fn new(autoplay: bool) -> Self {
+        Self {
+            session: GameSession::new(Self::TICK_RATE_HZ, 8, autoplay),
+            previous: START,
+            position: START,
+        }
+    }
+
+    /// Read lifecycle/timing state without bypassing the game's restart logic.
+    pub fn session(&self) -> &GameSession {
+        &self.session
+    }
+
+    /// Enter Playing from Ready; return whether the state changed.
+    pub fn start(&mut self) -> bool {
+        self.session.start()
+    }
+
+    /// Toggle Playing/Paused without moving the render pose or accumulating time.
+    pub fn toggle_pause(&mut self) -> bool {
+        let changed = self.session.toggle_pause();
+        if changed {
+            self.previous = self.position;
+        }
+        changed
+    }
+
+    /// Reset both simulation poses and the clock, and immediately enter Playing.
+    pub fn restart(&mut self) {
+        self.position = START;
+        self.previous = START;
+        self.session.restart();
+    }
+
+    /// Advance fixed updates using a held direction; zero means no movement.
+    /// Diagonals have the same speed as axial input, non-finite input is ignored,
+    /// and Ready/Paused/Won frames cannot advance the simulation. Crossing the
+    /// beacon during a tick wins even at low tick rates. Remaining updates in a
+    /// winning frame are skipped; FrameStep.steps reports the clock's budget.
+    pub fn advance(&mut self, elapsed_seconds: f64, movement: Vec2) -> FrameStep {
+        let frame = self.session.advance(elapsed_seconds);
+        let movement = if movement.is_finite() {
+            movement.clamp(-Vec2::ONE, Vec2::ONE).clamp_length_max(1.0)
+        } else {
+            Vec2::ZERO
+        };
+        for _ in 0..frame.steps {
+            self.previous = self.position;
+            self.position = (self.position + movement * (3.0 * frame.dt)).clamp(-BOUNDS, BOUNDS);
+            // Test the swept segment so a coarse tick cannot skip the beacon.
+            let delta = self.position - self.previous;
+            let fraction = if delta.length_squared() > 0.0 {
+                ((GOAL - self.previous).dot(delta) / delta.length_squared()).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            if self.previous.lerp(self.position, fraction).distance(GOAL) <= 0.5 {
+                self.session.finish(true);
+                self.previous = self.position;
+                break;
+            }
+        }
+        frame
+    }
+
+    /// Current simulation pose in ground-plane units.
+    pub fn position(&self) -> Vec2 {
+        self.position
+    }
+
+    /// Interpolate the last two fixed poses while playing; inactive games stay
+    /// at the current pose. Use the alpha returned by [`Self::advance`].
+    pub fn render_position(&self, alpha: f32) -> Vec2 {
+        if self.session.is_playing() && alpha.is_finite() {
+            self.previous.lerp(self.position, alpha.clamp(0.0, 1.0))
+        } else {
+            self.position
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ferravex::core::session::SessionState;
+
+    #[test]
+    fn ready_pause_resume_and_restart_do_not_accumulate_or_smear() {
+        let mut game = Game::new(false);
+        assert_eq!(game.advance(100.0, Vec2::X).steps, 0);
+        assert_eq!(game.position(), START);
+        assert!(game.start());
+        assert!(!game.start());
+        game.advance(1.0 / Game::TICK_RATE_HZ, Vec2::X);
+        let position = game.position();
+        let tick = game.session().tick();
+        assert!(game.toggle_pause());
+        assert_eq!(game.advance(100.0, Vec2::X).steps, 0);
+        assert_eq!(game.session().tick(), tick);
+        assert_eq!(game.render_position(0.0), position);
+        assert!(game.toggle_pause());
+        assert_eq!(game.advance(0.0, Vec2::X).steps, 0);
+        assert_eq!(game.render_position(0.0), position);
+        game.restart();
+        assert_eq!(game.session().state(), SessionState::Playing);
+        assert_eq!(game.session().tick(), 0);
+        assert_eq!(game.position(), START);
+        assert_eq!(game.render_position(0.5), START);
+    }
+
+    #[test]
+    fn fixed_updates_are_frame_rate_independent_and_diagonals_are_bounded() {
+        // Compare the same sixty-tick span at two render rates. Small movement
+        // keeps even a 1 Hz game away from the goal and bounds during this test.
+        let movement = Vec2::X * 0.01;
+        let mut reference = Game::new(true);
+        for _ in 0..30 {
+            reference.advance(2.0 / Game::TICK_RATE_HZ, movement);
+        }
+        let mut fast = Game::new(true);
+        for _ in 0..144 {
+            fast.advance((60.0 / 144.0) / Game::TICK_RATE_HZ, movement);
+        }
+        assert_eq!(reference.position(), fast.position());
+        assert_eq!(reference.session().tick(), 60);
+        assert_eq!(fast.session().tick(), 60);
+        let mut diagonal = Game::new(true);
+        diagonal.advance(1.0 / Game::TICK_RATE_HZ, Vec2::ONE);
+        let distance = 3.0 * diagonal.session().dt();
+        assert!((diagonal.position().distance(START) - distance).abs() < 1e-6);
+        let position = diagonal.position();
+        diagonal.advance(1.0 / Game::TICK_RATE_HZ, vec2(f32::NAN, 1.0));
+        assert_eq!(diagonal.position(), position);
+    }
+
+    #[test]
+    fn winning_freezes_until_restart_and_movement_stays_in_the_arena() {
+        let mut game = Game::new(true);
+        let ticks = (3.0 * Game::TICK_RATE_HZ).ceil() as u32;
+        for _ in 0..ticks {
+            game.advance(1.0 / Game::TICK_RATE_HZ, Vec2::X);
+        }
+        assert_eq!(game.session().state(), SessionState::Won);
+        let position = game.position();
+        assert_eq!(game.advance(10.0, -Vec2::X).steps, 0);
+        assert_eq!(game.position(), position);
+        assert!(!game.toggle_pause());
+        game.restart();
+        for _ in 0..ticks {
+            game.advance(1.0 / Game::TICK_RATE_HZ, -Vec2::X);
+        }
+        assert_eq!(game.position().x, -BOUNDS.x);
+    }
+
+    #[test]
+    fn crossing_the_beacon_wins_and_stops_the_catch_up_batch() {
+        let mut game = Game::new(true);
+        // A single step crosses the whole beacon; its endpoint misses it.
+        game.session = GameSession::new(1.0, 8, true);
+        game.position = vec2(3.0, 0.0);
+        game.previous = game.position;
+        let frame = game.advance(3.0, Vec2::X);
+        assert_eq!(frame.steps, 3);
+        assert_eq!(game.session().state(), SessionState::Won);
+        assert_eq!(game.position(), vec2(6.0, 0.0));
+        assert_eq!(game.render_position(0.0), game.position());
+
+        // With short steps, no remaining update runs after entering the goal.
+        game.session = GameSession::new(60.0, 8, true);
+        game.position = vec2(3.49, 0.0);
+        game.previous = game.position;
+        game.advance(3.0 / 60.0, Vec2::X);
+        assert_eq!(game.session().state(), SessionState::Won);
+        assert!((game.position().x - 3.54).abs() < 1e-6);
+
+        // A parallel segment outside the beacon's radius must not win.
+        game.session = GameSession::new(1.0, 8, true);
+        game.position = vec2(3.0, 1.0);
+        game.previous = game.position;
+        game.advance(1.0, Vec2::X);
+        assert_eq!(game.session().state(), SessionState::Playing);
+    }
+}

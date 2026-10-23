@@ -1,7 +1,141 @@
 <!doctype html>
-<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>2D Physics Lab · Ferravex</title>
-<style>*{box-sizing:border-box}html,body{margin:0;height:100%;background:#101a21;color:#e2ece2;font:14px system-ui}body{display:flex;flex-direction:column}nav{height:40px;flex:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 16px;border-bottom:1px solid #2c3c45}nav>a{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}nav>button{flex:none}a{color:#97c3b5;text-decoration:none}canvas{width:100%;height:calc(100% - 40px);display:block;touch-action:none;outline:none}button[data-controls],button[data-audio]{font:inherit;color:#c3d9d0;background:transparent;border:1px solid #40545b;border-radius:4px;padding:3px 9px;cursor:pointer}button[data-controls]:hover,button[data-controls]:focus-visible,button[data-audio]:hover,button[data-audio]:focus-visible{background:#293f46;outline:1px solid #97c3b5}button[data-controls]:disabled,button[data-audio]:disabled{opacity:.4;cursor:wait}nav>span{margin-left:auto;margin-right:16px}@media(max-width:540px){nav>span{display:none}}[role=status]{position:absolute;top:50%;width:100%;text-align:center;pointer-events:none}</style>
-<nav><a href="../">FERRAVEX / 2D Physics Lab</a><span>2D · Original rigid-body sandbox</span><button type="button" data-controls title="Controls (F2)" aria-pressed="false" disabled>Controls</button><button type="button" data-audio title="Enable sound" aria-pressed="false" disabled>Sound off</button></nav>
-<canvas tabindex="0" data-game="physics-2d" aria-label="2D Physics Lab game"></canvas><div role="status">Loading original Rust engine…</div>
-<script type="module" src="../runtime.js"></script></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>2D Physics Lab · Ferravex</title>
+  <style>
+    * { box-sizing: border-box; }
+    html { background: #101a21; color: #e2ece2; font: 16px/1.5 system-ui; }
+    body { margin: 0; }
+    .lab-header, .lab-guide { padding: 16px max(16px, env(safe-area-inset-left)); }
+    .lab-header { border-bottom: 1px solid #40545b; }
+    h1 { margin: 0 0 10px; font-size: 1.25rem; }
+    h2 { font-size: 1.125rem; }
+    nav, .lab-links, .lab-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+    nav { justify-content: space-between; }
+    .lab-tools { gap: 8px; }
+    a { color: #b3e0d1; text-underline-offset: .2em; }
+    .lab-links a, .lab-guide > a { display: inline-block; padding-block: 10px; }
+    .lab-tools button { font: inherit; color: #e2ece2; background: #18262b; border: 1px solid #6c898b; border-radius: 4px; padding: 8px 12px; min-height: 44px; cursor: pointer; }
+    .lab-tools button:hover { background: #293f46; }
+    .lab-tools button:disabled { opacity: .5; cursor: wait; }
+    :focus-visible { outline: 3px solid #efc986; outline-offset: 3px; }
+    .lab-stage { position: relative; height: max(480px, calc(100svh - 11rem)); }
+    .lab-scroll-nav { position: sticky; top: 0; z-index: 2; justify-content: flex-start; gap: 16px; padding-inline: 16px; background: #101a21; border-bottom: 1px solid #40545b; touch-action: pan-y; }
+    .lab-scroll-nav a { padding-block: 10px; min-height: 44px; font-size: 14px; }
+    #lab-canvas, #lab-instructions, #lab-control-anchor { scroll-margin-top: 48px; }
+    #lab-control-anchor { position: absolute; top: calc(100% - 178px); }
+    @media (max-width: 639px) {
+      .lab-stage { min-height: 880px; }
+      #lab-control-anchor { top: calc(100% - 548px); }
+    }
+    @media (max-width: 359px) {
+      .lab-stage { min-height: 924px; }
+      #lab-control-anchor { top: calc(100% - 592px); }
+    }
+    canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+    canvas:focus-visible { outline-offset: -3px; }
+    #lab-status { position: absolute; top: 40%; left: 16px; right: 16px; margin: 0; text-align: center; overflow-wrap: anywhere; pointer-events: none; }
+    #lab-status:not(:empty) { padding: 16px; background: #101a21; border: 1px solid #6c898b; }
+    .lab-guide { max-width: 76ch; margin-inline: auto; overflow-wrap: anywhere; }
+    body.physics-lab .lab-guide { -webkit-user-select: text; user-select: text; }
+    .lab-bindings { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 8px 20px; }
+    .lab-bindings dt { font-weight: 650; }
+    .lab-bindings dd { margin: 0; }
+    kbd { font: inherit; font-weight: 650; }
+    body.physics-lab.ferravex-fullscreen { overflow: auto; }
+    @media (max-width: 540px) {
+      .lab-links, .lab-tools { width: 100%; }
+      .lab-bindings { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+      .lab-bindings dd { margin-bottom: 12px; }
+    }
+    @media (forced-colors: active) {
+      :focus-visible { outline-color: Highlight; }
+    }
+  </style>
+</head>
+<body class="physics-lab">
+  <header class="lab-header" data-host-ui>
+    <h1 id="lab-title">2D Physics Lab</h1>
+    <nav aria-label="Lab navigation and player tools">
+      <div class="lab-links">
+        <a href="../">All Ferravex examples</a>
+        <a href="#lab-instructions">Lab instructions</a>
+      </div>
+      <div class="lab-tools">
+        <button type="button" data-controls title="Controls (F2 while the canvas is focused)" aria-pressed="false" disabled>Controls</button>
+        <button type="button" data-audio title="Enable sound" aria-pressed="false" disabled>Sound off</button>
+      </div>
+    </nav>
+  </header>
+  <main>
+    <nav class="lab-scroll-nav" aria-label="Lab page sections" data-host-ui>
+      <a href="#lab-canvas">Scene</a>
+      <a href="#lab-control-anchor">Lab controls</a>
+      <a href="#lab-instructions">Guide</a>
+    </nav>
+    <div class="lab-stage">
+      <span id="lab-control-anchor" tabindex="-1" data-host-ui aria-label="Lab controls and diagnostics"></span>
+      <canvas id="lab-canvas" tabindex="0" data-game="physics-2d" aria-labelledby="lab-title" aria-describedby="lab-summary lab-keyboard lab-remapping">
+        Interactive 2D physics sandbox. A browser with WebGL2 is required to draw the scene. Keyboard instructions follow the canvas.
+      </canvas>
+      <p id="lab-status" role="status" aria-live="polite" aria-atomic="true">Loading original Rust engine…</p>
+    </div>
+    <section class="lab-guide" id="lab-instructions" tabindex="-1" aria-labelledby="lab-guide-title" data-host-ui>
+      <h2 id="lab-guide-title">Lab instructions</h2>
+      <p id="lab-summary">The sandbox starts running immediately: balls, crates and jointed mechanisms move inside fixed boundaries. Place shapes, pause to inspect them, or advance one 120 Hz tick at a time. There is no win condition. The scene and its changing diagnostics are drawn visually in the canvas.</p>
+      <p id="lab-keyboard">Focus the canvas to use game keys. With Controls closed, <kbd>Tab</kbd> or <kbd>Shift + Tab</kbd> leaves the canvas for page navigation. Use <kbd>F2</kbd> or the Controls button to view bindings. In Controls, <kbd>Tab</kbd> or the up/down arrows select items and <kbd>Enter</kbd> activates them. <kbd>Escape</kbd> cancels a binding capture first; press it again to close Controls. Escape also closes Details. Use the pause action to freeze the lab.</p>
+      <h2>Default keyboard and mouse controls</h2>
+      <p id="lab-remapping">These are the default bindings. Saved or remapped controls may differ; Controls shows your current bindings and lets you change them. Tab is reserved for page navigation while Controls is closed.</p>
+      <dl class="lab-bindings">
+        <dt><kbd>W A S D</kbd> / arrow keys</dt><dd>Move the virtual cursor.</dd>
+        <dt><kbd>1</kbd> / <kbd>2</kbd></dt><dd>Select a ball / crate.</dd>
+        <dt>Left click / <kbd>Enter</kbd></dt><dd>Place the selected shape at the cursor. Enter drops above center when the cursor is outside the scene.</dd>
+        <dt>Right click</dt><dd>Place a crate without changing the selected shape.</dd>
+        <dt><kbd>Space</kbd></dt><dd>Pause or resume. Shapes placed while paused stay still.</dd>
+        <dt><kbd>N</kbd></dt><dd>Advance one tick while paused. Each press steps once; holding does not repeat.</dd>
+        <dt><kbd>F</kbd></dt><dd>Pulse nearby bodies while running. Wait for the pulse cooldown before pulsing again.</dd>
+        <dt><kbd>I</kbd></dt><dd>Inspect the body at the cursor without waking it. A miss clears body selection.</dd>
+        <dt><kbd>R</kbd></dt><dd>Restore the original scene, keeping the selected shape and pause state.</dd>
+      </dl>
+      <p>The lab has a 240-body limit. The canvas shows awake/asleep counts, last-tick contacts, bounded cursor-query hits and selected-body diagnostics, along with the tick and pulse readiness. A successful drop selects the new body. Reset clears body inspection while retaining the drop shape and pause state. The BALL, CRATE, DROP, PULSE, PAUSE / RESUME, STEP and RESET buttons also operate the lab. On narrow screens, the diagnostics wrap at a fixed readable size. Use the Scene, Lab controls and Guide links to move around the taller canvas; the section-link bar also provides a page scrolling surface.</p>
+      <p>Opening Controls or Details, or switching away from the browser, suspends this local lab. Closing the panel or returning preserves a manually paused scene. Details → Player tools contains presentation and accessibility preferences, screenshots and settings backups.</p>
+      <a href="#lab-canvas">Return to the lab canvas</a>
+    </section>
+    <noscript><p class="lab-guide">JavaScript and WebGL2 are required to run this lab. The instructions above remain available.</p></noscript>
+  </main>
+  <script id="lab-host-accessibility">
+    (() => {
+      const canvas = document.querySelector('#lab-canvas');
+      const controls = document.querySelector('[data-controls]');
+      const descriptions = ['lab-summary', 'lab-keyboard', 'lab-remapping'];
+      // bindPlayer installs shared help during boot. Keep that help and the
+      // lab-specific description; aria-labelledby keeps the authored title.
+      const preserveDescription = () => {
+        const current = canvas.getAttribute('aria-describedby') || '';
+        const ids = new Set([...descriptions, ...current.split(/\s+/).filter(Boolean)]);
+        const next = [...ids].join(' ');
+        if (current !== next) canvas.setAttribute('aria-describedby', next);
+      };
+      preserveDescription();
+      new MutationObserver(preserveDescription).observe(canvas, {
+        attributes: true, attributeFilter: ['aria-describedby'],
+      });
+      // Shared input listens on window. Page links and instructions must keep
+      // native navigation, while keyup still reaches it to release held keys.
+      for (const region of document.querySelectorAll('[data-host-ui]')) {
+        region.addEventListener('keydown', event => event.stopPropagation());
+      }
+      canvas.addEventListener('keydown', event => {
+        if (event.key === 'Tab' && !event.ctrlKey && !event.altKey && !event.metaKey
+            && !event.isComposing && event.keyCode !== 229
+            && controls.getAttribute('aria-pressed') !== 'true') {
+          event.stopPropagation();
+        }
+      });
+    })();
+  </script>
+  <script type="module" src="../runtime.js"></script>
+</body>
+</html>

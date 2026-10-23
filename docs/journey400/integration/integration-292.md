@@ -1,0 +1,17 @@
+# Journey400 292 parent integration
+
+Frozen renderer changes were integrated with their closed 273/278/286 UI dependencies into the accepted original release graph. Unrelated engine, physics, math, flow and scroll work was excluded from this release snapshot. The parent registration adds only `ui::text_layout`; the input root/reexports are present in production.
+
+Parent checks in `../journey-200/controls-orbit-v3-checks/` passed renderer all-feature tests/doctests, strict workspace all-target/all-feature Clippy and separate runtime/authoring release Wasm builds. New slot-aware hints remain opt-in and allocation-free in their regression; games have not all adopted those descriptors. Existing input configuration bytes and installed-slot checks are preserved.
+
+The parent save-persistence check had hard-coded Devices click coordinates from the old header. It now follows the new `panel.y + 143` row and retains all volume, fresh-instance, rejected-save and idle-I/O checks. Sky's real glyph checker now expects PageUp/PageDown names. Its overlong-profile fixture also adds Left Shift so it still exceeds the game's 32-byte hint limit after the shorter names; full-glyph and fallback assertions remain intact. Earlier failures are retained in the check directory.
+
+The release includes the separate frozen original Orbit readable-status follow-up. All fifteen modules retain prior imports and exports; only Orbit adds its two versioned status exports. Fresh browser acceptance of shared Controls is pending. No physical device, audio, sustained performance, native fullscreen paint, or resolution of prior tall-WebGL capture gaps is established here.
+
+## Fresh browser acceptance and parent evidence review
+
+Same-owner browser continuation passed against manifest20510172e0b260b017f3c1f817b3c4ebfc5d95e22559e173d9d3876f211d96a9. Strike's29 action pages at320x480, complete long/Unbound binding text, four continuation pages for a64-binding fixture, native capture/cancel, named PageUp/PageDown, saved reload, Devices edits/Reset and Details modal isolation were checked. Long-profile setup is explicitly an input-only FXIN fixture; it did not modify game state. Sky's live HUD used native remapped page keys at320/390.
+
+Parent revalidated all59 screenshot hashes and calculated their PNG dimensions, checked the frozen/current292 source paths, all59 local artifacts and the currently served manifest. Seventeen owner screenshot index entries lacked dimension metadata; parent calculated those dimensions directly and records them without modifying the original evidence. The initial parent verifier assumed that optional field existed and was corrected. Parent visually inspected a long action page, final continuation page, Devices panel and narrow Sky HUD. `integration-292/browser-parent/report.json` preserves exact evidence identities and scope.
+
+This closes the observed shared Controls truncation/numeric-page-key issue for the tested authored host sizes. Minimum304x324 host geometry remains native-test evidence; browser tests used real480px-minimum Strike hosts. The opt-in visible-slot API remains available without claiming all games adopted it. No source repair or rebuild was needed. The initial Sky black-canvas capture and prior tall-WebGL/native-fullscreen gaps remain open, and physical devices, listening/audio and sustained performance were not tested. This is scoped acceptance, not whole-Journey400 completion.

@@ -7,27 +7,130 @@
   <meta name="description" content="Orbit Breaker: an original Rust arcade game running on Ferravex's own physics and software renderer.">
   <title>Orbit Breaker · Ferravex</title>
   <style>
-    :root{color-scheme:dark;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;background:#060e13;color:#dce8df}
-    *{box-sizing:border-box}body{margin:0;min-height:100svh;display:grid;place-items:center;padding:12px env(safe-area-inset-right,12px) 12px env(safe-area-inset-left,12px)}
-    main{width:min(94vw,640px,calc((100svh - 64px)*.8888889));position:relative}canvas{display:block;width:100%;height:auto;aspect-ratio:8/9;background:#091219;touch-action:none;outline:none}
-    canvas:focus-visible{outline:1px solid #63d7c4;outline-offset:3px}.toolbar{height:36px;display:flex;align-items:center;gap:12px;padding:0 6px;font-size:11px;color:#789497}
-    button,summary,a{font:inherit;color:inherit}button{border:0;background:none;padding:6px 0;cursor:pointer}button:hover,a:hover,summary:hover{color:#e1eada}button:focus-visible,a:focus-visible,summary:focus-visible{outline:1px solid #63d7c4;outline-offset:4px}a{text-decoration:none}.toolbar .spacer{flex:1}
-    details{position:relative}summary{cursor:pointer;list-style:none}summary::-webkit-details-marker{display:none}details[open] .help{display:block}.help{position:absolute;bottom:34px;right:-60px;z-index:4;width:260px;padding:18px;background:#0c1a22;border:1px solid #2a4148;font-size:12px;line-height:1.8;box-shadow:0 8px 32px #0008}.help p{margin:0 0 8px}.help p:last-child{margin:0}.help strong{font-weight:500;color:#63d7c4}
-    #notice{position:absolute;inset:0 0 36px;display:grid;place-items:center;background:#091219e8;text-align:center;padding:24px;line-height:1.7;font-size:14px}#notice[hidden]{display:none}#notice strong{display:block;font-size:20px;letter-spacing:.08em;color:#63d7c4;margin-bottom:12px}#resume{margin-top:16px;color:#63d7c4;border:1px solid #2a4148;padding:9px 22px}#resume[hidden]{display:none}.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
-    @media(max-width:480px){.toolbar details{display:none}.toolbar a{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}}
+    :root{color-scheme:dark;font:16px/1.6 system-ui,sans-serif;background:#060e13;color:#dce8df}
+    *{box-sizing:border-box}
+    body{margin:0;min-height:100svh;padding:16px max(12px,env(safe-area-inset-right)) max(16px,env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left))}
+    main{width:min(100%,760px);margin:auto;overflow-wrap:anywhere}
+    h1{font-size:1.5rem;line-height:1.3;margin:0 0 8px;color:#63d7c4}h2{font-size:1rem;margin:16px 0 4px}p{margin:8px 0}
+    .orbit-stage{position:relative;width:min(100%,640px);margin:16px auto 0}
+    #game{display:block;width:100%;height:auto;aspect-ratio:8/9;background:#091219;touch-action:none}
+    #game:focus-visible{outline:3px solid #efc986!important;outline-offset:-4px}
+    #orbit-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;height:auto;padding:8px 0;color:#c0d8d5}
+    button,summary,a{font:inherit;color:inherit}button{border:1px solid #58777d;border-radius:4px;background:#102129;padding:8px 12px;cursor:pointer;white-space:normal}
+    #orbit-toolbar>button,#orbit-toolbar>a,summary,#resume{min-height:44px;max-width:100%}
+    #orbit-toolbar>button{font-size:1rem}
+    button:disabled{opacity:.55;cursor:wait}button:hover,a:hover,summary:hover{color:#fff}
+    button:focus-visible,a:focus-visible,summary:focus-visible{outline:3px solid #efc986;outline-offset:3px}
+    a{color:#9fe0d6;text-underline-offset:3px}.toolbar .spacer{flex:1}
+    #orbit-help{position:relative;flex-basis:100%;min-width:0;border-top:1px solid #40545b;margin-top:4px}
+    summary{cursor:pointer;padding:8px 0;color:#9fe0d6;font-weight:600}
+    .help{position:static;width:100%;padding:0 0 8px;line-height:1.6}
+    .help dl{display:grid;grid-template-columns:minmax(8rem,1fr) minmax(0,3fr);gap:8px 16px;margin:8px 0}
+    .help dt{font-weight:600}.help dd{margin:0}kbd{font:inherit;font-weight:600}
+    #notice{position:absolute;inset:0;display:grid;place-items:center;overflow:auto;background:#091219e8;text-align:center;padding:16px;line-height:1.7}
+    #notice[hidden],#resume[hidden]{display:none}#notice strong{display:block;font-size:1.25rem;letter-spacing:.08em;color:#63d7c4;margin-bottom:12px}
+    #resume{margin-top:16px;color:#9fe0d6;padding:9px 22px}
+    #game-state{color:#c0d8d5;min-height:1.6em}
+    #orbit-readable{font:16px/1.5 system-ui,sans-serif;white-space:pre-line;overflow-wrap:anywhere;color:#dce8df;border-left:2px solid #63d7c4;padding:8px 12px;margin:8px 0}
+    #orbit-readable[hidden]{display:none}
+    /* This custom host keeps its toolbar and help in document flow. */
+    body.ferravex-game:has(#orbit-toolbar){overflow:auto}
+    body.ferravex-fullscreen:has(#orbit-toolbar){overflow:auto!important}
+    body.ferravex-fullscreen:has(#orbit-toolbar) main{width:min(100%,760px)}
+    body.ferravex-fullscreen :is(#orbit-title,#orbit-description,#orbit-keys,#orbit-navigation){display:none}
+    body.ferravex-fullscreen .orbit-stage{width:min(100%,640px,calc((100dvh - env(safe-area-inset-top,0px) - env(safe-area-inset-bottom,0px))*.8888889));margin:0 auto}
+    @media(max-width:480px){
+      #orbit-toolbar>a{flex-basis:100%}.toolbar .spacer{display:none}
+      .help dl{grid-template-columns:minmax(0,1fr);gap:4px}.help dd{margin-bottom:8px}
+    }
+    @media(forced-colors:active){
+      #game:focus-visible{outline-color:Highlight!important}
+      button:focus-visible,a:focus-visible,summary:focus-visible{outline-color:Highlight}
+    }
   </style>
 </head>
 <body>
   <main>
-    <canvas id="game" width="640" height="720" tabindex="0" aria-label="Orbit Breaker. Move with A and D or arrow keys, or drag. Space launches the ball. Escape pauses. R restarts.">Your browser needs Canvas 2D and WebAssembly to play Orbit Breaker.</canvas>
-    <div id="notice" role="status"><div><strong id="notice-title">ORBIT BREAKER</strong><span id="notice-message">Loading the Rust game…</span><br><button id="resume" hidden>Resume</button></div></div>
-    <nav class="toolbar" aria-label="Game controls">
-      <a href="../">← Engine lab</a><span class="spacer"></span>
-      <details><summary>How to play</summary><div class="help"><p><strong>A D / ← →</strong> move<br><strong>Space / tap</strong> launch<br><strong>Escape</strong> pause<br><strong>R</strong> restart</p><p>Drag on the playfield to steer. Paddle edges angle your return. Catch turquoise capsules for a wider paddle.</p><p>Clear both debris fields with three lives.</p></div></details>
-      <button type="button" data-controls aria-pressed="false" title="Controls (F2)" disabled>Controls</button><button type="button" data-audio aria-pressed="false" title="Enable sound" disabled>Sound off</button><button id="pause" type="button">Pause</button><button id="restart" type="button">Restart</button>
+    <h1 id="orbit-title">Orbit Breaker</h1>
+    <p id="orbit-description">Steer a paddle to bounce the ball through two debris fields. Clear both sectors before losing three lives.</p>
+    <p id="orbit-keys"><strong>Default keys:</strong> <kbd>A</kbd> / <kbd>Left arrow</kbd> and <kbd>D</kbd> / <kbd>Right arrow</kbd> move; <kbd>Space</kbd> or <kbd>Enter</kbd> launches or retries; <kbd>Escape</kbd> pauses or resumes; <kbd>R</kbd> restarts. Open <strong>Controls</strong> or press <kbd>F2</kbd> in the playfield to view or remap current bindings.</p>
+    <p id="orbit-navigation">Pause before reading help. <kbd>Shift</kbd> + <kbd>Tab</kbd> from the playfield moves to <strong>How to play</strong>; use <kbd>Shift</kbd> + <kbd>Tab</kbd> again to reach the toolbar buttons. Moving focus or opening this help does not pause the game.</p>
+    <div class="orbit-stage">
+      <canvas id="game" width="640" height="720" tabindex="0" aria-labelledby="orbit-title" aria-describedby="orbit-description orbit-keys orbit-navigation game-state">Orbit Breaker requires JavaScript, Canvas 2D and WebAssembly. Keyboard instructions are available in How to play below.</canvas>
+      <div id="notice" role="status" aria-live="polite" aria-atomic="true"><div><strong id="notice-title">ORBIT BREAKER</strong><span id="notice-message">Loading the Rust game…</span><br><button id="resume" type="button" hidden>Resume</button></div></div>
+    </div>
+    <p id="game-state" aria-live="polite" aria-atomic="true"></p>
+    <p id="orbit-readable" aria-live="off" hidden></p>
+    <nav id="orbit-toolbar" class="toolbar" aria-label="Game controls">
+      <a href="../">← Ferravex · All games</a><span class="spacer"></span>
+      <button type="button" data-controls aria-pressed="false" title="View or remap controls (F2)" disabled>Controls</button><button type="button" data-audio aria-pressed="false" title="Enable sound" disabled>Sound off</button><button id="pause" type="button" aria-pressed="false">Pause</button><button id="restart" type="button">Restart</button>
+      <details id="orbit-help">
+        <summary id="orbit-help-summary">How to play · keyboard and remapping</summary>
+        <div class="help">
+          <h2>Default controls</h2>
+          <p>Saved remaps take precedence over these defaults. The Controls panel shows your current bindings.</p>
+          <dl>
+            <dt>Move the paddle</dt><dd>Hold <kbd>A</kbd> or <kbd>Left arrow</kbd> to move left; <kbd>D</kbd> or <kbd>Right arrow</kbd> to move right.</dd>
+            <dt>Launch / retry</dt><dd>Press <kbd>Space</kbd> or <kbd>Enter</kbd>. After a win or loss, retry readies a fresh run; release, then press again to launch.</dd>
+            <dt>Pause / resume</dt><dd>Press <kbd>Escape</kbd> in the playfield or use Pause / Resume below it. Release held controls before resuming.</dd>
+            <dt>Restart</dt><dd><kbd>R</kbd> or Restart clears the score, restores three lives and readies a fresh ball. Use a separate press to launch.</dd>
+          </dl>
+          <h2>Menus and keyboard focus</h2>
+          <p>Use <strong>Controls</strong> or <kbd>F2</kbd> for the in-canvas remapping panel. <kbd>Tab</kbd> or <kbd>Up</kbd> / <kbd>Down arrow</kbd> selects an entry; <kbd>Enter</kbd> activates it. <kbd>Escape</kbd> cancels a binding capture; press it again to close Controls, or choose Done. Closing Controls preserves any existing pause.</p>
+          <p><kbd>Shift</kbd> + <kbd>Tab</kbd> leaves the canvas for this help heading even while Controls is open, without closing that panel. <kbd>Enter</kbd> or <kbd>Space</kbd> expands the help; <kbd>Escape</kbd> closes this help and keeps focus on its heading. Use <kbd>Shift</kbd> + <kbd>Tab</kbd> from the heading to reach the toolbar, then <kbd>Tab</kbd> / <kbd>Shift</kbd> + <kbd>Tab</kbd> to navigate the page.</p>
+          <p>Open <strong>Details → Player tools</strong> for accessibility preferences, screenshots and settings backups. <kbd>Escape</kbd> or Done closes Details and returns focus to the canvas. Switching away from the browser pauses play; returning requires an explicit resume.</p>
+          <h2>Serve and return</h2>
+          <p>Wait before launch to charge your serve. Full charge pierces reinforced panels until the first paddle return. Each launch gets one opening ball save. Paddle edges angle your return. Catch turquoise capsules for a wider paddle.</p>
+          <p>With default pointer controls, click or tap the playfield to launch or retry; hold and drag to steer. Release before launching again. Controls also lists controller bindings and touch settings.</p>
+        </div>
+      </details>
     </nav>
-    <span id="game-state" class="sr-only" aria-live="polite"></span>
+    <noscript><p>Enable JavaScript to load Orbit Breaker. The instructions and All games link remain available.</p></noscript>
   </main>
+  <script>
+    // DOM focus only. The custom platform retains input, rendering and lifecycle.
+    const orbitCanvas = document.querySelector('#game');
+    const orbitHelp = document.querySelector('#orbit-help');
+    const orbitHelpSummary = document.querySelector('#orbit-help-summary');
+    // Shared fullscreen fits direct-child canvases. This nested software stage
+    // needs its own entry scroll; Exit and help remain reachable below it.
+    let orbitFullscreen = false;
+    new MutationObserver(() => {
+      const fullscreen = document.body.classList.contains('ferravex-fullscreen');
+      if (fullscreen && !orbitFullscreen) {
+        orbitCanvas.scrollIntoView({block: 'start', behavior: 'instant'});
+      }
+      orbitFullscreen = fullscreen;
+    }).observe(document.body, {attributes: true, attributeFilter: ['class']});
+    // Player tools replaces this attribute at boot; retain both descriptions.
+    // aria-labelledby keeps the game's visible name ahead of its internal slug.
+    const orbitDescriptions = orbitCanvas.getAttribute('aria-describedby').split(/\s+/);
+    new MutationObserver(() => {
+      const current = orbitCanvas.getAttribute('aria-describedby') || '';
+      const combined = [...new Set([...orbitDescriptions, ...current.split(/\s+/).filter(Boolean)])].join(' ');
+      if (current !== combined) orbitCanvas.setAttribute('aria-describedby', combined);
+    }).observe(orbitCanvas, {attributes: true, attributeFilter: ['aria-describedby']});
+    const orbitPageKey = event => !event.ctrlKey && !event.altKey && !event.metaKey && !event.isComposing && event.keyCode !== 229;
+    orbitCanvas.addEventListener('keydown', event => {
+      if (event.key === 'Tab' && event.shiftKey && orbitPageKey(event)) {
+        event.preventDefault();
+        event.stopPropagation();
+        orbitHelpSummary.focus();
+      }
+    });
+    orbitHelp.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && orbitHelp.open && orbitPageKey(event)) {
+        event.preventDefault();
+        orbitHelp.open = false;
+        orbitHelpSummary.focus();
+      }
+    });
+    // Preserve native page activation. Keyup still reaches the shared bridge
+    // so a held gameplay key releases after focus leaves the canvas.
+    document.addEventListener('keydown', event => {
+      if (event.target !== orbitCanvas) event.stopPropagation();
+    });
+  </script>
   <script type="module" src="./platform.js"></script>
 </body>
 </html>

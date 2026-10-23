@@ -15,6 +15,7 @@ mod raster;
 pub use cache::*;
 pub use camera::*;
 pub use ferravex_math::{Color, Mat4, Quat, Vec2, Vec3, Vec4, vec2, vec3, vec4};
+pub use image::ImageRegionError;
 pub use mesh::*;
 pub use obj::*;
 pub use raster::*;

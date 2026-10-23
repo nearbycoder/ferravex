@@ -1,4 +1,6 @@
 //! Hover dynamics and ordered race progress, independent of the renderer/event loop.
+use ferravex_play::navigation::Route3;
+use ferravex_play::vehicle::{DriveInput, PlanarHandling, PlanarState, PlanarTelemetry};
 use ferravex_render::prelude::{Vec2, Vec3, vec2, vec3};
 use std::f32::consts::{PI, TAU};
 
@@ -7,6 +9,28 @@ pub const LAPS: u32 = 3;
 pub const HALF_WIDTH: f32 = 6.8;
 pub const HOVER_HEIGHT: f32 = 1.45;
 const PATH_SAMPLES: usize = 192;
+const BOOST_EMPTY: f32 = 0.03;
+const BOOST_REARM: f32 = 0.25;
+const RECOVERY_DELAY: f32 = 2.5;
+pub const RECOVERY_PENALTY: f32 = 3.0;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Traction {
+    Track,
+    Sliding,
+    Reversing,
+    Sand,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BoostStatus {
+    Countdown,
+    Ready,
+    Active,
+    Overheated,
+    Sand,
+    Finished,
+}
 
 pub fn path(t: f32) -> Vec2 {
     vec2(64.0 * t.cos() + 8.0 * (2.0 * t).sin(), 45.0 * t.sin())
@@ -54,10 +78,14 @@ impl Gate {
 pub struct Course {
     pub gates: [Gate; GATES],
     pub rocks: Vec<(Vec2, f32)>,
-    samples: [Vec2; PATH_SAMPLES],
+    route: Route3,
 }
 impl Course {
     pub fn new() -> Self {
+        let mut route = Route3::new(PATH_SAMPLES).expect("bounded authored circuit");
+        let samples: [_; PATH_SAMPLES] =
+            std::array::from_fn(|i| world(path(i as f32 / PATH_SAMPLES as f32 * TAU), 0.));
+        route.set_closed(&samples).expect("finite authored circuit");
         Self {
             gates: std::array::from_fn(|i| {
                 let t = i as f32 / GATES as f32 * TAU;
@@ -76,22 +104,23 @@ impl Course {
                     )
                 })
                 .collect(),
-            samples: std::array::from_fn(|i| path(i as f32 / PATH_SAMPLES as f32 * TAU)),
+            route,
         }
     }
     /// Nearest point on the finite closed track polyline, not an infinite roadway.
     pub fn nearest(&self, point: Vec2) -> (f32, f32) {
-        let mut best = (f32::MAX, 0.0);
-        for i in 0..PATH_SAMPLES {
-            let a = self.samples[i];
-            let b = self.samples[(i + 1) % PATH_SAMPLES];
-            let fraction = ((point - a).dot(b - a) / (b - a).length_squared()).clamp(0.0, 1.0);
-            let distance = point.distance_squared(a.lerp(b, fraction));
-            if distance < best.0 {
-                best = (distance, (i as f32 + fraction) / PATH_SAMPLES as f32 * TAU);
-            }
-        }
-        (best.0.sqrt(), best.1)
+        let projection = self
+            .route
+            .project(world(point, 0.))
+            .expect("finite vehicle position")
+            .expect("nonempty authored circuit");
+        // Autoplay follows the authored curve parameter, not normalized arc length.
+        // Projection remains advisory; only ordered forward gate crossings score.
+        (
+            projection.distance_to_route as f32,
+            (projection.segment as f32 + projection.segment_fraction as f32) / PATH_SAMPLES as f32
+                * TAU,
+        )
     }
 }
 
@@ -120,6 +149,7 @@ pub struct Race {
     pub last_gate_timer: f32,
     pub bank: f32,
     pub recovery_count: u32,
+    pub recovery_timer: f32,
     boost_exhausted: bool,
     impact_cooldown: f32,
     stranded_time: f32,
@@ -147,6 +177,7 @@ impl Race {
             last_gate_timer: 0.0,
             bank: 0.0,
             recovery_count: 0,
+            recovery_timer: 0.0,
             boost_exhausted: false,
             impact_cooldown: 0.0,
             stranded_time: 0.0,
@@ -159,7 +190,81 @@ impl Race {
     pub fn speed(&self) -> f32 {
         self.velocity.length()
     }
+    fn motor(&self) -> PlanarState {
+        PlanarState {
+            position: self.position,
+            velocity: self.velocity,
+            yaw: self.yaw,
+            turn_rate: self.turn_rate,
+        }
+    }
+    fn apply_motor(&mut self, motor: PlanarState) {
+        self.position = motor.position;
+        self.velocity = motor.velocity;
+        self.yaw = motor.yaw;
+        self.turn_rate = motor.turn_rate;
+    }
+    pub fn telemetry(&self) -> PlanarTelemetry {
+        self.motor().telemetry().expect("finite skimmer telemetry")
+    }
+    pub fn traction(&self) -> Traction {
+        let motion = self.telemetry();
+        if self.off_track {
+            Traction::Sand
+        } else if motion.forward_speed < -1.0 {
+            Traction::Reversing
+        } else if motion.speed > 3.0 && motion.slip_angle.abs() > 0.25 {
+            Traction::Sliding
+        } else {
+            Traction::Track
+        }
+    }
+    /// Total added recovery time, already included in `elapsed`.
+    pub fn penalty_seconds(&self) -> f32 {
+        self.recovery_count as f32 * RECOVERY_PENALTY
+    }
+    pub fn driving_seconds(&self) -> f32 {
+        (self.elapsed - self.penalty_seconds()).max(0.)
+    }
+    /// Cooling estimate to the strict rearm threshold; boost still needs throttle.
+    pub fn cooling_seconds(&self) -> f32 {
+        ((BOOST_REARM - self.boost) / 0.11).max(0.)
+    }
+    /// Gates earned across the entire trial, including the finish gate of each lap.
+    pub fn gates_completed(&self) -> usize {
+        (self.laps as usize * GATES + (self.next_gate + GATES - 1) % GATES)
+            .min(LAPS as usize * GATES)
+    }
+    /// Explain boost availability using the same hysteresis as the next vehicle tick.
+    pub fn boost_status(&self) -> BoostStatus {
+        if self.finished {
+            BoostStatus::Finished
+        } else if self.countdown > 0.0 {
+            BoostStatus::Countdown
+        } else if self.boost < BOOST_EMPTY || (self.boost_exhausted && self.boost <= BOOST_REARM) {
+            BoostStatus::Overheated
+        } else if self.off_track {
+            BoostStatus::Sand
+        } else if self.boosting {
+            BoostStatus::Active
+        } else {
+            BoostStatus::Ready
+        }
+    }
+    /// Remaining off-course grace period; `None` means no recovery is pending.
+    pub fn recovery_in(&self) -> Option<f32> {
+        (self.stranded_time > 0.0).then(|| (RECOVERY_DELAY - self.stranded_time).max(0.0))
+    }
     pub fn step(&mut self, course: &Course, input: Input, dt: f32) {
+        // Invalid/zero ticks must not award gates, spend energy or alter history.
+        if !dt.is_finite() || dt <= 0.0 || dt > 0.25 {
+            return;
+        }
+        let input = if input.throttle.is_finite() && input.steer.is_finite() {
+            input
+        } else {
+            Input::default()
+        };
         self.previous_position = self.position;
         self.previous_yaw = self.yaw;
         if self.finished {
@@ -172,28 +277,23 @@ impl Race {
         }
         self.elapsed += dt;
         self.last_gate_timer = (self.last_gate_timer - dt).max(0.0);
+        self.recovery_timer = (self.recovery_timer - dt).max(0.0);
         self.impact_cooldown = (self.impact_cooldown - dt).max(0.0);
         let (distance, _) = course.nearest(self.position);
         self.off_track = distance > HALF_WIDTH;
         let throttle = input.throttle.clamp(-1.0, 1.0);
         let steer = input.steer.clamp(-1.0, 1.0);
-        if self.boost < 0.03 {
+        if self.boost < BOOST_EMPTY {
             self.boost_exhausted = true;
         }
-        if self.boost > 0.25 {
+        if self.boost > BOOST_REARM {
             self.boost_exhausted = false;
         }
         self.boosting = input.boost && !self.boost_exhausted && throttle > 0.1 && !self.off_track;
         self.boost = (self.boost + dt * if self.boosting { -0.26 } else { 0.11 }).clamp(0.0, 1.0);
         // Turn rate stays useful at a standstill. Lateral damping gives the craft
         // controlled slip, while sand outside the racing line costs momentum.
-        use ferravex_play::vehicle::*;
-        let mut motor = PlanarState {
-            position: self.position,
-            velocity: self.velocity,
-            yaw: self.yaw,
-            turn_rate: self.turn_rate,
-        };
+        let mut motor = self.motor();
         motor
             .step(
                 PlanarHandling {
@@ -221,10 +321,7 @@ impl Race {
                 dt,
             )
             .unwrap();
-        self.position = motor.position;
-        self.velocity = motor.velocity;
-        self.yaw = motor.yaw;
-        self.turn_rate = motor.turn_rate;
+        self.apply_motor(motor);
         self.bank +=
             (-steer * 0.30 * (self.speed() / 25.0).min(1.0) - self.bank) * (dt * 7.0).min(1.0);
         for &(center, radius) in &course.rocks {
@@ -269,7 +366,8 @@ impl Race {
         } else {
             0.0
         };
-        if self.stranded_time > 2.5 || self.position.length() > 210.0 {
+        if !self.finished && (self.stranded_time > RECOVERY_DELAY || self.position.length() > 210.0)
+        {
             self.recover(course);
         }
     }
@@ -302,15 +400,25 @@ impl Race {
     }
     fn recover(&mut self, course: &Course) {
         let gate = course.gates[(self.next_gate + GATES - 1) % GATES];
-        self.position = gate.position + gate.direction * 1.0;
+        let mut motor = self.motor();
+        motor
+            .reset(
+                gate.position + gate.direction,
+                heading(gate.direction),
+                Vec2::ZERO,
+            )
+            .expect("finite authored recovery anchor");
+        self.apply_motor(motor);
         self.previous_position = self.position;
-        self.yaw = heading(gate.direction);
         self.previous_yaw = self.yaw;
-        self.velocity = Vec2::ZERO;
-        self.elapsed += 3.0;
+        self.elapsed += RECOVERY_PENALTY;
         self.recovery_count += 1;
+        self.recovery_timer = 2.4;
+        self.off_track = false;
+        self.boosting = false;
+        self.last_gate_timer = 0.0;
+        self.impact_cooldown = 0.0;
         self.stranded_time = 0.0;
-        self.turn_rate = 0.;
         self.bank = 0.;
     }
     /// Pure pursuit drives exactly the same throttle/steer/boost path as a player.
@@ -333,6 +441,240 @@ impl Race {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_route_preserves_authored_projection_including_closing_segment() {
+        let course = Course::new();
+        let samples: [_; PATH_SAMPLES] =
+            std::array::from_fn(|i| path(i as f32 / PATH_SAMPLES as f32 * TAU));
+        // Independent baseline projection guards the authored autoplay parameter:
+        // substituting normalized arc progress would silently retune pursuit.
+        for i in 0..97 {
+            let t = i as f32 / 97. * TAU;
+            for offset in [-40., -HALF_WIDTH, 0., HALF_WIDTH, 40.] {
+                let point = path(t) + right(tangent(t)) * offset;
+                let mut expected = (f32::MAX, 0.);
+                for j in 0..PATH_SAMPLES {
+                    let a = samples[j];
+                    let b = samples[(j + 1) % PATH_SAMPLES];
+                    let fraction =
+                        ((point - a).dot(b - a) / (b - a).length_squared()).clamp(0., 1.);
+                    let distance = point.distance_squared(a.lerp(b, fraction));
+                    if distance < expected.0 {
+                        expected = (distance, (j as f32 + fraction) / PATH_SAMPLES as f32 * TAU);
+                    }
+                }
+                let actual = course.nearest(point);
+                assert!((actual.0 - expected.0.sqrt()).abs() < 0.0001);
+                assert!(angle_difference(actual.1, expected.1).abs() < 0.0001);
+            }
+        }
+    }
+
+    #[test]
+    fn traction_uses_signed_vehicle_telemetry_and_sand_has_priority() {
+        let mut race = Race::new();
+        race.yaw = 0.;
+        assert_eq!(race.traction(), Traction::Track);
+        race.velocity = vec2(8., 10.);
+        assert_eq!(race.traction(), Traction::Sliding);
+        assert_eq!(race.telemetry().lateral_speed, 8.);
+        race.velocity = vec2(0., -10.);
+        assert_eq!(race.traction(), Traction::Reversing);
+        race.off_track = true;
+        assert_eq!(race.traction(), Traction::Sand);
+        race.off_track = false;
+        race.velocity = vec2(0.2, 0.);
+        assert_eq!(race.traction(), Traction::Track);
+    }
+
+    #[test]
+    fn every_recovery_anchor_is_clear_and_preserves_earned_progress() {
+        let course = Course::new();
+        for next_gate in 0..GATES {
+            let mut race = Race::new();
+            race.next_gate = next_gate;
+            race.laps = 2;
+            race.velocity = vec2(12., -5.);
+            race.turn_rate = 0.7;
+            race.bank = 0.2;
+            let progress = race.gates_completed();
+            race.recover(&course);
+            assert_eq!(race.gates_completed(), progress);
+            assert_eq!(race.telemetry().turn_rate, 0.);
+            assert_eq!(race.telemetry().speed, 0.);
+            assert_eq!(race.previous_position, race.position);
+            assert_eq!(race.previous_yaw, race.yaw);
+            assert_eq!(race.bank, 0.);
+            assert!(course.nearest(race.position).0 < HALF_WIDTH);
+            for &(center, radius) in &course.rocks {
+                assert!(race.position.distance(center) > radius + 0.8);
+            }
+            for gate in course.gates {
+                for side in [-1., 1.] {
+                    let post = gate.position + right(gate.direction) * (HALF_WIDTH + 0.4) * side;
+                    assert!(race.position.distance(post) > 0.65 + 0.8);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn recovery_penalties_are_included_once_and_impacts_only_cost_speed() {
+        let course = Course::new();
+        let mut race = Race::new();
+        race.elapsed = 10.;
+        race.position = Vec2::X;
+        race.velocity = -Vec2::X * 20.;
+        race.resolve_obstacle(Vec2::ZERO, 1.);
+        assert_eq!(race.impacts, 1);
+        assert_eq!(race.elapsed, 10.);
+        assert_eq!(race.penalty_seconds(), 0.);
+        for recovery in 1..=2 {
+            race.recover(&course);
+            assert_eq!(race.penalty_seconds(), recovery as f32 * 3.);
+            assert_eq!(race.driving_seconds(), 10.);
+            assert_eq!(
+                race.elapsed,
+                race.driving_seconds() + race.penalty_seconds()
+            );
+        }
+        race.finished = true;
+        race.step(&course, Input::default(), 1. / 120.);
+        assert_eq!(race.elapsed, 16.);
+        assert_eq!(race.penalty_seconds(), 6.);
+    }
+
+    #[test]
+    fn rejected_ticks_preserve_history_and_invalid_controls_coast_safely() {
+        let course = Course::new();
+        let mut race = Race::new();
+        race.countdown = 0.;
+        race.previous_position = race.position - Vec2::X;
+        let previous = race.previous_position;
+        let telemetry = race.telemetry();
+        for dt in [0., -0.1, 0.251, f32::INFINITY, f32::NAN] {
+            race.step(
+                &course,
+                Input {
+                    throttle: 1.,
+                    steer: 1.,
+                    boost: true,
+                },
+                dt,
+            );
+            assert_eq!(race.previous_position, previous);
+            assert_eq!(race.telemetry(), telemetry);
+            assert_eq!(race.elapsed, 0.);
+            assert_eq!(race.boost, 1.);
+        }
+        for (throttle, steer) in [(f32::NAN, 1.), (1., f32::INFINITY)] {
+            race.step(
+                &course,
+                Input {
+                    throttle,
+                    steer,
+                    boost: true,
+                },
+                1. / 120.,
+            );
+            assert_eq!(race.telemetry(), telemetry);
+            assert!(!race.boosting);
+        }
+        assert!(race.elapsed > 0.);
+    }
+
+    #[test]
+    fn boost_feedback_matches_overheat_lockout_and_rearm_threshold() {
+        let course = Course::new();
+        let mut race = Race::new();
+        assert_eq!(race.boost_status(), BoostStatus::Countdown);
+        race.countdown = 0.0;
+        assert_eq!(race.boost_status(), BoostStatus::Ready);
+        race.boost = 0.0;
+        let input = Input {
+            throttle: 1.0,
+            boost: true,
+            ..Default::default()
+        };
+        for _ in 0..120 {
+            // Keep this a straight-line energy test, clear of course obstacles.
+            race.position = Race::new().position;
+            race.velocity = Vec2::ZERO;
+            race.step(&course, input, 1.0 / 120.0);
+            assert!(!race.boosting);
+            assert_eq!(race.boost_status(), BoostStatus::Overheated);
+        }
+        race.boost = BOOST_REARM;
+        assert_eq!(race.boost_status(), BoostStatus::Overheated);
+        race.step(&course, input, 1.0 / 120.0);
+        assert!(!race.boosting);
+        assert_eq!(race.boost_status(), BoostStatus::Ready);
+        race.step(&course, input, 1.0 / 120.0);
+        assert!(race.boosting);
+        assert_eq!(race.boost_status(), BoostStatus::Active);
+        race.position = Vec2::ZERO;
+        race.step(&course, input, 1.0 / 120.0);
+        assert!(!race.boosting);
+        assert_eq!(race.boost_status(), BoostStatus::Sand);
+        race.finished = true;
+        assert_eq!(race.boost_status(), BoostStatus::Finished);
+    }
+
+    #[test]
+    fn progress_counts_finish_gate_and_remains_monotonic_across_laps() {
+        let course = Course::new();
+        let mut race = Race::new();
+        let mut completed = 0;
+        assert_eq!(race.gates_completed(), 0);
+        for _ in 0..120 * 120 {
+            race.step(&course, race.autoplay(&course), 1.0 / 120.0);
+            let next = race.gates_completed();
+            assert!(next == completed || next == completed + 1);
+            assert!(next <= GATES * LAPS as usize);
+            completed = next;
+            if race.finished {
+                break;
+            }
+        }
+        assert_eq!(completed, GATES * LAPS as usize);
+    }
+
+    #[test]
+    fn recovery_has_grace_period_penalty_and_clears_transient_vehicle_state() {
+        let course = Course::new();
+        let mut race = Race::new();
+        race.countdown = 0.0;
+        race.next_gate = 5;
+        race.position = Vec2::ZERO;
+        for _ in 0..120 {
+            race.step(&course, Input::default(), 1.0 / 120.0);
+        }
+        assert_eq!(race.recovery_count, 0);
+        assert!((race.recovery_in().unwrap() - 1.5).abs() < 0.001);
+        race.boosting = true;
+        race.bank = 0.2;
+        race.last_gate_timer = 0.5;
+        let elapsed = race.elapsed;
+        race.recover(&course);
+        assert!((race.elapsed - elapsed - 3.0).abs() < 0.0001);
+        assert_eq!(race.recovery_count, 1);
+        assert_eq!(race.recovery_in(), None);
+        assert!(race.recovery_timer > 2.0);
+        assert!(!race.off_track && !race.boosting);
+        assert_eq!(race.bank, 0.0);
+        assert_eq!(race.last_gate_timer, 0.0);
+        assert_eq!(race.next_gate, 5);
+        assert_eq!(race.laps, 0);
+        assert_eq!(race.position, race.previous_position);
+        assert_eq!(race.yaw, race.previous_yaw);
+        assert!(race.position.distance(course.gates[4].position) < 1.01);
+        for _ in 0..300 {
+            race.step(&course, Input::default(), 1.0 / 120.0);
+        }
+        assert_eq!(race.recovery_timer, 0.0);
+        assert_eq!(race.recovery_count, 1);
+    }
 
     #[test]
     fn glancing_impacts_keep_tangential_speed_and_turning_has_inertia() {

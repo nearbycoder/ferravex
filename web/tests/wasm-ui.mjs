@@ -2,13 +2,18 @@
 // cancellation, support keyboard focus and block while settings owns input.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-const catalog=JSON.parse(fs.readFileSync(new URL('../../examples/catalog.json',import.meta.url)));
+import {resolve} from 'node:path';
+import {pathToFileURL} from 'node:url';
+// An optional immutable source/artifact root permits parent integration checks
+// without changing the captured source or publishing an unverified build.
+const root=process.argv[2]?pathToFileURL(resolve(process.argv[2])+'/'):new URL('../../',import.meta.url);
+const catalog=JSON.parse(fs.readFileSync(new URL('examples/catalog.json',root)));
 function runtime(id){
  const game=catalog.find(g=>g.id===id);let playing=false;
- const module=new WebAssembly.Module(fs.readFileSync(new URL(`../../dist/web/${game.host}/${id.replaceAll('-','_')}.wasm`,import.meta.url)));
+ const module=new WebAssembly.Module(fs.readFileSync(new URL(`dist/web/${game.host}/${id.replaceAll('-','_')}.wasm`,root)));
  const e=new WebAssembly.Instance(module,{env:{ferravex_save_len:()=>0,ferravex_save_load:()=>-1,ferravex_save_store:()=>-1,ferravex_controls_len:()=>0,ferravex_controls_load:()=>-1,ferravex_controls_store:()=>-1,ferravex_set_playing:v=>playing=!!v}}).exports;
  e.ferravex_init();
- const frame=()=>{e.ferravex_frame(1/60,1280,800);assert.ok(new Float32Array(e.memory.buffer,e.ferravex_vertices(),e.ferravex_vertex_count()*8).every(Number.isFinite));};
+ const frame=(width=1280,height=800)=>{e.ferravex_frame(1/60,width,height);assert.ok(new Float32Array(e.memory.buffer,e.ferravex_vertices(),e.ferravex_vertex_count()*8).every(Number.isFinite));};
  const key=code=>{e.ferravex_key(code,1);e.ferravex_key(code,0);};
  const menu=()=>{
   const v=new Float32Array(e.memory.buffer,e.ferravex_vertices(),e.ferravex_vertex_count()*8);
@@ -40,21 +45,90 @@ function runtime(id){
  key(0xff09);frame();key(0xff0d);frame();frame();assert.ok(!menu(),'keyboard focuses and resumes');
  console.log('neon-swarm shared UI release, capture, focus and settings integration passed');
 }
-{
- const {e,frame,key,playing}=runtime('strike');frame();assert.equal(playing(),false);
- key(0xff09);frame();key(0xff0d);frame();assert.equal(playing(),true,'keyboard starts Strike');
- key(0xff1b);frame();assert.equal(playing(),false);
- e.ferravex_pointer(150,420,0,0);e.ferravex_button(1,1);frame();assert.equal(playing(),false);
- e.ferravex_button(1,0);frame();assert.equal(playing(),true,'mouse releases Resume');
- console.log('strike shared menu keyboard and release integration passed');
+for(const [width,height] of [[1280,800],[390,608],[320,480]]){
+ const {e,frame,key,playing}=runtime('strike'),step=()=>frame(width,height);
+ step();assert.equal(playing(),false);
+ key(0xff09);step();key(0xff0d);step();assert.equal(playing(),true,'keyboard starts Strike');
+ key(0xff1b);step();assert.equal(playing(),false);
+ // Locate the actual primary button fill rather than an obsolete fixed click.
+ // Six colored vertices must form one visible, sufficiently large rectangle.
+ const vertices=new Float32Array(e.memory.buffer,e.ferravex_vertices(),e.ferravex_vertex_count()*8);
+ const color=[215/255,181/255,109/255,1],near=(a,b)=>Math.abs(a-b)<1e-5,buttons=[];
+ for(let i=0;i+48<=vertices.length;i+=8){
+  if(!Array.from({length:6},(_,n)=>i+n*8).every(at=>color.every((c,j)=>near(vertices[at+4+j],c))))continue;
+  const points=Array.from({length:6},(_,n)=>[(vertices[i+n*8]+1)*width/2,(1-vertices[i+n*8+1])*height/2]);
+  const left=Math.min(...points.map(p=>p[0])),right=Math.max(...points.map(p=>p[0]));
+  const top=Math.min(...points.map(p=>p[1])),bottom=Math.max(...points.map(p=>p[1]));
+  if(right-left<44-.01||bottom-top<44-.01)continue;
+  assert.ok(points.every(([x,y])=>(near(x,left)||near(x,right))&&(near(y,top)||near(y,bottom))),'primary fill is rectangular');
+  buttons.push({left,right,top,bottom});i+=40;
+ }
+ assert.equal(buttons.length,1,'exactly one primary Resume button is painted');
+ const {left,right,top,bottom}=buttons[0];
+ assert.ok(left>=0&&right<=width&&top>=0&&bottom<=height,'button stays in viewport');
+ const x=(left+right)/2,y=(top+bottom)/2;
+ e.ferravex_pointer(x,y,0,0);e.ferravex_button(1,1);step();assert.equal(playing(),false,'press alone cannot resume');
+ e.ferravex_pointer(0,0,-x,-y);e.ferravex_button(1,0);step();assert.equal(playing(),false,'outside release cancels Resume');
+ e.ferravex_pointer(x,y,x,y);e.ferravex_button(1,1);step();assert.equal(playing(),false,'fresh press still waits for release');
+ e.ferravex_button(1,0);step();assert.equal(playing(),true,'mouse releases rendered Resume');
+ console.log(`strike shared menu keyboard, rendered bounds, drag cancellation and release passed at ${width}x${height}`);
 }
 {
  const {e,frame,key,panel}=runtime('orchard-guard');frame();
  assert.ok(panel(240,683,190,55,[.23,.39,.24,1]),'empty plot shows Seed build control');
  key(0xff09);frame();key(0xff0d);frame();frame();
  assert.ok(!panel(240,683,190,55,[.23,.39,.24,1]),'accepted build replaces empty plot controls');
- assert.ok(panel(260,683,190,55,[.23,.39,.24,1]),'built tower exposes upgrade control');
+ assert.ok(panel(240,683,415,55,[.23,.39,.24,1]),'built tower exposes the wider upgrade control with room for current costs and hints');
+ // Building removes the focused Seed button. Focus the replacement Upgrade,
+ // then reverse through the current HUD (which also includes Pause/Restart).
+ key(0xff09);frame();
+ assert.ok(panel(240,683,415,2,[.88,.62,.22,1]),'keyboard focuses the new upgrade control');
  key(0xff52);frame();key(0xff0d);frame();frame();
- assert.ok(panel(957,683,215,55,[177/255,180/255,156/255,1]),'focused wave control launches and disables itself');
- console.log('orchard-guard shared keyboard build, focus cycling and wave activation passed');
+ assert.ok(panel(957,683,215,55,[97/255,105/255,86/255,1]),'focused wave control launches and disables itself');
+ assert.ok(panel(695,683,110,55,[.23,.39,.24,1]),'starting the first wave enables Pause');
+ // Starting play clears focus. Navigate Upgrade -> Pause, then activate the
+ // modal's Resume and verify the running-wave HUD returns without a restart.
+ key(0xff09);frame();key(0xff09);frame();key(0xff0d);frame();frame();
+ assert.ok(panel(375,404,215,55,[.23,.39,.24,1]),'keyboard Pause opens the resume modal');
+ key(0xff0d);frame();frame();
+ assert.ok(!panel(375,404,215,55,[.23,.39,.24,1]),'modal Resume returns to the orchard');
+ assert.ok(panel(240,683,415,55,[.23,.39,.24,1]),'resume retains the built tower');
+ assert.ok(panel(957,683,215,55,[97/255,105/255,86/255,1]),'resume retains the active wave');
+ console.log('orchard-guard shared keyboard build, focus cycling, wave, pause and resume passed');
+}
+
+// Read actual glyph geometry after the HUD panel, excluding world geometry.
+// Consecutive cream vertices form one text run, separated by its shadow pass.
+for(const width of [1280,390,320]){
+ const height=800,{e,frame}=runtime('pocket-rally');frame(width,height);
+ const v=new Float32Array(e.memory.buffer,e.ferravex_vertices(),e.ferravex_vertex_count()*8);
+ const near=(a,b)=>Math.abs(a-b)<1e-5;
+ const color=(i,c)=>c.every((n,j)=>near(v[i+4+j],n));
+ const point=i=>[(v[i]+1)*width/2,(1-v[i+1])*height/2];
+ const findPanel=alpha=>{
+  for(let i=0;i<v.length;i+=8)if(color(i,[.12,.19,.17,alpha]))return i;
+  assert.fail(`rally panel ${alpha} exists`);
+ };
+ const runs=(start,end)=>{
+  const out=[];let run;
+  for(let i=start;i<end;i+=8){
+   if(!color(i,[.96,.92,.81,1])){run=null;continue;}
+   if(!run){run={left:Infinity,right:-Infinity,top:Infinity,bottom:-Infinity};out.push(run);}
+   const [x,y]=point(i);run.left=Math.min(run.left,x);run.right=Math.max(run.right,x);run.top=Math.min(run.top,y);run.bottom=Math.max(run.bottom,y);
+  }
+  return out;
+ };
+ const hud=findPanel(.88),countdown=findPanel(.94);
+ const header=runs(hud+48,countdown).filter(r=>r.top<94);
+ assert.equal(header.length,7,'title, lap, gates, two timers, speed and unit are rendered');
+ for(const r of header)assert.ok(r.left>=8&&r.right<=width-8,`rally HUD stays inside ${width}px viewport: ${JSON.stringify(r)}`);
+ const [title,lap,gates,lapTime,raceTime,speed,unit]=header;
+ assert.ok(unit.left-speed.right>=8,'speed and KM/H have a visible gap');
+ assert.ok(speed.left-title.right>=8,'title and speed remain separate');
+ assert.ok(lapTime.left-lap.right>=8&&raceTime.left-gates.right>=8,'timers remain separate from lap and gate progress');
+ const [left,top]=point(countdown),[right,bottom]=point(countdown+40);
+ const labels=runs(countdown+48,v.length);
+ assert.equal(labels.length,3,'ready, countdown number and starting instruction are rendered');
+ for(const r of labels)assert.ok(r.left>=left+10&&r.right<=right-10&&r.top>=top+10&&r.bottom<=bottom-10,`countdown text stays inside its panel at ${width}px: ${JSON.stringify(r)}`);
+ console.log(`pocket-rally actual glyph bounds, speed spacing and countdown panel passed at ${width}x${height}`);
 }

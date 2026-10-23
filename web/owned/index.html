@@ -1,9 +1,216 @@
-<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Ferravex — Courtyard</title>
-<style>
-:root{color-scheme:dark;font:14px system-ui,sans-serif;color:#f1ede2;background:#192326}*{box-sizing:border-box}body{margin:0;overflow:hidden}canvas{display:block;width:100vw;height:100vh;outline:none;touch-action:none}button,input,select,textarea{font:inherit}button{background:#e5d6b9;border:0;color:#202a2a;padding:12px 20px;border-radius:3px;cursor:pointer}button:hover{background:#f5e7ca}button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px solid #e0aa67;outline-offset:3px}.secondary{color:#e8dfcf;background:#ffffff16;border:1px solid #ffffff32}#menu{position:absolute;inset:0;display:grid;align-content:end;padding:clamp(24px,5vw,72px);background:linear-gradient(0deg,#101c22e8,transparent 75%);pointer-events:none}#menu>*{pointer-events:auto;max-width:520px}#menu h1{font-size:clamp(40px,7vw,76px);font-weight:500;letter-spacing:-.05em;line-height:1;margin:12px 0 18px}p{line-height:1.6;color:#c2c7bf}small,.eyebrow{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:#d8c39e}#menu .row{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}#hud{position:absolute;inset:0;pointer-events:none;padding:24px max(24px,env(safe-area-inset-right));display:flex;align-items:end;justify-content:space-between;text-shadow:0 2px 12px #000}#vitals{font-size:25px;letter-spacing:.04em}#vitals span{font-size:11px;color:#c4c9c4;margin-right:24px;margin-left:7px}#score{text-align:right;font-size:12px;color:#c4c9c4}#crosshair{pointer-events:none;position:absolute;left:50%;top:50%;width:4px;height:4px;background:#f4ead6;box-shadow:0 0 2px #000;border-radius:50%;transform:translate(-50%,-50%)}#top{position:absolute;top:22px;left:24px;color:#ede0c7;font-size:11px;letter-spacing:.16em;pointer-events:none}#tools{position:absolute;right:20px;top:20px;bottom:85px;width:min(345px,calc(100vw - 40px));overflow:auto;background:#19262aee;backdrop-filter:blur(12px);border:1px solid #ffffff22;padding:22px;border-radius:5px}#tools h2{font-size:20px;font-weight:500;margin:0 0 16px}label{display:block;font-size:12px;color:#c2c7bf;margin:12px 0 5px}input,select,textarea{width:100%;background:#0c181d;color:#f1e9d9;border:1px solid #ffffff30;padding:8px;border-radius:2px}textarea{font:11px ui-monospace,monospace;height:180px}#tools .row{display:flex;gap:8px;flex-wrap:wrap}#tools button{font-size:12px;padding:9px 12px}#message{white-space:pre-wrap;color:#e8c493;font-size:12px}#touch{position:absolute;bottom:75px;left:24px;right:24px;display:none;justify-content:space-between;pointer-events:none}#touch div{display:grid;grid-template-columns:repeat(3,48px);gap:6px}#touch button{pointer-events:auto;touch-action:none;min-height:48px;padding:10px;background:#203034a8;color:#f6ead4;border:1px solid #fff3}#touch .fire{width:65px;height:65px;border-radius:50%}[hidden]{display:none!important}@media(pointer:coarse){#touch{display:flex}#hud{padding-bottom:18px}}@media(max-width:600px){#menu p{font-size:13px}#menu h1{margin-bottom:10px}#tools{bottom:24px}#top{font-size:9px}}
-#audio{position:absolute;right:110px;top:16px;z-index:6;padding:6px 10px;font-size:12px;background:#203034;color:#e8dfcf;border:1px solid #ffffff32}#audio:hover{background:#33464c}#controls{background:#203034;color:#e8dfcf;border:1px solid #ffffff32;position:absolute;right:20px;top:16px;z-index:6;padding:6px 10px;font-size:12px}#controls:hover{background:#33464c}body[data-controls-open] #menu,body[data-controls-open] #tools,body[data-controls-open] #hud,body[data-controls-open] #crosshair{display:none!important}@media(max-width:500px){#top{display:none}}</style>
-<canvas id="game" tabindex="0" aria-label="Courtyard game. WASD to move, mouse to aim, click to shoot, Space to jump, R to reload, Escape for menu."></canvas>
-<button id="audio" class="secondary" type="button" disabled title="Enable sound" aria-pressed="false">Sound off</button><button id="controls" class="secondary" type="button" disabled title="Controls (F2)" aria-pressed="false">Controls</button><div id="top">FERRAVEX / COURTYARD</div><div id="hud" hidden><div id="vitals"></div><div id="score"></div></div><div id="crosshair" hidden></div>
-<div id="menu"><div class="eyebrow">Original Rust engine · no third-party runtime libraries</div><h1>Courtyard</h1><p>A low-poly training ground running on Ferravex’s own math, simulation, physics and mesh pipeline. Direct WebGL rendering, warm stone, quiet detail.</p><div class="row"><button id="play" disabled>Loading engine…</button><button id="overview" class="secondary">2D overview</button><button id="edit" class="secondary">Scene tools</button></div><p><small>WASD move · Mouse aim · Click fire · Space jump · R reload · Esc menu</small></p></div>
-<aside id="tools" hidden><h2>Scene tools</h2><div class="row"><button id="closeTools" class="secondary">Close</button><button id="reset" class="secondary">Reset</button></div><label for="object">Object</label><select id="object"></select><div class="row"><div style="flex:1"><label for="x">X</label><input id="x" type="number" step="0.25"></div><div style="flex:1"><label for="y">Y</label><input id="y" type="number" step="0.25"></div><div style="flex:1"><label for="z">Z</label><input id="z" type="number" step="0.25"></div></div><div class="row" style="margin-top:14px"><button id="apply">Apply position</button><button id="save">Save scene</button><button id="load" class="secondary">Load saved</button><button id="record" class="secondary">Record inputs</button><button id="download" class="secondary">Export replay</button></div><label for="fog">Atmospheric fog</label><input id="fog" type="range" min="0" max="0.018" value="0.004" step="0.001"><label for="shader">Fragment shader · reload keeps the last valid program</label><textarea id="shader" spellcheck="false"></textarea><button id="reload">Reload shader</button><details><summary>Two-player LAN session</summary><p>Exchange tokens directly with your teammate over a trusted channel. This prototype has no relay or accounts. Both peers need a route to each other.</p><div class="row"><button id="hostPeer">Host</button><button id="joinPeer" class="secondary">Join offer</button><button id="acceptPeer" class="secondary">Accept answer</button><button id="leavePeer" class="secondary">Disconnect</button></div><label for="peerToken">Pairing token · paste received offer or answer here</label><textarea id="peerToken" spellcheck="false"></textarea><p id="peerStatus" role="status">Offline practice</p><p id="peerStats"></p></details><p id="metrics"></p><p id="message" role="status"></p></aside>
-<script type="module" src="platform.js"></script></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Ferravex — Courtyard</title>
+  <style>
+    :root { color-scheme: dark; font: 16px/1.5 system-ui, sans-serif; color: #f1ede2; background: #192326; }
+    * { box-sizing: border-box; }
+    body { margin: 0; height: 100vh; height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr); }
+    [hidden] { display: none !important; }
+    a { color: #e8c493; text-underline-offset: .2em; }
+    button, input, select, textarea { font: inherit; }
+    button { background: #e5d6b9; border: 1px solid #e5d6b9; color: #202a2a; padding: 10px 16px; border-radius: 3px; cursor: pointer; min-height: 44px; }
+    button:hover { background: #f5e7ca; }
+    button:disabled { opacity: .5; cursor: wait; }
+    .secondary { color: #e8dfcf; background: #203034; border-color: #758582; }
+    .secondary:hover { background: #33464c; }
+    .courtyard-host :focus-visible { outline: 3px solid #efc986; outline-offset: 3px; }
+    #game:focus-visible { outline-offset: -4px; }
+    #courtyard-navigation { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; height: auto; padding: 8px max(16px, env(safe-area-inset-right)) 8px max(16px, env(safe-area-inset-left)); border-bottom: 1px solid #657b80; }
+    #courtyard-navigation a { display: inline-flex; align-items: center; min-height: 44px; }
+    #top { flex: 1 1 160px; font-size: .875rem; color: #ede0c7; }
+    #courtyard-navigation button { position: static; min-height: 44px; font: inherit; }
+    #courtyard-stage { position: relative; min-height: 0; }
+    #courtyard-pan { display: none; }
+    #game { display: block; width: 100%; height: 100%; touch-action: none; }
+    #menu { position: absolute; inset: 0; overflow: auto; padding: clamp(16px, 4vw, 56px); background: #101c22ed; }
+    #menu > * { max-width: 54rem; }
+    #menu h1 { font-size: clamp(2.25rem, 6vw, 4rem); font-weight: 500; letter-spacing: -.04em; line-height: 1.1; margin: 8px 0 16px; }
+    #menu h2 { font-size: 1.15rem; margin-top: 24px; }
+    p { line-height: 1.6; color: #d0d5cd; }
+    #menu, #tools { overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+    .eyebrow { font-size: .875rem; color: #d8c39e; }
+    .row { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+    .courtyard-bindings { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)); gap: 12px; }
+    .courtyard-bindings > div { padding: 12px; border: 1px solid #657b80; border-radius: 3px; }
+    .courtyard-bindings dt { font-weight: 600; }
+    .courtyard-bindings dd { margin: 4px 0 0; }
+    kbd { font: inherit; font-weight: 600; }
+    #menu-status { color: #e8c493; }
+    #hud { position: absolute; inset: auto 0 0; pointer-events: none; padding: 16px max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); display: flex; flex-wrap: wrap; gap: 12px; align-items: end; justify-content: space-between; text-shadow: 0 2px 12px #000; background: linear-gradient(transparent, #101c22db); }
+    #vitals { font-size: 1.5rem; }
+    #vitals span { font-size: .875rem; color: #e1e5dd; margin: 0 16px 0 6px; }
+    #score { font-size: .875rem; color: #e1e5dd; }
+    #crosshair { pointer-events: none; position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; background: #f4ead6; box-shadow: 0 0 2px #000; border-radius: 50%; transform: translate(-50%, -50%); }
+    #training { position: absolute; left: 16px; top: 16px; max-width: min(400px, calc(100% - 32px)); padding: 10px 14px; background: #101c22eb; border: 1px solid #657b80; border-radius: 4px; pointer-events: none; }
+    #objective { margin: 0; color: #f1ede2; }
+    #capture-status { margin: 5px 0 0; font-size: .875rem; color: #ded9c4; }
+    #tools { position: absolute; inset: 16px 16px 16px auto; width: min(28rem, calc(100% - 32px)); overflow: auto; background: #19262af5; border: 1px solid #657b80; padding: 20px; border-radius: 5px; }
+    #tools h2 { font-size: 1.25rem; margin: 0 0 16px; }
+    #tools label { display: block; margin: 12px 0 5px; color: #d0d5cd; }
+    #tools input, #tools select, #tools textarea { width: 100%; min-width: 0; background: #0c181d; color: #f1e9d9; border: 1px solid #758582; padding: 8px; border-radius: 2px; }
+    #tools textarea { font: .875rem/1.5 ui-monospace, monospace; height: 180px; resize: vertical; }
+    #tools .coordinates > div { flex: 1 1 5rem; min-width: 0; }
+    #tools summary { cursor: pointer; padding-block: 12px; }
+    #message { white-space: pre-wrap; color: #e8c493; }
+    body[data-controls-open] :is(#menu, #tools, #hud, #crosshair, #training, #pause) { display: none !important; }
+    body.courtyard-host.ferravex-high-contrast :is(#menu, #tools, #training) { background: #000; color: #fff; }
+    body.courtyard-host.ferravex-high-contrast :is(#menu, #tools, #training) p { color: #fff; }
+    body.courtyard-host.ferravex-large-text :is(#menu, #tools) { font-size: 1.2rem; }
+    @media (max-width: 540px) {
+      #courtyard-navigation { gap: 6px 8px; padding-inline: 12px; }
+      #top { flex-basis: calc(100% - 100px); }
+      #courtyard-navigation button { padding-inline: 10px; font-size: .9375rem; }
+      #menu { padding: 16px; }
+      #tools { inset: 8px; width: auto; padding: 16px; }
+      #menu .row > button { flex: 1 1 10rem; }
+    }
+    @media (max-width: 540px) and (max-height: 700px) {
+      /* Keep the guide, touch actions and stats apart. The canvas consumes touch
+         gestures, so the adjacent native page surface remains available to pan. */
+      #courtyard-stage { min-height: 640px; margin-right: 44px; }
+      body.courtyard-host.ferravex-fullscreen { overflow-y: auto; }
+      #courtyard-pan { display: block; position: absolute; left: 100%; top: 0; bottom: 0; width: 44px; padding: 8px; background: #203034; border-left: 1px solid #758582; touch-action: pan-y; }
+      #courtyard-pan span { position: sticky; top: 12px; display: block; writing-mode: vertical-rl; }
+      #capture-status { display: none; }
+    }
+    @media (max-height: 500px) {
+      #courtyard-navigation { padding-block: 4px; }
+      #training { top: 8px; padding: 6px 10px; }
+      #capture-status { display: none; }
+    }
+  </style>
+</head>
+<body class="courtyard-host">
+  <header>
+    <nav id="courtyard-navigation" aria-label="Game and player controls">
+      <a href="../">All games</a>
+      <span id="top">FERRAVEX / COURTYARD</span>
+      <button id="audio" class="secondary" type="button" disabled title="Enable sound" aria-pressed="false">Sound off</button>
+      <button id="controls" class="secondary" type="button" disabled title="Controls (F2)" aria-pressed="false">Controls</button>
+      <button id="pause" class="secondary" type="button" hidden>Pause / menu</button>
+    </nav>
+  </header>
+  <main id="courtyard-stage" aria-label="Courtyard training">
+    <canvas id="game" tabindex="0" aria-label="Courtyard game canvas" aria-describedby="courtyard-intro courtyard-keyboard courtyard-remapping courtyard-session">
+      Courtyard is a 3D movement and aiming training game. It requires JavaScript, WebAssembly and WebGL2. The menu explains the drills and default controls.
+    </canvas>
+    <div id="courtyard-pan" tabindex="0" role="region" aria-label="Scroll the page here, or focus here and use arrow keys. Leaving the canvas pauses offline training."><span>↕ Scroll page</span></div>
+    <div id="hud" hidden><div id="vitals"></div><div id="score"></div></div>
+    <div id="crosshair" hidden aria-hidden="true"></div>
+    <section id="training" hidden aria-label="Training progress">
+      <p id="objective" role="status" aria-live="polite" aria-atomic="true"></p>
+      <p id="capture-status" role="status" aria-atomic="true"></p>
+    </section>
+    <section id="menu" aria-labelledby="courtyard-title" tabindex="-1">
+      <div class="eyebrow">Original Rust engine · no third-party runtime libraries</div>
+      <h1 id="courtyard-title">Courtyard</h1>
+      <p id="courtyard-intro">Learn movement and aim against moving operators in a stone courtyard. Complete four drills, then keep practicing: move five meters, fire a shot, finish a reload and hit an operator. The operators do not shoot back in offline training.</p>
+      <p id="menu-status" role="status" aria-atomic="true">Preparing training…</p>
+      <p id="menu-objective">Move five meters · Fire a shot · Finish a reload · Hit an operator</p>
+      <div class="row">
+        <button id="play" type="button" disabled>Loading engine…</button>
+        <button id="overview" class="secondary" type="button" disabled>2D overview</button>
+        <button id="edit" class="secondary" type="button" disabled aria-controls="tools" aria-expanded="false">Scene tools</button>
+      </div>
+      <p id="courtyard-keyboard">Use <kbd>Tab</kbd> and <kbd>Shift</kbd> + <kbd>Tab</kbd> to reach page controls; <kbd>Enter</kbd> or <kbd>Space</kbd> activates a focused button. Choose <strong>Enter / Resume training</strong> to focus the canvas and capture the mouse. <strong>2D overview</strong> starts without mouse capture; movement stays active. With the canvas focused, <kbd>Enter</kbd> starts or resumes the first-person view. Click the scene if mouse capture is needed.</p>
+      <h2>Default keyboard and mouse controls</h2>
+      <p id="courtyard-remapping">Saved or remapped bindings may differ from these defaults and the drill hints. Open <strong>Controls</strong> or press <kbd>F2</kbd> with the canvas focused to inspect or change bindings. <kbd>Tab</kbd> is reserved for page navigation here. In Controls, use <kbd>Up</kbd> / <kbd>Down</kbd> and <kbd>Enter</kbd> to select a binding. <kbd>Escape</kbd> cancels an active remap; otherwise it closes Controls. <kbd>F2</kbd> also closes Controls.</p>
+      <dl class="courtyard-bindings" aria-describedby="courtyard-remapping">
+        <div><dt>Move and strafe</dt><dd><kbd>W</kbd> / <kbd>A</kbd> / <kbd>S</kbd> / <kbd>D</kbd> or arrow keys</dd></div>
+        <div><dt>Aim and fire</dt><dd>Mouse to aim; left click to fire. Arrow keys move, not aim.</dd></div>
+        <div><dt>Jump</dt><dd><kbd>Space</kbd></dd></div>
+        <div><dt>Reload</dt><dd><kbd>R</kbd> — wait for the magazine to refill.</dd></div>
+        <div><dt>Release controls / menu</dt><dd><kbd>Escape</kbd> or <strong>Pause / menu</strong></dd></div>
+        <div><dt>Reset training</dt><dd><strong>Scene tools → Reset</strong> clears training, scene edits and recording. Disconnect a peer session first.</dd></div>
+      </dl>
+      <p id="courtyard-session">Release mouse capture with <kbd>Escape</kbd> before navigating the page. Leaving the canvas for a page control, switching away from the window, or opening Controls releases gameplay input. Offline training keeps its progress and waits for an explicit resume. Connected matches stay live while your local controls are released. Closing Controls does not resume training. On short screens, scroll beside the scene using the labelled strip; keyboard users can focus that strip and use arrow keys. Moving focus out of the scene pauses offline training.</p>
+      <p><strong>Scene tools</strong> opens the scene, shader, replay and LAN tools. <kbd>Escape</kbd> or <strong>Close</strong> returns to this menu. <strong>Details → Player tools</strong> contains presentation and accessibility settings, screenshots and settings backups. Close Details with <kbd>Escape</kbd> or <strong>Done</strong> to return focus to the canvas. Fullscreen may consume the first Escape to exit.</p>
+      <noscript><p>JavaScript is required to load Courtyard. You can still read this guide and return to <a href="../">all games</a>.</p></noscript>
+    </section>
+    <aside id="tools" hidden aria-labelledby="courtyard-tools-title">
+      <h2 id="courtyard-tools-title">Scene tools</h2>
+      <div class="row"><button id="closeTools" class="secondary" type="button">Close</button><button id="reset" class="secondary" type="button" aria-describedby="courtyard-reset-help">Reset</button></div>
+      <p id="courtyard-reset-help">Reset clears training, scene edits and recording. It is unavailable during a connected match.</p>
+      <label for="object">Object</label><select id="object"></select>
+      <div class="row coordinates">
+        <div><label for="x">X</label><input id="x" type="number" step="0.25"></div>
+        <div><label for="y">Y</label><input id="y" type="number" step="0.25"></div>
+        <div><label for="z">Z</label><input id="z" type="number" step="0.25"></div>
+      </div>
+      <div class="row"><button id="apply" type="button">Apply position</button><button id="save" type="button">Save scene</button><button id="load" class="secondary" type="button">Load saved</button><button id="record" class="secondary" type="button">Record inputs</button><button id="download" class="secondary" type="button">Export replay</button></div>
+      <label for="fog">Atmospheric fog</label><input id="fog" type="range" min="0" max="0.018" value="0.004" step="0.001">
+      <label for="shader">Fragment shader · reload keeps the last valid program</label><textarea id="shader" spellcheck="false"></textarea><button id="reload" type="button">Reload shader</button>
+      <details><summary>Two-player LAN session</summary><p>Exchange tokens directly with your teammate over a trusted channel. This prototype has no relay or accounts. Both peers need a route to each other.</p>
+        <div class="row"><button id="hostPeer" type="button">Host</button><button id="joinPeer" class="secondary" type="button">Join offer</button><button id="acceptPeer" class="secondary" type="button">Accept answer</button><button id="leavePeer" class="secondary" type="button">Disconnect</button></div>
+        <label for="peerToken">Pairing token · paste received offer or answer here</label><textarea id="peerToken" spellcheck="false"></textarea><p id="peerStatus" role="status" aria-atomic="true">Offline practice</p><p id="peerStats"></p>
+      </details>
+      <p id="metrics"></p><p id="message" role="status" aria-atomic="true"></p>
+    </aside>
+  </main>
+  <script id="courtyard-accessibility">
+    (() => {
+      const canvas = document.getElementById('game');
+      const menu = document.getElementById('menu'), tools = document.getElementById('tools');
+      const play = document.getElementById('play'), edit = document.getElementById('edit');
+      const closeTools = document.getElementById('closeTools'), pause = document.getElementById('pause');
+      const descriptionIds = ['courtyard-intro', 'courtyard-keyboard', 'courtyard-remapping', 'courtyard-session'];
+      // Shared player setup uses the package name (owned-lab). Retain its help,
+      // while keeping the actual game title and instructions on this canvas.
+      const describe = () => {
+        if (canvas.getAttribute('aria-label') !== 'Courtyard game canvas') canvas.setAttribute('aria-label', 'Courtyard game canvas');
+        const current = canvas.getAttribute('aria-describedby') || '';
+        const ids = new Set(current.split(/\s+/).filter(Boolean));
+        for (const id of descriptionIds) ids.add(id);
+        const next = [...ids].join(' ');
+        if (next !== current) canvas.setAttribute('aria-describedby', next);
+      };
+      describe();
+      new MutationObserver(describe).observe(canvas, { attributes: true, attributeFilter: ['aria-label', 'aria-describedby'] });
+      const controlsOpen = () => document.body.hasAttribute('data-controls-open');
+      let menuVisible = !menu.hidden, toolsVisible = !tools.hidden, panelOpen = controlsOpen();
+      const syncFocus = records => {
+        const nextMenu = !menu.hidden, nextTools = !tools.hidden, nextPanel = controlsOpen();
+        // A synchronous capture failure can close and reopen the menu before
+        // this observer runs. Keep that return visible to focus restoration.
+        const menuReopened = records.some(record => record.target === menu && record.attributeName === 'hidden' && record.oldValue !== null);
+        const active = document.activeElement;
+        edit.setAttribute('aria-expanded', String(nextTools && !nextPanel));
+        if (document.hasFocus() && !document.hidden && !nextPanel && !document.querySelector('dialog[open]')) {
+          if (nextTools && !toolsVisible && (active === edit || active === canvas || active === document.body || menu.contains(active))) {
+            closeTools.focus({ preventScroll: true });
+          } else if (nextMenu && !nextTools && (!menuVisible || toolsVisible || panelOpen || menuReopened) &&
+                     (active === canvas || active === pause || active === document.body || tools.contains(active))) {
+            (toolsVisible && !edit.disabled ? edit : play.disabled ? menu : play).focus({ preventScroll: true });
+          }
+        }
+        menuVisible = nextMenu; toolsVisible = nextTools; panelOpen = nextPanel;
+      };
+      const focusObserver = new MutationObserver(syncFocus);
+      for (const element of [menu, tools]) focusObserver.observe(element, { attributes: true, attributeOldValue: true, attributeFilter: ['hidden'] });
+      focusObserver.observe(document.body, { attributes: true, attributeFilter: ['data-controls-open'] });
+      // Use the existing local-menu action; platform.js still owns input release,
+      // pointer capture and offline versus live-peer progression.
+      document.addEventListener('focusin', event => {
+        if (event.target !== canvas && menu.hidden && tools.hidden && !pause.hidden && !controlsOpen()) pause.click();
+      });
+      // Window capture (fullscreen) and dialog handlers retain Escape priority.
+      // Native Tab/activation/scrolling must not become gameplay/remapping input.
+      document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && !event.defaultPrevented && !event.isComposing &&
+            !event.ctrlKey && !event.metaKey && !event.altKey && !tools.hidden && !controlsOpen()) {
+          event.preventDefault(); event.stopPropagation(); closeTools.click(); return;
+        }
+        if (event.key === 'Tab' || event.code === 'Tab' || event.target !== canvas) event.stopPropagation();
+      });
+      document.addEventListener('keyup', event => {
+        if (event.key === 'Tab' || event.code === 'Tab') event.stopPropagation();
+        // Forward other releases even if focus moved, to clear held game keys.
+      });
+    })();
+  </script>
+  <script type="module" src="platform.js"></script>
+</body>
+</html>

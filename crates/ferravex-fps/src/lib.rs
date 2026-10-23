@@ -6,18 +6,27 @@ use ferravex_physics::character::{
     Character, CharacterError, CharacterInput, CharacterSettings, CharacterShape, JumpState,
     Obstacle as CharacterObstacle, ObstacleShape, QueryBounds, Terrain,
 };
+pub mod arena_authoring;
 pub mod bots;
 pub mod checkpoint;
 pub mod combat;
 pub mod tactical;
-pub use combat::{CombatRules, PracticeRules, WeaponSettings};
+pub use combat::{
+    CombatRules, MAX_STEP_TRANSITIONS, PlayerStepError, PlayerStepResult, PlayerTransitions,
+    PracticeRules, StepTransition, WeaponSettings,
+};
 mod event_wire;
 pub mod replay;
+pub mod spawn;
 pub use event_wire::NetworkEvent;
 mod rewind;
 use ferravex_net::PlayerSnapshot;
 pub use ferravex_net::{BUTTON_FIRE, BUTTON_JUMP, BUTTON_RELOAD, InputFrame, MAX_PLAYERS};
-pub use rewind::{MAX_REWIND_TICKS, RewindError, RewindStep, ShotTime, ShotTrace};
+pub use rewind::{
+    MAX_REWIND_TICKS, MAX_STEP_EVENTS, MAX_STEP_REJECTIONS, Relocation, RelocationError,
+    RelocationMotion, RelocationOccupancy, RelocationOptions, RewindError, RewindStep, ShotTime,
+    ShotTrace, StepCounts, StepError, StepOutput,
+};
 
 pub const TICK_RATE: u32 = 64;
 pub const FIXED_DT: f32 = 1.0 / TICK_RATE as f32;
@@ -247,8 +256,12 @@ impl Match {
         }
         self.rewind.capture(self.tick, &self.players);
     }
-    /// Snapshot generations; absent slots are zero. Bounded interpolation never
-    /// spans enough lives to confuse a low-32-bit generation wrap.
+    /// Snapshot generations; absent slots are zero. This is the low 32 bits of
+    /// the full authority life/discontinuity generation, compared for equality
+    /// by existing remote interpolation. Adjacent wrap still differs, but 2^32
+    /// transitions between received snapshots can alias. Hosts must establish a
+    /// fresh session/presentation boundary before such an interval; these values
+    /// are not globally unique IDs. Checkpoints retain the full u64 generations.
     pub fn life_epochs(&self) -> [u32; MAX_PLAYERS] {
         std::array::from_fn(|id| {
             if self.player(id as u8).is_some() {
@@ -290,12 +303,97 @@ impl Match {
         shot_times: &[ShotTime],
         rules: &mut R,
     ) -> RewindStep {
+        let mut output = RewindStep::default();
+        self.step_kernel(inputs, shot_times, rules, None, &mut output, None);
+        output
+    }
+    /// One checked tick with retained output and the legacy spawn behavior.
+    /// See StepOutput for the capacity/state contract and authority replay recipe.
+    pub fn step_into(
+        &mut self,
+        inputs: &[(u8, InputFrame)],
+        output: &mut StepOutput,
+    ) -> Result<StepCounts, StepError> {
+        self.step_with_rewind_into(inputs, &[], output)
+    }
+    /// Retained-output equivalent of step_with_rewind. Invalid shot times are
+    /// complete rejection records on an accepted tick, rather than StepError.
+    pub fn step_with_rewind_into(
+        &mut self,
+        inputs: &[(u8, InputFrame)],
+        shot_times: &[ShotTime],
+        output: &mut StepOutput,
+    ) -> Result<StepCounts, StepError> {
+        self.step_with_rules_into(inputs, shot_times, &mut PracticeRules, output)
+    }
+    /// Retained-output equivalent of step_with_rules for checkpoint-valid state.
+    /// All capacity/state checks precede capture, tick changes, output clearing
+    /// and every CombatRules callback. No speculative callbacks/steps are used.
+    /// The same kernel emits every accepted event; see StepOutput's bound proof.
+    pub fn step_with_rules_into<R: CombatRules>(
+        &mut self,
+        inputs: &[(u8, InputFrame)],
+        shot_times: &[ShotTime],
+        rules: &mut R,
+        output: &mut StepOutput,
+    ) -> Result<StepCounts, StepError> {
+        self.preflight_step_output(output)?;
+        Ok(self.step_kernel(
+            inputs,
+            shot_times,
+            rules,
+            None,
+            &mut output.inner,
+            Some(&mut output.transitions),
+        ))
+    }
+    fn preflight_step_output(&self, output: &StepOutput) -> Result<(), StepError> {
+        let required = StepCounts {
+            events: MAX_STEP_EVENTS,
+            rejected_shots: MAX_STEP_REJECTIONS,
+        };
+        let provided = output.capacities();
+        if provided.events < required.events || provided.rejected_shots < required.rejected_shots {
+            return Err(StepError::OutputCapacity { required, provided });
+        }
+        // Reuse full allocation-free validation, including raw public edits and
+        // stale/future rewind frames. This does not capture or advance anything.
+        self.state_hash().map_err(StepError::InvalidState)?;
+        Ok(())
+    }
+    // Shared legacy/policy motor, combat, event and rewind pipeline. Only the
+    // opt-in path visits players by ID and supplies preflighted spawn decisions.
+    fn step_kernel<R: CombatRules>(
+        &mut self,
+        inputs: &[(u8, InputFrame)],
+        shot_times: &[ShotTime],
+        rules: &mut R,
+        mut spawn: Option<&mut spawn::Prepared>,
+        output: &mut RewindStep,
+        mut transitions: Option<&mut combat::TransitionBuffer>,
+    ) -> StepCounts {
+        if let Some(transitions) = transitions.as_deref_mut() {
+            transitions.clear();
+        }
+        output.events.clear();
+        output.rejected_shots.clear();
         self.rewind.capture(self.tick, &self.players);
-        let mut rejected_shots = Vec::new();
-        let mut events = Vec::new();
+        let RewindStep {
+            events,
+            rejected_shots,
+        } = output;
         let mut shots = [None; MAX_PLAYERS];
         let mut shot_count = 0;
-        for player in &mut self.players {
+        let mut order: [usize; MAX_PLAYERS] = std::array::from_fn(|i| i);
+        if spawn.is_some() {
+            order[..self.players.len()].sort_unstable_by_key(|i| self.players[*i].id);
+        }
+        // Legacy iteration also tolerates an oversized raw public roster, as
+        // before; checked policy calls reject it before entering this kernel.
+        let policy_order = spawn.is_some();
+        let indices = (0..self.players.len()).map(|i| if policy_order { order[i] } else { i });
+        for index in indices {
+            let player = &mut self.players[index];
             let mut input = inputs
                 .iter()
                 .find(|(id, _)| *id == player.id)
@@ -329,7 +427,26 @@ impl Match {
                 rejected_shots.push((player.id, error));
             }
             let was_alive = player.is_alive();
-            if step_player_with_settings(player, input, &self.arena, rules.weapon(player.id)) {
+            let weapon = rules.weapon(player.id);
+            let result = if !was_alive && spawn.is_some() {
+                if weapon.valid() {
+                    spawn.as_deref_mut().expect("policy path").respawn(player);
+                }
+                PlayerStepResult::default()
+            } else {
+                step_player_with_settings_detailed(player, input, &self.arena, weapon)
+            };
+            if !result.transitions.is_empty()
+                && let Some(transitions) = transitions.as_deref_mut()
+            {
+                transitions.push(StepTransition {
+                    player: player.id,
+                    tick: self.tick.wrapping_add(1),
+                    life: self.rewind.life(player.id),
+                    transitions: result.transitions,
+                });
+            }
+            if result.transitions.fired {
                 shots[shot_count] = Some((
                     player.id,
                     player.eye_position(),
@@ -374,10 +491,7 @@ impl Match {
         }
         self.tick = self.tick.wrapping_add(1);
         self.rewind.capture(self.tick, &self.players);
-        RewindStep {
-            events,
-            rejected_shots,
-        }
+        StepCounts::of(output)
     }
 }
 impl Default for Match {
@@ -395,18 +509,61 @@ pub fn forward(yaw: f32, pitch: f32) -> Vec3 {
 
 /// Shared client/server step, including weapon timers but excluding damage to others.
 /// Returns whether a legal shot was fired. Prediction never applies remote damage.
+/// Use [`step_player_detailed`] for accepted reload/jump/fire observations.
 pub fn step_player(player: &mut Player, input: InputFrame, arena: &Arena) -> bool {
     step_player_with_settings(player, input, arena, WeaponSettings::default())
 }
 /// Invalid weapon settings leave the complete player state untouched.
+/// See [`step_player_with_settings_detailed`] for outcomes and diagnostics.
 pub fn step_player_with_settings(
     player: &mut Player,
     input: InputFrame,
     arena: &Arena,
     weapon: WeaponSettings,
 ) -> bool {
+    step_player_with_settings_detailed(player, input, arena, weapon)
+        .transitions
+        .fired
+}
+
+/// Detailed default-weapon counterpart of [`step_player`]. See [`PlayerStepResult`]
+/// for the runnable authority/local-prediction feedback recipe and error semantics.
+pub fn step_player_detailed(
+    player: &mut Player,
+    input: InputFrame,
+    arena: &Arena,
+) -> PlayerStepResult {
+    step_player_with_settings_detailed(player, input, arena, WeaponSettings::default())
+}
+
+/// Execute the same local motor/weapon tick as [`step_player_with_settings`],
+/// returning accepted transitions without claiming authority over a prediction.
+/// Invalid settings preserve the complete player. A movement error preserves
+/// motion and weapon timers/ammo but retains the existing sanitized aim update.
+/// Dead countdown/respawn ticks return no weapon/jump transitions.
+/// ```
+/// use ferravex_fps::{Arena, Player, InputFrame, WeaponSettings,
+///     step_player_with_settings_detailed, BUTTON_RELOAD};
+/// let arena = Arena::default();
+/// let mut player = Player::new(0, arena.spawn(0));
+/// player.ammo = 0;
+/// let settings = WeaponSettings { magazine: 10, fire_ticks: 4, reload_ticks: 2 };
+/// let result = step_player_with_settings_detailed(&mut player,
+///     InputFrame { buttons: BUTTON_RELOAD, ..Default::default() }, &arena, settings);
+/// assert!(result.error.is_none() && result.transitions.reload_started);
+/// assert!(!result.transitions.fired);
+/// assert_eq!(player.reload_ticks, 2);
+/// ```
+pub fn step_player_with_settings_detailed(
+    player: &mut Player,
+    input: InputFrame,
+    arena: &Arena,
+    weapon: WeaponSettings,
+) -> PlayerStepResult {
+    let mut result = PlayerStepResult::default();
     if !weapon.valid() {
-        return false;
+        result.error = Some(PlayerStepError::InvalidWeaponSettings);
+        return result;
     }
     let input = input.sanitized();
     if !player.is_alive() {
@@ -414,18 +571,23 @@ pub fn step_player_with_settings(
         if player.respawn_ticks == 0 {
             *player = Player::new(player.id, arena.spawn(player.id));
         }
-        return false;
+        return result;
     }
     player.yaw = input.yaw;
     player.pitch = input.pitch;
-    if try_move_player(player, input, arena).is_err() {
-        return false;
+    match try_move_player_detailed(player, input, arena) {
+        Ok(jumped) => result.transitions.jumped = jumped,
+        Err(error) => {
+            result.error = Some(PlayerStepError::Movement(error));
+            return result;
+        }
     }
     player.fire_cooldown = player.fire_cooldown.saturating_sub(1);
     if player.reload_ticks > 0 {
         player.reload_ticks -= 1;
         if player.reload_ticks == 0 {
             player.ammo = weapon.magazine;
+            result.transitions.reload_completed = true;
         }
     }
     if input.buttons & BUTTON_RELOAD != 0
@@ -433,6 +595,7 @@ pub fn step_player_with_settings(
         && player.reload_ticks == 0
     {
         player.reload_ticks = weapon.reload_ticks;
+        result.transitions.reload_started = true;
     }
     if input.buttons & BUTTON_FIRE != 0
         && player.ammo > 0
@@ -441,9 +604,9 @@ pub fn step_player_with_settings(
     {
         player.ammo -= 1;
         player.fire_cooldown = weapon.fire_ticks;
-        return true;
+        result.transitions.fired = true;
     }
-    false
+    result
 }
 
 /// Shared capsule motor. Static arena supports require no additional platform pose
@@ -454,6 +617,15 @@ pub fn try_move_player(
     input: InputFrame,
     arena: &Arena,
 ) -> Result<(), CharacterError> {
+    try_move_player_detailed(player, input, arena).map(|_| ())
+}
+// Return the actual motor's acceptance; never infer a jump from velocity,
+// grounded changes, a raw button or a second simulation of the movement.
+fn try_move_player_detailed(
+    player: &mut Player,
+    input: InputFrame,
+    arena: &Arena,
+) -> Result<bool, CharacterError> {
     let input = input.sanitized();
     let (sin, cos) = ferravex_math::deterministic::sin_cos(input.yaw);
     let forward = Vec3::new(sin, 0., -cos);
@@ -462,7 +634,7 @@ pub fn try_move_player(
     motor.velocity = player.velocity;
     motor.grounded = player.grounded;
     motor.jump = player.jump;
-    motor.step(
+    let step = motor.step(
         arena,
         CharacterShape::Capsule {
             radius: PLAYER_RADIUS,
@@ -495,7 +667,7 @@ pub fn try_move_player(
     player.velocity = motor.velocity;
     player.grounded = motor.grounded;
     player.jump = motor.jump;
-    Ok(())
+    Ok(step.jumped)
 }
 /// Compatibility entry point for callers that do not consume movement diagnostics.
 pub fn move_player(player: &mut Player, input: InputFrame, arena: &Arena) {
@@ -570,6 +742,8 @@ pub fn ray_aabb(
 #[cfg(target_arch = "wasm32")]
 pub mod browser;
 mod network;
+pub use network::client_state;
+pub use network::server_state;
 pub use network::{GameClient, GameServer, TacticalOptions};
 
 #[cfg(test)]

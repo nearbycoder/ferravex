@@ -199,7 +199,9 @@ impl Level {
             return Err(ContentError::domain("expected one economy component"));
         }
         let c = economy[0].1;
-        let wave_hint = format!("[SPACE]  Protect {} harvests", waves.len());
+        let wave_hint =
+            "Between waves: build, upgrade, then send the next wave. Reopening restores this checkpoint."
+                .into();
         Ok(Self {
             wave_hint,
             path,

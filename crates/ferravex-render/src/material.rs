@@ -1,4 +1,8 @@
 //! Reusable shader handles. GPU compilation is host-owned and replacements are transactional.
+//!
+//! [`ShaderMaterial::new_with_layout`] opts into checked, material-bound parameters.
+//! The layout describes how authored hooks read the existing `u_params[4]` ABI;
+//! it is not GLSL reflection. Source reloads must preserve that contract.
 use std::{
     cell::{Cell, RefCell},
     rc::{Rc, Weak},
@@ -122,6 +126,206 @@ impl Default for MaterialOptions {
         }
     }
 }
+
+/// The components a shader hook reads from one `u_params` slot.
+///
+/// Every slot is still uploaded as a `vec4`. Smaller values occupy `.x`, `.xy`
+/// or `.xyz`, with the remaining components zeroed. See
+/// [`ShaderMaterial::new_with_layout`] for a checked usage example.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParameterType {
+    Float,
+    Vec2,
+    Vec3,
+    Vec4,
+}
+
+impl std::fmt::Display for ParameterType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Float => "float",
+            Self::Vec2 => "vec2",
+            Self::Vec3 => "vec3",
+            Self::Vec4 => "vec4",
+        })
+    }
+}
+
+/// A typed update to one slot; [`MaterialParameters::set`] checks its type and finiteness.
+///
+/// See [`MaterialParameters::update`] for a transactional multi-slot example.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ParameterValue {
+    Float(f32),
+    Vec2([f32; 2]),
+    Vec3([f32; 3]),
+    Vec4([f32; 4]),
+}
+
+impl ParameterValue {
+    fn packed(self) -> (ParameterType, [f32; 4]) {
+        match self {
+            Self::Float(x) => (ParameterType::Float, [x, 0., 0., 0.]),
+            Self::Vec2([x, y]) => (ParameterType::Vec2, [x, y, 0., 0.]),
+            Self::Vec3([x, y, z]) => (ParameterType::Vec3, [x, y, z, 0.]),
+            Self::Vec4(value) => (ParameterType::Vec4, value),
+        }
+    }
+}
+
+/// A rejected update or binding. Failures leave the parameter block and active binding intact.
+///
+/// Slots and components use zero-based indices. Errors implement [`std::error::Error`]
+/// and their display text identifies the affected `u_params` slot or material IDs.
+/// See [`MaterialParameters::set`] and [`ShaderMaterial::begin_checked`] for examples.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParameterError {
+    SlotOutOfRange {
+        slot: usize,
+    },
+    UndeclaredSlot {
+        slot: usize,
+    },
+    TypeMismatch {
+        slot: usize,
+        expected: ParameterType,
+        provided: ParameterType,
+    },
+    NonFinite {
+        slot: usize,
+        component: usize,
+    },
+    MaterialMismatch {
+        expected: u32,
+        provided: u32,
+    },
+}
+
+impl std::fmt::Display for ParameterError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SlotOutOfRange { slot } => {
+                write!(f, "u_params[{slot}] is out of range; valid slots are 0..4")
+            }
+            Self::UndeclaredSlot { slot } => {
+                write!(
+                    f,
+                    "u_params[{slot}] is not declared in this material's parameter layout"
+                )
+            }
+            Self::TypeMismatch {
+                slot,
+                expected,
+                provided,
+            } => {
+                write!(
+                    f,
+                    "u_params[{slot}] expects {expected} in this material's parameter layout; received {provided}"
+                )
+            }
+            Self::NonFinite { slot, component } => {
+                write!(f, "u_params[{slot}][{component}] must be finite")
+            }
+            Self::MaterialMismatch { expected, provided } => {
+                write!(
+                    f,
+                    "parameter block belongs to material {provided}, not material {expected}; create it with the receiving material's parameters()"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for ParameterError {}
+
+/// A fixed-size, finite parameter block tied to one material's declared layout.
+///
+/// Create one with [`ShaderMaterial::parameters`]. Cloning copies the values and
+/// retains the material handle; updates never allocate or change renderer state.
+/// Bind explicitly with [`ShaderMaterial::begin_checked`].
+#[derive(Clone)]
+pub struct MaterialParameters {
+    material: ShaderMaterial,
+    rows: [[f32; 4]; 4],
+}
+
+impl std::fmt::Debug for MaterialParameters {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MaterialParameters")
+            .field("material_id", &self.material.id())
+            .field("rows", &self.rows)
+            .finish()
+    }
+}
+
+impl MaterialParameters {
+    /// Replace one slot, rejecting invalid indices, undeclared slots, wrong types
+    /// and nonfinite components before changing any values.
+    ///
+    /// ```
+    /// use ferravex_render::material::{ParameterError, ParameterValue, ShaderMaterial};
+    /// let material = ShaderMaterial::new(Default::default(), Default::default())?;
+    /// let mut params = material.parameters(); // Legacy materials declare four vec4 slots.
+    /// params.set(3, ParameterValue::Vec4([1., 2., 3., 4.]))?;
+    /// assert_eq!(params.set(4, ParameterValue::Float(1.)),
+    ///            Err(ParameterError::SlotOutOfRange { slot: 4 }));
+    /// assert_eq!(params.as_rows()[3], [1., 2., 3., 4.]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn set(&mut self, slot: usize, value: ParameterValue) -> Result<(), ParameterError> {
+        self.update(&[(slot, value)])
+    }
+
+    /// Apply all updates or leave the entire block unchanged on the first error.
+    /// Repeated slots are validated in order; the last valid value wins on success.
+    /// An empty update is a no-op. Storage remains bounded to four slots.
+    ///
+    /// ```
+    /// use ferravex_render::material::{ParameterError, ParameterValue, ShaderMaterial};
+    /// let material = ShaderMaterial::new(Default::default(), Default::default())?;
+    /// let mut params = material.parameters();
+    /// let before = *params.as_rows();
+    /// assert_eq!(params.update(&[
+    ///     (0, ParameterValue::Vec4([1.; 4])),
+    ///     (1, ParameterValue::Vec4([0., f32::NAN, 0., 0.])),
+    /// ]), Err(ParameterError::NonFinite { slot: 1, component: 1 }));
+    /// assert_eq!(*params.as_rows(), before);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn update(&mut self, updates: &[(usize, ParameterValue)]) -> Result<(), ParameterError> {
+        let mut next = self.rows;
+        for &(slot, value) in updates {
+            let expected = self
+                .material
+                .0
+                .parameter_layout
+                .get(slot)
+                .ok_or(ParameterError::SlotOutOfRange { slot })?
+                .ok_or(ParameterError::UndeclaredSlot { slot })?;
+            let (provided, row) = value.packed();
+            if expected != provided {
+                return Err(ParameterError::TypeMismatch {
+                    slot,
+                    expected,
+                    provided,
+                });
+            }
+            if let Some(component) = row.iter().position(|v| !v.is_finite()) {
+                return Err(ParameterError::NonFinite { slot, component });
+            }
+            next[slot] = row;
+        }
+        self.rows = next;
+        Ok(())
+    }
+
+    /// Read the unchanged four-`vec4` ABI, including zero padding and unused slots.
+    /// See [`Self::set`] for an example. No mutable access is exposed.
+    pub fn as_rows(&self) -> &[[f32; 4]; 4] {
+        &self.rows
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CompileStatus {
     Pending,
@@ -141,6 +345,7 @@ pub(crate) struct Data {
     pub source: RefCell<ShaderSource>,
     pub last_valid_source: RefCell<Option<ShaderSource>>,
     status: RefCell<MaterialStatus>,
+    parameter_layout: [Option<ParameterType>; 4],
 }
 #[derive(Clone)]
 pub struct ShaderMaterial(pub(crate) Rc<Data>);
@@ -152,7 +357,43 @@ struct Registry {
 thread_local! {static REGISTRY:RefCell<Registry>=RefCell::new(Registry::default());}
 impl ShaderMaterial {
     /// Validates storage/metadata. Actual shader compilation occurs when presented by a GPU host.
+    /// Checked parameter blocks from this constructor use four [`ParameterType::Vec4`] slots.
     pub fn new(source: ShaderSource, options: MaterialOptions) -> Result<Self, &'static str> {
+        Self::new_with_layout(source, options, [Some(ParameterType::Vec4); 4])
+    }
+
+    /// Declare how shader hooks consume each existing `u_params` slot.
+    /// `None` reserves an unused, zero-filled slot in checked parameter blocks.
+    ///
+    /// This is an author-declared contract, not shader reflection or compilation.
+    /// It remains fixed across [`Self::reload`]; create a new material when changing
+    /// the contract. The legacy [`Self::begin`] accepts raw rows without checking types.
+    ///
+    /// ```
+    /// use ferravex_render::material::{ParameterType, ParameterValue, ShaderMaterial, ShaderSource};
+    /// let material = ShaderMaterial::new_with_layout(
+    ///     ShaderSource::fragment(r#"
+    ///         vec4 ferravex_fragment(vec4 color, vec3 world, vec3 normal) {
+    ///             return vec4(color.rgb * u_params[1].xyz, color.a * u_params[0].x);
+    ///         }
+    ///     "#),
+    ///     Default::default(),
+    ///     [Some(ParameterType::Float), Some(ParameterType::Vec3), None, None],
+    /// )?;
+    /// assert_eq!(material.parameter_layout()[0], Some(ParameterType::Float));
+    /// let mut params = material.parameters();
+    /// params.set(0, ParameterValue::Float(0.5))?;
+    /// params.set(1, ParameterValue::Vec3([1., 0.8, 0.6]))?;
+    /// material.begin_checked(&params)?;
+    /// // Retained mesh draws here capture these parameter values.
+    /// material.end();
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn new_with_layout(
+        source: ShaderSource,
+        options: MaterialOptions,
+        parameter_layout: [Option<ParameterType>; 4],
+    ) -> Result<Self, &'static str> {
         source.validate()?;
         if !options.bounds_padding.is_finite() || options.bounds_padding < 0. {
             return Err("invalid material bound padding");
@@ -175,6 +416,7 @@ impl ShaderMaterial {
                     last_valid_revision: None,
                     status: CompileStatus::Pending,
                 }),
+                parameter_layout,
             });
             r.materials.push(Rc::downgrade(&data));
             Ok(Self(data))
@@ -186,8 +428,53 @@ impl ShaderMaterial {
     pub fn status(&self) -> MaterialStatus {
         self.0.status.borrow().clone()
     }
+
+    /// Return the immutable authored slot contract; see [`Self::new_with_layout`].
+    pub fn parameter_layout(&self) -> [Option<ParameterType>; 4] {
+        self.0.parameter_layout
+    }
+
+    /// Create a zero-filled, independent parameter block bound to this material.
+    /// Clones of this shader handle accept the same block; another material cannot.
+    /// The block retains this handle and its registry slot until dropped.
+    /// See [`Self::new_with_layout`] for an example.
+    pub fn parameters(&self) -> MaterialParameters {
+        MaterialParameters {
+            material: self.clone(),
+            rows: [[0.; 4]; 4],
+        }
+    }
+
+    /// Bind checked values, preserving the active shader and values on a material mismatch.
+    /// Does not require or imply GPU compilation; existing pending/fallback behavior applies.
+    /// Updating the block after binding does not change the active values until bound again.
+    ///
+    /// ```
+    /// use ferravex_render::material::{ParameterError, ShaderMaterial};
+    /// let a = ShaderMaterial::new(Default::default(), Default::default())?;
+    /// let b = ShaderMaterial::new(Default::default(), Default::default())?;
+    /// let params = a.parameters();
+    /// a.clone().begin_checked(&params)?;
+    /// assert_eq!(b.begin_checked(&params), Err(ParameterError::MaterialMismatch {
+    ///     expected: b.id(), provided: a.id(),
+    /// }));
+    /// a.end();
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn begin_checked(&self, params: &MaterialParameters) -> Result<(), ParameterError> {
+        if !Rc::ptr_eq(&self.0, &params.material.0) {
+            return Err(ParameterError::MaterialMismatch {
+                expected: self.id(),
+                provided: params.material.id(),
+            });
+        }
+        crate::set_shader(Some(self.clone()), flatten_params(&params.rows));
+        Ok(())
+    }
+
     /// Queue a source replacement. Bad metadata leaves the request unchanged; GPU errors retain
     /// each host's last valid program. The latest request is applied at presentation time.
+    /// Checked parameter layouts are immutable: authored replacements must keep the same contract.
     pub fn reload(&self, source: ShaderSource) -> Result<u32, &'static str> {
         source.validate()?;
         let revision = self
@@ -203,15 +490,13 @@ impl ShaderMaterial {
         status.status = CompileStatus::Pending;
         Ok(revision)
     }
+    /// Bind raw ABI rows after a finite-value check, preserving the active binding on failure.
+    /// This compatibility API does not enforce the layout; use [`Self::begin_checked`] for that.
     pub fn begin(&self, params: [[f32; 4]; 4]) -> Result<(), &'static str> {
         if params.iter().flatten().any(|v| !v.is_finite()) {
             return Err("material parameters must be finite");
         }
-        let mut flat = [0.; 16];
-        for (i, p) in params.iter().enumerate() {
-            flat[i * 4..i * 4 + 4].copy_from_slice(p);
-        }
-        crate::set_shader(Some(self.clone()), flat);
+        crate::set_shader(Some(self.clone()), flatten_params(&params));
         Ok(())
     }
     pub fn end(&self) {
@@ -227,6 +512,15 @@ impl ShaderMaterial {
         bounds
     }
 }
+
+fn flatten_params(params: &[[f32; 4]; 4]) -> [f32; 16] {
+    let mut flat = [0.; 16];
+    for (i, row) in params.iter().enumerate() {
+        flat[i * 4..i * 4 + 4].copy_from_slice(row);
+    }
+    flat
+}
+
 pub(crate) fn lookup(id: u32) -> Option<Rc<Data>> {
     REGISTRY.with(|r| {
         r.borrow()
@@ -505,6 +799,346 @@ mod wasm {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn typed_material() -> ShaderMaterial {
+        ShaderMaterial::new_with_layout(
+            Default::default(),
+            Default::default(),
+            [
+                Some(ParameterType::Float),
+                Some(ParameterType::Vec2),
+                Some(ParameterType::Vec3),
+                Some(ParameterType::Vec4),
+            ],
+        )
+        .unwrap()
+    }
+
+    fn active_binding() -> (Option<u32>, [f32; 16]) {
+        crate::read(|s| (s.shader.as_ref().map(ShaderMaterial::id), s.shader_params))
+    }
+
+    #[test]
+    fn typed_parameters_pack_into_existing_abi_and_bind_through_clones() {
+        let material = typed_material();
+        let mut params = material.parameters();
+        assert_eq!(*params.as_rows(), [[0.; 4]; 4]);
+        params
+            .update(&[
+                (0, ParameterValue::Float(1.)),
+                (1, ParameterValue::Vec2([2., 3.])),
+                (2, ParameterValue::Vec3([4., 5., 6.])),
+                (3, ParameterValue::Vec4([7., 8., 9., 10.])),
+            ])
+            .unwrap();
+        assert_eq!(
+            *params.as_rows(),
+            [
+                [1., 0., 0., 0.],
+                [2., 3., 0., 0.],
+                [4., 5., 6., 0.],
+                [7., 8., 9., 10.]
+            ]
+        );
+        material.clone().begin_checked(&params).unwrap();
+        assert_eq!(
+            active_binding(),
+            (
+                Some(material.id()),
+                [
+                    1., 0., 0., 0., 2., 3., 0., 0., 4., 5., 6., 0., 7., 8., 9., 10.
+                ]
+            )
+        );
+        material.end();
+    }
+
+    #[test]
+    fn invalid_and_undeclared_slots_preserve_all_values() {
+        let material = ShaderMaterial::new_with_layout(
+            Default::default(),
+            Default::default(),
+            [Some(ParameterType::Float), None, None, None],
+        )
+        .unwrap();
+        let mut params = material.parameters();
+        params.set(0, ParameterValue::Float(5.)).unwrap();
+        let before = *params.as_rows();
+        for slot in [4, 5, usize::MAX] {
+            assert_eq!(
+                params.set(slot, ParameterValue::Float(7.)),
+                Err(ParameterError::SlotOutOfRange { slot })
+            );
+            assert_eq!(*params.as_rows(), before);
+        }
+        for slot in 1..4 {
+            assert_eq!(
+                params.set(slot, ParameterValue::Float(7.)),
+                Err(ParameterError::UndeclaredSlot { slot })
+            );
+            assert_eq!(*params.as_rows(), before);
+        }
+    }
+
+    #[test]
+    fn every_wrong_type_reports_the_declared_type_without_changing_values() {
+        let material = typed_material();
+        let values = [
+            ParameterValue::Float(1.),
+            ParameterValue::Vec2([2.; 2]),
+            ParameterValue::Vec3([3.; 3]),
+            ParameterValue::Vec4([4.; 4]),
+        ];
+        let mut params = material.parameters();
+        for (slot, value) in values.into_iter().enumerate() {
+            params.set(slot, value).unwrap();
+        }
+        let before = *params.as_rows();
+        for (slot, expected) in material.parameter_layout().into_iter().enumerate() {
+            let expected = expected.unwrap();
+            for value in values {
+                let provided = value.packed().0;
+                if provided == expected {
+                    continue;
+                }
+                let error = ParameterError::TypeMismatch {
+                    slot,
+                    expected,
+                    provided,
+                };
+                assert_eq!(params.set(slot, value), Err(error));
+                assert_eq!(*params.as_rows(), before);
+                assert!(error.to_string().contains(&format!("u_params[{slot}]")));
+                assert!(error.to_string().contains(&format!("expects {expected}")));
+                assert!(error.to_string().contains(&format!("received {provided}")));
+            }
+        }
+    }
+
+    #[test]
+    fn all_nonfinite_components_are_rejected_without_touching_the_active_binding() {
+        let material = ShaderMaterial::new(Default::default(), Default::default()).unwrap();
+        let mut params = material.parameters();
+        for slot in 0..4 {
+            params
+                .set(slot, ParameterValue::Vec4([slot as f32 + 1.; 4]))
+                .unwrap();
+        }
+        material.begin_checked(&params).unwrap();
+        let before = *params.as_rows();
+        let active = active_binding();
+        for slot in 0..4 {
+            for component in 0..4 {
+                for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                    let mut row = [1.; 4];
+                    row[component] = invalid;
+                    let error = ParameterError::NonFinite { slot, component };
+                    assert_eq!(params.set(slot, ParameterValue::Vec4(row)), Err(error));
+                    assert_eq!(*params.as_rows(), before);
+                    assert_eq!(active_binding(), active);
+                    assert_eq!(
+                        error.to_string(),
+                        format!("u_params[{slot}][{component}] must be finite")
+                    );
+                }
+            }
+        }
+        material.end();
+    }
+
+    #[test]
+    fn smaller_types_check_nonfinite_values_and_accept_finite_extremes() {
+        let material = typed_material();
+        let mut params = material.parameters();
+        for (slot, value, component) in [
+            (0, ParameterValue::Float(f32::NAN), 0),
+            (1, ParameterValue::Vec2([0., f32::INFINITY]), 1),
+            (2, ParameterValue::Vec3([0., 0., f32::NEG_INFINITY]), 2),
+        ] {
+            assert_eq!(
+                params.set(slot, value),
+                Err(ParameterError::NonFinite { slot, component })
+            );
+            assert_eq!(*params.as_rows(), [[0.; 4]; 4]);
+        }
+        params
+            .set(3, ParameterValue::Vec4([f32::MIN, f32::MAX, -0., 0.]))
+            .unwrap();
+        assert_eq!(params.as_rows()[3][0], f32::MIN);
+        assert_eq!(params.as_rows()[3][1], f32::MAX);
+        assert_eq!(params.as_rows()[3][2].to_bits(), (-0_f32).to_bits());
+    }
+
+    #[test]
+    fn multi_slot_updates_roll_back_every_failure_and_define_duplicate_order() {
+        let material = ShaderMaterial::new_with_layout(
+            Default::default(),
+            Default::default(),
+            [
+                Some(ParameterType::Float),
+                Some(ParameterType::Vec2),
+                None,
+                None,
+            ],
+        )
+        .unwrap();
+        let mut params = material.parameters();
+        params.set(0, ParameterValue::Float(4.)).unwrap();
+        let before = *params.as_rows();
+        for bad_update in [
+            (usize::MAX, ParameterValue::Float(5.)),
+            (2, ParameterValue::Float(5.)),
+            (1, ParameterValue::Float(5.)),
+            (1, ParameterValue::Vec2([5., f32::NAN])),
+            (0, ParameterValue::Float(f32::INFINITY)),
+        ] {
+            assert!(
+                params
+                    .update(&[(0, ParameterValue::Float(9.)), bad_update])
+                    .is_err()
+            );
+            assert_eq!(*params.as_rows(), before);
+        }
+        // Even an invalid earlier duplicate cannot be hidden by a later valid update.
+        assert!(
+            params
+                .update(&[
+                    (0, ParameterValue::Float(f32::NAN)),
+                    (0, ParameterValue::Float(9.)),
+                ])
+                .is_err()
+        );
+        assert_eq!(*params.as_rows(), before);
+        params.update(&[]).unwrap();
+        assert_eq!(*params.as_rows(), before);
+        params
+            .update(&[
+                (0, ParameterValue::Float(6.)),
+                (1, ParameterValue::Vec2([7., 8.])),
+                (0, ParameterValue::Float(9.)),
+            ])
+            .unwrap();
+        assert_eq!(
+            *params.as_rows(),
+            [[9., 0., 0., 0.], [7., 8., 0., 0.], [0.; 4], [0.; 4]]
+        );
+    }
+
+    #[test]
+    fn wrong_material_with_identical_layout_preserves_the_previous_binding() {
+        let a = typed_material();
+        let b = typed_material();
+        let mut params = a.parameters();
+        params.set(0, ParameterValue::Float(3.)).unwrap();
+        a.begin_checked(&params).unwrap();
+        let before = active_binding();
+        let error = ParameterError::MaterialMismatch {
+            expected: b.id(),
+            provided: a.id(),
+        };
+        assert_eq!(b.begin_checked(&params), Err(error));
+        assert_eq!(active_binding(), before);
+        let message = error.to_string();
+        assert!(message.contains(&format!("belongs to material {}", a.id())));
+        assert!(message.contains(&format!("not material {}", b.id())));
+        assert!(message.contains("parameters()"));
+        a.end();
+    }
+
+    #[test]
+    fn parameter_copies_are_independent_and_binding_captures_values() {
+        let material = typed_material();
+        let mut params = material.parameters();
+        params.set(0, ParameterValue::Float(3.)).unwrap();
+        let mut copy = params.clone();
+        copy.set(0, ParameterValue::Float(4.)).unwrap();
+        assert_eq!(params.as_rows()[0][0], 3.);
+        assert_eq!(material.parameters().as_rows()[0][0], 0.);
+        material.begin_checked(&params).unwrap();
+        params.set(0, ParameterValue::Float(5.)).unwrap();
+        assert_eq!(active_binding().1[0], 3.);
+        material.begin_checked(&params).unwrap();
+        assert_eq!(active_binding().1[0], 5.);
+        material.begin_checked(&copy).unwrap();
+        assert_eq!(active_binding().1[0], 4.);
+        material.end();
+    }
+
+    #[test]
+    fn parameter_blocks_retain_the_material_identity_until_dropped() {
+        let material = typed_material();
+        let id = material.id();
+        let mut params = material.parameters();
+        drop(material);
+        assert!(lookup(id).is_some());
+        params.set(0, ParameterValue::Float(1.)).unwrap();
+        drop(params);
+        assert!(lookup(id).is_none());
+    }
+
+    #[test]
+    fn rejected_reload_preserves_checked_layout_values_and_last_valid_source() {
+        let material = typed_material();
+        let layout = material.parameter_layout();
+        let mut params = material.parameters();
+        params.set(0, ParameterValue::Float(2.)).unwrap();
+        material.begin_checked(&params).unwrap();
+        let before = active_binding();
+        feedback(material.id(), 1, Ok(()));
+        assert!(material.reload(ShaderSource::fragment("\0")).is_err());
+        assert_eq!(material.status().requested_revision, 1);
+        assert_eq!(material.status().status, CompileStatus::Ready);
+        let revision = material.reload(ShaderSource::fragment("bad GLSL")).unwrap();
+        feedback(material.id(), revision, Err("fragment shader failed"));
+        assert_eq!(material.status().last_valid_revision, Some(1));
+        assert_eq!(
+            material
+                .0
+                .last_valid_source
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .fragment,
+            DEFAULT_FRAGMENT_HOOK
+        );
+        assert_eq!(material.parameter_layout(), layout);
+        material.begin_checked(&params).unwrap();
+        assert_eq!(active_binding(), before);
+        params.set(0, ParameterValue::Float(3.)).unwrap();
+        material.begin_checked(&params).unwrap();
+        assert_eq!(active_binding().1[0], 3.);
+        material.end();
+    }
+
+    #[test]
+    fn legacy_raw_binding_stays_compatible_and_rejects_invalid_values_transactionally() {
+        let material =
+            ShaderMaterial::new_with_layout(Default::default(), Default::default(), [None; 4])
+                .unwrap();
+        let checked = material.parameters();
+        material.begin_checked(&checked).unwrap();
+        assert_eq!(active_binding().1, [0.; 16]);
+        let rows = [
+            [1., 2., 3., 4.],
+            [5., 6., 7., 8.],
+            [9., 10., 11., 12.],
+            [13., 14., 15., 16.],
+        ];
+        material.begin(rows).unwrap();
+        assert_eq!(active_binding().1, std::array::from_fn(|i| i as f32 + 1.));
+        let before = active_binding();
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut bad_rows = rows;
+            bad_rows[3][3] = invalid;
+            assert_eq!(
+                material.begin(bad_rows),
+                Err("material parameters must be finite")
+            );
+            assert_eq!(active_binding(), before);
+        }
+        material.end();
+    }
+
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
     fn file_reload_is_bounded_and_failed_reads_preserve_source() {

@@ -1,6 +1,6 @@
 # Build the documentation site locally
 
-The Ferravex site is generated from repository Markdown, crate READMEs and the first-party example catalog. Python's standard library builds the pages; the browser uses Ferravex CSS/JavaScript plus the explicitly requested, self-hosted Qikbar command menu. The current recovery is local work: it has not been pushed or deployed, and building this site does not publish it.
+The Ferravex site is generated from repository Markdown, crate READMEs and the first-party example catalog. Python's standard library builds the pages; the browser uses Ferravex CSS/JavaScript plus the explicitly requested, self-hosted Qikbar command menu. The current source stopping point and verification limits are recorded in the [release status](/docs/release-status/). Building this site creates local artifacts; publishing remains a separate step.
 
 ## Build and inspect
 
@@ -24,7 +24,7 @@ This requires matching game and API artifacts and still runs the dependency audi
 
 The repository's Dockerfile and static server remain available for a future publishing step. The image builds WebAssembly/API documentation, then serves generated files with the original Python server. It accepts `PORT` and exposes `/healthz`.
 
-No push, deployment, DNS change or remote CI run is part of the recovery workflow. Existing hosting configuration or public URLs do not indicate that the restored catalog has been published. Toolchains and container base images are hosting tools, not bundled game runtime dependencies.
+The production service builds this Dockerfile from the merged main branch. Verify its exact deployment reaches SUCCESS, then check /healthz and the served game manifest before calling a release deployed. Existing hosting configuration or a local build alone does not establish publication. Toolchains and container base images are hosting tools, not bundled game runtime dependencies.
 
 ## Add an example
 

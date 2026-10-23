@@ -3,7 +3,7 @@
 import argparse, gzip, hashlib, html, json, re, shutil, subprocess
 from pathlib import Path
 from urllib.parse import quote, urlsplit
-from site_search import build_index
+from site_search import build_index, browser_search_module
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / 'dist/site'
@@ -11,8 +11,18 @@ REPO = 'https://github.com/nearbycoder/ferravex'
 BASE = 'https://ferravex.com'
 DOCS = [
  ('getting-started','Getting started','Start here','website/content/getting-started.md'),
+ ('quickstart','Facade quickstart','Start here','docs/QUICKSTART.md'),
+ ('agent-guide','Coding-agent guide','Start here','docs/AGENT_GUIDE.md'),
+ ('api-migration','API migration cookbook','Start here','docs/MIGRATION_50.md'),
  ('player-guide','Browser player guide','Start here','docs/PLAYER_GUIDE.md'),
  ('first-game','Your first simulation','Start here','website/content/first-game.md'),
+ ('api-migration-200','Journey200 API migration','Journey200','docs/MIGRATION_200.md'),
+ ('journey-200-gameplay','Compose a gameplay scenario','Journey200','docs/JOURNEY_200_GAMEPLAY.md'),
+ ('journey-200-presentation','Compose a HUD and presentation','Journey200','docs/JOURNEY_200_PRESENTATION.md'),
+ ('journey-200-debugging','Debug saves and replays','Journey200','docs/JOURNEY_200_DEBUGGING.md'),
+ ('journey-200-performance','Measure performance evidence','Journey200','docs/JOURNEY_200_PERFORMANCE.md'),
+ ('journey-200-accessibility','Accessible gameplay integration','Journey200','docs/JOURNEY_200_ACCESSIBILITY.md'),
+ ('journey-200-templates','Generated game verification','Journey200','docs/JOURNEY_200_TEMPLATES.md'),
  ('architecture','Architecture','Engine','docs/ARCHITECTURE.md'),
  ('math','Math','Engine','crates/ferravex-math/README.md'),
  ('ecs','Entities and components','Engine','crates/ferravex-ecs/README.md'),
@@ -49,7 +59,13 @@ DOCS = [
  ('performance','Performance','Shipping','docs/PERFORMANCE.md'),
  ('deployment','Build and deploy the site','Shipping','website/content/building-site.md'),
  ('status','Implementation status','Project','docs/FROM_SCRATCH.md'),
+ ('release-status','Current release stopping point','Project','docs/STOPPING_POINT.md'),
  ('validation','Example validation','Project','docs/GAME_TESTS.md'),
+ ('validation-runner','Local validation command','Project','docs/VALIDATION_50.md'),
+ ('journey-200','Journey200 implementation and validation ledger','Project','docs/JOURNEY_200.md'),
+ ('journey-400','Journey400 roadmap and deferred work','Project','docs/JOURNEY_400.md'),
+ ('journey-50','Fifty engine and demo improvements','Project','docs/JOURNEY_50.md'),
+ ('journey-50-results','Journey50 results and verification','Project','docs/JOURNEY_50_RESULTS.md'),
  ('dependencies','Dependency policy','Project','DEPENDENCIES.md'),
 ]
 SOURCE_LINKS = {str((ROOT / source).resolve()):f'/docs/{slug}/' for slug,_,_,source in DOCS}
@@ -57,6 +73,21 @@ SOURCE_LINKS[str((ROOT/'README.md').resolve())]='/docs/getting-started/'
 GAMES = [dict(g,play='/play/'+g['host']+'/') for g in json.loads((ROOT/'examples/catalog.json').read_text())]
 UPDATES=json.loads((ROOT/'website/releases/player30.json').read_text())
 SEARCH=[]
+
+def validate_docs(docs=None,root=None):
+ """Reject missing/ambiguous guide registrations before replacing build output."""
+ docs=DOCS if docs is None else docs;root=ROOT if root is None else root
+ errors=[];slugs=set();sources=set()
+ for slug,_,_,source in docs:
+  if not re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*',slug):errors.append('Invalid guide slug: '+slug)
+  if slug in slugs:errors.append('Duplicate guide slug: '+slug)
+  slugs.add(slug)
+  path=(root/source).resolve()
+  if path in sources:errors.append('Duplicate guide source: '+source)
+  sources.add(path)
+  if not path.is_relative_to(root.resolve()):errors.append('Guide source outside repository: '+source)
+  elif not path.is_file():errors.append('Missing guide source: '+source)
+ if errors:raise ValueError('\n'.join(errors))
 
 def write(path,text):
  path.parent.mkdir(parents=True,exist_ok=True);path.write_text(text.replace('—',' - ').replace('–','-'),encoding='utf-8')
@@ -92,7 +123,7 @@ def markdown(text,source):
   line=lines[i]
   if not line.strip():i+=1;continue
   if line.startswith('```'):
-   lang=line[3:].strip();code=[];i+=1
+   lang=re.split(r'[\s,]',line[3:].strip())[0];code=[];i+=1
    while i<len(lines) and not lines[i].startswith('```'):code.append(lines[i]);i+=1
    out.append(f'<div class="code-wrap"><pre><code class="language-{esc(lang)}">{html.escape(chr(10).join(code))}</code></pre><button class="copy" type="button" aria-label="Copy code">Copy</button></div>');i+=1;continue
   m=re.match(r'^(#{1,6})\s+(.+)',line)
@@ -129,12 +160,18 @@ def sidebar(current):
   if group!=last:out.append('<h2>'+esc(group)+'</h2>');last=group
   out.append(f'<a href="/docs/{slug}/"'+(' aria-current="page"' if current==slug else '')+'>'+esc(title)+'</a>')
  return ''.join(out)+'</aside>'
+def documentation_index():
+ groups={}
+ for slug,title,group,_ in DOCS:groups.setdefault(group,[]).append((slug,title))
+ sections=''.join('<section><h2>'+esc(group)+'</h2><ul>'+''.join(f'<li><a href="/docs/{slug}/">{esc(title)}</a></li>' for slug,title in guides)+'</ul></section>' for group,guides in groups.items())
+ return '<main id="main" class="container prose"><h1>Documentation</h1><p>Start with the setup and first simulation, then choose a focused guide. The Journey200 ledger records implementation and validation status; a guide is not a platform verification claim.</p><p><a class="button" href="/docs/getting-started/">Start building</a></p>'+sections+'</main>'
 def layout(title,body,url='/',description='An original Rust engine for compact 2D and 3D games.',section=''):
  nav=''.join(f'<a href="{href}" class="{cls}"'+(' aria-current="page"' if section==label else '')+f'>{label}</a>' for href,label,cls in [('/updates/','Updates',''),('/docs/getting-started/','Docs',''),('/examples/','Examples',''),('/api/ferravex/index.html','API','api-nav')])
  return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>{esc(title)} · Ferravex</title><meta name="description" content="{esc(description)}"><link rel="canonical" href="{BASE}{url}"><meta property="og:title" content="{esc(title)} · Ferravex"><meta property="og:description" content="{esc(description)}"><meta property="og:image" content="{BASE}/assets/owned-courtyard.png"><meta property="og:type" content="website"><link rel="icon" href="/favicon.ico"><link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png"><link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png"><link rel="stylesheet" href="/site.css"><link rel="stylesheet" href="/search.css"><script src="/site.js" defer></script><script type="module" src="/site-search.js"></script></head><body><a class="skip" href="#main">Skip to content</a><header class="header"><div class="header-inner"><a class="brand" href="/" aria-label="Ferravex home"><img class="brand-mark" src="/favicon-32.png" alt="" width="28" height="28" aria-hidden="true">ferravex</a><nav aria-label="Main navigation">{nav}</nav><div class="header-actions"><button class="search-trigger" data-qikbar-open aria-label="Search Ferravex"><span>Search site</span><kbd data-command-key>Ctrl K</kbd></button><button class="theme-toggle" id="theme-toggle" aria-label="Switch color theme">Theme</button><a href="{REPO}">GitHub</a></div></div></header>{body}<footer class="footer"><div class="container"><span>Ferravex. Original engine systems, built in Rust.</span><span><a href="{REPO}">Source</a><a href="{REPO}/blob/main/LICENSE">MIT license</a><a href="/docs/status/">Implementation status</a></span></div></footer></body></html>'''
 def meta(game):return f'<div class="meta"><span>{esc(game["dimension"])} / {esc(game["genre"])}</span><span class="owned">First-party engine</span></div>'
 def tile(game):
- return f'<article class="example-tile" data-dimension="{game["dimension"]}" data-search="{esc(game['title']+' '+game['genre']+' '+game['description']+' '+game['controls'])}"><a href="/examples/{game["id"]}/"><img src="/assets/{game["image"]}" alt="{esc(game["title"])} gameplay" width="960" height="600" loading="lazy"><h2>{esc(game["title"])}</h2></a>{meta(game)}<p>{esc(game["description"])}</p></article>'
+ search=' '.join(game[key] for key in ('title','genre','description','controls'))
+ return f'<article class="example-tile" data-dimension="{game["dimension"]}" data-search="{esc(search)}"><a href="/examples/{game["id"]}/"><img src="/assets/{game["image"]}" alt="{esc(game["title"])} gameplay" width="960" height="600" loading="lazy"><h2>{esc(game["title"])}</h2></a>{meta(game)}<p>{esc(game["description"])}</p></article>'
 def home():
  cards=''.join(tile(g) for g in GAMES[:6])
  body=f'''<main id="main" class="container release-home">
@@ -155,12 +192,13 @@ def updates():
  body=f'<main id="main" class="container"><div class="page-heading"><div class="eyebrow">The player update</div><h1>Every improvement.<br>One place.</h1><p>Explore 26 shared browser player improvements and four website and documentation upgrades. All fifteen games receive the shared player features.</p></div><div class="release-filters"><label>Find an improvement<input type="search" id="updates-query" placeholder="Screenshots, frame rate, controls…"></label><label>Category<select id="updates-category">{options}</select></label></div><p id="updates-count" role="status">30 improvements</p><div class="updates-grid">'+''.join(cards)+'</div><p id="updates-empty" hidden>No improvements match. Try another search or category.</p></main>'
  write(OUT/'updates/index.html',layout('The player update',body,'/updates/',section='Updates'))
 
-def pages():
- for slug,title,group,source in DOCS:
+def pages(docs=None):
+ """Render guides and catalog pages; a subset supports isolated content checks."""
+ for slug,title,group,source in DOCS if docs is None else docs:
   text=(ROOT/source).read_text();body,toc=markdown(text,source);toc_html='<aside class="toc" aria-label="On this page"><strong>On this page</strong>'+''.join(f'<a href="#{key}">{esc(t)}</a>' for t,key in toc)+'</aside>'
   content=f'<main id="main" class="docs-layout">{sidebar(slug)}<article class="prose"><button class="menu-toggle" aria-controls="docs-navigation" aria-expanded="false">Browse documentation</button>{body}<div class="edit-source"><a href="{REPO}/blob/main/{source}">View this page source on GitHub</a></div></article>{toc_html}</main>'
   write(OUT/f'docs/{slug}/index.html',layout(title,content,f'/docs/{slug}/',section='Docs'));SEARCH.append(dict(title=title,url=f'/docs/{slug}/',type=group,text=re.sub(r'[`#*|]',' ',text)[:24000]))
- write(OUT/'docs/index.html',layout('Documentation','<main id="main" class="container page-heading"><h1>Documentation</h1><p>Follow the guides or inspect the Rust API.</p><a class="button" href="/docs/getting-started/">Start building</a></main>','/docs/',section='Docs'))
+ write(OUT/'docs/index.html',layout('Documentation',documentation_index(),'/docs/',section='Docs'))
  filters=''.join(f'<button data-filter="{key}" aria-pressed="{str(key=="all").lower()}">{label}</button>' for key,label in [('all','All examples'),('2D','2D'),('3D','3D')])
  body=f'<main id="main" class="container"><div class="page-heading"><h1>A playground for the engine.</h1><p>Fifteen original examples, in 2D and 3D. Every example includes playable code, controls and a clear view of the systems behind it.</p></div><label class="game-search">Find a game<input id="game-query" type="search" placeholder="Title, genre or controls…"></label><div class="filters" role="group" aria-label="Filter examples">{filters}</div><p id="filter-status" class="mono" role="status">{len(GAMES)} examples</p><div class="example-grid">'+''.join(map(tile,GAMES))+'</div><p id="games-empty" hidden>No games match. Try another search or dimension.</p></main>'
  write(OUT/'examples/index.html',layout('Examples',body,'/examples/',section='Examples'))
@@ -170,8 +208,71 @@ def pages():
 
   write(OUT/f'examples/{g["id"]}/index.html',layout(g['title'],body,f'/examples/{g["id"]}/',g['description'],'Examples'));SEARCH.append(dict(title=g['title'],url=f'/examples/{g["id"]}/',type='Example',text=g['description']+' '+g['genre']+' '+g['controls']))
 
+def self_test():
+ """Source-only navigation regressions; no Cargo, dist or staged API inputs."""
+ import ast, tempfile, unittest
+ from unittest.mock import patch
+
+ class NavigationTests(unittest.TestCase):
+  def test_shared_assets_are_accepted_by_site_packager(self):
+   def assigned(nodes,name):
+    return next(ast.literal_eval(node.value) for node in nodes if isinstance(node,ast.Assign) and any(isinstance(target,ast.Name) and target.id==name for target in node.targets))
+   owned=ast.parse((ROOT/'scripts/build-owned.py').read_text())
+   site=ast.parse(Path(__file__).read_text())
+   main_node=next(node for node in site.body if isinstance(node,ast.FunctionDef) and node.name=='main')
+   self.assertLessEqual(set(assigned(owned.body,'SHARED_ASSETS')),assigned(main_node.body,'allowed'))
+
+  def test_missing_sources_reported_together(self):
+   with tempfile.TemporaryDirectory() as directory:
+    with self.assertRaises(ValueError) as error:
+     validate_docs([('one','One','Test','one.md'),('two','Two','Test','two.md')],Path(directory))
+    self.assertIn('Missing guide source: one.md',str(error.exception))
+    self.assertIn('Missing guide source: two.md',str(error.exception))
+
+  def test_valid_and_ambiguous_registrations(self):
+   with tempfile.TemporaryDirectory() as directory:
+    root=Path(directory);(root/'one.md').write_text('# One\n')
+    row=('one','One','Test','one.md');validate_docs([row],root)
+    with self.assertRaisesRegex(ValueError,'Duplicate guide slug'):validate_docs([row,row],root)
+    with self.assertRaisesRegex(ValueError,'Duplicate guide source'):validate_docs([row,('two','Two','Test','./one.md')],root)
+    with self.assertRaisesRegex(ValueError,'outside repository'):validate_docs([('other','Other','Test','../other.md')],root)
+    with self.assertRaisesRegex(ValueError,'Invalid guide slug'):validate_docs([('../one','One','Test','one.md')],root)
+
+  def test_every_registered_guide_is_navigable(self):
+   index=documentation_index();navigation=sidebar('api-migration-200')
+   for slug,_,_,source in DOCS:
+    url=f'/docs/{slug}/'
+    self.assertIn(f'href="{url}"',index)
+    self.assertIn(f'href="{url}"',navigation)
+    self.assertEqual(link(source+'#section','README.md'),url+'#section')
+   self.assertEqual(navigation.count('aria-current="page"'),1)
+   self.assertEqual(link('docs/MIGRATION_50.md','README.md'),'/docs/api-migration/')
+   self.assertEqual(link('docs/MIGRATION_200.md','README.md'),'/docs/api-migration-200/')
+
+  def test_checked_code_fence_has_rust_language(self):
+   body,_=markdown('```rust,check,crate-type=bin\nfn main() { assert!(1 < 2); }\n```','README.md')
+   self.assertIn('class="language-rust"',body)
+   self.assertIn('assert!(1 &lt; 2)',body)
+   self.assertNotIn('rust,check',body)
+
+  def test_missing_guide_stops_before_build_or_output_replacement(self):
+   with patch(__name__+'.validate_docs',side_effect=ValueError('Missing guide source: pending.md')), patch.object(subprocess,'run') as run, patch.object(shutil,'rmtree') as remove, patch('sys.argv',['build-site.py','--skip-build']):
+    with self.assertRaisesRegex(SystemExit,'Missing guide source: pending.md'):main()
+   run.assert_not_called();remove.assert_not_called()
+
+ result=unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(NavigationTests))
+ if not result.wasSuccessful():raise SystemExit(1)
+
 def main():
- parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--skip-build',action='store_true');args=parser.parse_args()
+ parser=argparse.ArgumentParser(description=__doc__);mode=parser.add_mutually_exclusive_group()
+ mode.add_argument('--skip-build',action='store_true',help='reuse staged web/Rustdoc inputs; replaces dist/site')
+ mode.add_argument('--check-sources',action='store_true',help='validate guide registrations without building or writing output')
+ mode.add_argument('--self-test',action='store_true',help='run source-only navigation regressions without staged artifacts')
+ args=parser.parse_args()
+ if args.self_test:self_test();return
+ try:validate_docs()
+ except ValueError as error:raise SystemExit(str(error)) from error
+ if args.check_sources:print(f'Validated {len(DOCS)} guide registrations');return
  subprocess.run(['python3','scripts/audit-owned.py'],cwd=ROOT,check=True)
  if not args.skip_build:
   shutil.rmtree(ROOT/'target/doc',ignore_errors=True)
@@ -187,10 +288,11 @@ def main():
  stale=[p.name for p in (ROOT/'target/doc').iterdir() if p.is_dir() and p.name not in targets|support]
  sources=ROOT/'target/doc/src'
  if sources.exists():stale.extend('src/'+p.name for p in sources.iterdir() if p.is_dir() and p.name not in targets)
- allowed={'index.html','games.json','build-info.json','runtime.js', 'lifecycle.js','visuals.js','details.js','loader.js','player.js','fullscreen.js','audio.js','audio-worklet.js','audio-ring.js','input.js','storage.js','input-overlay.js','retained.js','retained-shader.js','effects.js','effects-shader.js','material-tools.js','content-tools.js','replay-tools.js','multiplayer-tools.js'}
+ allowed={'index.html','catalog.js','games.json','build-info.json','runtime.js', 'lifecycle.js','visuals.js','details.js','loader.js','player.js','fullscreen.js','audio.js','audio-worklet.js','audio-ring.js','input.js','storage.js','input-overlay.js','retained.js','retained-shader.js','effects.js','effects-shader.js','material-tools.js','content-tools.js','replay-tools.js','multiplayer-tools.js','status.js'}
  for game in GAMES:
   allowed.add(game['host']+'/'+game['id'].replace('-','_')+'.wasm')
-  allowed.update(game['host']+'/'+p.name for p in (ROOT/'web'/game['host']).iterdir() if p.is_file())
+  host=ROOT/'web'/game['host']
+  allowed.update(game['host']+'/'+p.relative_to(host).as_posix() for p in host.rglob('*') if p.is_file())
  stale.extend('play/'+str(p.relative_to(ROOT/'dist/web')) for p in (ROOT/'dist/web').rglob('*') if p.is_file() and str(p.relative_to(ROOT/'dist/web')) not in allowed)
  if stale:raise SystemExit('Stale build inputs; run a full site build: '+', '.join(stale))
  shutil.rmtree(OUT,ignore_errors=True)
@@ -203,6 +305,7 @@ def main():
  for game in GAMES:
   if not (assets/game['image']).is_file():raise SystemExit('Missing screenshot: '+game['image'])
  for name in ['site.css','site.js','site-search.js','search-index.mjs','search.css','favicon.ico','favicon-16.png','favicon-32.png','apple-touch-icon.png']:shutil.copy2(ROOT/'website/static'/name,OUT/name)
+ write(OUT/'search-index.mjs',browser_search_module())
 
  shutil.copytree(ROOT/'website/static/vendor',OUT/'vendor')
  # Qikbar is available on generated Rustdoc pages as well as the branded guides.

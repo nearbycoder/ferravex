@@ -1,4 +1,72 @@
 use super::*;
+/// Check the current terrain for penetration at fixed feet coordinates, without
+/// recovery, ground snap, support lookup or scratch allocation. Uses the same
+/// shape/obstacle separation and filtering as the motor. Touching is clear, with
+/// the existing `1e-5` penetration tolerance (no extra skin clearance).
+///
+/// `max_candidates` is in `0..=1_000_000`, matching the motor's upper bound.
+/// Zero proves clearance only if no candidates are visited. Sensors and excluded
+/// layers still consume the budget, as in movement queries. A complete query is
+/// required before reporting a blocker; budget/obstacle errors take precedence.
+/// The budget bounds candidate processing, not traversal inside [`Terrain::visit`].
+/// Terrain must obey its complete/current-pose visitation contract.
+///
+/// ```
+/// use ferravex_math::Vec3;
+/// use ferravex_physics::character::{check_clearance, CharacterShape, ClearanceError, Obstacle};
+/// let shape = CharacterShape::Capsule { radius: 0.3, height: 1.8 };
+/// assert_eq!(check_clearance(&[][..], shape, Vec3::ZERO, u32::MAX, 0)?.candidates, 0);
+/// let ceiling = Obstacle::cuboid(9, Vec3::Y * 1.7, Vec3::new(2., 0.1, 2.));
+/// assert_eq!(check_clearance(&[ceiling][..], shape, Vec3::ZERO, u32::MAX, 1),
+///            Err(ClearanceError::Blocked { obstacle: 9 }));
+/// # Ok::<(), ClearanceError>(())
+/// ```
+pub fn check_clearance<T: Terrain + ?Sized>(
+    world: &T,
+    shape: CharacterShape,
+    feet: Vec3,
+    membership_mask: u32,
+    max_candidates: usize,
+) -> Result<Clearance, ClearanceError> {
+    if !shape.valid()
+        || !bounded(feet)
+        || (shape.planar() && feet.z != 0.)
+        || max_candidates > 1_000_000
+    {
+        return Err(ClearanceError::InvalidInput);
+    }
+    let mut queries = Queries {
+        world,
+        shape,
+        settings: CharacterSettings {
+            membership_mask,
+            max_candidates,
+            ..Default::default()
+        },
+        candidates: 0,
+        ignored: None,
+        recovery: Recovery::default(),
+    };
+    let mut blocker: Option<u64> = None;
+    queries
+        .visit(shape.bounds(feet), |o| {
+            if separation(shape, feet, o)?.0 < -1e-5 {
+                blocker = Some(blocker.map_or(o.id, |id| id.min(o.id)));
+            }
+            Ok(())
+        })
+        .map_err(|error| match error {
+            CharacterError::QueryBudget => ClearanceError::QueryBudget,
+            _ => ClearanceError::InvalidObstacle,
+        })?;
+    if let Some(obstacle) = blocker {
+        return Err(ClearanceError::Blocked { obstacle });
+    }
+    Ok(Clearance {
+        candidates: queries.candidates,
+    })
+}
+
 /// Exact closest pair between a line segment and an axis-aligned box. The squared
 /// distance is quadratic between the segment's face crossings (at most 8 intervals).
 fn segment_box(a: Vec3, b: Vec3, h: Vec3) -> (f32, Vec3) {
@@ -256,6 +324,7 @@ pub(super) struct Queries<'a, T: Terrain + ?Sized> {
     pub settings: CharacterSettings,
     pub candidates: usize,
     pub ignored: Option<u64>,
+    pub recovery: Recovery,
 }
 impl<T: Terrain + ?Sized> Queries<'_, T> {
     fn visit(
@@ -290,8 +359,9 @@ impl<T: Terrain + ?Sized> Queries<'_, T> {
         error.map_or(Ok(()), Err)
     }
     pub fn recover(&mut self, mut p: Vec3) -> Result<Vec3, CharacterError> {
-        let origin = p;
-        for _ in 0..self.settings.max_iterations {
+        // The final pass verifies the last allowed correction, including when
+        // max_iterations is one. Each pass still shares the query budget.
+        for iteration in 0..=self.settings.max_iterations {
             let mut deepest = 0.;
             let mut normal = Vec3::ZERO;
             let shape = self.shape;
@@ -306,10 +376,19 @@ impl<T: Terrain + ?Sized> Queries<'_, T> {
             if deepest >= -1e-5 {
                 return Ok(p);
             }
-            p += normal * (-deepest + self.settings.skin);
-            if p.distance(origin) > self.settings.max_recovery {
+            let correction = normal * (-deepest + self.settings.skin);
+            let distance = self.recovery.distance + correction.length();
+            if iteration == self.settings.max_iterations || distance > self.settings.max_recovery {
                 return Err(CharacterError::UnresolvedPenetration);
             }
+            p += correction;
+            if !bounded(p) || (self.shape.planar() && p.z != 0.) {
+                return Err(CharacterError::InvalidInput);
+            }
+            self.recovery.translation += correction;
+            self.recovery.distance = distance;
+            self.recovery.iterations += 1;
+            self.recovery.max_depth = self.recovery.max_depth.max(-deepest);
         }
         Err(CharacterError::UnresolvedPenetration)
     }

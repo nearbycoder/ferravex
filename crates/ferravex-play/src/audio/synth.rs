@@ -1,4 +1,5 @@
 //! Original compact procedural source bank. Generated once, never per frame.
+//! [`Sound::with_release`] bakes a checked release into an existing source clip.
 use super::{Clip, Sound};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -107,6 +108,65 @@ impl SoundBank {
         self.sounds.iter().map(|s| s.clip().samples.len() * 8).sum()
     }
 }
+impl Sound {
+    /// Returns a shortened copy with a quadratic release ending in exact silence.
+    ///
+    /// Frames before `start_frame` are copied unchanged. The release spans
+    /// `release_frames` stereo frames: its first frame retains full source gain,
+    /// and its last frame is exactly `[0.0; 2]`. Between them, gain follows the
+    /// quadratic decay used by the bank's chirps, without restarting their phase
+    /// or noise sequence. The returned clip contains `start_frame + release_frames`
+    /// frames at the original sample rate. The source sound remains unchanged.
+    ///
+    /// Returns `None` if the release has fewer than two frames, its end overflows,
+    /// or it extends past the source. Requiring both endpoints avoids a forced
+    /// one-frame gain jump; very short releases can still be audible.
+    ///
+    /// This is a preparation/export operation: it allocates a new clip and takes
+    /// linear work in its length, bounded by the already validated source length.
+    /// Call it outside audio render callbacks and reuse the resulting [`Sound`].
+    ///
+    /// ```
+    /// use ferravex_play::audio::{Cue, SoundBank};
+    ///
+    /// let bank = SoundBank::procedural(8_000).unwrap();
+    /// let source = bank.get(Cue::Success);
+    /// let short = source.with_release(400, 800).unwrap();
+    /// assert_eq!(short.clip().sample_rate, 8_000);
+    /// assert_eq!(short.clip().samples.len(), 1_200);
+    /// assert_eq!(&short.clip().samples[..400], &source.clip().samples[..400]);
+    /// assert_eq!(short.clip().samples.last(), Some(&[0.0; 2]));
+    /// assert!(source.with_release(400, 1).is_none());
+    /// ```
+    pub fn with_release(&self, start_frame: usize, release_frames: usize) -> Option<Self> {
+        if release_frames < 2 {
+            return None;
+        }
+        let end = start_frame.checked_add(release_frames)?;
+        let source = self.clip();
+        let mut samples = source.samples.get(..end)?.to_vec();
+        for (i, frame) in samples[start_frame..].iter_mut().enumerate() {
+            if i == release_frames - 1 {
+                // Assign rather than multiply to also canonicalize negative zero.
+                *frame = [0.; 2];
+            } else {
+                let gain = quadratic_decay(i as f64 / (release_frames - 1) as f64) as f32;
+                for sample in frame {
+                    *sample *= gain;
+                }
+            }
+        }
+        Sound::new(Clip {
+            sample_rate: source.sample_rate,
+            samples: samples.into(),
+        })
+    }
+}
+
+fn quadratic_decay(t: f64) -> f64 {
+    (1. - t) * (1. - t)
+}
+
 fn transient(
     rate: u32,
     hz: f32,
@@ -146,7 +206,7 @@ fn chirp(rate: u32, from: f32, to: f32, seconds: f32) -> Option<Sound> {
             let phase = (f64::from(from) * t + 0.5 * f64::from(to - from) * t * t)
                 * f64::from(seconds)
                 * std::f64::consts::TAU;
-            let envelope = ((1. - t) * (1. - t) * (i as f64 / 24.).min(1.)) as f32;
+            let envelope = (quadratic_decay(t) * (i as f64 / 24.).min(1.)) as f32;
             let v = (phase.sin() + 0.18 * (phase * 2.).sin()) as f32 * envelope * 0.23;
             [v; 2]
         })
@@ -205,5 +265,143 @@ mod tests {
         let hum = a.get(Cue::Engine).clip().samples.as_ref();
         assert!((hum[0][0] - hum.last().unwrap()[0]).abs() < 0.03);
         assert!(SoundBank::procedural(1).is_none());
+    }
+
+    #[test]
+    fn release_preserves_prefix_stereo_and_source_then_reaches_exact_silence() {
+        let original = [
+            [0.25, -0.5],
+            [-0.25, 0.5],
+            [0.5, -1.],
+            [0.25, -0.5],
+            [-0.25, 0.5],
+            [0.5, -1.],
+            [0.25, -0.5],
+            [-0.25, 0.5],
+        ];
+        let source = Sound::new(Clip {
+            sample_rate: 8000,
+            samples: original.into(),
+        })
+        .unwrap();
+        let released = source.with_release(2, 5).unwrap();
+        let samples = &released.clip().samples;
+        assert_eq!(released.clip().sample_rate, 8000);
+        assert_eq!(samples.len(), 7);
+        assert_eq!(&samples[..=2], &original[..=2]);
+        for (frame, gain) in [(3, 0.5625), (4, 0.25), (5, 0.0625)] {
+            assert_eq!(samples[frame], original[frame].map(|sample| sample * gain));
+        }
+        assert_eq!(samples[6].map(f32::to_bits), [0; 2]);
+        assert_eq!(source.clip().samples.as_ref(), original);
+        assert!(!std::sync::Arc::ptr_eq(
+            &source.clip().samples,
+            &released.clip().samples
+        ));
+    }
+
+    #[test]
+    fn release_handles_full_length_two_frame_and_already_silent_sources() {
+        let source = Sound::new(Clip {
+            sample_rate: 96000,
+            samples: vec![[1., -1.]; 5].into(),
+        })
+        .unwrap();
+        let full = source.with_release(0, 5).unwrap();
+        assert_eq!(
+            full.clip().samples.as_ref(),
+            &[
+                [1., -1.],
+                [0.5625, -0.5625],
+                [0.25, -0.25],
+                [0.0625, -0.0625],
+                [0., 0.],
+            ]
+        );
+        let shortest = source.with_release(0, 2).unwrap();
+        assert_eq!(shortest.clip().samples.as_ref(), &[[1., -1.], [0.; 2]]);
+        let tail = source.with_release(3, 2).unwrap();
+        assert_eq!(&tail.clip().samples[..4], &source.clip().samples[..4]);
+        assert_eq!(tail.clip().samples[4].map(f32::to_bits), [0; 2]);
+
+        let silent = Sound::new(Clip {
+            sample_rate: 8000,
+            samples: vec![[-0., 0.]; 8].into(),
+        })
+        .unwrap();
+        let released = silent.with_release(1, 4).unwrap();
+        assert!(
+            released
+                .clip()
+                .samples
+                .iter()
+                .all(|frame| *frame == [0.; 2])
+        );
+        assert_eq!(released.clip().samples[4].map(f32::to_bits), [0; 2]);
+    }
+
+    #[test]
+    fn release_rejects_invalid_and_overflowing_ranges_without_changing_source() {
+        let source = Sound::new(Clip {
+            sample_rate: 48000,
+            samples: vec![[0.5, -0.5]; 8].into(),
+        })
+        .unwrap();
+        let original = source.clip().samples.clone();
+        for (start, frames) in [
+            (0, 0),
+            (0, 1),
+            (0, 9),
+            (7, 2),
+            (8, 2),
+            (usize::MAX, 2),
+            (1, usize::MAX),
+            (usize::MAX, usize::MAX),
+            (0, super::super::MAX_CLIP_FRAMES + 1),
+        ] {
+            assert!(source.with_release(start, frames).is_none());
+            assert!(std::sync::Arc::ptr_eq(&original, &source.clip().samples));
+            assert_eq!(source.clip().samples.as_ref(), &[[0.5, -0.5]; 8]);
+        }
+        let one_frame = Sound::new(Clip {
+            sample_rate: 8000,
+            samples: vec![[1.; 2]].into(),
+        })
+        .unwrap();
+        assert!(one_frame.with_release(0, 2).is_none());
+    }
+
+    #[test]
+    fn released_bank_samples_remain_finite_and_bounded_at_supported_rate_limits() {
+        for rate in [8000, 24000, 96000] {
+            let bank = SoundBank::procedural(rate).unwrap();
+            let mut released_bytes = 0;
+            for source in &bank.sounds {
+                let frames = source.clip().samples.len();
+                let start = frames / 4;
+                let released = source.with_release(start, frames / 2).unwrap();
+                let samples = &released.clip().samples;
+                assert_eq!(released.clip().sample_rate, rate);
+                assert_eq!(samples.len(), start + frames / 2);
+                assert_eq!(&samples[..=start], &source.clip().samples[..=start]);
+                assert_eq!(samples.last().unwrap().map(f32::to_bits), [0; 2]);
+                for (frame, original) in samples.iter().zip(source.clip().samples.iter()) {
+                    for (sample, source_sample) in frame.iter().zip(original) {
+                        assert!(sample.is_finite());
+                        assert!(sample.abs() <= source_sample.abs());
+                    }
+                }
+                released_bytes += samples.len() * std::mem::size_of::<[f32; 2]>();
+                assert_eq!(
+                    samples,
+                    &source
+                        .with_release(start, frames / 2)
+                        .unwrap()
+                        .clip()
+                        .samples
+                );
+            }
+            assert!(released_bytes < bank.decoded_bytes());
+        }
     }
 }

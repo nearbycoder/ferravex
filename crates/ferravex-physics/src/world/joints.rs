@@ -58,6 +58,7 @@ impl JointRow {
         }
     }
 }
+
 fn body_pair(a: RigidBodyHandle, b: RigidBodyHandle) -> (RigidBodyHandle, RigidBodyHandle) {
     if a < b { (a, b) } else { (b, a) }
 }
@@ -215,6 +216,69 @@ fn rows(
     }
 }
 impl<B: Access> World<B> {
+    // Shared dimensional authoring path. This only samples live authored body
+    // origins; neither collider poses nor compound centers of mass define frames.
+    pub(crate) fn joint_desc_from_world(
+        &self,
+        a: RigidBodyHandle,
+        b: RigidBodyHandle,
+        mut desc: JointDesc,
+        anchors: [Vec3; 2],
+        axis: Vec3,
+        preserve_pose: bool,
+    ) -> Result<JointDesc, PhysicsError> {
+        let (Some(aa), Some(bb)) = (self.bodies.get(a), self.bodies.get(b)) else {
+            return Err(PhysicsError::InvalidHandle);
+        };
+        let (aa, bb) = (aa.core(), bb.core());
+        if a == b || aa.kind != Kind::Dynamic && bb.kind != Kind::Dynamic {
+            return Err(PhysicsError::InvalidJoint);
+        }
+        if [aa, bb].into_iter().any(|body| {
+            !body.position.is_finite()
+                || !body.rotation.is_finite()
+                || !body.rotation.is_normalized()
+        }) {
+            return Err(PhysicsError::InvalidBody);
+        }
+        desc.local_anchor1 = aa.rotation.conjugate() * (anchors[0] - aa.position);
+        desc.local_anchor2 = bb.rotation.conjugate() * (anchors[1] - bb.position);
+        if matches!(desc.kind, JointKind::Hinge { .. }) {
+            // Normalize before rotating so huge/subnormal finite world axes
+            // take the math kernel's checked path without overflow/underflow.
+            let axis = axis.try_normalize().ok_or(PhysicsError::InvalidJoint)?;
+            desc.kind = JointKind::Hinge {
+                axis1: aa.rotation.conjugate() * axis,
+                axis2: bb.rotation.conjugate() * axis,
+            };
+        }
+        if preserve_pose || desc.reference_rotation.is_none() {
+            desc.reference_rotation = Some(
+                (aa.rotation.conjugate() * bb.rotation)
+                    .try_normalize()
+                    .ok_or(PhysicsError::InvalidBody)?,
+            );
+        }
+        if preserve_pose {
+            match &mut desc.kind {
+                JointKind::Distance { length } | JointKind::Spring { length, .. } => {
+                    *length = anchors[0].distance(anchors[1]);
+                }
+                JointKind::Fixed | JointKind::Hinge { .. } => {}
+            }
+        }
+        desc.validate(self.planar)
+            .map_err(|_| PhysicsError::InvalidJoint)?;
+        // Separated fixed/hinge pivots cannot retain the current pose. Reject
+        // rather than silently providing a mode with an initial anchor error.
+        if preserve_pose
+            && matches!(desc.kind, JointKind::Fixed | JointKind::Hinge { .. })
+            && anchors[0] != anchors[1]
+        {
+            return Err(PhysicsError::InvalidJoint);
+        }
+        Ok(desc)
+    }
     // Install the implementation only from insert_joint. Worlds that never use
     // connections retain a cheap None check, and linkers can strip joint rows.
     pub(super) fn run_joints(&mut self, phase: JointPhase, dt: f32, stats: &mut StepStats) {
@@ -232,6 +296,24 @@ impl<B: Access> World<B> {
             JointPhase::Store => self.store_joint_impulses(dt),
         }
     }
+    // Endpoints are staged bodies, so no live handles or solver changes are
+    // required to apply the same descriptor/type rules as insert_joint.
+    pub(crate) fn check_assembly_joint(
+        &self,
+        a: &B,
+        b: &B,
+        same_body: bool,
+        desc: JointDesc,
+    ) -> Result<(), PhysicsError> {
+        if same_body
+            || !desc.valid(self.planar)
+            || a.core().kind != Kind::Dynamic && b.core().kind != Kind::Dynamic
+        {
+            return Err(PhysicsError::InvalidJoint);
+        }
+        Ok(())
+    }
+
     pub fn insert_joint(
         &mut self,
         a: RigidBodyHandle,
@@ -466,5 +548,202 @@ impl<B: Access> World<B> {
         if self.broken_joints.len() > first {
             self.rebuild_joint_filters();
         }
+    }
+}
+
+#[cfg(test)]
+mod journey400_223 {
+    use super::*;
+
+    macro_rules! current_pose_tests {
+        ($module:ident) => {
+            mod $module {
+                use super::*;
+                use crate::$module::{
+                    ColliderBuilder, JointBuilder, JointPoseMode, PhysicsWorld, RigidBodyBuilder,
+                    Vector, WorldJointFrame,
+                };
+
+                #[test]
+                fn invalid_retained_pose_is_rejected_without_mutating_either_body() {
+                    let mut world = PhysicsWorld::default();
+                    let a = world.insert_body(RigidBodyBuilder::fixed()).unwrap();
+                    let (b, _) = world.insert(
+                        RigidBodyBuilder::dynamic().translation(Vector::X),
+                        ColliderBuilder::ball(0.2),
+                    );
+                    let original = world.bodies[b].core().clone();
+                    for (position, rotation) in [
+                        (Vec3::NAN, Quat::IDENTITY),
+                        (Vec3::INFINITY, Quat::IDENTITY),
+                        (Vec3::X, Quat::NAN),
+                        (Vec3::X, Quat::from_xyzw(0., 0., 0., 0.)),
+                        (Vec3::X, Quat::IDENTITY * 2.),
+                    ] {
+                        for id in [a, b] {
+                            let saved = world.bodies[id].core().clone();
+                            let body = world.bodies[id].core_mut();
+                            body.position = position;
+                            body.rotation = rotation;
+                            let before = format!("{:?}", world.bodies);
+                            assert_eq!(
+                                world.insert_joint_from_world(
+                                    a,
+                                    b,
+                                    JointBuilder::fixed(),
+                                    WorldJointFrame::at_pivot(Vector::ZERO),
+                                    JointPoseMode::Preserve,
+                                ),
+                                Err(PhysicsError::InvalidBody)
+                            );
+                            assert_eq!(format!("{:?}", world.bodies), before);
+                            assert!(world.joints.is_empty());
+                            *world.bodies[id].core_mut() = saved;
+                        }
+                    }
+                    assert_eq!(
+                        format!("{:?}", world.bodies[b].core()),
+                        format!("{original:?}")
+                    );
+                    // Finite inputs can overflow during inverse translation.
+                    // Reject the derived local frame rather than passing it on.
+                    world.bodies[a].core_mut().position = Vec3::X * f32::MAX;
+                    world.bodies[b].core_mut().position = -Vec3::X * f32::MAX;
+                    assert_eq!(
+                        world.joint_desc_from_world(
+                            a,
+                            b,
+                            JointBuilder::fixed(),
+                            WorldJointFrame::at_pivot(Vector::X * f32::MAX),
+                            JointPoseMode::Preserve,
+                        ),
+                        Err(PhysicsError::InvalidJoint)
+                    );
+                }
+
+                #[test]
+                fn sampling_and_rejection_preserve_live_joint_caches_and_pending_motion() {
+                    let mut world = PhysicsWorld::default();
+                    let a = world.insert_body(RigidBodyBuilder::fixed()).unwrap();
+                    let (b, _) = world.insert(
+                        RigidBodyBuilder::dynamic()
+                            .translation(Vector::X)
+                            .linvel(Vector::X),
+                        ColliderBuilder::ball(0.2),
+                    );
+                    let existing = world
+                        .insert_joint(a, b, JointBuilder::distance(1.))
+                        .unwrap();
+                    world.step(1. / 60.);
+                    assert!(
+                        world.joints[existing]
+                            .cache
+                            .iter()
+                            .any(|row| row.impulse != 0.)
+                    );
+                    let body = world.bodies[b].core_mut();
+                    body.force = Vec3::Y;
+                    body.torque = Vec3::Z;
+                    body.next_position = Some(Vec3::X * 5.);
+                    body.next_rotation = Some(Quat::from_rotation_z(0.3));
+                    // Read-only authoring requires no revision budget.
+                    body.revision = u64::MAX;
+                    let before =
+                        format!("{:?}{:?}{:?}", world.bodies, world.colliders, world.joints);
+                    let desc = world
+                        .joint_desc_from_world(
+                            a,
+                            b,
+                            JointBuilder::hinge(),
+                            WorldJointFrame::at_pivot(Vector::ZERO),
+                            JointPoseMode::Preserve,
+                        )
+                        .unwrap();
+                    desc.validate(world.planar).unwrap();
+                    assert_eq!(
+                        world.insert_joint_from_world(
+                            a,
+                            b,
+                            JointBuilder::hinge().limits(1., -1.),
+                            WorldJointFrame::at_pivot(Vector::ZERO),
+                            JointPoseMode::Preserve,
+                        ),
+                        Err(PhysicsError::InvalidJoint)
+                    );
+                    assert_eq!(
+                        format!("{:?}{:?}{:?}", world.bodies, world.colliders, world.joints),
+                        before
+                    );
+                }
+            }
+        };
+    }
+    #[cfg(feature = "dim2")]
+    current_pose_tests!(d2);
+    #[cfg(feature = "dim3")]
+    current_pose_tests!(d3);
+}
+
+#[cfg(all(test, feature = "dim2"))]
+mod journey400_224 {
+    use super::*;
+    use crate::assembly::{Assembly, AssemblyError};
+    use crate::d2::{ColliderBuilder, JointBuilder, PhysicsWorld, RigidBodyBuilder};
+
+    #[test]
+    fn late_error_does_not_refresh_existing_dirty_joints_filters_or_caches() {
+        let mut w = PhysicsWorld::default();
+        let a = w.insert_body(RigidBodyBuilder::fixed()).unwrap();
+        let (b, _) = w.insert(RigidBodyBuilder::dynamic(), ColliderBuilder::ball(1.));
+        let joint = w
+            .insert_joint(
+                a,
+                b,
+                JointBuilder::hinge().motor(crate::JointMotor::velocity(1., 2.)),
+            )
+            .unwrap();
+        for _ in 0..8 {
+            w.step(1. / 120.);
+        }
+        w.joints[joint].set_contacts_enabled(true);
+        assert!(w.joints[joint].dirty);
+        assert!(w.joints[joint].cache.iter().any(|row| row.impulse != 0.));
+        let snapshot = |w: &PhysicsWorld| {
+            format!(
+                "{:?}{:?}{:?}{:?}{:?}{:?}{:?}",
+                w.bodies,
+                w.colliders,
+                w.joints,
+                w.raw.disabled_joint_pairs,
+                w.raw.broken_joints,
+                w.raw
+                    .joint_rows
+                    .iter()
+                    .map(|row| (row.id, row.slot, row.a, row.b, row.impulse))
+                    .collect::<Vec<_>>(),
+                w.last_step
+            )
+        };
+        let mut plan = Assembly::new();
+        let x = plan
+            .add_body(RigidBodyBuilder::fixed(), [] as [Collider; 0])
+            .unwrap();
+        let y = plan
+            .add_body(RigidBodyBuilder::dynamic(), [ColliderBuilder::ball(1.)])
+            .unwrap();
+        plan.add_joint(x, y, JointBuilder::hinge()).unwrap();
+        let invalid = plan
+            .add_joint(x, y, JointBuilder::spring(1., 0., 1.))
+            .unwrap();
+        let before = snapshot(&w);
+        assert_eq!(
+            w.insert_assembly(plan),
+            Err(AssemblyError::Joint {
+                joint: invalid,
+                error: PhysicsError::InvalidJoint,
+            })
+        );
+        assert_eq!(snapshot(&w), before);
+        assert!(w.raw.joint_solver.is_some());
     }
 }

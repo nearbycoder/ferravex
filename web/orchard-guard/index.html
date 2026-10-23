@@ -1,7 +1,127 @@
 <!doctype html>
-<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Orchard Guard · Ferravex</title>
-<style>*{box-sizing:border-box}html,body{margin:0;height:100%;background:#101a21;color:#e2ece2;font:14px system-ui}body{display:flex;flex-direction:column}nav{height:40px;flex:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 16px;border-bottom:1px solid #2c3c45}nav>a{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}nav>button{flex:none}a{color:#97c3b5;text-decoration:none}canvas{width:100%;height:calc(100% - 40px);display:block;touch-action:none;outline:none}button[data-controls],button[data-audio]{font:inherit;color:#c3d9d0;background:transparent;border:1px solid #40545b;border-radius:4px;padding:3px 9px;cursor:pointer}button[data-controls]:hover,button[data-controls]:focus-visible,button[data-audio]:hover,button[data-audio]:focus-visible{background:#293f46;outline:1px solid #97c3b5}button[data-controls]:disabled,button[data-audio]:disabled{opacity:.4;cursor:wait}nav>span{margin-left:auto;margin-right:16px}@media(max-width:540px){nav>span{display:none}}[role=status]{position:absolute;top:50%;width:100%;text-align:center;pointer-events:none}</style>
-<nav><a href="../">FERRAVEX / Orchard Guard</a><span>2D · Tower defense</span><button type="button" data-controls title="Controls (F2)" aria-pressed="false" disabled>Controls</button><button type="button" data-audio title="Enable sound" aria-pressed="false" disabled>Sound off</button></nav>
-<canvas tabindex="0" data-game="orchard-guard" aria-label="Orchard Guard game"></canvas><div role="status">Loading original Rust engine…</div>
-<script type="module" src="../runtime.js"></script></html>
+<style>
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; background: #101a21; color: #e2ece2; font: 16px/1.5 system-ui; }
+body { height: 100vh; height: 100dvh; display: flex; flex-direction: column; }
+#orchard-header { flex: none; padding: 12px 16px; border-bottom: 1px solid #40545b; -webkit-user-select: text; user-select: text; }
+#orchard-header h1 { margin: 0; font-size: 1.25rem; }
+/* Keep room for Fullscreen and Details, inserted by the shared player. */
+#orchard-navigation { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; height: auto; padding: 8px 0; }
+#orchard-navigation > a { margin-right: auto; padding: 8px 0; }
+#orchard-navigation > button { flex: none; min-height: 44px; font: inherit; color: #e2ece2; background: #18262b; border: 1px solid #70877e; border-radius: 4px; padding: 8px 10px; cursor: pointer; }
+#orchard-navigation > button:hover { background: #293f46; }
+#orchard-navigation > button:disabled { opacity: .5; cursor: wait; }
+a { color: #b2dece; text-decoration: underline; text-underline-offset: .2em; }
+#orchard-header p { margin: 8px 0; }
+#orchard-help { max-width: 72rem; }
+#orchard-help summary { min-height: 44px; padding: 10px 0; cursor: pointer; font-weight: 600; }
+#orchard-controls { padding: 0 0 8px; overflow-wrap: anywhere; }
+#orchard-controls h2 { font-size: 1rem; margin: 16px 0 8px; }
+#orchard-controls dl { display: grid; grid-template-columns: minmax(9rem, 1fr) minmax(0, 3fr); gap: 8px 16px; margin: 8px 0; }
+#orchard-controls dt { font-weight: 600; }
+#orchard-controls dd { margin: 0; }
+kbd { font: inherit; font-weight: 600; }
+#orchard-header :focus-visible { outline: 3px solid #f6d887; outline-offset: 3px; }
+#orchard-stage { position: relative; flex: 1 0 20rem; min-height: 20rem; }
+#orchard-canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; touch-action: none; }
+#orchard-canvas:focus-visible { outline: 4px solid #f6d887; outline-offset: -4px; }
+#orchard-status { position: absolute; top: 40%; left: 0; width: 100%; margin: 0; padding: 16px; text-align: center; overflow-wrap: anywhere; pointer-events: none; }
+#orchard-status:not(:empty) { background: #101a21; }
+#orchard-status button { font: inherit; min-height: 44px; }
+#orchard-status button:focus-visible { outline: 3px solid #f6d887; outline-offset: 3px; }
+/* Expanded presentation must still allow the text guide to scroll. */
+body.ferravex-fullscreen:has(#orchard-stage) { overflow: auto; }
+/* The compact HUD keeps text and controls in CSS pixels. Leave the page
+   scrollable so the complete game and expanded guide can both be reached. */
+@media (max-width: 899px) {
+  #orchard-stage { flex-basis: calc(min(49.1667vw, 200px) + 576px); min-height: calc(min(49.1667vw, 200px) + 576px); }
+}
+@media (max-width: 540px) {
+  #orchard-header { padding: 10px 12px; }
+  #orchard-navigation > a { flex-basis: 100%; }
+  #orchard-controls dl { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  #orchard-controls dd { margin-bottom: 12px; }
+}
+@media (forced-colors: active) {
+  #orchard-header :focus-visible, #orchard-canvas:focus-visible { outline-color: Highlight; }
+}
+</style>
+</head>
+<body>
+<header id="orchard-header">
+  <h1>Orchard Guard</h1>
+  <nav id="orchard-navigation" aria-label="Game and player tools">
+    <a href="../">All Ferravex games</a>
+    <button type="button" data-controls title="Controls (F2 in game)" aria-pressed="false" disabled>Controls</button>
+    <button type="button" data-audio title="Enable sound" aria-pressed="false" disabled>Sound off</button>
+  </nav>
+  <p id="orchard-description">Protect the orchard: select plots, build towers and send waves when ready. Controls shows your current bindings; How to play explains the defaults.</p>
+  <p id="orchard-focus">In the game, <kbd>Shift + Escape</kbd> opens this guide and moves keyboard focus here. Pause first to stop an active wave. Exit fullscreen first if it is active.</p>
+  <details id="orchard-help">
+    <summary id="orchard-help-summary">How to play — defaults and keyboard access</summary>
+    <div id="orchard-controls">
+      <p>Prepare your defenses before sending the first wave. Select a numbered plot, then build or upgrade using the bottom bar. Prices and missing coins appear on the game buttons. You can build during waves. Progress saves between waves when storage is available.</p>
+      <h2>Default controls</h2>
+      <p>Saved or remapped bindings can differ from this list. Open <strong>Controls</strong>, or press <kbd>F2</kbd> while the game has focus, to inspect and change your current bindings.</p>
+      <dl>
+        <dt>Click a plot</dt><dd>Select where to build or upgrade. Plot numbers are labels, not number-key shortcuts.</dd>
+        <dt><kbd>1</kbd> / <kbd>2</kbd></dt><dd>Build a seed sling / frost hive on the selected empty plot.</dd>
+        <dt><kbd>U</kbd></dt><dd>Upgrade the selected tower when you have enough coins.</dd>
+        <dt><kbd>Space</kbd></dt><dd>Send the next wave when no wave is active.</dd>
+        <dt><kbd>Escape</kbd></dt><dd>Pause or resume after the first wave has started. Use your current Pause / menu binding if remapped.</dd>
+        <dt><kbd>R</kbd></dt><dd>Restart with a fresh harvest. Restart / Plant again clears the current checkpoint.</dd>
+        <dt><kbd>Tab</kbd> / arrows</dt><dd>Move focus among available game buttons. <kbd>Shift + Tab</kbd> moves backward; <kbd>Enter</kbd> activates the focused button.</dd>
+      </dl>
+      <h2>Keyboard plot selection</h2>
+      <p>In narrow windows, the large Plot buttons select all eight locations with the same Tab / arrows and Enter navigation as the other game buttons. The highlighted button identifies the selected plot. The game area can be scrolled into view below this guide.</p>
+      <p>Point / select has no keyboard binding by default. In Controls, choose <strong>Point / select</strong> and assign a keyboard key; this replaces that action's mouse binding. Close Controls, use the default <kbd>W</kbd>/<kbd>A</kbd>/<kbd>S</kbd>/<kbd>D</kbd> bindings to move the cursor over a plot, then press your assigned key. If a game button has focus, reopen and close Controls to clear that focus before selecting a plot. Use your saved movement bindings if changed.</p>
+      <h2>Menus and returning to the page</h2>
+      <p>Controls uses <kbd>Tab</kbd> or up/down arrows and <kbd>Enter</kbd>. <kbd>Escape</kbd> cancels a binding capture first; press it again to close Controls. Opening Controls or Details suspends interactive play; closing them preserves a manual pause. Switching away from the browser window also suspends play.</p>
+      <p><kbd>Shift + Escape</kbd> moves from the canvas to this guide without changing the game's pause state. Fullscreen can handle Escape first, so exit fullscreen before using this shortcut. Here, <kbd>Tab</kbd> and <kbd>Shift + Tab</kbd> navigate the page normally. Close How to play with <kbd>Enter</kbd> on its heading, then <kbd>Tab</kbd> into the game to return.</p>
+      <p><strong>Details → Player tools</strong> contains the shared accessibility preferences and player tools. Gameplay and its menus are drawn on the canvas; this text guide does not provide a live screen-reader view of the board.</p>
+    </div>
+  </details>
+</header>
+<main id="orchard-stage" aria-label="Orchard Guard game">
+  <canvas id="orchard-canvas" tabindex="0" data-game="orchard-guard" aria-label="Orchard Guard tower defense game" aria-describedby="orchard-description orchard-focus">
+    Orchard Guard needs canvas and WebGL2 support. Read How to play above for the game instructions and keyboard controls.
+  </canvas>
+  <p id="orchard-status" role="status" aria-live="polite" aria-atomic="true">Loading Orchard Guard…</p>
+</main>
+<script type="module" data-host-focus>
+const canvas = document.getElementById('orchard-canvas');
+const help = document.getElementById('orchard-help');
+const summary = document.getElementById('orchard-help-summary');
+const header = document.getElementById('orchard-header');
+const heldGameKeys = new Set();
+// The shared bridge listens on window. Keep page key defaults, including Space
+// release on the native summary. Forward releases that began in the canvas.
+header.addEventListener('keydown', event => {
+  event.stopPropagation();
+});
+header.addEventListener('keyup', event => {
+  if (!heldGameKeys.delete(event.code)) event.stopPropagation();
+});
+window.addEventListener('keyup', event => heldGameKeys.delete(event.code));
+window.addEventListener('blur', () => heldGameKeys.clear());
+window.addEventListener('pagehide', () => heldGameKeys.clear());
+canvas.addEventListener('keydown', event => {
+  if (event.ctrlKey || event.altKey || event.metaKey || event.isComposing || event.keyCode === 229) return;
+  if (event.code === 'Escape' && event.shiftKey) {
+    event.preventDefault();
+    event.stopPropagation();
+    help.open = true;
+    summary.focus();
+  } else if (!event.repeat && heldGameKeys.size < 128) {
+    heldGameKeys.add(event.code);
+  }
+});
+</script>
+<script type="module" src="../runtime.js"></script>
+</body>
+</html>

@@ -1,4 +1,4 @@
-use crate::game::{Game, HEIGHT, LEFT, PADDLE_Y, Phase, RIGHT, TOP, WIDTH};
+use crate::game::{Feedback, Game, HEIGHT, LEFT, PADDLE_Y, Phase, RIGHT, TOP, WIDTH};
 use ferravex_engine::{
     graphics::{Color, Framebuffer},
     play::animation::{LoopMode, SpriteClip, SpriteFrame},
@@ -38,6 +38,14 @@ impl Canvas {
         }
     }
     pub fn render(&mut self, g: &Game) {
+        self.render_session(g, false, &crate::presentation::Presentation::default());
+    }
+    pub(crate) fn render_session(
+        &mut self,
+        g: &Game,
+        paused: bool,
+        presentation: &crate::presentation::Presentation,
+    ) {
         self.look = ferravex_engine::render::look();
         self.frame.clear(self.look.shade(Color::from_hex(0x091219)));
         for y in TOP as i32..654 {
@@ -83,7 +91,15 @@ impl Canvas {
                 _ => [80, 133, 140, 255],
             };
             self.rect(x + 2, y + 4, w, h, [3, 10, 15, 180]);
-            self.rect(x, y, w, h, if block.flash > 0.0 { PAPER } else { shade });
+            let mut panel = shade;
+            if block.flash > 0.0 && !g.policy.reduced_flash() {
+                for channel in 0..3 {
+                    panel[channel] = (f32::from(shade[channel])
+                        + (f32::from(PAPER[channel]) - f32::from(shade[channel]))
+                            * g.policy.intensity()) as u8;
+                }
+            }
+            self.rect(x, y, w, h, panel);
             self.rect(x + 1, y + 1, w - 2, 2, [240, 240, 211, 80]);
             self.rect(x + 2, y + h - 5, w - 4, 4, [3, 18, 22, 45]);
             self.rect(x + 5, y + 5, 2, 2, [9, 27, 30, 120]);
@@ -121,10 +137,13 @@ impl Canvas {
                 }
             }
         }
-        let sprite = self
-            .pulse
-            .frame(g.time, LoopMode::Repeat)
-            .expect("finite time");
+        let sprite = if g.policy.reduced_motion() || g.policy.intensity() == 0. {
+            0
+        } else {
+            self.pulse
+                .frame(g.time, LoopMode::Repeat)
+                .expect("finite time")
+        };
         for drop in &g.drops {
             let [x, y] = drop.position;
             self.rect(x as i32 - 9, y as i32 - 9, 18, 18, [30, 76, 70, 255]);
@@ -137,10 +156,16 @@ impl Canvas {
         }
         for (i, p) in g.trail.iter().enumerate() {
             let t = (i + 1) as f32 / (g.trail.len() + 1) as f32;
-            self.circle(p[0], p[1], 2.0 + t * 3.0, [99, 215, 196, (t * 80.0) as u8]);
+            self.circle(
+                p[0],
+                p[1],
+                2.0 + t * 3.0,
+                [99, 215, 196, (t * 80.0 * g.policy.intensity()) as u8],
+            );
         }
         for p in g.particles.iter() {
-            let color = p.color.map(|n| (n.clamp(0.0, 1.0) * 255.0) as u8);
+            let mut color = p.color.map(|n| (n.clamp(0.0, 1.0) * 255.0) as u8);
+            color[3] = (f32::from(color[3]) * g.policy.intensity()) as u8;
             self.rect(
                 p.position[0] as i32,
                 p.position[1] as i32,
@@ -157,6 +182,16 @@ impl Canvas {
         self.rect(x + 9, PADDLE_Y as i32 - 4, w - 18, 5, [188, 214, 201, 255]);
         self.rect(x + 5, PADDLE_Y as i32 + 3, 4, 3, GOLD);
         self.rect(x + w - 9, PADDLE_Y as i32 + 3, 4, 3, GOLD);
+        let emphasis = presentation.feedback.impact().emphasis;
+        if emphasis > 0.01 {
+            self.rect(
+                x,
+                PADDLE_Y as i32 - 11,
+                w,
+                (emphasis * 6.).ceil() as i32,
+                [99, 215, 196, 130],
+            );
+        }
         if g.wide_time > 0.0 {
             self.rect(
                 x,
@@ -189,6 +224,12 @@ impl Canvas {
             1,
             MUTED,
         );
+        if g.armor_piercing() {
+            self.text("ARMOR PIERCING / UNTIL PADDLE RETURN", 39, 88, 1, GOLD);
+        }
+        if g.wide_time > 0. {
+            self.text_right(&format!("WIDE {:.1}S", g.wide_time), 600, 88, 1, CYAN);
+        }
         for i in 0..3 {
             self.circle(
                 46.0 + i as f32 * 17.0,
@@ -198,39 +239,96 @@ impl Canvas {
             );
         }
         self.text(&format!("{:02} PANELS", g.remaining()), 104, 679, 1, MUTED);
-        self.text_right("A D / ARROWS / DRAG", 600, 679, 1, MUTED);
+        self.text_fit_center(&presentation.hints.movement, 699, 1, 564, MUTED);
         if g.ball_save > 0. && g.phase == Phase::Playing {
             self.text("BALL SAVE", 270, 679, 1, CYAN);
         }
         match g.phase {
-            Phase::Ready => self.overlay(
-                if g.lives == 3 && g.sector == 1 && g.clears == 0 {
-                    "ORBIT BREAKER"
+            Phase::Ready => {
+                let title = if g.feedback() == Some(Feedback::LifeLost) {
+                    format!(
+                        "BALL LOST / {} {}",
+                        g.lives,
+                        if g.lives == 1 { "LIFE" } else { "LIVES" }
+                    )
+                } else if g.feedback() == Some(Feedback::Restarted) {
+                    "FRESH RUN / 3 LIVES".into()
+                } else if g.lives == 3 && g.sector == 1 && g.clears == 0 {
+                    "ORBIT BREAKER".into()
                 } else {
-                    "READY FOR LAUNCH"
-                },
-                &format!(
-                    "SERVE CHARGE {:03}% / FULL CHARGE PIERCES ARMOR",
-                    (g.serve_charge.power() * 100.) as u32
-                ),
-                "SPACE / TAP TO LAUNCH",
-            ),
+                    "READY FOR LAUNCH".into()
+                };
+                self.overlay(
+                    &title,
+                    &format!(
+                        "SERVE CHARGE {:03}% / FULL CHARGE PIERCES ARMOR",
+                        (g.serve_charge.power() * 100.) as u32
+                    ),
+                    &format!("{} TO LAUNCH", presentation.hints.launch),
+                );
+                self.rect(180, 472, 280, 3, LINE);
+                self.rect(180, 472, (280. * g.serve_charge.power()) as i32, 3, CYAN);
+            }
             Phase::Won => self.overlay(
                 "FIELD CLEARED",
                 &format!("{} POINTS / {:.0} SECONDS", g.score, g.time),
-                "SPACE / TAP TO RESTART",
+                &format!("{} TO RETRY", presentation.hints.launch),
             ),
             Phase::Lost => self.overlay(
                 "SIGNAL LOST",
                 &format!("{} POINTS / {} PANELS CLEARED", g.score, g.clears),
-                "SPACE / TAP TO RESTART",
+                &format!("{} TO RETRY", presentation.hints.launch),
             ),
-            Phase::Transition => self.overlay(
-                "SECTOR SECURED",
-                "REINFORCED DEBRIS AHEAD",
-                "PREPARING SECTOR 02",
-            ),
-            Phase::Playing => {}
+            Phase::Transition => {
+                self.overlay(
+                    "SECTOR 01 SECURED",
+                    "REINFORCED PANELS NEED TWO HITS",
+                    &format!("SECTOR 02 IN {:.1} SECONDS", g.transition_remaining()),
+                );
+                self.rect(180, 517, 280, 3, LINE);
+                let progress = (1. - g.transition_remaining() / 1.4).clamp(0., 1.);
+                self.rect(180, 517, (280. * progress) as i32, 3, CYAN);
+            }
+            Phase::Playing => {
+                let message = match g.feedback() {
+                    Some(Feedback::Launched) => "LAUNCHED / OPENING BALL SAVE ACTIVE",
+                    Some(Feedback::BallSaved) => "BALL SAVED / KEEP THE VOLLEY GOING",
+                    _ => "",
+                };
+                self.text_center(message, 553, 1, CYAN);
+                if let Some((label, points)) = presentation.notice {
+                    self.text_center(&format!("{label} +{points}"), 573, 1, GOLD);
+                }
+            }
+        }
+        if matches!(g.phase, Phase::Won | Phase::Lost) {
+            self.text_center(
+                &format!(
+                    "BEST PRECISE {} / BALL SAVES {}",
+                    g.precision.best(),
+                    g.saves
+                ),
+                474,
+                1,
+                GOLD,
+            );
+        }
+        if paused {
+            self.overlay(
+                "PAUSED",
+                &format!(
+                    "SECTOR {} / {} POINTS / {} LIVES",
+                    g.sector, g.score, g.lives
+                ),
+                &format!("{} TO RESUME", presentation.hints.pause),
+            );
+            self.text_fit_center(
+                &format!("{} TO RESTART / F2 CONTROLS", presentation.hints.restart),
+                519,
+                1,
+                408,
+                MUTED,
+            );
         }
     }
     fn overlay(&mut self, title: &str, detail: &str, action: &str) {
@@ -238,9 +336,18 @@ impl Canvas {
         self.rect(104, 379, 432, 1, LINE);
         self.rect(104, 539, 432, 1, LINE);
         self.rect(302, 395, 36, 2, CYAN);
-        self.text_center(title, 415, 2, PAPER);
-        self.text_center(detail, 451, 1, MUTED);
-        self.text_center(action, 493, 1, CYAN);
+        self.text_fit_center(title, 415, 2, 408, PAPER);
+        self.text_fit_center(detail, 451, 1, 408, MUTED);
+        self.text_fit_center(action, 493, 1, 408, CYAN);
+    }
+    fn text_fit_center(&mut self, text: &str, y: i32, scale: i32, width: i32, color: [u8; 4]) {
+        let scale = if scale > 1 && text_width(text, scale) > width {
+            1
+        } else {
+            scale
+        };
+        let fitted = fit_label(text, scale, width);
+        self.text_center(&fitted, y, scale, color);
     }
     fn text_center(&mut self, t: &str, y: i32, s: i32, c: [u8; 4]) {
         self.text(t, (WIDTH as i32 - text_width(t, s)) / 2, y, s, c);
@@ -338,7 +445,19 @@ impl Canvas {
     }
 }
 fn text_width(text: &str, scale: i32) -> i32 {
-    text.chars().count() as i32 * 6 * scale - scale
+    let metrics = ferravex_engine::render::get_default_font()
+        .try_metrics(8, scale as f32)
+        .expect("positive bitmap scale");
+    (metrics.measure_line(text).expect("bounded HUD label").width as i32 - scale).max(0)
+}
+fn fit_label(text: &str, scale: i32, width: i32) -> std::borrow::Cow<'_, str> {
+    if text_width(text, scale) <= width {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let cells = ((width + scale) / (6 * scale)).max(3) as usize;
+    let mut fitted: String = text.chars().take(cells - 3).collect();
+    fitted.push_str("...");
+    std::borrow::Cow::Owned(fitted)
 }
 fn glyph(c: char) -> [u8; 7] {
     match c {
@@ -379,8 +498,84 @@ fn glyph(c: char) -> [u8; 7] {
         '8' => [14, 17, 17, 14, 17, 17, 14],
         '9' => [14, 17, 17, 15, 1, 1, 14],
         '/' => [1, 1, 2, 4, 8, 16, 16],
+        '+' => [0, 4, 4, 31, 4, 4, 0],
+        ':' => [0, 12, 12, 0, 12, 12, 0],
         '-' => [0, 0, 0, 31, 0, 0, 0],
         '.' => [0, 0, 0, 0, 0, 12, 12],
+        '%' => [25, 26, 2, 4, 8, 11, 19],
         _ => [0; 7],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::presentation::Presentation;
+    use ferravex_engine::play::feedback::FeedbackPolicy;
+
+    #[test]
+    fn legacy_retry_glyph_geometry_explains_why_narrow_status_uses_native_dom_text() {
+        let mut canvas = Canvas::new();
+        canvas.frame.clear(Color::from_hex(0x091219));
+        canvas.text("J", 0, 0, 1, PAPER);
+        let lit: Vec<_> = canvas
+            .frame
+            .pixels()
+            .iter()
+            .enumerate()
+            .filter(|(_, pixel)| **pixel == PAPER)
+            .map(|(index, _)| (index % WIDTH as usize, index / WIDTH as usize))
+            .collect();
+        assert_eq!(lit.iter().map(|p| p.0).max(), Some(4));
+        assert_eq!(lit.iter().map(|p| p.1).max(), Some(6));
+        assert_eq!(glyph('J'), [7, 2, 2, 2, 18, 18, 12]);
+        for css_width in [300.796875_f64, 320., 327.109375, 366.59375, 390.] {
+            let glyph_height = 7. * css_width / f64::from(WIDTH);
+            assert!(glyph_height < 4.3, "{glyph_height}");
+        }
+        assert_eq!((canvas.frame.width(), canvas.frame.height()), (640, 720));
+    }
+
+    #[test]
+    fn shared_measurements_fit_labels_inside_the_panel_and_empty_labels_have_zero_width() {
+        assert_eq!(text_width("", 1), 0);
+        assert_eq!(text_width("ORBIT BREAKER", 3), 231);
+        for label in [
+            "SPACE / ENTER / MOUSE 1 TO LAUNCH".to_owned(),
+            "PAD 10 / ".repeat(64),
+        ] {
+            let fitted = fit_label(&label, 1, 408);
+            assert!(text_width(&fitted, 1) <= 408);
+            let mut canvas = Canvas::new();
+            canvas.frame.clear(Color::from_hex(0x091219));
+            canvas.text_center(&fitted, 493, 1, CYAN);
+            for (i, pixel) in canvas.frame.pixels().iter().enumerate() {
+                if *pixel == CYAN {
+                    assert!((116..524).contains(&(i % WIDTH as usize)));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn reduced_motion_stops_capsule_pulses_and_pause_is_visible_in_the_software_frame() {
+        let mut game = Game::new();
+        game.drops.push(crate::game::Drop {
+            position: [320., 340.],
+        });
+        game.apply_policy(FeedbackPolicy::new(true, false, 1.).unwrap());
+        let mut canvas = Canvas::new();
+        let presentation = Presentation::default();
+        canvas.render_session(&game, false, &presentation);
+        let still = canvas.frame.pixels().to_vec();
+        game.time = 0.25;
+        canvas.render_session(&game, false, &presentation);
+        assert_eq!(canvas.frame.pixels(), still);
+        canvas.render_session(&game, true, &presentation);
+        assert_ne!(canvas.frame.pixels(), still);
+        assert!(canvas.frame.pixels().iter().all(|p| p[3] == 255));
+        game.apply_policy(FeedbackPolicy::default());
+        canvas.render_session(&game, false, &presentation);
+        assert_ne!(canvas.frame.pixels(), still);
     }
 }

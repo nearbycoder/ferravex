@@ -1,4 +1,33 @@
-//! An asset-free rolling-ball time trial over a suspended, low-poly aqueduct.
+//! Four authored rolling-ball trials with a pausable, fixed-step countdown.
+//!
+//! The host uses [`ferravex_core::session::GameSession`] to gate both countdown
+//! and physics ticks. Course selection, input focus and settings pauses never
+//! charge trial time. [`run`] launches the native game; browser exports are
+//! supplied by the same renderer game entry point.
+//!
+//! ```
+//! use ferravex_core::session::{GameSession, SessionState};
+//! let mut session = GameSession::new(120., 12, false);
+//! assert_eq!(session.state(), SessionState::Ready); // course picker
+//! session.start();
+//! assert_eq!(session.advance(1. / 60.).steps, 2);
+//! session.set_paused(true);
+//! assert_eq!(session.advance(30.).steps, 0); // no trial/countdown time
+//! session.restart(); // selecting another course or retrying starts fresh
+//! assert_eq!(session.tick(), 0);
+//! ```
+//!
+//! Finish comparisons use the shared record summary before changing the best:
+//!
+//! ```
+//! use ferravex_engine::persistence::RecordBook;
+//! let mut records = RecordBook::default();
+//! records.record("aqueduct", 1, 3, Some(30_000_000)).unwrap();
+//! let finish = records.record_with_summary("aqueduct", 1, 2, Some(29_000_000)).unwrap();
+//! assert_eq!(finish.time_us.unwrap().delta, Some(-1_000_000));
+//! // A faster run can earn a lower medal after a recovery; metrics stay separate.
+//! assert_eq!(records.get("aqueduct", 1).unwrap().score, 3);
+//! ```
 use ferravex_render::audio::{Cue, GameAudio, Surface};
 use ferravex_render::input::{
     ActionKind, Binding, InputCode, PlayerInput, Preset,
@@ -6,10 +35,15 @@ use ferravex_render::input::{
 };
 mod course_ui;
 mod courses;
+mod hud;
+#[cfg(test)]
+mod journey200_tests;
 mod level;
+mod presentation;
 mod sim;
-use ferravex_core::FixedClock;
-use ferravex_engine::camera::{Input3, Mode3, NoObstructions, Rig3, Settings3, Target3};
+mod timing;
+mod trial;
+use ferravex_engine::camera::{Input3, Mode3, Settings3, Target3};
 use ferravex_render::{
     demo::Demo,
     mesh::Mesh3d,
@@ -19,6 +53,7 @@ use ferravex_render::{
 };
 use sim::{Controls, Run};
 use std::{collections::BTreeMap, rc::Rc, sync::Arc};
+use trial::Trial;
 
 const SKY: Color = Color::from_rgba(172, 194, 189, 255);
 const CREAM: Color = Color::from_rgba(255, 241, 205, 255);
@@ -161,6 +196,7 @@ struct Scene {
     obstacles: Vec<Prop>,
     checkpoint: Mesh3d,
     checkpoint_lit: Mesh3d,
+    checkpoint_next: Mesh3d,
     shadow: Mesh3d,
     sweepers: Vec<Mesh3d>,
 }
@@ -338,6 +374,7 @@ impl Scene {
             obstacles,
             checkpoint: Mesh3d::cylinder(1.25, 0.02, rgb(105, 142, 128), 16),
             checkpoint_lit: Mesh3d::cylinder(1.25, 0.025, TEAL, 16),
+            checkpoint_next: Mesh3d::cylinder(1.25, 0.025, GOLD, 16),
             shadow: Mesh3d::cylinder(0.62, 0.015, rgb(131, 113, 90), 12),
             sweepers: level
                 .sweepers
@@ -362,7 +399,14 @@ impl Scene {
                 .collect(),
         }
     }
-    fn draw(&self, game: &Run, position: Vec3, rotation: Quat, time: f32) {
+    fn draw(
+        &self,
+        game: &Run,
+        position: Vec3,
+        rotation: Quat,
+        time: f32,
+        presentation: &presentation::Presentation,
+    ) {
         for prop in &self.platforms {
             prop.draw();
         }
@@ -378,6 +422,8 @@ impl Scene {
         for (i, p) in game.level.checkpoints.iter().enumerate() {
             (if game.checkpoint > i {
                 &self.checkpoint_lit
+            } else if game.checkpoint == i {
+                &self.checkpoint_next
             } else {
                 &self.checkpoint
             })
@@ -387,10 +433,8 @@ impl Scene {
             if !game.collected[i] {
                 self.gem_base
                     .draw(vec3(p.x, p.y - 0.675, p.z), Quat::IDENTITY);
-                self.gem.draw(
-                    *p + vec3(0., 0.15 + (time * 2. + i as f32).sin() * 0.1, 0.),
-                    Quat::from_rotation_y(time * 1.3),
-                );
+                let (position, rotation) = presentation.gem_pose(*p, i);
+                self.gem.draw(position, rotation);
             }
         }
         let mut surface: Option<(f32, Vec3, Vec3)> = None;
@@ -422,27 +466,9 @@ fn text(s: &str, x: f32, y: f32, size: f32, color: Color) {
     draw_text(s, x, y, size, color);
 }
 fn centered(s: &str, y: f32, size: u16, color: Color) {
-    let m = measure_text(s, None, size, 1.);
-    text(s, (screen_width() - m.width) * 0.5, y, size as f32, color);
+    hud::centered(s, y, size, color);
 }
-ferravex_render::game!(conf, game);
-async fn game() {
-    let mut demo = Demo::with_content();
-    let mut content =
-        ferravex_render::content::ContentSource::new(level::SOURCE, demo.content.as_deref())
-            .unwrap();
-    let mut game = Run::with_level(Arc::new(level::Level::parse(content.current()).unwrap()));
-    let mut scene = Scene::new(&game.level);
-    let mut records = ferravex_render::storage::Records::new("marble-run").unwrap();
-    let mut record_context = courses::context(content.current());
-    let mut course = 0;
-    let mut picker = !demo.autoplay && demo.content.is_none();
-    let mut course_ui = ferravex_render::ui::Ui::new();
-    let material = LitMaterial::new().expect("Ferravex's portable lit material must compile");
-    let mut clock = FixedClock::new(120., 12);
-    let mut sound = GameAudio::new();
-    let mut impact_cooldown = 0_f32;
-    let mut player_input = PlayerInput::preset("marble-run", Preset::Racer);
+fn trial_actions(player_input: &mut PlayerInput) {
     player_input
         .global_action(
             "overview",
@@ -458,21 +484,42 @@ async fn game() {
         ("courses", "Choose course", KeyCode::C, 2),
         ("recover", "Return to checkpoint", KeyCode::V, 4),
     ] {
-        player_input
-            .global_action(
-                name,
-                label,
-                ActionKind::Button,
-                vec![
-                    Binding::digital(InputCode::Key(key as u16)),
-                    Binding::digital(InputCode::PadButton(pad)),
-                ],
-            )
-            .unwrap();
+        let bindings = vec![
+            Binding::digital(InputCode::Key(key as u16)),
+            Binding::digital(InputCode::PadButton(pad)),
+        ];
+        if name == "recover" {
+            player_input.action(name, label, ActionKind::Button, bindings)
+        } else {
+            player_input.global_action(name, label, ActionKind::Button, bindings)
+        }
+        .unwrap();
     }
-    player_input.set_paused(picker);
-    let mut camera = Rig3::new(follow_settings()).unwrap();
-    let mut composition = course_composition(&game.level);
+}
+
+ferravex_render::game!(conf, game);
+async fn game() {
+    let mut demo = Demo::with_content();
+    let mut content =
+        ferravex_render::content::ContentSource::new(level::SOURCE, demo.content.as_deref())
+            .unwrap();
+    let mut game = Run::with_level(Arc::new(level::Level::parse(content.current()).unwrap()));
+    let mut scene = Scene::new(&game.level);
+    let mut records = timing::TrialRecords::new();
+    let mut record_context = courses::context(content.current());
+    let mut course = courses::COURSES
+        .iter()
+        .position(|c| c.source == content.current())
+        .unwrap_or(0);
+    records.begin(course, record_context);
+    let mut trial = Trial::new(!demo.autoplay && demo.content.is_none());
+    let mut course_ui = ferravex_render::ui::Ui::new();
+    let material = LitMaterial::new().expect("Ferravex's portable lit material must compile");
+    let mut sound = GameAudio::new();
+    let mut impact_cooldown = 0_f32;
+    let mut player_input = PlayerInput::preset("marble-run", Preset::Racer);
+    trial_actions(&mut player_input);
+    let mut presentation = presentation::Presentation::new(&game.level);
     let mut previous_falls = 0;
     let forward = vec3(-8., 0., -19.).normalize();
     let right = vec3(-forward.z, 0., forward.x);
@@ -492,10 +539,9 @@ async fn game() {
             game = Run::with_level(Arc::new(level::Level::parse(source).unwrap()));
             scene = Scene::new(&game.level);
             record_context = courses::context(source);
-            picker = false;
-            clock.reset();
-            camera.cut();
-            composition = course_composition(&game.level);
+            trial.restart();
+            presentation = presentation::Presentation::new(&game.level);
+            records.begin(course, record_context);
             previous_falls = 0;
             impact_cooldown = 0.;
             sound = GameAudio::new();
@@ -514,17 +560,18 @@ async fn game() {
             {
                 course = index;
             }
-            picker = false;
+            trial.restart();
+            player_input.set_paused(true);
             player_input.set_paused(false);
             scene = next_scene;
             record_context = courses::context(content.current());
-            clock.reset();
-            camera.cut();
-            composition = course_composition(&game.level);
+            presentation = presentation::Presentation::new(&game.level);
+            records.begin(course, record_context);
             previous_falls = 0;
             impact_cooldown = 0.;
             sound = GameAudio::new();
         }
+        presentation.begin_frame();
         ferravex_render::ui::warm_up_font_sizes(&[12, 17, 18, 20, 23, 26, 30]);
         let (stick_center, brake_center, touch_radius) =
             touch_hud(vec2(screen_width(), screen_height()));
@@ -551,30 +598,23 @@ async fn game() {
                 },
             ])
             .unwrap();
-        player_input.sample_play();
-        if player_input.pressed("courses") {
-            picker = !picker;
-            player_input.set_paused(picker);
+        // Picker visibility is independent of the player's manual pause.
+        player_input.sample(!trial.picker && !player_input.paused() && !game.finished);
+        if player_input.pressed("pause") {
+            player_input.set_paused(!player_input.paused());
+            player_input.sample(!trial.picker && !player_input.paused() && !game.finished);
         }
-        if !picker && !game.finished && player_input.pressed("recover") {
-            game.recover();
-            clock.reset();
-            camera.cut();
-            composition = course_composition(&game.level);
-            sound.cue(Cue::Failure, 0.3);
+        if player_input.pressed("courses") {
+            trial.toggle_picker();
+            player_input.sample(!trial.picker && !player_input.paused() && !game.finished);
         }
         let touch_mode = player_input.touch_seen();
         let touch = player_input
             .touch_stick(0, 1)
             .map_or(Vec2::ZERO, |(_, delta)| delta);
         if player_input.pressed("restart") {
-            game = Run::with_level(game.level.clone());
-            clock.reset();
-            camera.cut();
-            composition = course_composition(&game.level);
-            previous_falls = 0;
-            picker = false;
-            player_input.set_paused(false);
+            // Share the course/reload reset path, including input/audio/camera.
+            pending_course = Some(course);
         }
         let movement = player_input.movement();
         let direction = right * movement.x + forward * movement.y;
@@ -582,18 +622,17 @@ async fn game() {
             roll: vec2(direction.x, direction.z).clamp_length_max(1.),
             brake: player_input.held("brake"),
         };
-        let dt = if picker || game.finished {
-            0.
-        } else if demo.autoplay {
-            demo.dt()
-        } else {
-            player_input.simulation_dt(demo.dt())
-        };
-        impact_cooldown = (impact_cooldown - dt).max(0.);
-        let frame = clock.advance(dt as f64);
-        ferravex_render::performance::context(Some(clock.tick()), None);
+        let frame = trial.advance(
+            demo.dt() as f64,
+            !player_input.gameplay_active() || pending_course.is_some(),
+        );
+        ferravex_render::performance::context(Some(trial.session.tick()), None);
         for _ in 0..frame.steps {
-            let controls = if demo.autoplay {
+            if !trial.session.is_playing() {
+                break;
+            }
+            impact_cooldown = (impact_cooldown - frame.dt).max(0.);
+            let controls = if demo.autoplay && trial.countdown().is_none() {
                 game.autopilot()
             } else {
                 input
@@ -601,11 +640,29 @@ async fn game() {
             let before = Vec3::from_array(game.physics.bodies[game.marble].linvel().to_array());
             let gems = game.gems();
             let falls = game.falls;
+            let checkpoint = game.checkpoint;
             let finished = game.finished;
-            game.step(controls, frame.dt);
+            let countdown = trial.countdown();
+            if player_input.pressed("recover") {
+                trial.request_recovery();
+            }
+            trial.step(&mut game, controls);
+            if trial.countdown() != countdown {
+                sound.cue(
+                    if trial.countdown().is_some() {
+                        Cue::Click
+                    } else {
+                        Cue::Success
+                    },
+                    0.3,
+                );
+            }
             let after = Vec3::from_array(game.physics.bodies[game.marble].linvel().to_array());
             if game.gems() > gems {
                 sound.cue(Cue::Pickup, 0.6);
+            }
+            if game.checkpoint > checkpoint {
+                sound.cue(Cue::Success, 0.35);
             }
             if game.falls > falls {
                 sound.cue(Cue::Failure, 0.5);
@@ -624,75 +681,65 @@ async fn game() {
                     ferravex_engine::performance::DiagnosticKind::Completed,
                     game.elapsed,
                 );
-                let _ = records.attempt(
-                    courses::COURSES[course].id,
-                    record_context,
-                    match courses::COURSES[course].medal(game.elapsed, game.falls) {
-                        "GOLD" => 3,
-                        "SILVER" => 2,
-                        _ => 1,
-                    },
-                    ferravex_render::storage::run_micros(game.elapsed),
-                );
+                records.finish(course, record_context, &game);
                 sound.cue(Cue::Success, 0.65);
             }
         }
-        let position = game.previous_position.lerp(game.position(), frame.alpha);
-        let rotation = game.previous_rotation.slerp(game.rotation(), frame.alpha);
+        let (position, rotation) = trial.pose(&game);
         if game.falls != previous_falls {
             ferravex_render::performance::event(
                 ferravex_engine::performance::DiagnosticKind::Fall,
                 game.falls as f32,
             );
-            camera.cut();
-            composition = course_composition(&game.level);
+            presentation.recover(position);
         }
         previous_falls = game.falls;
-        let mut camera_input = follow_input(position);
-        camera_input.target.velocity = game.physics.bodies[game.marble].linvel();
-        let camera_input = composition
-            .update(camera_input, Vec3::ZERO, demo.dt())
-            .unwrap();
-        let view = camera
-            .update(demo.dt(), camera_input, &NoObstructions)
-            .expect("valid rolling camera")
-            .pose;
+        let camera_dt = if trial.session.is_playing() {
+            demo.dt()
+        } else {
+            0.
+        };
+        let follow = presentation.update(
+            position,
+            game.physics.bodies[game.marble].linvel(),
+            camera_dt,
+        );
         clear_background(SKY);
         let overview = player_input.held("overview");
-        let mut lo = game.level.spawn;
-        let mut hi = lo;
-        for p in &game.level.platforms {
-            lo = lo.min(p.center);
-            hi = hi.max(p.center);
-        }
-        let course_center = (lo + hi) * 0.5;
-        let course_span =
-            (hi - lo).max_element().max(20.) / (screen_width() / screen_height()).min(1.);
-        let camera_position = if overview {
-            course_center + vec3(course_span * 0.6, course_span, course_span * 0.8)
+        let view = if overview {
+            presentation.overview(screen_width(), screen_height())
         } else {
-            view.position
+            follow
         };
-        let target = if overview { course_center } else { view.target };
+        let camera_position = view.position;
+        let target = view.target;
         set_camera(&Camera3D {
             position: camera_position,
             target,
-            up: if overview { Vec3::Y } else { view.up },
+            up: view.up,
             fovy: view.fov_y,
             z_near: 0.1,
-            z_far: 220.,
+            z_far: presentation.far_plane(view),
             ..Default::default()
         });
         material.begin(LitSettings {
             camera_position,
             fog_color: SKY,
-            fog_start: 38.,
-            fog_end: 115.,
+            fog_start: if overview {
+                presentation.far_plane(view) - 20.
+            } else {
+                38.
+            },
+            fog_end: if overview {
+                presentation.far_plane(view)
+            } else {
+                115.
+            },
             light_direction: vec3(-0.55, 0.85, 0.35),
             ambient: 0.48,
         });
-        let visual_time = (game.elapsed - frame.dt * (1. - frame.alpha)).max(0.);
-        scene.draw(&game, position, rotation, visual_time);
+        let visual_time = trial.visual_time(&game);
+        scene.draw(&game, position, rotation, visual_time, &presentation);
         material.end();
         set_default_camera();
         let compact = screen_width() < 560.;
@@ -729,21 +776,67 @@ async fn game() {
         let status_y = if compact { 55. } else { 39. };
         text(&status, status_x, status_y, status_size as f32, INK);
         draw_poly(status_x - 16., status_y - 8., 4, 6., 0., GOLD);
-        if game.notice > 0. && !game.finished {
-            centered(
-                if game.recovered {
-                    "BACK ON TRACK"
-                } else if game.checkpoint > 0 {
-                    "CHECKPOINT SAVED"
-                } else {
-                    "BACK ON TRACK"
-                },
-                89.,
-                17,
-                INK,
-            );
+        if !trial.picker && !game.finished {
+            if screen_height() >= 240. {
+                let x = if compact { 16. } else { 28. };
+                let available = screen_width() - x - if touch_mode { 114. } else { 16. };
+                let (label, size, _) = hud::fitted(
+                    &format!(
+                        "CP {} / {} / FALLS {}",
+                        game.checkpoint,
+                        game.level.checkpoints.len(),
+                        game.falls,
+                    ),
+                    available,
+                    12,
+                );
+                text(&label, x, if compact { 76. } else { 80. }, size, INK);
+            }
+            if screen_height() >= 300. {
+                let x = if compact { 16. } else { 28. };
+                let y = if compact { 96. } else { 100. };
+                let available = screen_width() - x - if touch_mode { 114. } else { 16. };
+                let (goal, size, _) = hud::fitted(&hud::goal(&game), available, 12);
+                text(&goal, x, y, size, INK);
+                if let Some(split) = records.split_label(&game) {
+                    let (split, size, _) = hud::fitted(&split, available, 12);
+                    text(&split, x, y + 20., size, INK);
+                }
+            }
+            let message = hud::notice(&game, &trial, &player_input);
+            if let Some((title, detail)) = message {
+                let y = (screen_height() * 0.35)
+                    .max(if screen_height() >= 300. { 150. } else { 100. })
+                    .min((screen_height() - 36.).max(100.));
+                let width = (screen_width() - 24.).min(360.);
+                draw_rectangle(
+                    (screen_width() - width) * 0.5,
+                    y - 25.,
+                    width,
+                    55.,
+                    Color::new(0.07, 0.13, 0.14, 0.86),
+                );
+                hud::centered_in(
+                    &title,
+                    y,
+                    if trial.countdown().is_some() || trial.showing_go() {
+                        26
+                    } else {
+                        17
+                    },
+                    CREAM,
+                    width - 16.,
+                );
+                hud::centered_in(
+                    &detail,
+                    y + 20.,
+                    if compact { 10 } else { 12 },
+                    CREAM,
+                    width - 16.,
+                );
+            }
         }
-        if touch_mode && !player_input.touch_customized() && !game.finished && !picker {
+        if touch_mode && !player_input.touch_customized() && !game.finished && !trial.picker {
             let center = stick_center;
             draw_circle(
                 center.x,
@@ -771,15 +864,21 @@ async fn game() {
                 14.,
                 CREAM,
             );
-        } else if game.elapsed < 10. && !picker && !game.finished {
+        } else if game.elapsed < 10.
+            && !trial.picker
+            && !game.finished
+            && trial.countdown().is_none()
+            && screen_height() >= 240.
+        {
+            hud::controls(&player_input);
+        }
+        if ferravex_render::content::reload_state().status
+            == ferravex_render::content::ReloadStatus::Rejected
+        {
             centered(
-                if screen_width() > 700. {
-                    "WASD roll / SPACE brake / TAB view / V recover / C courses"
-                } else {
-                    "Arrows roll / Space brake / C courses"
-                },
-                screen_height() - 27.,
-                if compact { 12 } else { 17 },
+                "EDIT REJECTED / LAST GOOD COURSE ACTIVE",
+                screen_height() - 8.,
+                10,
                 INK,
             );
         }
@@ -787,10 +886,14 @@ async fn game() {
             &mut course_ui,
             &mut player_input,
             &game,
-            course,
-            picker,
+            course_ui::View {
+                course,
+                picker: trial.picker,
+                resumable: trial.resumable(&game),
+                can_recover: trial.can_recover(),
+                context: record_context,
+            },
             &records,
-            record_context,
         ) {
             use course_ui::Command;
             let selected = match command {
@@ -798,28 +901,24 @@ async fn game() {
                 Command::Next if course + 1 < courses::COURSES.len() => Some(course + 1),
                 Command::Retry => Some(course),
                 Command::Next => {
-                    picker = true;
-                    player_input.set_paused(true);
+                    trial.toggle_picker();
                     None
                 }
                 Command::Toggle => {
-                    picker = !picker;
-                    player_input.set_paused(picker);
+                    trial.toggle_picker();
                     None
                 }
                 Command::Recover => {
-                    game.recover();
-                    clock.reset();
-                    camera.cut();
-                    composition = course_composition(&game.level);
-                    sound.cue(Cue::Failure, 0.3);
+                    trial.request_recovery();
                     None
                 }
             };
             // Keep the current frame's resident meshes alive through GPU submission.
-            pending_course = selected;
+            if let Some(selected) = selected {
+                pending_course = Some(selected);
+            }
         }
-        if (!picker && !game.finished) || player_input.controls_open() {
+        if (!trial.picker && !game.finished) || player_input.controls_open() {
             player_input.draw_settings();
         }
         if demo.finish_frame() {
@@ -880,7 +979,62 @@ mod content_scene_tests {
 #[cfg(test)]
 mod presentation_tests {
     use super::*;
-    use ferravex_engine::camera::RigidObstructions;
+    use ferravex_engine::camera::{NoObstructions, Rig3, RigidObstructions};
+
+    #[test]
+    fn camera_freezes_on_pause_and_cuts_cleanly_after_retry() {
+        let mut run = Run::new();
+        let mut camera = Rig3::new(follow_settings()).unwrap();
+        let mut composition = course_composition(&run.level);
+        let mut input = follow_input(run.level.finish);
+        input.target.velocity = vec3(4., 0., -4.);
+        let mut view = None;
+        for _ in 0..120 {
+            let input = composition.update(input, Vec3::ZERO, 1. / 60.).unwrap();
+            view = Some(
+                camera
+                    .update(1. / 60., input, &NoObstructions)
+                    .unwrap()
+                    .pose,
+            );
+        }
+        let frozen = camera
+            .update(
+                0.,
+                composition.update(input, Vec3::ZERO, 0.).unwrap(),
+                &NoObstructions,
+            )
+            .unwrap()
+            .pose;
+        assert_eq!(frozen, view.unwrap());
+
+        run.checkpoint = 1;
+        run.recover();
+        for retry in [false, true] {
+            if retry {
+                run = Run::with_level(run.level.clone());
+            }
+            camera.cut();
+            composition = course_composition(&run.level);
+            let input = composition
+                .update(follow_input(run.position()), Vec3::ZERO, 0.)
+                .unwrap();
+            let frame = camera.update(0., input, &NoObstructions).unwrap();
+            assert!(frame.cut);
+            assert!(
+                frame
+                    .pose
+                    .position
+                    .abs_diff_eq(run.position() + vec3(8., 12., 14.), 1e-5)
+            );
+            assert!(
+                frame
+                    .pose
+                    .target
+                    .abs_diff_eq(run.position() + vec3(0., -0.2, -5.), 1e-5)
+            );
+        }
+    }
     #[test]
     fn follow_distance_stays_constant_beside_every_pole() {
         let run = Run::new();
@@ -908,5 +1062,72 @@ mod presentation_tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod journey200_136 {
+    use super::*;
+
+    #[test]
+    fn recovery_context_change_retains_existing_control_profile_bytes() {
+        let mut legacy = PlayerInput::transient("marble-profile");
+        legacy
+            .global_action(
+                "recover",
+                "Return to checkpoint",
+                ActionKind::Button,
+                vec![Binding::digital(InputCode::Key(KeyCode::B as u16))],
+            )
+            .unwrap();
+        let bytes = legacy.export_config().unwrap();
+        let mut current = PlayerInput::transient("marble-profile");
+        trial_actions(&mut current);
+        assert_eq!(current.import_config(&bytes).unwrap().matched, 1);
+        assert_eq!(hud::hint(&current, "recover"), "B");
+        assert_eq!(
+            ferravex_render::input::decode_config(&bytes)
+                .unwrap()
+                .actions[0]
+                .name,
+            "recover"
+        );
+    }
+
+    #[test]
+    fn rejected_reload_keeps_trial_and_splits_then_valid_reload_builds_fresh() {
+        use ferravex_render::content::{self, ContentSource, ReloadStatus};
+        let mut source = ContentSource::new(level::SOURCE, None).unwrap();
+        let mut run = Run::new();
+        let mut trial = Trial::new(false);
+        for _ in 0..400 {
+            trial.step(&mut run, Controls::default());
+        }
+        run.splits[0] = Some(1_000);
+        let before = (run.elapsed, run.position(), run.splits);
+        content::queue("not a valid scene").unwrap();
+        assert!(
+            source
+                .poll(0., |text| Ok(Run::with_level(Arc::new(
+                    level::Level::parse(text)?
+                ))))
+                .is_none()
+        );
+        assert_eq!(content::reload_state().status, ReloadStatus::Rejected);
+        assert_eq!(source.current(), level::SOURCE);
+        assert_eq!((run.elapsed, run.position(), run.splits), before);
+        content::queue(courses::COURSES[2].source).unwrap();
+        run = source
+            .poll(0., |text| {
+                Ok(Run::with_level(Arc::new(level::Level::parse(text)?)))
+            })
+            .unwrap();
+        trial.restart();
+        assert_eq!(content::reload_state().status, ReloadStatus::Ready);
+        assert_eq!(source.generation(), 1);
+        assert_eq!(trial.countdown(), Some(3));
+        assert_eq!(run.elapsed, 0.);
+        assert!(run.splits.iter().all(Option::is_none));
+        assert_eq!(run.sweepers.len(), 3);
     }
 }

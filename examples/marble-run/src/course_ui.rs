@@ -2,16 +2,33 @@ use crate::{CREAM, GOLD, INK, TEAL, courses::COURSES, sim::Run};
 use ferravex_render::{
     input::PlayerInput,
     prelude::*,
-    storage::Records,
-    ui::{Align, ButtonStyle, TextStyle, Ui, UiRect, Viewport},
+    ui::{Align, ButtonOptions, ButtonStyle, TextStyle, Ui, UiRect, Viewport},
 };
 
+#[derive(Debug, PartialEq, Eq)]
 pub enum Command {
     Select(usize),
     Toggle,
     Retry,
     Next,
     Recover,
+}
+pub(crate) struct View {
+    pub course: usize,
+    pub picker: bool,
+    pub resumable: bool,
+    pub can_recover: bool,
+    pub context: u64,
+}
+
+impl View {
+    fn selection(&self, index: usize) -> Command {
+        if index == self.course && self.resumable {
+            Command::Toggle
+        } else {
+            Command::Select(index)
+        }
+    }
 }
 fn rect(x: f32, y: f32, w: f32, h: f32) -> UiRect {
     UiRect {
@@ -32,18 +49,22 @@ fn label(ui: &mut Ui, r: UiRect, text: &str, size: f32, color: Color) {
     )
     .unwrap();
 }
-fn button(ui: &mut Ui, id: u64, r: UiRect, text: &str) {
-    ui.button(
+fn button(ui: &mut Ui, id: u64, r: UiRect, text: &str, selected: bool) {
+    let width = measure_text(text, None, 15, 1.).width.max(1.);
+    ui.button_with_options(
         id,
         r,
         text,
-        true,
+        ButtonOptions {
+            enabled: true,
+            selected,
+        },
         ButtonStyle {
             fill: TEAL,
             ink: CREAM,
             focus: GOLD,
             disabled: INK,
-            size: 15.,
+            size: (15. * ((r.size[0] - 12.) / width).min(1.)).max(8.),
         },
     )
     .unwrap();
@@ -52,11 +73,16 @@ pub fn draw(
     ui: &mut Ui,
     player: &mut PlayerInput,
     run: &Run,
-    course: usize,
-    picker: bool,
-    records: &Records,
-    context: u64,
+    view: View,
+    records: &crate::timing::TrialRecords,
 ) -> Option<Command> {
+    let View {
+        course,
+        picker,
+        resumable,
+        can_recover,
+        context,
+    } = view;
     let w = screen_width();
     let h = screen_height();
     // A hidden/collapsed player may briefly report a zero-sized viewport.
@@ -65,9 +91,9 @@ pub fn draw(
     }
     ui.begin(Viewport::fit([w, h], [w, h], [0.; 4]).unwrap());
     ui.set_auto_focus(picker || run.finished);
-    button(ui, 1, rect(w - 102., 12., 88., 34.), "COURSES");
-    if !picker && !run.finished && player.touch_seen() {
-        button(ui, 2, rect(w - 102., 54., 88., 32.), "RECOVER");
+    button(ui, 1, rect(w - 102., 12., 88., 34.), "COURSES", picker);
+    if !picker && can_recover && player.touch_seen() {
+        button(ui, 2, rect(w - 102., 54., 88., 32.), "RECOVER", false);
     }
     if picker || run.finished {
         ui.modal(100).unwrap();
@@ -82,7 +108,11 @@ pub fn draw(
             label(
                 ui,
                 rect(x + 12., y + 9., pw - 24., 24.),
-                "CHOOSE YOUR COURSE",
+                if resumable {
+                    "COURSES / RUN PAUSED"
+                } else {
+                    "CHOOSE YOUR COURSE"
+                },
                 20.,
                 CREAM,
             );
@@ -91,13 +121,14 @@ pub fn draw(
             for (i, c) in COURSES.iter().enumerate() {
                 let cx = x + 12. + (i % 2) as f32 * (cw + 12.);
                 let cy = y + 36. + (i / 2) as f32 * (ch + 8.);
-                let title = if i == course && run.elapsed > 0. && !run.finished {
+                let title = if i == course && resumable {
                     format!("RESUME {}", c.name)
                 } else {
                     c.name.into()
                 };
-                button(ui, 10 + i as u64, rect(cx, cy, cw, ch), &title);
+                button(ui, 10 + i as u64, rect(cx, cy, cw, ch), &title, i == course);
                 let best = records
+                    .book
                     .get(c.id, if i == course { context } else { c.context() })
                     .and_then(|r| r.fastest_us);
                 let summary = best.map_or_else(
@@ -122,7 +153,7 @@ pub fn draw(
                         rect(cx + 5., cy + ch - 19., cw - 10., 15.),
                         &summary,
                         10.,
-                        CREAM,
+                        if i == course { TEAL } else { CREAM },
                     );
                 }
             }
@@ -143,10 +174,11 @@ pub fn draw(
                 CREAM,
             );
             let best = records
+                .book
                 .get(c.id, context)
                 .and_then(|r| r.fastest_us)
                 .map_or(run.elapsed, |us| us as f32 / 1e6);
-            if ph >= 188. {
+            if ph >= 240. {
                 label(
                     ui,
                     rect(x + 12., y + 67., pw - 24., 16.),
@@ -155,16 +187,28 @@ pub fn draw(
                     CREAM,
                 );
             }
+            label(
+                ui,
+                rect(
+                    x + 12.,
+                    y + if ph >= 240. { 96. } else { 64. },
+                    pw - 24.,
+                    14.,
+                ),
+                &records.finish_label(),
+                if ph >= 240. { 12. } else { 10. },
+                CREAM,
+            );
             if ph >= 240. {
                 label(
                     ui,
-                    rect(x + 12., y + 96., pw - 24., 16.),
+                    rect(x + 12., y + 120., pw - 24., 16.),
                     if records.error().is_some() {
                         "SESSION RECORD / SAVE UNAVAILABLE"
                     } else {
                         "ALL CRYSTALS COLLECTED"
                     },
-                    12.,
+                    10.,
                     CREAM,
                 );
             }
@@ -181,6 +225,7 @@ pub fn draw(
                 } else {
                     "CHOOSE A COURSE"
                 },
+                false,
             );
             button(
                 ui,
@@ -196,6 +241,7 @@ pub fn draw(
                     )
                 },
                 "RETRY FOR GOLD",
+                false,
             );
         }
     }
@@ -203,10 +249,7 @@ pub fn draw(
     ui.paint();
     for i in 0..COURSES.len() {
         if ui.activated(10 + i as u64) {
-            if i == course && run.elapsed > 0. && !run.finished {
-                return Some(Command::Toggle);
-            }
-            return Some(Command::Select(i));
+            return Some(view.selection(i));
         }
     }
     if ui.activated(1) {
@@ -219,5 +262,27 @@ pub fn draw(
         Some(Command::Retry)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn choosing_the_current_course_resumes_even_before_the_timer_starts() {
+        let mut view = View {
+            course: 2,
+            picker: true,
+            resumable: false,
+            can_recover: false,
+            context: 0,
+        };
+        assert_eq!(view.selection(2), Command::Select(2));
+        view.resumable = true;
+        assert_eq!(view.selection(2), Command::Toggle);
+        assert_eq!(view.selection(1), Command::Select(1));
+        view.resumable = false; // Completion offers a fresh trial.
+        assert_eq!(view.selection(2), Command::Select(2));
     }
 }

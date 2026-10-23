@@ -10,30 +10,117 @@ cargo run -p sky-courier --release
 
 | Input | Action |
 | --- | --- |
+| Enter / gamepad confirm / menu button | Start, resume, or fly again |
 | A / D or left / right | Turn and bank |
 | W / S or up / down | Climb / dive; release to level out |
 | Space | Boost |
 | Shift | Slow flight; required for delivery |
-| R | Restart |
+| Escape / gamepad Start | Pause / resume |
+| R | Restart immediately, including from pause |
 | Touch left stick | Turn and climb / dive |
 | Hold touch on right side | Slow flight |
 
-Follow the amber ring. Cleared rings disappear; future rings are muted. On the delivery approach, hold Shift (or the right side on touch) and fly through the airspace above the coral cross at less than 18 metres/second. The speed display uses knots. The final low pass releases the parcel automatically.
+These are the default bindings. In-game hints follow the current keyboard or
+controller mappings, including unbound actions; **Controls / F2** shows the full
+mapping when it is too long for the HUD. Default touch hints describe only the
+installed left stick and right-side slow region. The default touch layout has no
+boost region. Customized layouts show their configured touch channels.
+
+Start with **Start flight**; the delivery window stays frozen on the briefing screen. Follow the amber ring. Cleared rings disappear; future rings are muted. The six-part progress strip shows the five gates and final delivery. Navigation reports turn direction, climb/descent and distance to the current target, including a turn-back prompt when a gate is behind you. Accepted gates briefly confirm progress and replenish boost.
+
+On the delivery approach, hold Shift (or the right side on touch) and fly through the airspace above the coral cross at no more than 18 metres/second (about 35 knots), aiming for 16 metres altitude. The HUD reports **SLOW DOWN** or **SPEED READY**; the final low pass releases the parcel automatically. The countdown rounds up until the window closes and turns amber for the final 15 seconds.
 
 Ocean, island, ceiling, and map-boundary impacts cost one of three hull points and five seconds. Surviving impacts recover you at the previous beacon with temporary collision immunity. Three impacts or running out of time ends the flight. The same recovery rules apply to human and automated play.
+
+The HUD distinguishes accepted boost, cruise, slow flight and boost recharge,
+and reports vertical speed alongside airspeed and altitude. Recovery identifies
+the start or last cleared gate, the five-second penalty and protection remaining.
+The result screen distinguishes hull exhaustion from timeout and reports cleared
+gates, actual simulated flight time and impact penalties separately. It offers a
+retry button. Retry restores the full route, hull, timer and boost, clears
+camera/trail/exhaust history, and resets the engine audio. Release held steering,
+climb, boost and slow controls after starting or retrying before applying them
+again. Keyboard/gamepad confirmation held across a result transition must also be
+released before retrying.
+
+## Shared APIs and timing
+
+`ferravex_core::session::GameSession` owns Ready/Playing/Paused/Won/Lost and the 120 Hz clock, capped at 12 steps per frame. Simulation-specific `Outcome` still decides delivery and failure. The host reconciles `PlayerInput` pause, focus and controls-panel state before advancing the session. Pausing freezes flight, countdown, recovery protection, gate notices, trails and the propeller; resuming does not catch up inactive time. Autoplay starts immediately, uses the ordinary flight controls and remains independent of focus for smoke runs; explicit pause still applies.
+
+The HUD and keyboard/gamepad/touch menu buttons use the shared bounded `ui::Ui`,
+`Viewport`, `slots` and `ButtonOptions` APIs. Text is formatted into the retained
+UI arena; current bindings use `PlayerInput::format_hint` and fixed byte buffers.
+`FlightState` now owns the motor directly, including its checked recovery reset,
+forward direction and telemetry. Authored handling, route geometry, capture and
+delivery-speed rules are unchanged.
+
+The private presentation owner consumes `preferences::sync_feedback` and
+`preferences::feedback_policy` every frame, including ready/pause/results and
+frames with no fixed tick. `FeedbackController<16>` deduplicates accepted gate
+and damage cues; damage adds a restrained camera impulse and coral screen-edge
+cue. Reduced motion clears current wing trails, exhaust and camera impulses and
+stops the cosmetic propeller animation. Reduced flash independently clears the
+edge cue. Re-enabling a channel does not revive cleared effects, and neither
+choice alters flight, penalties, input or audio cues.
+
+The existing `Rig3` chase camera retains its authored offsets and damping, but
+now smooths on presentation time between simulation ticks. It remains frozen in
+local inactive sessions and cuts on recovery. Every accepted recovery explicitly
+breaks wing ribbons with `Trail::break_segment` and resets emitter motion history,
+even for jumps below the automatic teleport threshold. Retry clears all history.
+No external module registration, export, save/replay format or dependency changes
+are required. This game still has no saved progress or replay format to migrate.
+
+## Responsive flight panel
+
+The HUD now uses logical pixel sizes instead of fitting a 560-pixel design onto
+narrow screens. The briefing, pause and results panel replaces navigation and
+telemetry while inactive, with a 48-pixel flight button and complete recovery,
+delivery and retry guidance. Gameplay retains ordered progress, current target,
+recovery notices and remapping-aware hints. A binding too long for its row reads
+**Open Controls**; no default key is substituted. Some keys, including PageUp and
+PageDown, currently use numeric names supplied by the shared Controls editor.
+
+At widths up to 620 pixels the browser reserves a 600-pixel flight canvas so the
+scene, readable HUD and shared Controls panel have room. Short pages and
+fullscreen scroll. On short pages, **Panel top** and **Panel bottom** remain
+visible over the flight stage and align either end with the scroll viewport,
+without requiring a drag over the input canvas. The page outside the canvas also
+scrolls. The toolbar can wrap to any height. This does not change the
+flight camera, touch regions, gameplay clock or controls. Native windows smaller
+than the complete panel should be enlarged; text is not scaled down to fit them.
+
+The private `flight_ui` module is registered by this game's root. Its tests cover
+menu containment, actual logical-pixel button hit regions, long/remapped/unbound
+hints, bounded UI command construction and unchanged flight state while queuing
+menus. Task 195's receipt records the exact rebuilt browser artifacts and visual
+checks separately from these source tests.
 
 ## Validation
 
 ```sh
-cargo test -p sky-courier
-cargo clippy -p sky-courier --all-targets -- -D warnings
-cargo check -p sky-courier --target wasm32-unknown-unknown
+cargo test -p sky-courier --offline --locked -j 2
+cargo clippy -p sky-courier --all-targets --offline --locked -j 2 -- -D warnings
+cargo check -p sky-courier --target wasm32-unknown-unknown --offline --locked -j 2
 cargo run -p sky-courier -- --autoplay --smoke-frames 3000 --screenshot /tmp/sky-courier.png
 ```
 
-Autoplay steers through the normal turn/climb/slow inputs; it does not teleport, grant immunity, or change the timer. The fixed simulation runs at 120 Hz with bounded catch-up. Tests cover ordered progression, a complete delivery, crash recovery and failure, timeout and restart, slow-flight delivery, and swept beacon capture.
+Autoplay steers through the normal turn/climb/slow inputs; it does not teleport,
+grant immunity, or change the timer. Tests cover ordered progression, complete
+delivery at 30/60/144 Hz and irregular frame intervals, ready/pause timing, retry
+input quarantine and clock reset, immediate crash-penalty timeout, countdown
+rounding and bearing guidance, slow-flight delivery, and swept beacon capture.
+Additional headless regressions cover live independent motion/flash changes,
+clearing existing effects while inactive without revival, zero-tick camera
+smoothing, short-recovery trail breaks, remapping/unbinding, accepted boost
+status, and identical autoplay outcomes/audio cues with reduced effects.
 
-This is an arcade flight slice, not an aerodynamic simulator. Collision volumes conservatively approximate island terrain; decorative houses and trees do not have separate colliders. The delivery is a low flyover rather than a wheel-contact landing. There is no audio, networking, or saved progress. The restored runtime implements Linux and WebAssembly hosts; rerun rendering and input checks against the current build. Native Windows/macOS/iOS hosts are not implemented.
+Task 140 runs the package tests, strict targeted Clippy and owned-file formatting.
+Fresh Wasm compilation, browser/GPU rendering, real controls/audio and screenshot
+playtests remain parent integration checks; commands above are not claims that
+those runtime checks have been completed.
+
+This is an arcade flight slice, not an aerodynamic simulator. Collision volumes conservatively approximate island terrain; decorative houses and trees do not have separate colliders. The delivery is a low flyover rather than a wheel-contact landing. Audio is synthesized by the shared engine; there is no networking or saved progress. The restored runtime implements Linux and WebAssembly hosts; rendering and browser input require separate validation from headless tests.
 
 ## Browser player update
 

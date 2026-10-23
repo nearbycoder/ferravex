@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import {prepareIndex, searchIndex} from '../static/search-index.mjs';
+// Exercise the module actually shipped by build-site.py with its matching corpus.
+import {prepareIndex, searchIndex} from '../../dist/site/search-index.mjs';
 const corpus = JSON.parse(fs.readFileSync(new URL('../../dist/site/search.json', import.meta.url)));
 const rows = prepareIndex(corpus);
 assert.equal(searchIndex(rows, 'salvage pinball', {section:'Examples'})[0].href, '/examples/salvage-pinball/');
