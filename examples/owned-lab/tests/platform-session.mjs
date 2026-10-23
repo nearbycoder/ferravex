@@ -96,7 +96,9 @@ await vm.runInNewContext(`(async()=>{${source}\n})()`, {
 let now = 0;
 function frame() { assert.ok(nextFrame); nextFrame(now += 16); assert.deepEqual(errors, []); }
 assert.equal($('play').disabled, false);
-assert.match($('menu-status').textContent, /Ready/);
+assert.equal(state, 0, 'training stays Ready until an explicit play action');
+assert.equal($('menu-status').textContent, '', 'initial menu does not repeat Ready beside Enter training');
+assert.equal($('play').textContent, 'Enter training');
 frame(); assert.equal(frames.at(-1)[1], 0, 'initial menu supplies no gameplay input');
 captureFails = true; $('play').onclick(); await Promise.resolve(); frame();
 assert.equal(state, 0);
