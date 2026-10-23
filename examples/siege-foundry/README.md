@@ -1,6 +1,6 @@
 # Siege Foundry
 
-Restored locally with first-party Ferravex APIs. Native play currently uses Linux X11/GLX; browser play uses the shared WebGL2 host. This recovery has not been published, and prior backend test results must be rechecked.
+A first-party Ferravex example with a shared WebGL2 browser host and native renderer entry point. See [platform support and verification](../../docs/PLATFORMS.md) for the OS libraries and device checks that apply.
 
 A low-poly 3D demolition range built with Ferravex's `GameSession`, original rotational 3D physics, cached meshes, and built-in lit material. Bring down all six rust-red blocks with eight iron cannonballs. Supporting sandstone blocks are physical bodies too: removing a low support can collapse an entire tower.
 

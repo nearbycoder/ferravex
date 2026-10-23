@@ -8,7 +8,7 @@ Engine systems, game rules, browser hosts, shaders and build scripts are authore
 
 Rust's standard library, browser APIs and operating-system APIs are the platform boundary. Rust, Cargo, Python, Node for host tests, Git and container base images are development or hosting tools; their implementations are not bundled into the engine's source or browser games. Build scripts use the Python standard library. Browser hosts use standard WebAssembly, WebGL2, Canvas2D, Web Audio and WebRTC APIs directly.
 
-The original Linux window/GPU host binds system X11 and GLX/OpenGL through Rust FFI. These system libraries and the graphics driver remain platform dependencies; zero external Cargo packages does not mean an executable includes its own operating system or GPU driver. Native Windows, macOS and iOS window/GPU hosts and native audio sinks are not implemented. Courtyard and Orbit Breaker also provide headless native runs and PNG export.
+Native host source binds Linux X11/GLX, Windows Win32/WGL, macOS AppKit/OpenGL and iOS UIKit/OpenGL ES through Rust FFI. Native audio uses ALSA, WinMM or AudioQueue adapters. These OS libraries and graphics/audio drivers remain platform dependencies; zero external Cargo packages does not include an operating system or driver. Release CI links and tests native Rust code on Linux, Windows and macOS and checks iOS compilation; that does not establish interactive device or audio verification. See [Platforms](docs/PLATFORMS.md). Courtyard and Orbit Breaker also provide headless native runs and PNG export.
 
 ## Enforce the boundary locally
 

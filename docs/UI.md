@@ -71,3 +71,24 @@ UI buffers do not grow during a frame. Each Ui owns 213504 bytes (about 209 KiB)
 text and widget capacity on this 64-bit host, in addition to the renderer stream.
 Use fewer instances rather than one instance per entity. No textures, external
 fonts, layout libraries or third-party packages are required.
+
+## Current layout and composition APIs
+
+Use `Viewport::responsive` to author a HUD in logical screen pixels without
+scaling its fonts with the world. `HudRegions` reserves strips around a fitted
+scene; `ui::flow` wraps measured actions into complete rows. The renderer adds
+wrapped-text blocks, responsive stat lists, continuous/segmented meters and
+content-driven `CardLayout` menus. These helpers return overflow or omissions
+explicitly; keep a visible paging or scroll path for content that cannot fit.
+
+`Ui::compose` builds an atomic widget group with rollback on composition errors.
+`Ui::interaction` reports pointer ownership through release/cancellation, so a
+world editor can avoid placing a body behind a button. Opt-in `Ui::inspect` and
+caller-buffer export describe the widgets actually registered this frame.
+
+Themes, UI preference adapters and the semantic status bridge are opt-in.
+A host can expose declared labels/status through a DOM adapter, but arbitrary
+canvas text does not automatically become a screen-reader interface. Use the
+[responsive-screen guide](RESPONSIVE_GAMES.md) and
+[current workflows](ENGINE_WORKFLOWS.md#keep-the-hud-readable) for a small runnable
+layout and the correct world/HUD/input boundaries.

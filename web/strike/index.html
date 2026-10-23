@@ -41,6 +41,7 @@ body.ferravex-fullscreen>main{flex:1;min-height:0;overflow:auto}
  <nav id="strike-navigation" aria-label="Game and player tools">
   <a id="strike-home" href="../" title="Back to all games" aria-keyshortcuts="Alt+M">FERRAVEX / Strike</a>
   <span>3D · Tactical FPS</span>
+  <a href="#strike-guide">How to play</a>
   <div class="strike-tools" role="group" aria-label="Player tools">
    <button type="button" data-multiplayer disabled>Multiplayer</button>
    <button type="button" data-controls title="Controls (F2)" aria-pressed="false" disabled>Controls</button>
@@ -50,6 +51,11 @@ body.ferravex-fullscreen>main{flex:1;min-height:0;overflow:auto}
 </header>
 <main>
  <h1 class="screen-reader-help">Strike: Dockyard</h1>
+
+ <div id="strike-stage">
+  <canvas id="strike-canvas" tabindex="0" data-game="strike" aria-label="Strike: Dockyard tactical shooter game view" aria-describedby="strike-description strike-navigation-help strike-remapping">Strike uses a WebGL2 canvas for its game view. Read the instructions above for keyboard navigation and controls.</canvas>
+  <div id="strike-loading" role="status" aria-live="polite" aria-atomic="true">Loading original Rust engine…</div>
+ </div>
  <section id="strike-guide" aria-label="Strike instructions">
   <p id="strike-help" aria-live="polite" aria-atomic="true">For mouse play, choose Start practice or Resume practice, then click the game view to capture the mouse.</p>
   <p id="strike-navigation-help">In the game menu, <kbd>Tab</kbd> or arrow keys select a button; <kbd>Enter</kbd> activates it. To reach the page controls, release mouse capture with <kbd>Escape</kbd>, then press <kbd>Alt+M</kbd> (<kbd>Option+M</kbd> on Mac). This shortcut only moves focus; it does not pause play.</p>
@@ -74,10 +80,6 @@ body.ferravex-fullscreen>main{flex:1;min-height:0;overflow:auto}
   <a id="strike-focus-game" href="#strike-canvas">Focus game view</a>
   <noscript><p>Strike requires JavaScript and WebGL2 to load the Rust game. The instructions and link back to all games remain available.</p></noscript>
  </section>
- <div id="strike-stage">
-  <canvas id="strike-canvas" tabindex="0" data-game="strike" aria-label="Strike: Dockyard tactical shooter game view" aria-describedby="strike-description strike-navigation-help strike-remapping">Strike uses a WebGL2 canvas for its game view. Read the instructions above for keyboard navigation and controls.</canvas>
-  <div id="strike-loading" role="status" aria-live="polite" aria-atomic="true">Loading original Rust engine…</div>
- </div>
 </main>
 <script type="module">
 const canvas=document.querySelector('#strike-canvas');

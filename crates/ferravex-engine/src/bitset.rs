@@ -1,7 +1,7 @@
 //! Dense dirty/visibility masks with checked indices and ascending iteration.
 //!
-//! The caller chooses an immutable bit bound with [`BitSet::new`]. All binary
-//! operations require exactly equal [`BitSet::bit_len`] values, even when the
+//! The caller chooses an immutable bit bound with [`BitSet::new`](crate::bitset::BitSet::new). All binary
+//! operations require exactly equal [`BitSet::bit_len`](crate::bitset::BitSet::bit_len) values, even when the
 //! backing word counts match. A mismatch returns `false` from in-place operations
 //! or `None` from lazy operations, without changing either input. Equal empty
 //! bounds are valid. No operation resizes a set or exposes unused trailing bits.

@@ -1,7 +1,7 @@
 //! Two retained simulation values and caller-selected presentation interpolation.
 //!
 //! Commit once **after each actual simulation update**, including every update in
-//! a catch-up frame. A zero-tick frame only samples. Call [`InterpolationPair::snap`]
+//! a catch-up frame. A zero-tick frame only samples. Call [`InterpolationPair::snap`](crate::interpolation::InterpolationPair::snap)
 //! for an accepted teleport, respawn or restart, replacing both endpoints and
 //! advancing a local discontinuity generation. No clock, input, tick scheduling,
 //! replay format or network history is owned here; longer histories still belong

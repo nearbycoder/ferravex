@@ -1,6 +1,6 @@
 //! Supplied simulation time, pause/scale control, and drift-free duration timers.
 //!
-//! No wall-clock reads. Feed [`TimeStep::scaled_delta`] to a fixed clock and
+//! No wall-clock reads. Feed [`TimeStep::scaled_delta`](crate::time::TimeStep::scaled_delta) to a fixed clock and
 //! advance gameplay timers only with the duration of updates actually executed.
 //! Do not also feed them the render-frame delta. For systems outside a fixed
 //! update loop, choose `scaled_delta` for simulation or `unscaled_delta` for UI:

@@ -1,6 +1,6 @@
 # Orchard Guard
 
-Restored locally with first-party Ferravex APIs. Native play currently uses Linux X11/GLX; browser play uses the shared WebGL2 host. This recovery has not been published, and prior backend test results must be rechecked.
+A first-party Ferravex example with a shared WebGL2 browser host and native renderer entry point. See [platform support and verification](../../docs/PLATFORMS.md) for the OS libraries and device checks that apply.
 
 A warm, procedural 2D tower-defense game built on Ferravex. Protect an orchard through four increasingly crowded waves of beetles. The winding dirt path, fruit trees, farmhouse, towers and pests use simple vector geometry with no downloaded assets.
 

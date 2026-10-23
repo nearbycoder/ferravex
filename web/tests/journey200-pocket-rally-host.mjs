@@ -93,7 +93,7 @@ test('responsive source keeps toolbar wrapping, focus visible and text readable'
   assert.match(css, /#pocket-rally-host nav button[^}]*min-height: 44px/);
   assert.match(css, /#pocket-rally-host :focus-visible\s*\{[^}]*outline: 3px/);
   assert.match(css, /#rally-canvas:focus-visible\s*\{[^}]*outline-offset: -4px/);
-  assert.match(css, /#rally-game\s*\{[^}]*flex: 1 0 16rem/);
+  assert.match(css, /#rally-game\s*\{[^}]*flex: 1 0 324px;[^}]*min-height: 324px/);
   assert.match(css, /#rally-guide\s*\{[^}]*overflow-wrap: anywhere/);
   assert.match(css, /@media \(forced-colors: active\)/);
   assert.doesNotMatch(css, /outline:\s*none|white-space:\s*nowrap|overflow:\s*hidden/);

@@ -26,8 +26,8 @@
 //! # Ok::<(), ferravex_engine::diagnostics::DiagnosticInputError>(())
 //! ```
 //!
-//! [`Diagnostics::write_ndjson`] exports individual records followed by a counter
-//! summary, with one versioned JSON object per line. [`Diagnostics::summary`]
+//! [`Diagnostics::write_ndjson`](crate::diagnostics::Diagnostics::write_ndjson) exports individual records followed by a counter
+//! summary, with one versioned JSON object per line. [`Diagnostics::summary`](crate::diagnostics::Diagnostics::summary)
 //! provides the same counts without formatting or allocating. These additions
 //! leave the existing version 1 JSON snapshot unchanged.
 use std::collections::VecDeque;

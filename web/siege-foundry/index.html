@@ -13,6 +13,7 @@ html, body { margin: 0; background: #101a21; color: #e2ece2; font: 16px/1.5 syst
    wrapped controls and catalog link visible after those styles are installed. */
 #siege-host > nav { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; height: auto; flex: none; padding: 8px 16px; border-bottom: 1px solid #40545b; }
 #siege-host > nav > a { display: block; flex: 1 1 16rem; min-width: 0; padding-block: 8px; white-space: normal; }
+#siege-host > nav > .range-help-link { flex: none; min-height: 44px; padding: 10px 0; }
 #siege-host > nav > span { flex: none; font-size: 14px; }
 #siege-host > nav > button { flex: none; min-height: 44px; padding: 8px 12px; font: inherit; color: #e2ece2; background: #18262b; border: 1px solid #617c80; border-radius: 4px; cursor: pointer; }
 #siege-host > nav > button:hover { background: #293f46; }
@@ -47,18 +48,20 @@ kbd { font: inherit; font-weight: 600; }
 <body id="siege-host">
 <nav aria-label="Game and player tools">
   <a href="../">FERRAVEX / All games</a>
-  <span>6 targets · 8 shots</span>
+  <span>Siege Foundry · 6 targets · 8 shots</span>
+  <a class="range-help-link" href="#range-help">How to play</a>
   <button type="button" data-controls title="Controls (F2 while the range is focused)" aria-pressed="false" aria-describedby="range-remapping" disabled>Controls</button>
   <button type="button" data-audio title="Enable sound" aria-pressed="false" disabled>Sound off</button>
 </nav>
+
+<canvas id="siege-canvas" tabindex="0" data-game="siege-foundry" aria-label="Siege Foundry demolition range" aria-describedby="range-objective range-controls range-remapping range-focus">Siege Foundry requires JavaScript, WebAssembly and WebGL2. The range instructions and default keys are below.</canvas>
+<div id="load-status" role="status" aria-live="polite" aria-atomic="true">Loading original Rust engine…</div>
+<noscript><p class="range-intro">Enable JavaScript to play Siege Foundry. You can still read the range instructions below.</p></noscript>
 <header class="range-intro">
   <h1>Siege Foundry</h1>
   <p id="range-objective">A 3D demolition range: topple all six rust-red targets with eight cannonballs. Break the sandstone supports to collapse the towers.</p>
   <a href="#range-help">How to play and default keys</a>
 </header>
-<canvas id="siege-canvas" tabindex="0" data-game="siege-foundry" aria-label="Siege Foundry demolition range" aria-describedby="range-objective range-controls range-remapping range-focus">Siege Foundry requires JavaScript, WebAssembly and WebGL2. The range instructions and default keys are below.</canvas>
-<div id="load-status" role="status" aria-live="polite" aria-atomic="true">Loading original Rust engine…</div>
-<noscript><p class="range-intro">Enable JavaScript to play Siege Foundry. You can still read the range instructions below.</p></noscript>
 <section class="range-guide" aria-labelledby="range-help">
   <h2 id="range-help" tabindex="-1">How to play</h2>
   <p id="range-controls">Focus the range to use the keyboard. With default bindings, Enter or Space starts; arrows or W A S D aim; Space fires; Escape pauses or resumes; R rebuilds. Launch power is fixed at 28 metres per second: change the angle to change the arc.</p>

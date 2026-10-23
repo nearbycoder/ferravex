@@ -1,10 +1,10 @@
 # The browser player guide
 
-The player update brings the same shared browser tools to all fifteen games and labs. Open **Details** in any game, then scroll to **Player tools**. These tools run in the browser adapter; native hosts and simulation rules retain their documented behavior. See [every change](../website/releases/player30.json) and the [game catalog](../examples/catalog.json).
+All fifteen games and labs share browser tools for controls, presentation and recovery. Open **Details** in any game, then scroll to **Player tools**. These tools run in the browser adapter; native hosts and simulation rules retain their documented behavior. See [every change](../website/releases/player30.json) and the [game catalog](../examples/catalog.json).
 
 ## Controls and focus
 
-Every canvas has a keyboard focus target, accessible name and linked instructions. Click or Tab to the canvas to play. Use **Controls** to view and remap keyboard, mouse, touch or gamepad bindings. The Game guide in Details loads the catalog description and default controls on demand; current custom bindings are listed in Controls.
+Every canvas has a keyboard focus target, accessible name and linked instructions. Click or Tab to the canvas to play. Use **Controls** to view and remap keyboard, mouse, touch or gamepad bindings. Long action names and bindings wrap onto readable pages; use the page arrows to see the full set. An Unbound label means that action has no binding. The Game guide in Details loads the catalog description and default controls on demand; current custom bindings are listed in Controls.
 
 Ctrl, Command and Alt shortcuts remain available to your browser. IME composition does not trigger gameplay actions. Page navigation, capture cancellation and focus changes clear held input. Controllers stop sampling while unfocused and resynchronize on return. These changes apply to all three browser adapters, including Courtyard and Orbit Breaker.
 
@@ -34,7 +34,7 @@ Only settings supported by a game affect its rendering. 2D artwork retains autho
 
 ## Accessibility options
 
-**Player contrast** adds high contrast backgrounds, borders, text and focus rings to browser controls. **Player text size** enlarges the Details panel and its controls. These settings affect browser player UI; game art and in-canvas text retain their authored appearance.
+**Player contrast** adds high contrast backgrounds, borders, text and focus rings to browser controls. **Player text size** enlarges the Details panel and its controls. The current engine also exposes opt-in game-UI preferences and a theme adapter. A demo must adopt those APIs to change custom in-canvas text; stored preferences alone do not resize arbitrary game art.
 
 **Game and player UI motion** follows the system preference by default and offers reduced or standard motion. Reduced motion suppresses supported cosmetic camera and effect motion as well as browser control transitions. **Reduce game flashes** independently reduces supported flashes. Both settings apply live, including while paused. Essential movement, game rules, audio and haptics retain their behavior. The [accessible gameplay guide](JOURNEY_200_ACCESSIBILITY.md) describes each demo's consumers and remaining verification limits.
 
@@ -62,4 +62,4 @@ All games compile downloaded Wasm as a stream when supported. If MIME policy pre
 
 The shared adapter is [player.js](../web/player.js), initialized by [details.js](../web/details.js). Input fixes live in [input.js](../web/input.js); startup recovery lives in [loader.js](../web/loader.js). The renderer, Courtyard and Orbit Breaker call the same player frame hooks after drawing.
 
-The [player release catalog](../website/releases/player30.json) records the earlier implementation series. [Journey200](JOURNEY_200.md) tracks the current engine and demo work. See the [validation guide](GAME_TESTS.md) for native, Wasm and browser checks. Platform support claims remain governed by [Platforms](PLATFORMS.md).
+The [player release catalog](../website/releases/player30.json) records the earlier implementation series. The [current engine workflow](ENGINE_WORKFLOWS.md) covers the shipped API additions; [release status](STOPPING_POINT.md) separates completed work from deferred plans. See the [validation guide](GAME_TESTS.md) for native, Wasm and browser checks. Platform support claims remain governed by [Platforms](PLATFORMS.md).

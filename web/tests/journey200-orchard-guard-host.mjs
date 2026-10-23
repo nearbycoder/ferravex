@@ -36,7 +36,10 @@ test('host identity, relative catalog route and shared boot path agree', () => {
   assert.equal(game.title, 'Orchard Guard');
   assert.equal(new URL(`../${game.host}/index.html`, import.meta.url).href, hostUrl.href);
   const links = tags('a').map(([, attrs]) => attributes(attrs));
-  assert.equal(links.length, 1);
+  assert.equal(links.filter(link => link.href === '../').length, 1);
+  for (const href of ['#orchard-canvas', '#orchard-board-end', '#orchard-help-summary']) {
+    assert.ok(links.some(link => link.href === href), `native short-screen route ${href}`);
+  }
   assert.equal(links[0].href, '../');
   assert.ok(existsSync(new URL('index.html', new URL(links[0].href, hostUrl))));
   const scripts = tags('script').map(([, attrs]) => attributes(attrs));
@@ -133,7 +136,8 @@ test('existing player controls remain single and runtime-owned; guide uses nativ
   }
   assert.equal(tag('details').id, 'orchard-help');
   assert.equal(tag('summary').id, 'orchard-help-summary');
-  assert.match(text(element('orchard-help-summary')), /How to play.*keyboard access/);
+  assert.equal(text(element('orchard-help-summary')), 'How to play');
+  assert.ok(html.indexOf('id="orchard-description"') > html.indexOf('<div id="orchard-controls">'), 'long introductory guidance stays inside the native disclosure');
   assert.doesNotMatch(html, /role="dialog"|data-player|data-fullscreen|aria-modal/);
 });
 

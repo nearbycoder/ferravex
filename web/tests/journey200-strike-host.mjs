@@ -437,3 +437,8 @@ test('capture failure remains useful after touch, and unrelated locks do not ann
   assert.match(h.help.textContent, /Mouse captured/);
   assert.equal(h.doc.activeElement, h.canvas);
 });
+
+test('the practice view precedes the guide with a native help link', () => {
+  assert.ok(html.indexOf('id="strike-stage"') < html.indexOf('id="strike-guide"'));
+  assert.match(html, /href="#strike-guide">How to play<\/a>/);
+});

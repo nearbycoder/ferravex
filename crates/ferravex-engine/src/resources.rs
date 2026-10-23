@@ -3,18 +3,18 @@
 //! This single-threaded store does not impose Send/Sync on resources.
 //!
 //! Use [`Resources::get_or_insert_with`](crate::resources::Resources::get_or_insert_with) for lazy setup, [`Resources::try_init`](crate::resources::Resources::try_init)
-//! when setup can fail, and [`Resources::require`](crate::resources::Resources::require) for a required dependency.
+//! when setup can fail, and [`Resources::require`](crate::resources::Resources::require)(crate::resources::Resources::require) for a required dependency.
 //! Initializers run only for absent types with available capacity. Type names in
 //! errors are Rust diagnostic names, not stable serialization identifiers.
-//! Use [`Resources::try_update`] to validate a replacement before changing an
+//! Use [`Resources::try_update`](crate::resources::Resources::try_update) to validate a replacement before changing an
 //! existing resource; successful updates return ownership of the previous value.
 //!
-//! For simultaneous access to distinct types, use [`Resources::with2_mut`] or
-//! [`Resources::with3_mut`]. Mixed access is available through
-//! [`Resources::with2_mut_ref`], [`Resources::with3_mut_mut_ref`] and
-//! [`Resources::with3_mut_ref_ref`]; put mutable arguments first. All arguments
-//! must have distinct [`TypeId`]s, including the shared arguments. For entirely
-//! shared access, ordinary repeated [`Resources::require`] calls suffice.
+//! For simultaneous access to distinct types, use [`Resources::with2_mut`](crate::resources::Resources::with2_mut) or
+//! [`Resources::with3_mut`](crate::resources::Resources::with3_mut). Mixed access is available through
+//! [`Resources::with2_mut_ref`](crate::resources::Resources::with2_mut_ref), [`Resources::with3_mut_mut_ref`](crate::resources::Resources::with3_mut_mut_ref) and
+//! [`Resources::with3_mut_ref_ref`](crate::resources::Resources::with3_mut_ref_ref); put mutable arguments first. All arguments
+//! must have distinct [`TypeId`](std::any::TypeId)s, including the shared arguments. For entirely
+//! shared access, ordinary repeated [`Resources::require`](crate::resources::Resources::require) calls suffice.
 //! Disjoint access uses scoped ordinary references, never removes entries, and
 //! allocates no heap storage of its own. Resource types need not be `Clone`,
 //! `Send` or `Sync`. Callback allocations and side effects remain caller-owned.

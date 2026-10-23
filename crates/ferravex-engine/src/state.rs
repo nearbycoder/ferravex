@@ -24,8 +24,8 @@
 //! ```
 //!
 //! Optional tracing records successful commits, including those made through
-//! guarded/hooked APIs. Enable it with [`StateMachine::set_trace_capacity`]; use
-//! [`StateMachine::request_with_cause`] to attach a static diagnostic label.
+//! guarded/hooked APIs. Enable it with [`StateMachine::set_trace_capacity`](crate::state::StateMachine::set_trace_capacity); use
+//! [`StateMachine::request_with_cause`](crate::state::StateMachine::request_with_cause) to attach a static diagnostic label.
 //! Tracing reads no clocks and does not drive simulation or lifecycle effects.
 use std::{
     collections::{BTreeSet, TryReserveError, VecDeque, vec_deque},

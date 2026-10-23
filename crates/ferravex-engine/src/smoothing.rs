@@ -1,7 +1,7 @@
 //! Frame-independent scalar and angular presentation smoothing.
 //!
-//! [`ExponentialSmoother`] retains its scalar interpolation and permissive update
-//! behavior. [`AngularSmoother`] adds checked, shortest-arc interpolation in
+//! [`ExponentialSmoother`](crate::smoothing::ExponentialSmoother) retains its scalar interpolation and permissive update
+//! behavior. [`AngularSmoother`](crate::smoothing::AngularSmoother) adds checked, shortest-arc interpolation in
 //! radians using the same exponential response. Both use platform exp, so they
 //! are intended for cameras/UI/audio controls, not cross-platform lockstep state.
 //! Time comes entirely from the caller; no wall clock or pending time is stored.

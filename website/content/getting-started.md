@@ -2,7 +2,7 @@
 
 Ferravex is a first-party Rust foundation for compact 2D and 3D games. Start with a headless simulation, generate a small game, or run one of the fifteen catalog examples from this checkout.
 
-Journey50 remains the baseline. The [Journey200 ledger](../../docs/JOURNEY_200.md) records the follow-on implementation and validation work. Source, generated artifacts and published pages can be different revisions; fresh combined browser and workspace verification is still pending. A guide or implementation receipt does not establish platform support.
+Start with the [current engine workflows](../../docs/ENGINE_WORKFLOWS.md) for fixed ticks, ECS composition, checked physics, responsive UI and supplied-time networking. The [release scope](../../docs/STOPPING_POINT.md) distinguishes the 83 shipped Journey400 implementations from 117 deferred tasks. Recipes describe actual APIs; platform and device checks remain separate evidence.
 
 ## Check your local source
 

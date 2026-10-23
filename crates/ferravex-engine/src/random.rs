@@ -18,8 +18,8 @@
 //! ```
 //!
 //! Integer range sampling is allocation-free. The half-open methods exclude the
-//! upper bound; [`Random::try_range_u64_inclusive`] and
-//! [`Random::try_range_i64_inclusive`] also support the maximum integer and the
+//! upper bound; [`Random::try_range_u64_inclusive`](crate::random::Random::try_range_u64_inclusive) and
+//! [`Random::try_range_i64_inclusive`](crate::random::Random::try_range_i64_inclusive) also support the maximum integer and the
 //! entire 64-bit domain. Invalid ranges consume no draws. Valid singletons and
 //! full-width ranges consume exactly one draw; other widths use the existing
 //! rejection sampler, whose draw count has no fixed cap.

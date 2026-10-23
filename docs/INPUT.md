@@ -108,3 +108,20 @@ controllers must return held channels to neutral before gameplay resumes.
 Registration and rebinding allocate; bounded core feeds, context changes and
 steady touch layouts reuse their storage. The open controls panel can allocate
 for text/layout; retained UI work is iteration 16.
+
+## Read action state and show faithful hints
+
+Action descriptors expose current bindings and context activity without consuming
+edges. `peek_handles` and `consume_tick_handles` provide checked typed batches;
+all handles are validated before any tick state is consumed. Keep handle batches
+in the game and consume only for executed simulation ticks.
+
+The Controls editor pages full action/binding labels on narrow views and names
+navigation keys such as PageUp and PageDown. Use visible touch-layout slots when
+formatting touch hints: a preset action channel does not mean its control is
+currently drawn. Shared draw/hit layout helpers preserve saved slot identity.
+
+Gamepad calibration and supplied-time touch gestures are opt-in. Their checked
+profiles do not change default bindings or make a browser resize emulate a
+physical device. Follow the [screen/input checklist](RESPONSIVE_GAMES.md) and the
+[agent API map](AGENT_GUIDE.md#task-and-api-map) before adopting those paths.

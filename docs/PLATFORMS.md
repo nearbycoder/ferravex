@@ -7,17 +7,18 @@ graphics drivers and browser APIs form the platform boundary. There are no
 external Cargo packages. Source implementation, cross-target checking and device
 verification are separate milestones:
 
-| Platform | Host source in this repository | Verification on this machine |
+| Platform | Host source in this repository | Release checks and remaining limits |
 |---|---|---|
 | Web | WebGL2, DOM keyboard/pointer/touch/gamepad, AudioWorklet, context restoration | All 15 Wasm builds/contracts; actual browser input, multiplayer and context loss/recovery |
 | Linux | X11/GLX/OpenGL, keyboard/pointer capture, desktop DPI, minimize/resume, ALSA | All native builds, 15 gameplay/PNG smoke runs, GPU pixel/recovery/timing and audio checks |
-| Windows | Win32/WGL OpenGL 3.3 core, raw mouse, keys/buttons/wheel, per-monitor DPI, minimize/resume, WinMM audio | Workspace/all-target/all-feature Rust checks and strict Clippy for `x86_64-pc-windows-gnu`; no Windows executable linking or runtime test |
-| macOS | AppKit/NSOpenGL 4.1 core, Retina metrics, keyboard/mouse, focus/minimize lifecycle, AudioQueue | Workspace/all-target/all-feature Rust checks and strict Clippy for `aarch64-apple-darwin`; no Apple SDK linking or runtime test |
-| iOS | UIKit scene delegate, CADisplayLink, EAGL/OpenGL ES 3, touch/hardware keys, rotation/drawable resizing, background suspension, AudioQueue | Source and app-manifest review only; iOS target/SDK, simulator, signing and device checks remain excluded |
+| Windows | Win32/WGL OpenGL 3.3 core, raw mouse, keys/buttons/wheel, per-monitor DPI, minimize/resume, WinMM audio | Windows CI: native compilation/linking, Rust tests, runnable guide examples and strict Clippy; interactive windows, hardware input and audio listening remain unverified |
+| macOS | AppKit/NSOpenGL 4.1 core, Retina metrics, keyboard/mouse, focus/minimize lifecycle, AudioQueue | macOS CI: native compilation/linking, Rust tests, runnable guide examples and strict Clippy; interactive windows, hardware input and audio listening remain unverified |
+| iOS | UIKit scene delegate, CADisplayLink, EAGL/OpenGL ES 3, touch/hardware keys, rotation/drawable resizing, background suspension, AudioQueue | Apple SDK compilation for device and simulator targets in CI; app launch, signing, simulator/device play and audio remain unverified |
 
-The Windows and Apple hosts are provisional until they run on those systems.
-Their OS ABI, driver behavior and lifecycle paths have not been verified by a
-cross-target Rust check. Apple's [OpenGL](https://developer.apple.com/library/archive/documentation/GraphicsImaging/Conceptual/OpenGL-MacProgGuide/UpdatinganApplicationtoSupportOpenGL3/UpdatinganApplicationtoSupportOpenGL3.html)
+CI compilation and headless tests do not exercise an interactive window, its driver
+or device lifecycle. The Windows and Apple interactive hosts remain provisional
+until those paths receive device playtests. The [release scope](STOPPING_POINT.md)
+and release PR record the exact checks. Apple's [OpenGL](https://developer.apple.com/library/archive/documentation/GraphicsImaging/Conceptual/OpenGL-MacProgGuide/UpdatinganApplicationtoSupportOpenGL3/UpdatinganApplicationtoSupportOpenGL3.html)
 and [OpenGL ES](https://developer.apple.com/documentation/opengles/)
 APIs are deprecated; the current source uses those APIs to share the existing
 renderer. A first-party Metal backend remains future work.

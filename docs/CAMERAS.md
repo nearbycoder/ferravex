@@ -139,3 +139,18 @@ feedback), Strike and Crystal Cavern (first-person), and the 3D Physics Lab
 partitioned damping, heading conventions, angle seams/poles, constant-radius
 orbits, cuts, thin walls/corners, invalid queries, seeded shake, live compound
 filtering and zero heap allocations across all modes/queries/layered shake.
+
+## Blends, rails and projection boundaries
+
+The current camera transition helpers distinguish an explicit cut from an
+interpolated blend. They support continuous retargeting and hold/resume, and
+reject incompatible projection combinations. Authored camera rails sample
+caller-supplied time, with cuts, loops and reduced-motion instant transitions.
+Neither helper advances simulation time.
+
+`PreparedProjector3D` caches a checked inverse and makes viewport, Y direction and
+clip-depth conventions explicit for projection and screen-picking rays. Keep
+logical HUD pixels separate from framebuffer pixels and reserve a usable scene
+rectangle before fitting a narrow view. See [responsive games](RESPONSIVE_GAMES.md)
+and the [API map](AGENT_GUIDE.md#task-and-api-map) for the current public entry
+points and runnable module recipes.

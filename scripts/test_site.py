@@ -104,6 +104,27 @@ class SiteTests(unittest.TestCase):
                     path = path / 'index.html'
                 self.assertTrue(path.is_file(), f'{page.relative_to(root)}: {value}')
 
+    def test_example_goals_and_learning_paths(self):
+        root = ROOT / 'dist/site'
+        for game in json.loads((ROOT / 'examples/catalog.json').read_text()):
+            with self.subTest(game=game['id']):
+                page = (root / 'examples' / game['id'] / 'index.html').read_text()
+                self.assertIn('Your objective', page)
+                self.assertIn('Default controls', page)
+                self.assertIn('Open full player', page)
+                self.assertIn('class="play-brief"', page)
+                self.assertLess(page.index('Your objective'), page.index('data-launch'))
+                self.assertRegex(page, r'href="/docs/[a-z-]+/">Explore:')
+
+    def test_current_workflows_are_in_navigation_and_search(self):
+        root = ROOT / 'dist/site'
+        self.assertIn('A playground for the engine.', (root / 'play/index.html').read_text())
+        for slug in ('engine-workflows', 'responsive-games'):
+            url = '/docs/' + slug + '/'
+            for path in ('index.html', 'docs/index.html', 'docs/getting-started/index.html'):
+                self.assertIn(url, (root / path).read_text())
+            self.assertIn(url, (root / 'search.json').read_text())
+
     def test_content_build_rejects_retired_modules_and_api_cache(self):
         output = ROOT / 'dist/site/index.html'
         before = output.read_bytes()

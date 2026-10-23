@@ -5,7 +5,7 @@
 //! [`FrameEvents::read`](crate::frame_events::FrameEvents::read) and [`FrameEvents::iter`](crate::frame_events::FrameEvents::iter) let multiple listeners borrow
 //! the same visible events. Drains instead transfer ownership to one consumer;
 //! they never consume pending events and allocate no storage.
-//! Independent [`FrameEventReader`] cursors additionally distinguish an empty
+//! Independent [`FrameEventReader`](crate::frame_events::FrameEventReader) cursors additionally distinguish an empty
 //! read from unread events lost to advance, drain or clear. Readers do not keep
 //! old frames alive or change the two-buffer retention bound.
 //!
