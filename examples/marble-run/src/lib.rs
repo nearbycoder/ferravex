@@ -42,6 +42,7 @@ mod hud;
 mod journey200_tests;
 mod juice;
 mod level;
+mod look;
 mod presentation;
 mod quips;
 mod sim;
@@ -579,6 +580,9 @@ async fn game() {
     let mut juice = juice::Juice::new();
     let mut effects = ferravex_render::effects::ParticleRenderer::new(640).unwrap();
     let mut results: Option<course_ui::Results> = None;
+    let mut menu_motion = course_ui::Menu::new();
+    let mut look_scene = None;
+    let mut pause_age = 0_f32;
     // Session-only counters: attempts per course, learned controls and pauses.
     let mut attempts = [0_u32; courses::COURSES.len()];
     attempts[course] = 1;
@@ -836,13 +840,28 @@ async fn game() {
             game.physics.bodies[game.marble].linvel(),
             camera_dt,
         );
-        clear_background(SKY);
         #[allow(unused_mut)]
         let mut overview = player_input.held("overview");
         #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
         {
             overview |= capture.overview();
         }
+        let grade_scene = if trial.picker && !trial.session.is_started() {
+            look::Scene::Front
+        } else if trial.picker || player_input.paused() {
+            look::Scene::Menu
+        } else if game.finished {
+            look::Scene::Celebrate
+        } else if overview {
+            look::Scene::Overview
+        } else {
+            look::Scene::Play
+        };
+        if look_scene != Some(grade_scene) {
+            set_post_fx(look::post_fx(grade_scene));
+            look_scene = Some(grade_scene);
+        }
+        clear_background(SKY);
         let view = if overview {
             presentation.overview(screen_width(), screen_height())
         } else {
@@ -911,28 +930,9 @@ async fn game() {
         let (w, h) = (screen_width(), screen_height());
         if !trial.picker && !game.finished {
             let tip = if demo.autoplay || learned >= 3. || game.elapsed > 30. {
-                (juice.falls_here >= 2 && game.notice == 0.).then(|| {
-                    (
-                        format!(
-                            "TIP: HOLD {} TO BRAKE · {} RETURNS TO THE CHECKPOINT",
-                            hud::hint(&player_input, "brake"),
-                            hud::hint(&player_input, "recover"),
-                        )
-                        .to_uppercase(),
-                        1.,
-                    )
-                })
+                (juice.falls_here >= 2 && game.notice == 0.).then_some(hud::Tip::Brake)
             } else {
-                Some((
-                    format!(
-                        "{} ROLL · {} BRAKE · HOLD {} FOR OVERVIEW",
-                        hud::roll_hint(&player_input),
-                        hud::hint(&player_input, "brake"),
-                        hud::hint(&player_input, "overview"),
-                    )
-                    .to_uppercase(),
-                    ((3. - learned) / 0.6).clamp(0., 1.),
-                ))
+                Some(hud::Tip::Controls(((3. - learned) / 0.6).clamp(0., 1.)))
             };
             let line = countdown_line(
                 c,
@@ -1018,6 +1018,7 @@ async fn game() {
             &game,
             course_ui::View {
                 course,
+                front: !trial.session.is_started(),
                 picker: trial.picker,
                 resumable: trial.resumable(&game),
                 can_recover: trial.can_recover(),
@@ -1025,6 +1026,8 @@ async fn game() {
                 results: results.as_ref().filter(|_| juice.card_ready()),
             },
             &records,
+            &mut menu_motion,
+            demo.dt(),
         ) {
             use course_ui::Command;
             let selected = match command {
@@ -1057,7 +1060,18 @@ async fn game() {
         juice.draw_confetti(w, h, card);
         if player_input.paused() && !player_input.controls_open() && !trial.picker && !game.finished
         {
-            hud::draw_pause(&player_input, quips::pause(pauses));
+            pause_age += demo.dt();
+            hud::draw_pause(
+                &player_input,
+                quips::pause(pauses),
+                ferravex_engine::play::tween::Entrance::fade_up(12.).sample(
+                    pause_age,
+                    0,
+                    look::motion(),
+                ),
+            );
+        } else {
+            pause_age = 0.;
         }
         if (!trial.picker && !game.finished) || player_input.controls_open() {
             player_input.draw_controls();

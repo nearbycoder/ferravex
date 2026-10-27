@@ -37,6 +37,7 @@ mod juice;
 mod multiplayer;
 mod replay;
 mod scoreboard;
+mod style;
 
 use controls::Controls;
 use effects::CombatEffects;
@@ -265,6 +266,7 @@ async fn game() {
         .map(|_| animation::OperatorMotion::new(&operator_rig))
         .collect();
     let mut weapon_motion = animation::WeaponMotion::new();
+    let mut look_state = style::LookState::default();
     let mut effects = CombatEffects::new();
     let duck = geometry::build_duck();
     let mut juice = juice::Juice::new();
@@ -282,7 +284,6 @@ async fn game() {
     let mut tuning = bots::Tuning::new();
     let mut view_board = scoreboard::Tracker::new(0, false);
     let mut onboarding = juice::Onboarding::default();
-    let mut hint_line = String::with_capacity(96);
     let mut info_rows: [String; 3] = Default::default();
     // Personal bests are optional: storage failure still leaves a playable game.
     let mut records = ferravex_render::storage::Records::new("strike").ok();
@@ -314,6 +315,7 @@ async fn game() {
     sync_browser_ui(host.active());
     let mut controls = Controls::default();
     let mut hud_ui = ferravex_render::ui::Ui::new();
+    let mut menu_fx = hud::MenuFx::new();
     let mut replays = replay::Session::default();
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(path) = &opts.replay {
@@ -957,6 +959,13 @@ async fn game() {
         } else {
             0
         };
+        look_state.apply(if !active {
+            style::Look::Menu
+        } else if local.health == 0 {
+            style::Look::Down
+        } else {
+            style::Look::Play
+        });
         set_default_camera();
         if effects.damage_flash > 0. {
             draw_rectangle(
@@ -1009,6 +1018,11 @@ async fn game() {
                 } else {
                     &error
                 },
+                weapon: match kind {
+                    ferravex_play::rounds::Weapon::Rifle => "Rifle",
+                    ferravex_play::rounds::Weapon::Pistol => "Pistol",
+                    ferravex_play::rounds::Weapon::Sniper => "Sniper",
+                },
                 marker: juice.marker,
                 death: juice.death,
             },
@@ -1040,12 +1054,27 @@ async fn game() {
             let roster = controls.input.held("roster") || capture.roster();
             #[cfg(not(all(debug_assertions, not(target_arch = "wasm32"))))]
             let roster = controls.input.held("roster");
-            let hint = mode == Mode::Practice
-                && !roster
-                && local.health > 0
-                && onboarding.line(&controls.input, board.summary.frags, &mut hint_line);
+            let hint_kind = if mode == Mode::Practice && !roster && local.health > 0 {
+                onboarding.hint(board.summary.frags)
+            } else {
+                None
+            };
+            let mut key_a = [0; 64];
+            let mut key_b = [0; 64];
+            let hint = hint_kind.map(|kind| {
+                let (a, b) = match kind {
+                    juice::HintKind::FireReload => ("fire", "reload"),
+                    juice::HintKind::Scoreboard => ("roster", "roster"),
+                };
+                juice::Hint {
+                    kind,
+                    keys: [
+                        controls::hint(&controls.input, a, &mut key_a),
+                        controls::hint(&controls.input, b, &mut key_b),
+                    ],
+                }
+            });
             juice.draw_play(
-                &mut hud_ui,
                 &board,
                 juice::PlayLayout {
                     practice: mode == Mode::Practice,
@@ -1055,7 +1084,7 @@ async fn game() {
                     footer,
                     roster,
                     alive: local.health > 0,
-                    hint: hint.then_some(hint_line.as_str()),
+                    hint,
                     local: local.id,
                     bots: bots_named,
                 },
@@ -1101,7 +1130,22 @@ async fn game() {
             replays.overlay(&mut hud_ui, diagnostics, &controls.input);
         }
         hud_ui.finish_player(&mut controls.input, !active);
+        menu_fx.update(
+            &hud_ui,
+            !active && !finished_practice,
+            dt.clamp(0., 0.1),
+            style::motion(),
+        );
         hud_ui.paint();
+        if !active && !finished_practice {
+            hud::menu_overlay(
+                &menu_fx,
+                mode,
+                host.has_played(),
+                controls.touch_mode,
+                &controls.input,
+            );
+        }
         if !active && hud_ui.activated(1) {
             host.resume();
             controls.touch_mode |= !ferravex_render::input::logical_touches().is_empty();

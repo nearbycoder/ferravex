@@ -21,8 +21,10 @@ use ferravex_render::input::{
 };
 #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
 mod capture;
+mod fmtbuf;
 mod hud;
 mod juice;
+mod look;
 mod presentation;
 mod quips;
 mod race;
@@ -45,7 +47,7 @@ use ferravex_render::{
 };
 use hud::{Hud, Results};
 use juice::Juice;
-use presentation::{Presentation, chase_input, exhaust_source, fitted_size, text_width};
+use presentation::{Presentation, chase_input, exhaust_source};
 use race::{
     Course, HALF_WIDTH, HOVER_HEIGHT, Input, Race, RaceEvent, heading, path, right, tangent, world,
 };
@@ -437,14 +439,7 @@ fn label(text: &str, x: f32, y: f32, size: f32, color: Color) {
     );
     draw_text(text, x, y, size, color);
 }
-fn centered(text: &str, y: f32, size: u16, color: Color) {
-    centered_in(text, y, size, color, screen_width() - 32.);
-}
-fn centered_in(text: &str, y: f32, size: u16, color: Color, available: f32) {
-    let fitted = fitted_size(text, available, size);
-    let width = text_width(text, size) * fitted / size as f32;
-    label(text, (screen_width() - width) * 0.5, y, fitted, color);
-}
+
 fn time_label(time: f32) -> String {
     let centiseconds = (time.max(0.) * 100.).round() as u64;
     format!(
@@ -503,6 +498,9 @@ async fn game() {
     let mut records = ferravex_render::storage::Records::new("dune-skimmer").ok();
     let mut results = Results::default();
     let mut juice = Juice::new();
+    let mut ui_motion = hud::UiMotion::new();
+    let mut grade = look::Grade::default();
+    let mut trails = look::Trails::new();
     #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
     let mut capture = capture::Capture::from_env();
     let runs = |records: Option<&ferravex_render::storage::Records>| {
@@ -554,6 +552,8 @@ async fn game() {
             reset_drive_feedback(&mut camera, &mut dust, &mut dust_emitter);
             effects.reset();
             juice.reset();
+            ui_motion.reset();
+            trails.clear();
             juice.say(quips::start(juice.attempt), 0);
             results = Results::default();
             previous_recoveries = 0;
@@ -684,8 +684,29 @@ async fn game() {
             .expect("valid hover camera")
             .pose;
         let camera_position = view.position;
+        let paused = player_input.paused() && !player_input.controls_open();
+        ui_motion.motion = ferravex_play::tween::Motion::from(effects.policy);
+        ui_motion.update(
+            elapsed,
+            race,
+            paused,
+            ferravex_render::ui::kit::ButtonState {
+                focused: race.finished,
+                pressed: player_input.held("confirm"),
+                ..Default::default()
+            },
+        );
+        grade.set(if paused {
+            look::Scene::Paused
+        } else if race.finished {
+            look::Scene::Results
+        } else if race.countdown > 0. {
+            look::Scene::Title
+        } else {
+            look::Scene::Race
+        });
         clear_background(SKY);
-        set_camera(&Camera3D {
+        let world_camera = Camera3D {
             position: camera_position,
             target: view.target,
             up: view.up,
@@ -693,7 +714,12 @@ async fn game() {
             z_near: 0.12,
             z_far: 370.0,
             ..Default::default()
-        });
+        };
+        let projector = look::Projector::new(&world_camera, screen_width(), screen_height());
+        let horizon = look::horizon(&projector, camera_position, race.forward());
+        look::sky(horizon);
+        look::shimmer(horizon, juice.time, juice.motion());
+        set_camera(&world_camera);
         material.begin(LitSettings {
             camera_position,
             light_direction: vec3(-0.45, 0.9, -0.4),
@@ -726,7 +752,19 @@ async fn game() {
                 },
             )
             .unwrap();
+        trails.update(dt, race, position, yaw, juice.motion());
+        trails.draw(camera_position, view.up);
         set_default_camera();
+        look::glows(
+            &projector,
+            race,
+            &course,
+            position,
+            yaw,
+            &juice,
+            race.countdown > 0.,
+        );
+        post_fx_hud_begin();
         hud::effects(race, &juice);
         let paused = player_input.paused() && !player_input.controls_open();
         let hud = Hud {
@@ -734,6 +772,7 @@ async fn game() {
             input: &player_input,
             juice: &juice,
             results: &results,
+            ui: &ui_motion,
             waiting_for_controls: trial.waiting_for_controls && !demo.autoplay,
             best: stored_time(records.as_ref(), RECORD_RACE),
         };
@@ -787,6 +826,7 @@ async fn game() {
 #[cfg(test)]
 mod presentation_tests {
     use super::*;
+    use crate::presentation::fitted_size;
     use ferravex_play::camera::{Input3, Mode3, NoObstructions, ShakeImpulse, Target3};
 
     #[test]

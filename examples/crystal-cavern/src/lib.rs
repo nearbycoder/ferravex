@@ -58,7 +58,8 @@ const MAP: [&str; 15] = [
     "#############",
 ];
 const MINT: Color = Color::from_rgba(108, 239, 209, 255);
-const INK: Color = Color::from_rgba(20, 26, 29, 255);
+/// Deep blue-teal cave air: fog and clear color, so distance cools the palette.
+const INK: Color = Color::from_rgba(11, 19, 26, 255);
 const WARM: Color = Color::from_rgba(202, 165, 107, 255);
 
 fn center(x: usize, z: usize) -> Vec2 {
@@ -1050,10 +1051,11 @@ impl Scene {
                     if !sides.iter().any(|&open| open) {
                         continue;
                     }
+                    // Warm sandstone with a hint of rose; the grade cools its shadows.
                     let c = Color::from_rgba(
-                        91 + hash as u8 * 5,
-                        69 + hash as u8 * 3,
-                        55 + hash as u8 * 2,
+                        104 + hash as u8 * 5,
+                        76 + hash as u8 * 3,
+                        66 + hash as u8 * 3,
                         255,
                     );
                     stone.push(Piece {
@@ -1063,12 +1065,13 @@ impl Scene {
                         rotation: Quat::IDENTITY,
                     });
                 } else {
-                    let shade = 45 + hash as u8 * 2;
+                    // Cool slate floor contrasts the warm walls instead of matching them.
+                    let shade = 44 + hash as u8 * 2;
                     stone.push(Piece {
                         wall_sides: None,
                         mesh: Mesh3d::cuboid(
                             vec3(TILE, 0.22, TILE),
-                            Color::from_rgba(shade, shade - 5, shade - 8, 255),
+                            Color::from_rgba(shade - 6, shade - 1, shade + 4, 255),
                         ),
                         position: world(p, -0.12),
                         rotation: Quat::IDENTITY,
@@ -1077,7 +1080,7 @@ impl Scene {
                         wall_sides: None,
                         mesh: Mesh3d::cuboid(
                             vec3(TILE, 0.4, TILE),
-                            Color::from_rgba(61, 48, 41, 255),
+                            Color::from_rgba(40, 34, 38, 255),
                         ),
                         position: world(p, 4.3),
                         rotation: Quat::IDENTITY,
@@ -1089,7 +1092,7 @@ impl Scene {
                             mesh: Mesh3d::cone(
                                 0.55,
                                 0.8 + hash as f32 * 0.25,
-                                Color::from_rgba(84, 64, 48, 255),
+                                Color::from_rgba(78, 62, 58, 255),
                                 5,
                             ),
                             position: world(p + vec2(0.6, 0.7), 3.5),
@@ -1248,7 +1251,7 @@ impl Scene {
                 // Warmer/colder: each crystal brightens as the explorer approaches.
                 let near = (1. - p.distance(game.position) / RESONANCE_RANGE).clamp(0., 1.);
                 lights[count].position = world(p, 1.35);
-                lights[count].intensity = 1.5 + 1.8 * near;
+                lights[count].intensity = 1.5 + 0.8 * near;
                 lights[count].radius = 4.8 + 1.4 * near;
                 count += 1;
             }
@@ -1258,9 +1261,9 @@ impl Scene {
             camera_position: eye,
             light_direction: vec3(-0.3, 0.8, 0.4),
             fog_color: INK,
-            fog_start: 7.0,
-            fog_end: 27.0,
-            ambient: 0.58,
+            fog_start: 6.0,
+            fog_end: 26.0,
+            ambient: 0.5,
         };
         material.begin(settings);
         for piece in &self.stone {
@@ -1387,47 +1390,6 @@ impl Scene {
     }
 }
 
-fn text_center(text: &str, y: f32, size: u16, color: Color) {
-    let width = get_default_font()
-        .try_metrics(size, 1.)
-        .expect("nonzero HUD size")
-        .measure_line(text)
-        .expect("bounded HUD text")
-        .width
-        .max(1.);
-    let scale = ((screen_width() - 32.).max(1.) / width).min(1.);
-    let x = (screen_width() - width * scale) * 0.5;
-    for (offset, tint) in [(1., BLACK), (0., color)] {
-        draw_text_ex(
-            text,
-            x + offset,
-            y + offset,
-            TextParams {
-                font_size: size,
-                font_scale: scale,
-                color: tint,
-            },
-        );
-    }
-}
-fn wrapped_text(ui: &mut ferravex_render::ui::Ui, text: &str, top: f32, height: f32, color: Color) {
-    use ferravex_render::ui::{Align, TextStyle, UiRect};
-    ui.text(
-        UiRect {
-            min: [16., top],
-            size: [(screen_width() - 32.).max(1.), height],
-        },
-        text,
-        TextStyle {
-            size: 18.,
-            color,
-            align: Align::Center,
-            wrap: true,
-            shadow: true,
-        },
-    )
-    .expect("bounded expedition overlay");
-}
 fn window_conf() -> Conf {
     #[allow(unused_mut)]
     let mut conf = ferravex_render::window_conf("Ferravex / Crystal Cavern");
@@ -1476,10 +1438,14 @@ async fn game() {
     // Personal bests are optional: a storage failure still leaves a playable game.
     let mut records = ferravex_render::storage::Records::new("crystal-cavern").ok();
     let mut results = hud::Results::default();
+    let mut card_motion = hud::CardMotion::new();
+    let mut hud_scratch = String::with_capacity(128);
     let mut pauses = 0_u32;
+    let mut glow = look::Glow::new();
+    let mut look_state = None;
+    let mut attract = 0_f32;
     #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
     let mut capture = capture::Capture::from_env();
-    let mut overlay_text = ferravex_render::ui::Ui::new();
     let mut view_rig = Rig3::new(Settings3 {
         position_half_life: 0.,
         target_half_life: 0.,
@@ -1539,10 +1505,6 @@ async fn game() {
         ferravex_render::ui::warm_up_font_sizes(&[14, 17, 20, 22, 23, 24, 26, 30, 38]);
         let w = screen_width();
         let h = screen_height();
-        overlay_text.begin(
-            ferravex_render::ui::Viewport::responsive([w.max(1.), h.max(1.)], [0.; 4])
-                .expect("positive cave viewport"),
-        );
         player_input
             .set_touch_layout(&[
                 Control {
@@ -1723,16 +1685,35 @@ async fn game() {
             Surface::Stone,
             1.45,
         );
+        let state = expedition.session.state();
+        if look_state != Some(state) {
+            // Sticky per-state grade: cave, framed menus, or daylight results.
+            set_post_fx(look::post_for(state));
+            look_state = Some(state);
+        }
         clear_background(INK);
         let (shake_yaw, shake_pitch) = juice.shake();
+        // Head bob follows accepted travel (frozen under reduced motion), and
+        // the Ready screen slowly looks around the cave like an attract mode.
+        let stride = (game.velocity.length() / SPEED).min(1.);
+        let bob =
+            (game.walked * std::f32::consts::TAU / 1.7).sin() * 0.035 * stride * juice.motion();
+        if state == SessionState::Ready {
+            attract += elapsed;
+        }
+        let sway = if state == SessionState::Ready {
+            (attract * 0.22).sin() * 0.45 * juice.motion()
+        } else {
+            0.
+        };
         let view = view_rig
             .update(
                 dt,
                 Input3 {
                     target: Target3::at(world(game.position, 0.)),
                     mode: Mode3::FirstPerson {
-                        eye_offset: Vec3::Y * 1.55,
-                        yaw: game.yaw + shake_yaw,
+                        eye_offset: Vec3::Y * (1.55 + bob),
+                        yaw: game.yaw + shake_yaw + sway,
                         pitch: (pitch + shake_pitch).clamp(-0.85, 0.85),
                     },
                     fov_y: (67. + juice.fov_punch()).to_radians(),
@@ -1757,6 +1738,19 @@ async fn game() {
             eye,
             &presentation,
             expedition.session.is_playing(),
+        );
+        let forward = (view.target - eye).normalize_or_zero();
+        let right = forward.cross(view.up).normalize_or_zero();
+        look::draw_lights(
+            &mut glow,
+            game,
+            (right, view.up),
+            if presentation.pulse {
+                presentation.glow_time
+            } else {
+                0.
+            },
+            presentation.motion_time,
         );
         // Bursts are drawn only during play; menus keep a clean overlay stream.
         if expedition.session.is_playing()
@@ -1787,8 +1781,8 @@ async fn game() {
         let help_hint = action_hint(&player_input, "help");
         if expedition.session.is_playing() {
             hud::edge_glow(&juice, w, h);
-            hud::top_bar(game, &juice, w);
-            let marker = hud::hint_marker(game, game.yaw, w);
+            hud::top_bar(game, &juice, w, &mut hud_scratch);
+            let marker = hud::hint_marker(game, game.yaw, w, &mut hud_scratch);
             hud::pops(&juice, w, h);
             let target_color = game
                 .target()
@@ -1810,14 +1804,7 @@ async fn game() {
             let prompt_top = (h * 0.55).min(h - 230.).max(114.);
             let prompt = game.prompt(&use_hint);
             if let Some(prompt) = &prompt {
-                draw_rectangle(
-                    0.,
-                    prompt_top - 8.,
-                    w,
-                    88.,
-                    Color::new(0.03, 0.08, 0.08, 0.85),
-                );
-                wrapped_text(&mut overlay_text, prompt, prompt_top, 72., target_color);
+                hud::prompt(prompt_top, w, &use_hint, None, prompt, target_color);
             }
             // Milestones, zone names and the cave's echo sit between the bar
             // and the prompt, never in the warm notice slot below.
@@ -1834,7 +1821,6 @@ async fn game() {
                 (h * 0.5 - 40.).max(callout_top + 48.)
             };
             hud::callout(
-                &mut overlay_text,
                 &juice,
                 w,
                 callout_top,
@@ -1843,31 +1829,17 @@ async fn game() {
             if game.notice_time > 0.0
                 && game.notice != "Recover three crystals. Wake the numbered altars."
             {
-                wrapped_text(&mut overlay_text, &game.notice, h - 150., 72., WARM);
+                hud::notice(&game.notice, w, h);
             }
             if help {
-                text_center(
-                    &format!("{use_hint}: Use    {pause_hint}: Pause"),
-                    h - 56.,
-                    17,
-                    Color::new(0.78, 0.79, 0.74, 1.0),
-                );
-                text_center(
-                    &format!("{retry_hint}: Retry    {help_hint}: Help"),
-                    h - 34.,
-                    17,
-                    WHITE,
-                );
-                text_center("Move / look bindings: Controls (F2)", h - 12., 17, WHITE);
+                hud::help([&use_hint, &pause_hint, &retry_hint, &help_hint], w, h);
             } else if !player_input.touch_seen() {
                 let move_hint = ["move_forward", "move_left", "move_back", "move_right"]
-                    .map(|name| action_hint(&player_input, name))
-                    .join("");
-                hud::onboarding(game, &move_hint, w, h);
+                    .map(|name| action_hint(&player_input, name));
+                hud::onboarding(game, move_hint.each_ref().map(String::as_str), w, h);
             }
         } else {
             confirm_requested |= hud::card(
-                &mut overlay_text,
                 hud::Card {
                     state: expedition.session.state(),
                     confirm_hint: &confirm_hint,
@@ -1879,6 +1851,8 @@ async fn game() {
                 },
                 game,
                 &juice,
+                &mut card_motion,
+                elapsed,
                 w,
                 h,
             );
@@ -1901,10 +1875,6 @@ async fn game() {
             draw_circle_lines(w - 65., h - 90., 44., 2., tint);
             draw_text("USE", w - 82., h - 84., 17., tint);
         }
-        overlay_text.finish(false);
-        // finish only resolves UI input; queued descriptions, prompts and
-        // notices need an explicit paint before the Controls overlay.
-        overlay_text.paint();
         player_input.draw_controls();
         #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
         capture.end_frame();
@@ -1931,6 +1901,7 @@ async fn game() {
 mod capture;
 mod hud;
 mod juice;
+mod look;
 mod quips;
 use juice::Juice;
 

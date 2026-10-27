@@ -13,6 +13,8 @@ pub(crate) const WOBBLE_TIME: f32 = 0.5;
 pub(crate) const BONK_TIME: f32 = 0.3;
 pub(crate) const FALL_TIME: f32 = 0.35;
 const RECOIL_TIME: f32 = 0.12;
+pub(crate) const MUZZLE_TIME: f32 = 0.055;
+pub(crate) const TRACER_TIME: f32 = 0.07;
 const SWING_TIME: f32 = 1.6;
 pub(crate) const POP_TIME: f32 = 0.9;
 pub(crate) const RADIO_TIME: f32 = 3.6;
@@ -54,6 +56,11 @@ pub(crate) struct Juice {
     bonk: [f32; SLOTS],
     fallen: [Option<Fallen>; SLOTS],
     recoil: f32,
+    muzzle: f32,
+    /// World end point of the last local shot and its remaining time.
+    tracer: Option<(Vec3, f32)>,
+    /// Accepted local shots, so each muzzle flash is rotated differently.
+    pub shots: u32,
     swing: f32,
     pub marker: Marker,
     pops: [Option<(Pop, f32)>; 4],
@@ -85,6 +92,16 @@ impl Juice {
             *t = (*t - dt).max(0.);
         }
         self.recoil = (self.recoil - dt).max(0.);
+        self.muzzle = (self.muzzle - dt).max(0.);
+        if let Some((_, time)) = &mut self.tracer {
+            *time -= dt;
+            if *time <= 0. {
+                self.tracer = None;
+            }
+        }
+        if policy.reduced_flash() {
+            self.muzzle = 0.;
+        }
         self.swing = (self.swing - dt).max(0.);
         for fallen in self.fallen.iter_mut().flatten() {
             fallen.age = if policy.reduced_motion() {
@@ -111,9 +128,25 @@ impl Juice {
         }
     }
     pub fn fire(&mut self, policy: FeedbackPolicy) {
+        self.shots = self.shots.wrapping_add(1);
         if !policy.reduced_motion() {
             self.recoil = RECOIL_TIME;
         }
+        // A muzzle flash is a flash: reduced flashes keep the shot, drop the bloom.
+        if !policy.reduced_flash() {
+            self.muzzle = MUZZLE_TIME;
+        }
+    }
+    /// A short glowing tracer from the muzzle to where the shot stopped.
+    pub fn tracer(&mut self, end: Vec3) {
+        self.tracer = Some((end, TRACER_TIME));
+    }
+    pub fn tracer_end(&self) -> Option<(Vec3, f32)> {
+        self.tracer.map(|(end, time)| (end, time / TRACER_TIME))
+    }
+    /// Muzzle-flash strength in 0..=1.
+    pub fn muzzle(&self) -> f32 {
+        (self.muzzle / MUZZLE_TIME).clamp(0., 1.)
     }
     pub fn hit(
         &mut self,

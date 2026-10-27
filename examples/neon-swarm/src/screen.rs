@@ -198,7 +198,7 @@ impl ScreenLayout {
                 AMBER,
             )
         } else if let Some(callout) = &juice.callout {
-            (callout.head.clone(), callout.color)
+            (callout.head.to_string(), callout.color)
         } else {
             (
                 format!("WAVE {}/3 · {} LEFT", game.wave, game.remaining_enemies()),
@@ -538,13 +538,12 @@ mod tests {
                                 set_camera(&layout.canvas.camera());
                                 ui.begin(layout.viewport);
                                 // Call the production dispatcher, including its private layout.
-                                crate::overlay(
+                                layout.overlay(
                                     &mut ui,
-                                    &layout,
-                                    &input,
                                     title,
                                     "Run frozen. Resume when ready.",
                                     action,
+                                    &input,
                                 );
                                 ui.finish_player(&mut input, true);
                                 ui.paint();
@@ -705,14 +704,44 @@ mod tests {
                     if layout.compact {
                         layout.hud(&mut ui, &game, &juice);
                     } else {
+                        let painter = crate::hud::Painter::new(layout.viewport);
+                        let mut motion = crate::hud::Hud::new();
+                        motion.update(
+                            crate::hud::Screen::Playing,
+                            &game,
+                            None,
+                            1.,
+                            ferravex_play::tween::Motion::Reduced,
+                        );
+                        crate::hud::DRAWN.with(|d| d.borrow_mut().clear());
+                        set_default_camera();
                         crate::hud::play(
-                            &mut ui,
+                            &painter,
                             &game,
                             &input,
                             crate::hud::Learned::default(),
                             1.,
+                            &motion,
+                            &juice,
                         );
-                        crate::hud::announcements(&mut ui, &game, &juice);
+                        crate::hud::announcements(
+                            &painter,
+                            &game,
+                            &juice,
+                            &motion,
+                            ferravex_play::tween::Motion::Reduced,
+                        );
+                        crate::hud::DRAWN.with(|d| {
+                            let bounds = d.borrow();
+                            assert!(bounds.len() >= 6);
+                            for rect in bounds.iter() {
+                                assert!(
+                                    rect.x + rect.w <= size[0] - CORNER[0] + 0.01
+                                        || rect.y >= CORNER[1] - 0.01,
+                                    "{size:?}: {rect:?} enters corner"
+                                );
+                            }
+                        });
                     }
                     ui.finish(false);
                     let pixels = layout.viewport.pixels();
@@ -734,7 +763,9 @@ mod tests {
                         );
                         checked += 1;
                     }
-                    assert!(checked >= 6, "{size:?} drew its HUD");
+                    if layout.compact {
+                        assert!(checked >= 6, "{size:?} drew its HUD");
+                    }
                 });
             }
         }

@@ -49,6 +49,10 @@ pub(super) struct FlightPresentation {
     roll: f32,
     pub(super) motion: f32,
     flash: f32,
+    /// Render seconds for gulls, cloud drift and nav lights; frozen in pause.
+    pub(super) ambient: f32,
+    /// Render seconds on the briefing screen, for the idle bob.
+    idle: f32,
 }
 
 impl FlightPresentation {
@@ -98,6 +102,8 @@ impl FlightPresentation {
             roll: 0.,
             motion: 1.,
             flash: 1.,
+            ambient: 0.,
+            idle: 0.,
         }
     }
 
@@ -112,6 +118,7 @@ impl FlightPresentation {
         self.gate_glow = 0.;
         self.celebrate = 0.;
         self.roll = 0.;
+        self.idle = 0.;
     }
 
     fn clear_particles(&mut self) {
@@ -226,6 +233,15 @@ impl FlightPresentation {
         }
     }
 
+    /// Gentle hover on the briefing screen; zero once flying or when reduced.
+    pub(super) fn bob(&self, state: SessionState) -> f32 {
+        if state == SessionState::Ready && self.motion > 0. {
+            (self.idle * 1.7).sin() * 0.6
+        } else {
+            0.
+        }
+    }
+
     /// Victory-roll angle in radians: one eased full turn, zero when reduced.
     pub(super) fn roll_angle(&self) -> f32 {
         if self.roll <= 0. || self.motion == 0. {
@@ -286,6 +302,20 @@ impl FlightPresentation {
 
         let flight = &run.flight;
         self.courier_events(flight, frame, flash);
+        // Ambient life (gulls, clouds, idle prop) runs on render time but
+        // never in pause, and stops entirely under reduced motion.
+        let render = if elapsed.is_finite() {
+            elapsed.clamp(0., 0.1)
+        } else {
+            0.
+        };
+        if motion > 0. && !run.session.is_paused() {
+            self.ambient += render;
+            if run.session.state() == SessionState::Ready {
+                self.idle += render;
+                self.propeller_time += render * 0.6;
+            }
+        }
         // Pops and glow age on accepted time only, so pause freezes them.
         for slot in &mut self.pops {
             if let Some(pop) = slot {

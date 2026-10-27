@@ -23,10 +23,12 @@ mod hud;
 mod journey200_tests;
 mod juice;
 mod level;
+mod look;
 mod presentation;
 mod quips;
 mod save;
 mod scene;
+mod style;
 use ferravex_render::audio::{Cue, GameAudio, Surface};
 use ferravex_render::input::{ActionKind, Binding, InputCode, PlayerInput, Preset};
 use ferravex_render::ui::{Align, ButtonStyle, TextStyle, Ui, UiRect, Viewport};
@@ -50,35 +52,15 @@ fn conf() -> Conf {
     c
 }
 fn label(s: &str, x: f32, y: f32, size: f32, color: Color) {
-    draw_text(s, x, y, size, color);
+    ferravex_render::text::draw_text_styled(s, x, y, style::body(size, color));
 }
 fn center(s: &str, x: f32, y: f32, size: f32, color: Color) {
-    let width = get_default_font()
-        .try_metrics(size as u16, 1.)
-        .and_then(|font| font.measure_line(s))
-        .expect("bounded HUD text")
-        .width;
-    label(s, x - width * 0.5, y, size, color);
+    style::text_center(s, x, y, style::body(size, color));
 }
 fn button(ui: &mut Ui, id: u64, rect: Rect, title: &str, enabled: bool, size: f32) {
-    ui.hud_button(
-        id,
-        UiRect {
-            min: [rect.x, rect.y],
-            size: [rect.w, rect.h],
-        },
-        title,
-        enabled,
-        ButtonStyle {
-            fill: GREEN,
-            ink: CREAM,
-            focus: GOLD,
-            disabled: Color::from_hex(0x616956),
-            size,
-        },
-    )
-    .unwrap();
+    style::control(ui, id, rect, title, enabled, size);
 }
+
 fn availability(status: Result<(), ActionError>, available: &str) -> String {
     match status {
         Ok(()) => available.into(),
@@ -156,6 +138,7 @@ async fn game() {
     let mut sound = GameAudio::new();
     let mut presentation = Presentation::default();
     let mut juice = juice::Juice::new();
+    let mut daylight = look::DayLight::new();
     let mut particles = ferravex_render::effects::ParticleRenderer::new(320)
         .expect("bounded presentation particles");
     #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
@@ -185,10 +168,12 @@ async fn game() {
             sound = GameAudio::new();
             presentation = Presentation::default();
             juice.reset();
+            daylight.reset();
             true
         } else {
             false
         };
+        style::frame(demo.dt(), &campaign);
         let screen = vec2(screen_width().max(1.), screen_height().max(1.));
         let compact = (280. ..900.)
             .contains(&screen.x)
@@ -246,6 +231,12 @@ async fn game() {
         clear_background(Color::from_hex(0x27372a));
         presentation.frame(&campaign.game, demo.dt());
         juice.apply_policy(ferravex_render::preferences::feedback_policy());
+        daylight.frame(
+            &campaign.game,
+            !campaign.session.is_playing(),
+            demo.dt(),
+            ferravex_play::tween::Motion::from(ferravex_render::preferences::feedback_policy()),
+        );
         let base_camera = compact.map_or_else(|| canvas.camera(), |layout| layout.camera());
         let mut shaken = base_camera;
         shaken.target -= juice.shake();
@@ -255,8 +246,17 @@ async fn game() {
             &campaign.game,
             &presentation,
             &juice,
+            &daylight,
             compact.is_some(),
             boost,
+            pointer.and_then(|p| {
+                campaign
+                    .game
+                    .level
+                    .plots
+                    .iter()
+                    .position(|plot| p.distance(*plot) < 30.)
+            }),
         );
         let finished = campaign.game.outcome != Outcome::Playing;
         let mut draw_particles = || {
@@ -315,6 +315,8 @@ async fn game() {
         );
         hud_ui.finish_player(&mut player_input, !blocked && !reloaded);
         hud_ui.paint();
+        set_default_camera();
+        style::paint(&mut hud_ui);
         let ui_action = hud_action(&hud_ui, campaign.game.level.plots.len());
         if hud_ui.activated(9) {
             plot_picker = !plot_picker;

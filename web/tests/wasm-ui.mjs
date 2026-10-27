@@ -24,6 +24,20 @@ function runtime(id){
   const design=id==='orchard-guard'?[1200,760]:[1280,800],scale=Math.min(1280/design[0],800/design[1]);
   x=(1280-design[0]*scale)/2+x*scale;y=(800-design[1]*scale)/2+y*scale;w*=scale;h*=scale;
   const v=new Float32Array(e.memory.buffer,e.ferravex_vertices(),e.ferravex_vertex_count()*8),near=(a,b)=>Math.abs(a-b)<1e-5;
+  if(id==='orchard-guard'){
+   // Rounded AA controls have a triangulated core and a transparent fringe.
+   // Verify their actual colored bounds rather than requiring a square quad.
+   const points=[];
+   for(let i=0;i<v.length;i+=8){
+    if(!color.every((c,n)=>near(v[i+4+n],c)))continue;
+    const px=(v[i]+1)*640,py=(1-v[i+1])*400;
+    if(px>=x-1&&px<=x+w+1&&py>=y-1&&py<=y+h+1)points.push([px,py]);
+   }
+   if(!points.length)return false;
+   const left=Math.min(...points.map(p=>p[0])),right=Math.max(...points.map(p=>p[0]));
+   const top=Math.min(...points.map(p=>p[1])),bottom=Math.max(...points.map(p=>p[1]));
+   return Math.abs(left-x)<=1&&Math.abs(right-x-w)<=1&&Math.abs(top-y)<=1&&Math.abs(bottom-y-h)<=1;
+  }
   for(let i=0;i+23<v.length;i+=8)if(near(v[i],x/1280*2-1)&&near(v[i+1],1-y/800*2)
    &&near(v[i+8],(x+w)/1280*2-1)&&near(v[i+9],1-y/800*2)&&near(v[i+17],1-(y+h)/800*2)
    &&color.every((c,n)=>near(v[i+4+n],c)))return true;
@@ -82,7 +96,7 @@ for(const [width,height] of [[1280,800],[390,608],[320,480]]){
  // Building removes the focused Seed button. Focus the replacement Upgrade,
  // then reverse through the current HUD (which also includes Pause/Restart).
  key(0xff09);frame();
- assert.ok(panel(240,683,415,2,[.88,.62,.22,1]),'keyboard focuses the new upgrade control');
+ assert.ok(panel(233,676,429,69,[.88,.62,.22,1]),'keyboard focuses the new upgrade control');
  key(0xff52);frame();key(0xff0d);frame();frame();
  assert.ok(panel(957,683,215,55,[97/255,105/255,86/255,1]),'focused wave control launches and disables itself');
  assert.ok(panel(695,683,110,55,[.23,.39,.24,1]),'starting the first wave enables Pause');
@@ -126,7 +140,11 @@ for(const width of [1280,390,320]){
  assert.ok(speed.left-lap.right>=8,'lap and speed stay separate');
  assert.ok(speed.right<=width-72,'the fullscreen menu corner stays clear');
  assert.ok(raceTime.left-gates.right>=8,'race time remains separate from gate progress');
- const [left,top]=point(countdown),[right,bottom]=point(countdown+40);
+ // Rounded panel fans begin at their center; inspect the full opaque core.
+ const panelPoints=[];
+ for(let i=0;i<v.length;i+=8)if(color(i,[.12,.19,.17,.94]))panelPoints.push(point(i));
+ const left=Math.min(...panelPoints.map(p=>p[0])),right=Math.max(...panelPoints.map(p=>p[0]));
+ const top=Math.min(...panelPoints.map(p=>p[1])),bottom=Math.max(...panelPoints.map(p=>p[1]));
  const labels=runs(countdown+48,v.length);
  assert.equal(labels.length,2,'ready and countdown are rendered without a repeated key instruction');
  for(const r of labels)assert.ok(r.left>=left+10&&r.right<=right-10&&r.top>=top+10&&r.bottom<=bottom-10,`countdown text stays inside its panel at ${width}px: ${JSON.stringify(r)}`);

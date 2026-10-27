@@ -77,7 +77,15 @@ pub(super) fn run_summary(g: &Game) -> RunSummary {
 
 fn top_bar(campaign: &Campaign, juice: &Juice) {
     let g = &campaign.game;
-    draw_rectangle(0., 0., 1200., 70., CREAM);
+    ferravex_render::shapes::fill_rounded_rect(
+        Rect::new(0., 0., 1200., 70.),
+        0.,
+        ferravex_render::shapes::Fill::vertical(
+            Rect::new(0., 0., 1200., 70.),
+            style::BAR_TOP,
+            style::BAR_BOTTOM,
+        ),
+    );
     draw_rectangle(0., 68., 1200., 2., Color::new(0.23, 0.39, 0.24, 0.35));
     // Logo apple.
     draw_circle(38., 37., 14., juice::APPLE);
@@ -235,7 +243,7 @@ fn notice(campaign: &Campaign, save_error: bool) {
     let size = 16.;
     let w = (text_width(&text, size) + 36.).min(1100.);
     let (x, y) = (600. - w * 0.5, 622.);
-    draw_rectangle(x, y, w, 30., Color::new(0.19, 0.25, 0.19, 0.9));
+    style::dark_chip(Rect::new(x, y, w, 30.), 1.);
     fit_center(&text, 600., y + 22., size, w - 24., CREAM);
 }
 
@@ -396,8 +404,7 @@ pub(super) fn overlay(
     }
     draw_rectangle(0., 0., 1200., 760., Color::new(0.14, 0.20, 0.13, 0.55));
     if paused {
-        draw_rectangle(349., 219., 510., 300., Color::new(0.1, 0.14, 0.09, 0.3));
-        draw_rectangle(345., 215., 510., 300., CREAM);
+        style::card(Rect::new(345., 215., 510., 300.), 18., 1.);
         draw_rectangle(345., 215., 510., 6., GOLD);
         center("ORCHARD PAUSED", 600., 268., 30., INK);
         fit_center(

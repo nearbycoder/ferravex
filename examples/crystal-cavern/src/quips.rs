@@ -146,11 +146,11 @@ pub(super) fn altar(index: u8) -> &'static str {
 /// What the stage's next objective needs, as a short HUD label.
 pub(super) fn objective(stage: usize) -> &'static str {
     match stage {
-        0..=2 => "FIND THE CRYSTALS",
-        3 => "WAKE ALTAR I",
-        4 => "WAKE ALTAR II",
-        5 => "WALK INTO DAYLIGHT",
-        _ => "EXPEDITION COMPLETE",
+        0..=2 => "Find the crystals",
+        3 => "Wake altar I",
+        4 => "Wake altar II",
+        5 => "Walk into daylight",
+        _ => "Expedition complete",
     }
 }
 

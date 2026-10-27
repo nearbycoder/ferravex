@@ -17,6 +17,7 @@ members = [
     "examples/crystal-cavern",
     "examples/dune-skimmer",
     "examples/emberline",
+    "examples/glowtide",
     "examples/marble-run",
     "examples/neon-swarm",
     "examples/shared/mini-golf",

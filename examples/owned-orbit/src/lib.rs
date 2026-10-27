@@ -1,4 +1,5 @@
 //! Orbit Breaker: original gameplay, original CPU raster, and only first-party Ferravex crates.
+mod font;
 pub mod game;
 #[cfg(any(target_arch = "wasm32", test))]
 mod interactive;
@@ -115,6 +116,15 @@ impl Orbit {
     /// assert_eq!(orbit.game.phase, Phase::Playing);
     /// ```
     pub fn advance_input(&mut self, dt: f64, input: Input) {
+        self.advance_session(dt, input);
+        let key = self.game.phase as u8 + if self.session.is_paused() { 8 } else { 0 };
+        let policy = ferravex_engine::render::preferences::feedback_policy();
+        self.presentation
+            .screen
+            .update(dt as f32, key, self.game.score, policy);
+    }
+
+    fn advance_session(&mut self, dt: f64, input: Input) {
         self.presentation.begin_frame(dt);
         self.sync_presentation();
         if input.restart {
@@ -277,6 +287,7 @@ impl Orbit {
         self.game.restart();
         self.presentation.clear();
         self.presentation.restarts = self.presentation.restarts.wrapping_add(1);
+        self.presentation.screen.restarted();
         self.unrecorded = None;
         self.sync_presentation();
         self.session.restart();

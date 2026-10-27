@@ -57,12 +57,24 @@ for(const game of catalog){
  // A restored tower exposes the 415-wide upgrade panel, not either 190-wide
  // empty-plot build control. The upgrade now shares their left edge.
  const v=new Float32Array(r.e.memory.buffer,r.e.ferravex_vertices(),r.e.ferravex_vertex_count()*8);
- const scale=Math.min(1280/1200,720/760),x=(1280-1200*scale)/2+240*scale,y=683*scale,w=415*scale,h=55*scale;
+ const scale=Math.min(1280/1200,720/760),offset=(1280-1200*scale)/2;
  const near=(a,b)=>Math.abs(a-b)<1e-5;
- let upgrade=false;for(let i=0;i+23<v.length;i+=8)if(near(v[i],x/1280*2-1)&&near(v[i+1],1-y/720*2)
-  &&near(v[i+8],(x+w)/1280*2-1)&&near(v[i+9],1-y/720*2)&&near(v[i+17],1-(y+h)/720*2)
-  &&[.23,.39,.24,1].every((c,n)=>near(v[i+4+n],c))){upgrade=true;break;}
- assert.ok(upgrade,'fresh Wasm instance restores the actual tower and upgrade HUD');
+ const panel=(controlX,controlWidth)=>{
+  const x=offset+controlX*scale,y=683*scale,w=controlWidth*scale,h=55*scale,points=[];
+  // AA rounded fills have a triangulated opaque core and transparent fringe.
+  // Measure that core instead of requiring six square-quad vertices.
+  for(let i=0;i<v.length;i+=8){
+   if(![.23,.39,.24,1].every((c,n)=>near(v[i+4+n],c)))continue;
+   const px=(v[i]+1)*640,py=(1-v[i+1])*360;
+   if(px>=x-1&&px<=x+w+1&&py>=y-1&&py<=y+h+1)points.push([px,py]);
+  }
+  if(!points.length)return false;
+  const left=Math.min(...points.map(p=>p[0])),right=Math.max(...points.map(p=>p[0]));
+  const top=Math.min(...points.map(p=>p[1])),bottom=Math.max(...points.map(p=>p[1]));
+  return Math.abs(left-x)<=1&&Math.abs(right-x-w)<=1&&Math.abs(top-y)<=1&&Math.abs(bottom-y-h)<=1;
+ };
+ assert.ok(panel(240,415),'fresh Wasm instance restores the actual tower and upgrade HUD');
+ assert.ok(!panel(240,190)&&!panel(455,190),'restored tower replaces both empty-plot build controls');
  r.key(114);r.frame();assert.notEqual(data.get(key),stored,'restart clears the checkpoint explicitly');
  console.log('Orchard actual build, native-code checkpoint serialization, fresh-instance resume and restart passed');
 }

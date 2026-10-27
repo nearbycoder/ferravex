@@ -22,89 +22,89 @@ pub(super) enum Mood {
 }
 
 const START: [&str; 5] = [
-    "SIX TARGETS. NO PRESSURE.",
-    "I JUST STACKED THOSE.",
-    "MIND THE PAINTWORK, CHIEF.",
-    "LOAD-BEARING TOWERS. ALLEGEDLY.",
-    "SAFETY FIRST. DEMOLITION SECOND.",
+    "Six targets. No pressure.",
+    "I just stacked those.",
+    "Mind the paintwork, chief.",
+    "Load-bearing towers. Allegedly.",
+    "Safety first. Demolition second.",
 ];
 
 const RETRY: [&str; 6] = [
-    "REBUILT IT. WITH EXTRA GLUE.",
-    "BACK AGAIN? BRING IT.",
-    "SAME TOWERS. FRESH CONFIDENCE.",
-    "I'VE PUT THE KETTLE ON.",
-    "ROUND TWO. MY BACK HURTS.",
-    "GENTLY THIS TIME. OR NOT.",
+    "Rebuilt it. With extra glue.",
+    "Back again? Bring it.",
+    "Same towers. Fresh confidence.",
+    "I've put the kettle on.",
+    "Round two. My back hurts.",
+    "Gently this time. Or not.",
 ];
 
 const WOBBLE: [&str; 5] = [
-    "WOBBLE... WOBBLE...",
-    "EASY... EASY...",
-    "IT'S FINE. IT'S FINE.",
-    "DON'T YOU DARE FALL.",
-    "STEADY, OLD GIRL...",
+    "Wobble... wobble...",
+    "Easy... easy...",
+    "It's fine. It's fine.",
+    "Don't you dare fall.",
+    "Steady, old girl...",
 ];
 
 const KNOCKED: [&str; 7] = [
-    "MY BEAUTIFUL TOWER!",
-    "THAT WAS LOAD-BEARING!",
-    "I'LL GET THE BROOM.",
-    "THERE GOES MY WEEKEND.",
-    "WHO SIGNED OFF ON THAT?",
-    "INSURANCE WON'T COVER THIS.",
-    "I HAD A NAME FOR THAT ONE.",
+    "My beautiful tower!",
+    "That was load-bearing!",
+    "I'll get the broom.",
+    "There goes my weekend.",
+    "Who signed off on that?",
+    "Insurance won't cover this.",
+    "I had a name for that one.",
 ];
 
 const MISS: [&str; 7] = [
-    "THE BIRDS THANK YOU.",
-    "WIND, PROBABLY.",
-    "WARNING SHOT? SURE.",
-    "THE SKY IS NOT A TARGET.",
-    "BOLD. WRONG, BUT BOLD.",
-    "THE CLOUDS FELT THAT.",
-    "I'LL PUT IT IN THE REPORT.",
+    "The birds thank you.",
+    "Wind, probably.",
+    "Warning shot? Sure.",
+    "The sky is not a target.",
+    "Bold. Wrong, but bold.",
+    "The clouds felt that.",
+    "I'll put it in the report.",
 ];
 
 const MISS_STREAK: [&str; 4] = [
-    "TRY THE LOW SANDY BLOCKS.",
-    "FOLLOW THE DOTTED LINE!",
-    "AIM LOWER. I'M BEGGING.",
-    "SUPPORTS, CHIEF. SUPPORTS.",
+    "Try the low sandy blocks.",
+    "Follow the dotted line!",
+    "Aim lower. I'm begging.",
+    "Supports, chief. Supports.",
 ];
 
 const DOMINO: [&str; 3] = [
-    "THEY'RE HOLDING HANDS!",
-    "DOMINO RULES APPLY!",
-    "ONE PUSH. TWO TOWERS. RUDE.",
+    "They're holding hands!",
+    "Domino rules apply!",
+    "One push. Two towers. Rude.",
 ];
 
-const WONDER: [&str; 2] = ["ONE BALL?! ONE?!", "I'M CALLING MY MUM."];
+const WONDER: [&str; 2] = ["One ball?! One?!", "I'm calling my mum."];
 
 const BELL: [&str; 3] = [
-    "WHO RANG THE LUNCH BELL?",
-    "DING! ...LUNCH ALREADY?",
-    "NOBODY TOUCHES THE BELL!",
+    "Who rang the lunch bell?",
+    "Ding! ...Lunch already?",
+    "Nobody touches the bell!",
 ];
 
 const LAST_SHELL: [&str; 3] = [
-    "LAST SHELL. MAKE IT COUNT.",
-    "ONE LEFT. NO PRESSURE.",
-    "LAST ONE. I BELIEVE IN YOU.",
+    "Last shell. Make it count.",
+    "One left. No pressure.",
+    "Last one. I believe in you.",
 ];
 
 const SETTLING: [&str; 3] = [
-    "COME ON... COME ON...",
-    "ANY SECOND NOW...",
-    "LEAN, YOU STUBBORN THING!",
+    "Come on... come on...",
+    "Any second now...",
+    "Lean, you stubborn thing!",
 ];
 
 const PAUSE: [&str; 5] = [
-    "UNION-MANDATED TEA BREAK",
-    "THE RUBBLE WILL WAIT",
-    "GUS IS ON HIS SANDWICH",
-    "TOWERS HOLDING THEIR BREATH",
-    "HARD HATS OFF. BRIEFLY.",
+    "Union-mandated tea break.",
+    "The rubble will wait.",
+    "Gus is on his sandwich.",
+    "The towers hold their breath.",
+    "Hard hats off. Briefly.",
 ];
 
 /// Advances by a stride coprime with the table length, so a table never
@@ -218,30 +218,27 @@ pub(super) struct RunSummary {
 /// Silly, never mean, ordered from rarest feat to the general tiers.
 pub(super) fn rank(run: RunSummary) -> Rank {
     let (title, quip) = if run.won && run.wonder {
-        ("WRECKING BALL WIZARD", "PHYSICS HAS FILED A COMPLAINT")
+        ("WRECKING BALL WIZARD", "Physics has filed a complaint.")
     } else if run.won && run.stars == 3 && run.bell {
-        ("FOUNDRY LEGEND", "THREE STARS AND A DING. SHOW-OFF.")
+        ("FOUNDRY LEGEND", "Three stars and a ding. Show-off.")
     } else if run.bell && !run.won {
-        ("BELL RINGER", "WRONG TARGET. GREAT TONE.")
+        ("BELL RINGER", "Wrong target. Great tone.")
     } else if run.won && run.stars == 3 {
-        ("MASTER DEMOLISHER", "SURGICAL. SLIGHTLY TERRIFYING.")
+        ("MASTER DEMOLISHER", "Surgical. Slightly terrifying.")
     } else if run.won && run.domino {
-        ("DOMINO DIRECTOR", "WHY HIT TWO WHEN ONE WILL DO?")
+        ("DOMINO DIRECTOR", "Why hit two when one will do?")
     } else if run.won && run.stars == 2 {
-        ("CERTIFIED TOPPLER", "THE TOWERS TOOK EARLY RETIREMENT")
+        ("CERTIFIED TOPPLER", "The towers took early retirement.")
     } else if run.won {
-        ("PERSISTENT PLINKER", "THEY FELL EVENTUALLY. OUT OF PITY?")
+        ("PERSISTENT PLINKER", "They fell eventually. Out of pity?")
     } else if run.misses >= 5 {
-        ("SKY ARTILLERIST", "THE CLOUDS NEVER SAW IT COMING")
+        ("SKY ARTILLERIST", "The clouds never saw it coming.")
     } else if run.targets >= 4 {
-        ("SO CLOSE, SO RUBBLE", "ONE MORE SHELL. JUST ONE.")
+        ("SO CLOSE, SO RUBBLE", "One more shell. Just one.")
     } else if run.targets >= 1 {
-        ("APPRENTICE LOBBER", "THE TOWERS ARE BEING SMUG ABOUT IT")
+        ("APPRENTICE LOBBER", "The towers are being smug about it.")
     } else {
-        (
-            "CONSCIENTIOUS OBJECTOR",
-            "NOT ONE BLOCK HARMED. VERY POLITE.",
-        )
+        ("PEACEFUL FOREMAN", "Not one block harmed. Very polite.")
     };
     Rank { title, quip }
 }
@@ -339,7 +336,7 @@ mod tests {
             "PERSISTENT PLINKER"
         );
         let loss = RunSummary::default();
-        assert_eq!(rank(loss).title, "CONSCIENTIOUS OBJECTOR");
+        assert_eq!(rank(loss).title, "PEACEFUL FOREMAN");
         assert_eq!(
             rank(RunSummary { targets: 2, ..loss }).title,
             "APPRENTICE LOBBER"

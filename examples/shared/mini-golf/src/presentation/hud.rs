@@ -1,239 +1,408 @@
-//! Screen-space UI: score chip, hole title card, power dock, headline
-//! banner, the between-hole sheet, menus and the results card.
+//! Screen-space UI built with the modern kit: score chip, hole title card,
+//! power dock, headline banner, the between-hole sheet, menus and results.
+//!
+//! Every function runs twice per frame. The layout pass (`paint == false`,
+//! during `prepare`) submits only `Ui` input: invisible buttons, the modal
+//! blocker and a transparent anchor rectangle for each centered card. The
+//! paint pass (`paint == true`, during `draw`, after the post-processing HUD
+//! boundary) draws the same rectangles with the kit. One function owns both,
+//! so layout and visuals cannot drift apart.
 use super::*;
+use ferravex_play::tween::{Appearance, Entrance};
+use ferravex_render::{
+    post,
+    shapes::{self, Fill, Shadow, Stroke},
+    text::{FontFace, TextAlign, TextStyle as Type, draw_text_styled, text_width, wrap_text},
+    ui::kit::{self, ButtonKind, KitTheme},
+};
+use std::fmt::Write as _;
+
+/// Copper Greens palette on the kit's roles (contrast-checked by hand: ink
+/// and muted copy on `surface` exceed 4.5:1; dark ink on the copper accent ~7:1).
+pub(super) fn golf_theme() -> KitTheme {
+    KitTheme {
+        backdrop: Color::new(0.03, 0.07, 0.05, 0.55),
+        surface: Color::from_rgba(27, 51, 43, 255),
+        raised: Color::from_rgba(44, 80, 64, 255),
+        header: Color::from_rgba(38, 70, 56, 255),
+        ink: PAPER,
+        muted: DIM,
+        disabled: Color::from_rgba(118, 132, 116, 255),
+        accent: Color::from_rgba(228, 142, 88, 255),
+        accent_ink: Color::from_rgba(36, 18, 8, 255),
+        success: MINT,
+        warning: GOLD,
+        danger: Color::from_rgba(226, 112, 92, 255),
+        focus: GOLD,
+        line: Color::new(1., 1., 1., 0.1),
+        shadow: Color::new(0., 0., 0., 0.5),
+        ..KitTheme::default()
+    }
+}
+
+/// Reusable formatting buffer, so HUD copy never allocates per frame.
+#[derive(Default)]
+pub(super) struct Scribe(String);
+impl Scribe {
+    pub fn f(&mut self, args: std::fmt::Arguments<'_>) -> &str {
+        self.0.clear();
+        let _ = self.0.write_fmt(args);
+        &self.0
+    }
+}
+
+/// Button motion slot for a `Ui` id (10..=25 and practice 100..=111).
+pub(super) fn slot(id: u64) -> usize {
+    if id >= 100 {
+        26 + (id - 100).min(13) as usize
+    } else {
+        (id as usize).min(25)
+    }
+}
+pub(super) const SLOTS: usize = 40;
+
+fn modern(size: f32, color: Color) -> Type {
+    Type::modern(size, color)
+}
+fn classic(size: f32, color: Color) -> Type {
+    Type::classic(size, color)
+}
+/// Shrink in crisp 8 px steps until `s` fits `max_w`.
+fn fit(mut style: Type, s: &str, max_w: f32) -> Type {
+    while style.size > 8. && text_width(s, style) > max_w {
+        style.size = (style.size - 8.).max(8.);
+    }
+    style
+}
+fn faded(style: Type, a: f32) -> Type {
+    let mut s = style;
+    s.color = fade(s.color, a);
+    s.shadow = s.shadow.map(|c| fade(c, a));
+    s.outline = s.outline.map(|c| fade(c, a));
+    s
+}
+fn surface(r: Rect, radius: f32, theme: &KitTheme, a: f32) {
+    shapes::drop_shadow(
+        r,
+        radius,
+        Shadow::soft(Color::new(0., 0., 0., 0.45 * a))
+            .offset(vec2(0., 6.))
+            .blur(22.),
+    );
+    shapes::fill_rounded_rect(
+        r,
+        radius,
+        Fill::vertical(r, fade(theme.raised, a), fade(theme.surface, a)),
+    );
+    shapes::stroke_rounded_rect(r, radius, 1., fade(theme.line, a));
+}
+fn tone_label(tone: Tone) -> Color {
+    tone_color(tone)
+}
 
 impl App {
-    /// Score chip, hole title card, onboarding hint, power meter and shot dock.
-    pub(super) fn hud(&mut self, w: f32, h: f32, scene: Scene) {
-        let chip_w = chip_width(w);
-        self.ui
-            .button(
-                15,
-                rect(10., 10., chip_w, 44.),
-                "",
-                true,
-                ButtonStyle {
-                    fill: DARK,
-                    focus: GOLD,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-        let badge = 54.;
-        let text_w = chip_w - 20. - badge;
-        let name = self.round.course.name.to_uppercase();
-        let hole = self.round.hole_index + 1;
-        let title = if text_w >= 230. {
-            format!("HOLE {hole}/12 · {name}")
-        } else {
-            format!("{hole} · {name}")
-        };
-        line(
-            &mut self.ui,
-            rect(20., 15., text_w, 15.),
-            &title,
-            15.,
-            PAPER,
-            Align::Left,
-        );
-        let strokes = self.round.strokes;
-        let detail = format!(
-            "{}PAR {} · {} {}",
-            if self.round.practice {
-                "PRACTICE · "
-            } else {
-                ""
-            },
-            self.round.course.par,
-            strokes,
-            if strokes == 1 { "STROKE" } else { "STROKES" }
-        );
-        line(
-            &mut self.ui,
-            rect(20., 35., text_w, 12.),
-            &detail,
-            12.,
-            GOLD,
-            Align::Left,
-        );
-        let to_par = self.round_to_par();
-        let badge_x = 10. + chip_w - badge - 6.;
-        self.ui
-            .panel(rect(badge_x, 15., badge, 34.), PANEL)
-            .unwrap();
-        line(
-            &mut self.ui,
-            rect(badge_x, 18., badge, 9.),
-            "ROUND",
-            9.,
-            DIM,
-            Align::Center,
-        );
-        let color = match to_par {
-            i16::MIN..=-1 => MINT,
-            0 => PAPER,
-            _ => CLAY,
-        };
-        line(
-            &mut self.ui,
-            rect(badge_x, 30., badge, 16.),
-            &card::to_par_text(to_par),
-            16.,
-            color,
-            Align::Center,
-        );
-
-        // Hole title card: name, par, the hole's read and a personal best hook.
-        let shown = if self.round.strokes > 0 || self.round.phase == Phase::Rolling {
-            0.
-        } else {
-            ((INTRO - self.intro) / 0.4).clamp(0., 1.)
-        };
-        if shown > 0. {
-            let cw = (w - 24.).min(460.);
-            let cx = (w - cw) * 0.5;
-            let cy = scene.y + 6.;
-            let best = self.hole_best[self.round.hole_index];
-            // Short landscape screens keep the name and par; the hint waits
-            // for a taller view rather than covering the green.
-            let roomy = scene.h >= 300.;
-            let mut height = if roomy { 74. } else { 54. };
-            let best_y = height - 4.;
-            if best.is_some() {
-                height += 16.;
-            }
-            let rise = if self.juice.motion() > 0. {
-                // Settles upward from below, never into the menu corner.
-                (1. - ease_out(self.intro / 0.35)) * 10.
-            } else {
-                0.
-            };
-            let cy = cy + rise;
+    pub(super) fn px(&self, r: UiRect) -> Rect {
+        kit::ui_rect(self.ui.viewport(), r)
+    }
+    pub(super) fn motion(&self) -> Motion {
+        Motion::from_reduced(self.juice.motion() == 0.)
+    }
+    /// One button: `Ui` input in the layout pass, kit visuals in the paint pass.
+    #[allow(clippy::too_many_arguments)]
+    fn kit_button(
+        &mut self,
+        paint: bool,
+        id: u64,
+        r: UiRect,
+        label: &str,
+        kind: ButtonKind,
+        enabled: bool,
+        look: Appearance,
+    ) {
+        if !paint {
             self.ui
-                .panel(rect(cx, cy, cw, height), fade(DARK, 0.88 * shown))
-                .unwrap();
-            self.ui
-                .panel(rect(cx, cy, cw, 3.), fade(COPPER, shown))
-                .unwrap();
-            line(
-                &mut self.ui,
-                rect(cx + 12., cy + 10., cw - 24., 11.),
-                &format!("HOLE {} OF 12 · PAR {}", hole, self.round.course.par),
-                11.,
-                fade(GOLD, shown),
-                Align::Center,
-            );
-            line(
-                &mut self.ui,
-                rect(cx + 12., cy + 25., cw - 24., 22.),
-                &name,
-                22.,
-                fade(PAPER, shown),
-                Align::Center,
-            );
-            if roomy {
-                line(
-                    &mut self.ui,
-                    rect(cx + 12., cy + 52., cw - 24., 12.),
-                    &self.round.course.hint.to_uppercase(),
-                    12.,
-                    fade(PAPER, shown * 0.9),
-                    Align::Center,
-                );
-            }
-            if let Some(best) = best {
-                let ace = if best == 1 { " · ACED IT" } else { "" };
-                line(
-                    &mut self.ui,
-                    rect(cx + 12., cy + best_y, cw - 24., 11.),
-                    &format!("YOUR BEST HERE: {best}{ace}"),
-                    11.,
-                    fade(MINT, shown),
-                    Align::Center,
-                );
-            }
+                .button(id, r, "", enabled, kit::INVISIBLE_BUTTON)
+                .expect("bounded golf button");
+            return;
         }
+        let motion = self.motion();
+        let state = kit::ui_button_state(&self.ui, id, enabled);
+        let rect = kit::appear(self.px(r), look);
+        let m = &mut self.buttons[slot(id)];
+        m.update(state, self.frame_dt, motion);
+        kit::button(rect, label, kind, m, &self.theme.faded(look.alpha));
+    }
 
+    /// Top-level screen for this frame: play HUD, sheet, menus and banner.
+    pub(super) fn screen(&mut self, paint: bool, w: f32, h: f32, scene: Scene) {
+        let modal = self.modal_open();
+        let sheet = self.sheet_open();
+        if !modal && !sheet {
+            self.hud(paint, w, h, scene);
+        }
+        if !modal && paint {
+            self.banner(w, scene);
+        }
+        if sheet {
+            self.hole_sheet(paint, w, h);
+        } else if modal {
+            self.modal(paint, w, h);
+        }
+    }
+
+    /// Score chip, hole title card, onboarding hint, power meter and shot dock.
+    fn hud(&mut self, paint: bool, w: f32, h: f32, scene: Scene) {
+        let chip = rect(10., 10., chip_width(w), 48.);
+        if paint {
+            self.paint_chip(chip);
+            self.title_card(w, scene);
+        } else {
+            self.ui
+                .button(15, chip, "", true, kit::INVISIBLE_BUTTON)
+                .expect("bounded golf chip");
+        }
+        if self.round.phase != Phase::Aiming {
+            return;
+        }
         let dock_w = (w - 24.).min(420.);
         let x = (w - dock_w) * 0.5;
         let y = h - 64.;
         let gap = 6.;
         let bw = (dock_w - gap * 4.) / 5.;
-        if self.round.phase == Phase::Aiming {
-            // Onboarding: fades over the first few accepted putts, never for demos.
-            let learn = 1. - self.putts as f32 / LEARNED as f32;
-            if learn > 0. && !self.auto {
-                let hint = if w >= 560. {
-                    "DRAG TOWARD THE TARGET, RELEASE TO PUTT  ·  OR ← → AIM, ↑ ↓ POWER, SPACE"
-                } else {
-                    "DRAG TO AIM, RELEASE TO PUTT"
-                };
-                let a = 0.35 + 0.65 * learn;
-                let pill = (hint.chars().count() as f32 * 9. + 28.).min(w - 16.);
-                self.ui
-                    .panel(
-                        rect((w - pill) * 0.5, y - 46., pill, 24.),
-                        fade(DARK, 0.85 * a),
-                    )
-                    .unwrap();
-                overlay(
-                    &mut self.ui,
-                    rect(8., y - 40., w - 16., 12.),
-                    hint,
-                    12.,
-                    fade(PAPER, a),
-                );
-            }
-            // Power meter: label, gradient fill and a readable percentage.
-            let my = y - 18.;
-            self.ui.panel(rect(x, my - 3., dock_w, 14.), DARK).unwrap();
-            line(
-                &mut self.ui,
-                rect(x + 6., my, 44., 9.),
-                "POWER",
-                9.,
-                DIM,
-                Align::Left,
+        if paint {
+            self.paint_power(x, y, dock_w, w);
+        }
+        for (i, id, text) in [
+            (0, 10, "←"),
+            (1, 11, "→"),
+            (2, 12, "-"),
+            (3, 13, "+"),
+            (4, 14, "Putt"),
+        ] {
+            let kind = if id == 14 {
+                ButtonKind::Primary
+            } else {
+                ButtonKind::Secondary
+            };
+            self.kit_button(
+                paint,
+                id,
+                rect(x + i as f32 * (bw + gap), y, bw, 48.),
+                text,
+                kind,
+                true,
+                Appearance::SHOWN,
             );
-            let bar_x = x + 52.;
-            let bar_w = dock_w - 52. - 46.;
-            self.ui
-                .panel(rect(bar_x, my + 1., bar_w, 6.), PANEL)
-                .unwrap();
-            self.ui
-                .gradient(
-                    rect(bar_x, my + 1., bar_w * self.power, 6.),
-                    MINT,
-                    power_color(self.power),
-                )
-                .unwrap();
-            line(
-                &mut self.ui,
-                rect(x + dock_w - 44., my - 1., 38., 11.),
-                &format!("{:.0}%", self.power * 100.),
-                11.,
-                power_color(self.power),
-                Align::Right,
-            );
-            for (i, id, text) in [
-                (0, 10, "<"),
-                (1, 11, ">"),
-                (2, 12, "-"),
-                (3, 13, "+"),
-                (4, 14, "PUTT"),
-            ] {
-                button(
-                    &mut self.ui,
-                    id,
-                    rect(x + i as f32 * (bw + gap), y, bw, 48.),
-                    text,
-                    true,
-                );
-            }
         }
     }
-    /// Rare, full-width headline: aces, splashes and the hidden trick.
-    pub(super) fn banner(&mut self, w: f32, scene: Scene) {
+
+    fn paint_chip(&mut self, chip: UiRect) {
+        let theme = self.theme;
+        let r = self.px(chip);
+        let state = kit::ui_button_state(&self.ui, 15, true);
+        let motion = self.motion();
+        let m = &mut self.buttons[slot(15)];
+        m.update(state, self.frame_dt, motion);
+        let (hover, focus) = (m.hover(), m.focus());
+        surface(r, 12., &theme, 1.);
+        if hover > 0.01 {
+            shapes::fill_rounded_rect(r, 12., Color::new(1., 1., 1., 0.05 * hover));
+        }
+        if focus > 0.01 {
+            let g = 3.;
+            shapes::stroke_rounded_rect(
+                Rect::new(r.x - g, r.y - g, r.w + 2. * g, r.h + 2. * g),
+                15.,
+                2.,
+                fade(GOLD, focus),
+            );
+        }
+        let badge = Rect::new(r.x + r.w - 62., r.y + 6., 56., r.h - 12.);
+        shapes::fill_rounded_rect(badge, 8., Color::new(0., 0., 0., 0.24));
+        let c = badge.center();
+        draw_text_styled(
+            "Round",
+            c.x,
+            badge.y + 12.,
+            modern(8., DIM).with_align(TextAlign::Center),
+        );
+        let to_par = self.round_to_par();
+        let color = match to_par {
+            i16::MIN..=-1 => MINT,
+            0 => PAPER,
+            _ => CLAY,
+        };
+        let mut s = std::mem::take(&mut self.scribe);
+        let text = if to_par == 0 {
+            "E"
+        } else {
+            s.f(format_args!("{to_par:+}"))
+        };
+        draw_text_styled(
+            text,
+            c.x,
+            badge.y + badge.h - 6.,
+            classic(16., color)
+                .with_align(TextAlign::Center)
+                .with_shadow(Color::new(0., 0., 0., 0.4)),
+        );
+        let text_w = badge.x - r.x - 20.;
+        let name = self.round.course.name;
+        draw_text_styled(
+            name,
+            r.x + 12.,
+            r.y + 24.,
+            fit(modern(16., PAPER), name, text_w).with_shadow(Color::new(0., 0., 0., 0.35)),
+        );
+        let strokes = self.round.strokes;
+        let caption = s.f(format_args!(
+            "{}Hole {}/12 · Par {} · {} {}",
+            if self.round.practice {
+                "Practice · "
+            } else {
+                ""
+            },
+            self.round.hole_index + 1,
+            self.round.course.par,
+            strokes,
+            if strokes == 1 { "stroke" } else { "strokes" }
+        ));
+        draw_text_styled(
+            caption,
+            r.x + 12.,
+            r.y + 39.,
+            fit(modern(8., GOLD), caption, text_w),
+        );
+        self.scribe = s;
+    }
+
+    /// Hole title card: name, par, the hole's read and a personal best hook.
+    fn title_card(&mut self, w: f32, scene: Scene) {
+        let shown = if self.round.strokes > 0 || self.round.phase == Phase::Rolling {
+            0.
+        } else {
+            ((INTRO - self.intro) / 0.4).clamp(0., 1.)
+        };
+        if shown <= 0. {
+            return;
+        }
+        let look = Entrance::fade_up(10.).sample(self.intro, 0, self.motion());
+        let a = shown * look.alpha;
+        let cw = (w - 24.).min(460.);
+        let cx = (w - cw) * 0.5;
+        let roomy = scene.h >= 300.;
+        let hint = self.round.course.hint;
+        let hint_style = modern(8., PAPER).with_align(TextAlign::Center);
+        let lines = if roomy {
+            wrap_text(hint, cw - 32., hint_style).count().min(2)
+        } else {
+            0
+        };
+        let best = self.hole_best[self.round.hole_index];
+        let height = 54. + lines as f32 * 12. + if best.is_some() { 14. } else { 0. } + 6.;
+        // Settles upward from below, never into the fullscreen menu corner.
+        let top = scene.y + 6. + look.offset[1].abs();
+        let r = Rect::new(cx, top, cw, height);
+        surface(r, 14., &self.theme, a);
+        shapes::fill_rounded_rect(
+            Rect::new(r.x + 16., r.y, r.w - 32., 3.),
+            1.5,
+            fade(COPPER, a),
+        );
+        let c = r.x + r.w * 0.5;
+        let mut s = std::mem::take(&mut self.scribe);
+        draw_text_styled(
+            s.f(format_args!(
+                "Hole {} of 12 · Par {}",
+                self.round.hole_index + 1,
+                self.round.course.par
+            )),
+            c,
+            r.y + 18.,
+            modern(8., fade(GOLD, a)).with_align(TextAlign::Center),
+        );
+        let name = self.round.course.name;
+        draw_text_styled(
+            name,
+            c,
+            r.y + 44.,
+            fit(classic(24., fade(PAPER, a)), name, cw - 32.)
+                .with_align(TextAlign::Center)
+                .with_shadow(fade(Color::new(0., 0., 0., 0.45), a)),
+        );
+        let mut y = r.y + 60.;
+        for line in wrap_text(hint, cw - 32., hint_style).take(lines) {
+            draw_text_styled(line, c, y, faded(hint_style, 0.9 * a));
+            y += 12.;
+        }
+        if let Some(best) = best {
+            let text = if best == 1 {
+                s.f(format_args!("Your best here: {best} · aced it ★"))
+            } else {
+                s.f(format_args!("Your best here: {best}"))
+            };
+            draw_text_styled(
+                text,
+                c,
+                y + 2.,
+                modern(8., fade(MINT, a)).with_align(TextAlign::Center),
+            );
+        }
+        self.scribe = s;
+    }
+
+    fn paint_power(&mut self, x: f32, y: f32, dock_w: f32, w: f32) {
+        let theme = self.theme;
+        // Onboarding: fades over the first few accepted putts, never for demos.
+        let learn = 1. - self.putts as f32 / LEARNED as f32;
+        if learn > 0. && !self.auto {
+            let a = 0.35 + 0.65 * learn;
+            let t = theme.faded(a);
+            if w >= 560. {
+                let prompts: [(&[&str], &str); 3] = [
+                    (&["←", "→"], "Aim"),
+                    (&["↑", "↓"], "Power"),
+                    (&["Space"], "Putt"),
+                ];
+                let total: f32 = prompts
+                    .iter()
+                    .map(|(keys, action)| prompt_width(keys, action, &t) + 18.)
+                    .sum::<f32>()
+                    - 18.;
+                let pill = Rect::new((w - total) * 0.5 - 14., y - 70., total + 28., 34.);
+                shapes::fill_rounded_rect(pill, 17., Color::new(0.03, 0.08, 0.06, 0.72 * a));
+                let mut cx = pill.x + 14.;
+                for (keys, action) in prompts {
+                    cx += kit::key_prompt(cx, pill.y + 5., keys, action, &t) + 18.;
+                }
+            } else {
+                let style = modern(8., fade(PAPER, a)).with_align(TextAlign::Center);
+                let text = "Drag toward the target · release to putt";
+                let tw = text_width(text, style);
+                let pill = Rect::new((w - tw) * 0.5 - 14., y - 56., tw + 28., 22.);
+                shapes::fill_rounded_rect(pill, 11., Color::new(0.03, 0.08, 0.06, 0.72 * a));
+                draw_text_styled(text, w * 0.5, pill.y + 15., style);
+            }
+        }
+        let my = y - 22.;
+        let track = Rect::new(x, my - 6., dock_w, 20.);
+        shapes::fill_rounded_rect(track, 10., Color::new(0.03, 0.08, 0.06, 0.7));
+        draw_text_styled("Power", x + 10., my + 8., modern(8., DIM));
+        let bar = Rect::new(x + 52., my, dock_w - 52. - 48., 8.);
+        let color = power_color(self.power);
+        kit::meter(bar, self.power, None, color, &theme);
+        let mut s = std::mem::take(&mut self.scribe);
+        draw_text_styled(
+            s.f(format_args!("{:.0}%", self.power * 100.)),
+            x + dock_w - 10.,
+            my + 8.,
+            modern(8., color).with_align(TextAlign::Right),
+        );
+        self.scribe = s;
+    }
+
+    /// Rare, full-width headline: every score name, then it hands off to the sheet.
+    fn banner(&mut self, w: f32, scene: Scene) {
         let handoff = self.headline_handoff(w);
         let Some(b) = &self.juice.banner else { return };
         let a = b.alpha() * if b.score { 1. - handoff } else { 1. };
@@ -241,7 +410,6 @@ impl App {
             return;
         }
         let scale = self.juice.banner_scale();
-        let size = if b.head.len() > 12 { 26. } else { 34. } * scale;
         let top = if self.sheet_open() {
             if !Self::banner_room(w) {
                 return; // No room above the sheet; the sheet says it all.
@@ -250,35 +418,51 @@ impl App {
         } else {
             scene.y + scene.h * 0.22
         };
-        let band = size + 30.;
-        self.ui
-            .gradient(
-                rect(0., top, w * 0.5, band),
-                fade(DARK, 0.),
-                fade(DARK, 0.92 * a),
-            )
-            .unwrap();
-        self.ui
-            .gradient(
-                rect(w * 0.5, top, w * 0.5, band),
-                fade(DARK, 0.92 * a),
-                fade(DARK, 0.),
-            )
-            .unwrap();
-        let (head, sub, color) = (b.head.clone(), b.sub.clone(), b.color);
-        overlay(
-            &mut self.ui,
-            banner_text_rect(w, top + 6. + (34. - size) * 0.25, size),
-            &head,
-            size,
-            fade(color, a),
+        let band = 78.;
+        let full = Rect::new(0., top, w, band);
+        shapes::fill_rounded_rect(
+            Rect::new(0., top, w * 0.5, band),
+            0.,
+            Fill::horizontal(
+                full,
+                Color::new(0.03, 0.08, 0.06, 0.),
+                Color::new(0.03, 0.08, 0.06, 0.9 * a),
+            ),
         );
-        overlay(
-            &mut self.ui,
-            banner_text_rect(w, top + band - 17., 12.),
-            &sub,
-            12.,
-            fade(PAPER, a),
+        shapes::fill_rounded_rect(
+            Rect::new(w * 0.5, top, w * 0.5, band),
+            0.,
+            Fill::horizontal(
+                Rect::new(w * 0.5, top, w * 0.5, band),
+                Color::new(0.03, 0.08, 0.06, 0.9 * a),
+                Color::new(0.03, 0.08, 0.06, 0.),
+            ),
+        );
+        let area = banner_text_rect(w, top, 0.);
+        let cx = area.min[0] + area.size[0] * 0.5;
+        let (head, sub, color) = (b.head.as_str(), b.sub.as_str(), b.color);
+        shapes::glow_disc(vec2(cx, top + 30.), 120. * scale, fade(color, 0.22 * a));
+        let size = if head.len() > 12 { 24. } else { 32. };
+        let head_style = fit(
+            classic(size, fade(color, a))
+                .with_outline(fade(DARK, a))
+                .with_shadow(Color::new(0., 0., 0., 0.5 * a))
+                .with_align(TextAlign::Center),
+            head,
+            area.size[0],
+        );
+        // The bounce scales the headline about its center (motion only).
+        let head_style = head_style.with_size((head_style.size * scale).max(8.));
+        draw_text_styled(head, cx, top + 26. + head_style.size * 0.5, head_style);
+        draw_text_styled(
+            sub,
+            cx,
+            top + band - 10.,
+            fit(
+                modern(16., fade(PAPER, a)).with_align(TextAlign::Center),
+                sub,
+                area.size[0],
+            ),
         );
     }
     /// Whether a headline fits above the between-hole sheet while keeping a
@@ -305,7 +489,7 @@ impl App {
         (sw, 86. + strip + 32. + 44. + 14., cols)
     }
     /// Between-hole sheet: the course stays visible above it.
-    pub(super) fn hole_sheet(&mut self, w: f32, h: f32) {
+    fn hole_sheet(&mut self, paint: bool, w: f32, h: f32) {
         let (sw, sh, cols) = Self::sheet_layout(w);
         self.sheet_h = sh;
         let Some(o) = self.outcome else { return };
@@ -315,171 +499,196 @@ impl App {
         let y = (h - 12. - sh) + (1. - slide) * (sh + 16.);
         let tx = x + 16.;
         let tw = sw - 32.;
-        self.ui.modal(900).expect("one modal");
-        self.ui.panel(rect(x, y, sw, sh), DARK).unwrap();
-        let tone = o.name.tone();
-        self.ui.panel(rect(x, y, sw, 4.), tone_color(tone)).unwrap();
-        let head_w = tw * 0.6;
-        let side_x = tx + tw * 0.64;
-        let side_w = tw * 0.36;
-        line(
-            &mut self.ui,
-            rect(tx, y + 16., head_w, 24.),
-            &o.name.headline(),
-            24.,
-            fade(tone_color(tone), handoff),
-            Align::Left,
-        );
-        line(
-            &mut self.ui,
-            rect(side_x, y + 16., side_w, 11.),
-            &format!("HOLE {} · PAR {}", o.hole + 1, o.par),
-            11.,
-            DIM,
-            Align::Right,
-        );
-        line(
-            &mut self.ui,
-            rect(side_x, y + 30., side_w, 12.),
-            &format!(
-                "{} {}",
-                o.strokes,
-                if o.strokes == 1 { "STROKE" } else { "STROKES" }
-            ),
-            12.,
-            PAPER,
-            Align::Right,
-        );
-        line(
-            &mut self.ui,
-            rect(tx, y + 48., tw, 13.),
-            quips::hole(&o),
-            13.,
-            fade(PAPER, handoff),
-            Align::Left,
-        );
-        let mut tags: Vec<String> = Vec::with_capacity(4);
-        match o.style {
-            Style::Straight => {}
-            Style::Bank(1) => tags.push("BANK SHOT".into()),
-            Style::Bank(n) => tags.push(format!("BANK SHOT ×{n}")),
-            Style::Trick(n) => tags.push(format!("TRICK SHOT ×{n}")),
+        if !paint {
+            self.ui.modal(900).expect("one modal");
         }
-        if o.assist {
-            tags.push("COPPER ASSIST".into());
-        }
-        if o.streak >= 2 {
-            tags.push(format!("STREAK ×{}", o.streak));
-        }
-        if o.name != ScoreName::PickedUp && !self.auto {
-            match self.hole_best_before {
-                None => {}
-                Some(b) if o.strokes < b => tags.push("NEW HOLE BEST!".into()),
-                Some(b) => tags.push(format!("HOLE BEST {b}")),
-            }
-        }
-        line(
-            &mut self.ui,
-            rect(tx, y + 66., tw, 11.),
-            &tags[..tags.len().min(3)].join("  ·  "),
-            11.,
-            GOLD,
-            Align::Left,
-        );
-        let strip_y = y + 86.;
-        self.score_strip(tx, strip_y, tw, cols);
         let rows = 12 / cols;
-        let after = strip_y + rows as f32 * 34. + (rows - 1) as f32 * 4. + 10.;
-        let to_par = self.round_to_par();
-        let thru = self.round.scores.iter().flatten().count();
-        let summary = if self.round.practice {
-            format!("PRACTICE · TOTAL {} · THRU {thru}", self.round.total())
-        } else {
-            format!(
-                "ROUND {} · TOTAL {} · THRU {thru}",
-                card::to_par_text(to_par),
-                self.round.total()
-            )
-        };
-        line(
-            &mut self.ui,
-            rect(tx, after, tw, 12.),
-            &summary,
-            12.,
-            GOLD,
-            Align::Left,
-        );
+        let after = y + 86. + rows as f32 * 34. + (rows - 1) as f32 * 4. + 10.;
         let by = after + 22.;
         let next_w = (tw - 8.) * 0.62;
-        button(
-            &mut self.ui,
+        if paint {
+            let tone = o.name.tone();
+            let r = self.px(rect(x, y, sw, sh));
+            surface(r, 18., &self.theme, 1.);
+            shapes::fill_rounded_rect(
+                Rect::new(r.x + 18., r.y, r.w - 36., 3.),
+                1.5,
+                tone_label(tone),
+            );
+            let mut s = std::mem::take(&mut self.scribe);
+            let head = o.name.headline();
+            let head_w = tw * 0.6;
+            draw_text_styled(
+                &head,
+                tx,
+                y + 38.,
+                fit(classic(24., fade(tone_label(tone), handoff)), &head, head_w)
+                    .with_shadow(fade(Color::new(0., 0., 0., 0.4), handoff)),
+            );
+            let side = tx + tw;
+            draw_text_styled(
+                s.f(format_args!("Hole {} · Par {}", o.hole + 1, o.par)),
+                side,
+                y + 22.,
+                modern(8., DIM).with_align(TextAlign::Right),
+            );
+            draw_text_styled(
+                s.f(format_args!(
+                    "{} {}",
+                    o.strokes,
+                    if o.strokes == 1 { "stroke" } else { "strokes" }
+                )),
+                side,
+                y + 40.,
+                modern(16., PAPER).with_align(TextAlign::Right),
+            );
+            let quip = quips::hole(&o);
+            draw_text_styled(
+                quip,
+                tx,
+                y + 62.,
+                fit(modern(16., fade(PAPER, handoff)), quip, tw),
+            );
+            // Tags: style, the hidden assist, a streak and the hole-best hook.
+            let mut tags = std::mem::take(&mut s.0);
+            tags.clear();
+            let mut push = |t: std::fmt::Arguments<'_>| {
+                if !tags.is_empty() {
+                    tags.push_str("  ·  ");
+                }
+                let _ = tags.write_fmt(t);
+            };
+            match o.style {
+                Style::Straight => {}
+                Style::Bank(1) => push(format_args!("Bank shot")),
+                Style::Bank(n) => push(format_args!("Bank shot ×{n}")),
+                Style::Trick(n) => push(format_args!("Trick shot ×{n}")),
+            }
+            if o.assist {
+                push(format_args!("Copper assist ★"));
+            }
+            if o.streak >= 2 {
+                push(format_args!("Streak ×{}", o.streak));
+            }
+            if o.name != ScoreName::PickedUp && !self.auto {
+                match self.hole_best_before {
+                    None => {}
+                    Some(b) if o.strokes < b => push(format_args!("New hole best!")),
+                    Some(b) => push(format_args!("Hole best {b}")),
+                }
+            }
+            draw_text_styled(&tags, tx, y + 78., fit(modern(8., GOLD), &tags, tw));
+            s.0 = tags;
+            self.score_strip(tx, y + 86., tw, cols);
+            let to_par = self.round_to_par();
+            let thru = self.round.scores.iter().flatten().count();
+            let summary = if self.round.practice {
+                s.f(format_args!(
+                    "Practice · total {} · thru {thru}",
+                    self.round.total()
+                ))
+            } else if to_par == 0 {
+                s.f(format_args!(
+                    "Round E · total {} · thru {thru}",
+                    self.round.total()
+                ))
+            } else {
+                s.f(format_args!(
+                    "Round {to_par:+} · total {} · thru {thru}",
+                    self.round.total()
+                ))
+            };
+            draw_text_styled(summary, tx, after + 10., modern(8., GOLD));
+            self.scribe = s;
+        }
+        let finish = self.round.hole_index == 11;
+        self.kit_button(
+            paint,
             24,
             rect(tx, by, next_w, 44.),
-            if self.round.hole_index == 11 {
-                "FINISH"
-            } else {
-                "NEXT HOLE"
-            },
+            if finish { "Finish" } else { "Next hole" },
+            ButtonKind::Primary,
             true,
+            Appearance::SHOWN,
         );
-        button(
-            &mut self.ui,
+        self.kit_button(
+            paint,
             23,
             rect(tx + next_w + 8., by, tw - next_w - 8., 44.),
-            "CARD",
+            "Card",
+            ButtonKind::Secondary,
             true,
+            Appearance::SHOWN,
         );
     }
-    /// Twelve compact cells, colored by result; the current hole is outlined.
-    pub(super) fn score_strip(&mut self, x: f32, y: f32, w: f32, cols: usize) {
+    /// Twelve compact cells, colored by result, popping in one after another.
+    fn score_strip(&mut self, x: f32, y: f32, w: f32, cols: usize) {
         let gap = 4.;
         let cw = (w - gap * (cols - 1) as f32) / cols as f32;
+        let entrance = Entrance::pop(0.6).with_stagger(0.035);
+        let mut s = std::mem::take(&mut self.scribe);
         for i in 0..12 {
-            let cx = x + (i % cols) as f32 * (cw + gap);
-            let cy = y + (i / cols) as f32 * (34. + gap);
-            let current = i == self.round.hole_index;
-            if current {
-                self.ui
-                    .panel(rect(cx - 1., cy - 1., cw + 2., 36.), GOLD)
-                    .unwrap();
-            }
-            self.ui.panel(rect(cx, cy, cw, 34.), PANEL).unwrap();
-            line(
-                &mut self.ui,
-                rect(cx, cy + 4., cw, 8.),
-                &format!("{}", i + 1),
-                8.,
-                DIM,
-                Align::Center,
+            let look = entrance.sample(self.menu_time, i, self.motion());
+            let cell = kit::appear(
+                Rect::new(
+                    x + (i % cols) as f32 * (cw + gap),
+                    y + (i / cols) as f32 * (34. + gap),
+                    cw,
+                    34.,
+                ),
+                look,
             );
+            let a = look.alpha;
+            let current = i == self.round.hole_index;
             let par = course::hole(i).par;
             let (text, color) = match self.round.scores[i] {
-                Some(s) => {
-                    let name = ScoreName::of(s, par, self.round.picked_up[i]);
+                Some(v) => {
+                    let name = ScoreName::of(v, par, self.round.picked_up[i]);
                     (
                         if self.round.picked_up[i] {
-                            format!("{s}*")
+                            s.f(format_args!("{v}*"))
                         } else {
-                            format!("{s}")
+                            s.f(format_args!("{v}"))
                         },
                         tone_color(name.tone()),
                     )
                 }
-                None => ("·".into(), DIM),
+                None => ("·", DIM),
             };
-            line(
-                &mut self.ui,
-                rect(cx, cy + 15., cw, 14.),
-                &text,
-                14.,
-                color,
-                Align::Center,
+            shapes::fill_rounded_rect(
+                cell,
+                7.,
+                Fill::vertical(
+                    cell,
+                    fade(Color::from_rgba(46, 82, 66, 255), a),
+                    fade(Color::from_rgba(34, 64, 52, 255), a),
+                ),
+            );
+            if current {
+                shapes::stroke_rounded_rect(cell, 7., 2., fade(GOLD, a));
+                shapes::glow_disc(cell.center(), cw * 0.7, fade(GOLD, 0.12 * a));
+            }
+            let c = cell.center();
+            draw_text_styled(
+                text,
+                c.x,
+                cell.y + 28.,
+                classic(16., fade(color, a)).with_align(TextAlign::Center),
+            );
+            draw_text_styled(
+                s.f(format_args!("{}", i + 1)),
+                c.x,
+                cell.y + 11.,
+                modern(8., fade(DIM, a)).with_align(TextAlign::Center),
             );
         }
+        self.scribe = s;
     }
-    pub(super) fn modal(&mut self, w: f32, h: f32) {
+
+    /// Centered menus: welcome (front door), pause, practice and scorecard.
+    fn modal(&mut self, paint: bool, w: f32, h: f32) {
         if self.menu == Menu::None && !self.manual_pause && self.round.phase == Phase::Finished {
-            self.final_card(w, h);
+            self.final_card(paint, w, h);
             return;
         }
         let width = (w - 32.).min(420.);
@@ -496,30 +705,50 @@ impl App {
         let y = ((h - height) * 0.5).max(8.);
         let tx = x + 16.;
         let tw = width - 32.;
-        self.ui.modal(900).expect("one modal");
-        self.ui.panel(rect(0., 0., w, h), fade(DARK, 0.5)).unwrap();
-        self.ui.panel(rect(x, y, width, height), DARK).unwrap();
-        self.ui.panel(rect(x, y, width, 4.), COPPER).unwrap();
+        let look = Entrance::fade_up(14.).sample(self.menu_time, 0, self.motion());
+        if paint {
+            let full = Rect::new(0., 0., w, h);
+            shapes::fill_rounded_rect(full, 0., fade(self.theme.backdrop, look.alpha));
+            let r = kit::appear(self.px(rect(x, y, width, height)), look);
+            surface(r, 18., &self.theme, look.alpha);
+            shapes::fill_rounded_rect(
+                Rect::new(r.x + 18., r.y, r.w - 36., 3.),
+                1.5,
+                fade(COPPER, look.alpha),
+            );
+        } else {
+            self.ui.modal(900).expect("one modal");
+            // Transparent layout anchor in the card's exact rectangle; browser
+            // tests use its corner to find the menu (it paints nothing).
+            self.ui
+                .panel(
+                    rect(x, y, width, height),
+                    Color::new(DARK.r, DARK.g, DARK.b, 0.),
+                )
+                .expect("menu anchor");
+        }
+        let dy = look.offset[1];
         if self.menu == Menu::Practice {
-            label(
-                &mut self.ui,
-                rect(tx, y + 16., tw, 26.),
-                "PRACTICE",
-                20.,
-                PAPER,
-            );
-            line(
-                &mut self.ui,
-                rect(tx + 120., y + 21., tw - 120., 11.),
-                "PICK ANY GREEN",
-                11.,
-                DIM,
-                Align::Right,
-            );
+            if paint {
+                self.card_title(
+                    tx,
+                    y + 34. + dy,
+                    "Practice",
+                    "Pick any green",
+                    tw,
+                    look.alpha,
+                );
+            }
             let cw = (tw - 18.) / 4.;
-            for i in 0..12 {
-                button(
-                    &mut self.ui,
+            for (i, &text) in PRACTICE_LABELS.iter().enumerate() {
+                let cell = Entrance::fade_up(8.).with_stagger(0.02).sample(
+                    self.menu_time,
+                    i + 1,
+                    self.motion(),
+                );
+                let _ = cell;
+                self.kit_button(
+                    paint,
                     100 + i as u64,
                     rect(
                         tx + (i % 4) as f32 * (cw + 6.),
@@ -527,215 +756,335 @@ impl App {
                         cw,
                         44.,
                     ),
-                    &format!("{:02}", i + 1),
+                    text,
+                    ButtonKind::Secondary,
                     true,
+                    shift(look, 0.),
                 );
             }
-            button(&mut self.ui, 20, rect(tx, y + 208., tw, 44.), "BACK", true);
+            self.kit_button(
+                paint,
+                20,
+                rect(tx, y + 208., tw, 44.),
+                "Back",
+                ButtonKind::Primary,
+                true,
+                shift(look, 0.),
+            );
             return;
         }
         if self.menu == Menu::Score {
-            self.score_modal(tx, y, tw);
+            self.score_modal(paint, tx, y, tw, look);
             return;
         }
-        let heading = if self.manual_pause {
-            "PAUSED"
-        } else {
-            "COPPER GREENS"
-        };
-        label(
-            &mut self.ui,
-            rect(tx, y + 20., tw, 28.),
-            heading,
-            20.,
-            PAPER,
-        );
-        if self.manual_pause {
-            line(
-                &mut self.ui,
-                rect(tx, y + 50., tw, 12.),
-                &format!(
-                    "HOLE {} · {} · {} {}",
+        if paint {
+            let a = look.alpha;
+            if self.manual_pause {
+                self.card_title(tx, y + 36. + dy, "Paused", "", tw, a);
+                let mut s = std::mem::take(&mut self.scribe);
+                let info = s.f(format_args!(
+                    "Hole {} · {} · {} {}",
                     self.round.hole_index + 1,
-                    self.round.course.name.to_uppercase(),
+                    self.round.course.name,
                     self.round.strokes,
                     if self.round.strokes == 1 {
-                        "STROKE"
+                        "stroke"
                     } else {
-                        "STROKES"
+                        "strokes"
                     }
-                ),
-                12.,
-                GOLD,
-                Align::Left,
-            );
-            line(
-                &mut self.ui,
-                rect(tx, y + 70., tw, 12.),
-                quips::pause(self.pause_seed),
-                12.,
-                DIM,
-                Align::Left,
-            );
-        } else {
-            line(
-                &mut self.ui,
-                rect(tx, y + 50., tw, 12.),
-                &format!("12 HOLES · PAR {}", card::course_par()),
-                12.,
-                GOLD,
-                Align::Left,
-            );
-            let best = match self.best {
-                Some(b) => format!(
-                    "BEST ROUND {b} ({})",
-                    card::to_par_text(b as i16 - card::course_par() as i16)
-                ),
-                None => "NO BEST ROUND YET".into(),
-            };
-            line(
-                &mut self.ui,
-                rect(tx, y + 70., tw, 12.),
-                &best,
-                12.,
-                MINT,
-                Align::Left,
-            );
+                ));
+                draw_text_styled(
+                    info,
+                    tx,
+                    y + 56. + dy,
+                    fit(modern(8., fade(GOLD, a)), info, tw),
+                );
+                self.scribe = s;
+                let quip = quips::pause(self.pause_seed);
+                draw_text_styled(
+                    quip,
+                    tx,
+                    y + 76. + dy,
+                    fit(modern(8., fade(DIM, a)), quip, tw),
+                );
+            } else {
+                self.front_door(x, y + dy, width, tw, a, w, h);
+            }
         }
-        let first = 20;
-        let action = if self.manual_pause { "RESUME" } else { "PLAY" };
-        button(
-            &mut self.ui,
-            first,
+        let action = if self.manual_pause { "Resume" } else { "Play" };
+        self.kit_button(
+            paint,
+            20,
             rect(tx, y + 96., tw, 44.),
             action,
+            ButtonKind::Primary,
             true,
+            shift(look, 0.),
         );
         let half = (tw - 8.) * 0.5;
-        button(
-            &mut self.ui,
+        self.kit_button(
+            paint,
             22,
             rect(tx, y + 152., half, 44.),
-            "PRACTICE",
+            "Practice",
+            ButtonKind::Secondary,
             true,
+            shift(look, 0.),
         );
-        button(
-            &mut self.ui,
+        self.kit_button(
+            paint,
             23,
             rect(tx + half + 8., y + 152., half, 44.),
-            "CARD",
+            "Card",
+            ButtonKind::Secondary,
             true,
+            shift(look, 0.),
         );
         if self.manual_pause {
-            button(
-                &mut self.ui,
+            self.kit_button(
+                paint,
                 25,
                 rect(tx, y + 204., half, 44.),
-                "TAKE 12",
+                "Take 12",
+                ButtonKind::Ghost,
                 matches!(self.round.phase, Phase::Aiming | Phase::Rolling),
+                shift(look, 0.),
             );
-            button(
-                &mut self.ui,
+            self.kit_button(
+                paint,
                 21,
                 rect(tx + half + 8., y + 204., half, 44.),
-                "RESTART",
+                "Restart",
+                ButtonKind::Danger,
                 true,
+                shift(look, 0.),
             );
         }
     }
-    pub(super) fn score_modal(&mut self, tx: f32, y: f32, tw: f32) {
-        label(
-            &mut self.ui,
-            rect(tx, y + 16., tw, 26.),
-            "SCORECARD",
-            20.,
-            PAPER,
+
+    fn card_title(&self, x: f32, baseline: f32, title: &str, aside: &str, tw: f32, a: f32) {
+        draw_text_styled(
+            title,
+            x,
+            baseline,
+            modern(24., fade(PAPER, a)).with_shadow(Color::new(0., 0., 0., 0.35 * a)),
         );
-        line(
-            &mut self.ui,
-            rect(tx + 160., y + 21., tw - 160., 11.),
-            if self.round.practice {
-                "PRACTICE"
-            } else {
-                "FULL ROUND"
-            },
-            11.,
-            DIM,
-            Align::Right,
-        );
-        let cw = (tw - 12.) * 0.5;
-        for i in 0..12 {
-            let rx = tx + (i / 6) as f32 * (cw + 12.);
-            let ry = y + 50. + (i % 6) as f32 * 21.;
-            let par = course::hole(i).par;
-            if i == self.round.hole_index && self.round.phase != Phase::Finished {
-                self.ui
-                    .panel(rect(rx - 4., ry - 2., cw + 8., 19.), PANEL)
-                    .unwrap();
-            }
-            line(
-                &mut self.ui,
-                rect(rx, ry + 1., 26., 14.),
-                &format!("{:02}", i + 1),
-                14.,
-                DIM,
-                Align::Left,
-            );
-            let (score, color) = match self.round.scores[i] {
-                Some(s) => (
-                    format!("{s}{}", if self.round.picked_up[i] { "*" } else { "" }),
-                    tone_color(ScoreName::of(s, par, self.round.picked_up[i]).tone()),
-                ),
-                None => ("-".into(), DIM),
-            };
-            line(
-                &mut self.ui,
-                rect(rx + 30., ry + 1., 36., 14.),
-                &score,
-                14.,
-                color,
-                Align::Center,
-            );
-            line(
-                &mut self.ui,
-                rect(rx + 70., ry + 3., cw - 70., 10.),
-                &format!("PAR {par}"),
-                10.,
-                DIM,
-                Align::Left,
+        if !aside.is_empty() {
+            draw_text_styled(
+                aside,
+                x + tw,
+                baseline - 2.,
+                modern(8., fade(DIM, a)).with_align(TextAlign::Right),
             );
         }
-        let total = format!(
-            "TOTAL {}  ({})",
-            self.round.total(),
-            card::to_par_text(self.round_to_par())
+    }
+
+    /// Title screen: logo, course facts, best round and attract-mode motion.
+    #[allow(clippy::too_many_arguments)]
+    fn front_door(&mut self, x: f32, y: f32, width: f32, tw: f32, a: f32, w: f32, h: f32) {
+        let cx = x + width * 0.5;
+        let t = self.ambient;
+        let bob = (t * 2.).sin() * 2. * self.juice.motion();
+        shapes::glow_disc(vec2(cx, y + 30.), width * 0.45, fade(GOLD, 0.12 * a));
+        let logo = "COPPER GREENS";
+        draw_text_styled(
+            logo,
+            cx,
+            y + 40. + bob,
+            fit(
+                classic(32., fade(GOLD, a))
+                    .with_outline(fade(Color::from_rgba(60, 30, 14, 255), a))
+                    .with_shadow(Color::new(0., 0., 0., 0.5 * a))
+                    .with_align(TextAlign::Center),
+                logo,
+                tw,
+            ),
         );
-        line(
-            &mut self.ui,
-            rect(tx, y + 184., tw, 16.),
-            &total,
-            16.,
-            GOLD,
-            Align::Left,
+        draw_text_styled(
+            "12 holes · par 40 · 2 views, 1 course",
+            cx,
+            y + 62.,
+            fit(
+                modern(8., fade(DIM, a)).with_align(TextAlign::Center),
+                "12 holes · par 40 · 2 views, 1 course",
+                tw,
+            ),
         );
+        let mut s = std::mem::take(&mut self.scribe);
+        let best = match self.best {
+            Some(b) => {
+                let to_par = b as i16 - card::course_par() as i16;
+                if to_par == 0 {
+                    s.f(format_args!("Best round {b} (E)"))
+                } else {
+                    s.f(format_args!("Best round {b} ({to_par:+})"))
+                }
+            }
+            None => "No best round yet: set one!",
+        };
+        draw_text_styled(
+            best,
+            cx,
+            y + 80.,
+            modern(8., fade(MINT, a)).with_align(TextAlign::Center),
+        );
+        self.scribe = s;
+        // Attract mode above the card: a ball rolls into a glowing cup forever.
+        if y > 96. {
+            let lane_y = y - 34.;
+            let span = (width * 0.7).min(w - 48.);
+            let start = cx - span * 0.5;
+            let cup = vec2(start + span, lane_y);
+            let cycle = 2.6;
+            let k = if self.juice.motion() == 0. {
+                0.6
+            } else {
+                (t % cycle) / cycle
+            };
+            let roll = ease_out((k / 0.75).min(1.));
+            shapes::polyline(
+                &[vec2(start, lane_y + 7.), vec2(cup.x + 14., lane_y + 7.)],
+                Stroke::new(2., Color::new(0.4, 0.62, 0.42, 0.5 * a)),
+            );
+            shapes::glow_disc(cup, 26., fade(GOLD, 0.3 * a));
+            shapes::fill_circle(
+                cup + vec2(0., 4.),
+                9.,
+                fade(Color::from_rgba(10, 22, 18, 255), a),
+            );
+            shapes::polyline(
+                &[cup + vec2(0., 2.), cup - vec2(0., 26.)],
+                Stroke::new(2., fade(Color::from_rgba(240, 236, 226, 255), a)),
+            );
+            draw_triangle(
+                cup - vec2(0., 26.),
+                cup + vec2(15., -21. + bob),
+                cup - vec2(0., 16.),
+                fade(COPPER, a),
+            );
+            if k < 0.78 {
+                let ball = vec2(start + roll * (span - 2.), lane_y);
+                shapes::fill_circle(ball + vec2(2., 5.), 6., Color::new(0., 0., 0., 0.3 * a));
+                shapes::fill_circle(ball, 6., fade(Color::new(1., 1., 1., 1.), a));
+            } else {
+                let pop = (k - 0.78) / 0.22;
+                shapes::glow_ring(cup, 10. + 30. * pop, 3., fade(GOLD, (1. - pop) * a));
+            }
+        }
+        // Clear "press to start" below the card when there is room.
+        if h - (y + 212.) > 52. {
+            let prompt_theme = KitTheme {
+                ink: GOLD,
+                ..self.theme.faded(a)
+            };
+            let pw = prompt_width(&["Enter"], "Tee off", &prompt_theme);
+            kit::key_prompt(
+                cx - pw * 0.5,
+                y + 226.,
+                &["Enter"],
+                "Tee off",
+                &prompt_theme,
+            );
+        }
+    }
+
+    fn score_modal(&mut self, paint: bool, tx: f32, y: f32, tw: f32, look: Appearance) {
+        if paint {
+            let a = look.alpha;
+            let dy = look.offset[1];
+            self.card_title(
+                tx,
+                y + 36. + dy,
+                "Scorecard",
+                if self.round.practice {
+                    "Practice"
+                } else {
+                    "Full round"
+                },
+                tw,
+                a,
+            );
+            let cw = (tw - 12.) * 0.5;
+            let mut s = std::mem::take(&mut self.scribe);
+            for i in 0..12 {
+                let row = Entrance::fade_up(6.).with_stagger(0.02).sample(
+                    self.menu_time,
+                    i,
+                    self.motion(),
+                );
+                let ra = a * row.alpha;
+                let rx = tx + (i / 6) as f32 * (cw + 12.);
+                let ry = y + 50. + (i % 6) as f32 * 21. + dy + row.offset[1];
+                let par = course::hole(i).par;
+                if i == self.round.hole_index && self.round.phase != Phase::Finished {
+                    shapes::fill_rounded_rect(
+                        Rect::new(rx - 6., ry - 2., cw + 12., 20.),
+                        6.,
+                        fade(Color::from_rgba(52, 92, 72, 255), ra),
+                    );
+                }
+                draw_text_styled(
+                    s.f(format_args!("{:02}", i + 1)),
+                    rx,
+                    ry + 13.,
+                    modern(8., fade(DIM, ra)),
+                );
+                let (score, color) = match self.round.scores[i] {
+                    Some(v) => (
+                        if self.round.picked_up[i] {
+                            s.f(format_args!("{v}*"))
+                        } else {
+                            s.f(format_args!("{v}"))
+                        },
+                        tone_color(ScoreName::of(v, par, self.round.picked_up[i]).tone()),
+                    ),
+                    None => ("-", DIM),
+                };
+                draw_text_styled(
+                    score,
+                    rx + 48.,
+                    ry + 14.,
+                    classic(16., fade(color, ra)).with_align(TextAlign::Center),
+                );
+                draw_text_styled(
+                    s.f(format_args!("par {par}")),
+                    rx + 72.,
+                    ry + 13.,
+                    modern(8., fade(DIM, ra)),
+                );
+            }
+            let to_par = self.round_to_par();
+            let total = if to_par == 0 {
+                s.f(format_args!("Total {}  (E)", self.round.total()))
+            } else {
+                s.f(format_args!("Total {}  ({to_par:+})", self.round.total()))
+            };
+            draw_text_styled(total, tx, y + 200. + dy, modern(16., fade(GOLD, a)));
+            self.scribe = s;
+        }
         let half = (tw - 8.) * 0.5;
-        button(
-            &mut self.ui,
+        self.kit_button(
+            paint,
             20,
             rect(tx, y + 216., half, 44.),
-            "BACK",
+            "Back",
+            ButtonKind::Primary,
             true,
+            shift(look, 0.),
         );
-        button(
-            &mut self.ui,
+        self.kit_button(
+            paint,
             25,
             rect(tx + half + 8., y + 216., half, 44.),
-            "TAKE 12",
+            "Take 12",
+            ButtonKind::Ghost,
             self.round.phase == Phase::Aiming,
+            shift(look, 0.),
         );
     }
+
     /// Results: rank title, personal best, the next goal and round stats.
-    pub(super) fn final_card(&mut self, w: f32, h: f32) {
+    fn final_card(&mut self, paint: bool, w: f32, h: f32) {
         let width = (w - 32.).min(460.);
         let stats_rows = if h >= 520. { 4 } else { 0 };
         let assists = self.stats.assist_count();
@@ -755,177 +1104,254 @@ impl App {
         let y = ((h - height) * 0.5).max(8.);
         let tx = x + 16.;
         let tw = width - 32.;
-        self.ui.modal(900).expect("one modal");
-        self.ui.panel(rect(0., 0., w, h), fade(DARK, 0.5)).unwrap();
-        self.ui.panel(rect(x, y, width, height), DARK).unwrap();
-        let total = self.round.total();
-        let to_par = self.round_to_par();
-        let rank = card::rank(to_par);
+        let look = Entrance::fade_up(16.).sample(self.menu_time, 0, self.motion());
         let practice = self.round.practice;
-        let accent = if practice {
-            PAPER
-        } else if to_par < 0 {
-            GOLD
+        if !paint {
+            self.ui.modal(900).expect("one modal");
+            self.ui
+                .panel(
+                    rect(x, y, width, height),
+                    Color::new(DARK.r, DARK.g, DARK.b, 0.),
+                )
+                .expect("results anchor");
         } else {
-            COPPER
-        };
-        self.ui.panel(rect(x, y, width, 4.), accent).unwrap();
-        line(
-            &mut self.ui,
-            rect(tx, y + 16., tw, 11.),
-            if practice {
-                "PRACTICE COMPLETE"
+            let a = look.alpha;
+            let full = Rect::new(0., 0., w, h);
+            shapes::fill_rounded_rect(full, 0., fade(self.theme.backdrop, a * 0.8));
+            let r = kit::appear(self.px(rect(x, y, width, height)), look);
+            let to_par = self.round_to_par();
+            let accent = if practice {
+                PAPER
+            } else if to_par < 0 {
+                GOLD
             } else {
-                "ROUND COMPLETE · YOUR TITLE"
-            },
-            11.,
-            GOLD,
-            Align::Center,
-        );
-        let pulse = if self.juice.motion() > 0. {
-            1. + 0.04 * (self.juice.time * 3.).sin()
-        } else {
-            1.
-        };
-        line(
-            &mut self.ui,
-            rect(tx, y + 32., tw, 26. * pulse),
-            if practice {
+                COPPER
+            };
+            surface(r, 20., &self.theme, a);
+            shapes::fill_rounded_rect(
+                Rect::new(r.x + 20., r.y, r.w - 40., 3.),
+                1.5,
+                fade(accent, a),
+            );
+            let cx = x + width * 0.5;
+            let dy = look.offset[1];
+            let rank = card::rank(to_par);
+            let lines = Entrance::fade_up(10.).with_stagger(0.07);
+            let menu_time = self.menu_time;
+            let motion = self.motion();
+            let la = |i: usize| a * lines.sample(menu_time, i, motion).alpha;
+            draw_text_styled(
+                if practice {
+                    "Practice complete"
+                } else {
+                    "Round complete · your title"
+                },
+                cx,
+                y + 24. + dy,
+                modern(8., fade(GOLD, la(0))).with_align(TextAlign::Center),
+            );
+            let title = if practice {
                 "PRACTICE MAKES PUTTS"
             } else {
                 rank.title
-            },
-            26. * pulse,
-            if practice { PAPER } else { GOLD },
-            Align::Center,
-        );
-        line(
-            &mut self.ui,
-            rect(tx, y + 64., tw, 12.),
-            if practice {
-                "PRACTICE NEVER TOUCHES YOUR RECORD"
+            };
+            let pulse = if self.juice.motion() > 0. {
+                0.5 + 0.5 * (self.ambient * 2.5).sin()
+            } else {
+                0.
+            };
+            shapes::glow_disc(
+                vec2(cx, y + 48. + dy),
+                width * 0.4,
+                fade(GOLD, (0.1 + 0.06 * pulse) * la(1)),
+            );
+            draw_text_styled(
+                title,
+                cx,
+                y + 58. + dy,
+                fit(
+                    classic(24., fade(if practice { PAPER } else { GOLD }, la(1)))
+                        .with_outline(fade(Color::from_rgba(60, 30, 14, 255), la(1)))
+                        .with_align(TextAlign::Center),
+                    title,
+                    tw,
+                ),
+            );
+            let quip = if practice {
+                "Practice never touches your record."
             } else {
                 rank.quip
-            },
-            12.,
-            PAPER,
-            Align::Center,
-        );
-        line(
-            &mut self.ui,
-            rect(tx, y + 86., tw, 18.),
-            &format!("{total} STROKES · {}", card::to_par_text(to_par)),
-            18.,
-            PAPER,
-            Align::Center,
-        );
-        let (best_line, best_color) = match self.round_best {
-            _ if practice || self.auto && !self.capture.player_card => (
-                match self.best {
-                    Some(b) => format!("YOUR BEST FULL ROUND: {b}"),
-                    None => "PLAY A FULL ROUND TO SET A BEST".into(),
-                },
-                DIM,
-            ),
-            Some(b @ Best::New(_)) | Some(b @ Best::First) => (b.line(), MINT),
-            Some(b) => (b.line(), CLAY),
-            None => (String::new(), DIM),
-        };
-        line(
-            &mut self.ui,
-            rect(tx, y + 112., tw, 13.),
-            &best_line,
-            13.,
-            best_color,
-            Align::Center,
-        );
-        let goal = match card::next_rank(to_par) {
-            Some((better, strokes)) if !practice => format!(
-                "NEXT TITLE: {} · {strokes} {} TO GO",
-                better.title,
-                if strokes == 1 { "STROKE" } else { "STROKES" }
-            ),
-            None if !practice => "TOP TITLE. THE WINDMILL SALUTES YOU.".into(),
-            _ => "TRY A FULL ROUND FOR A TITLE".into(),
-        };
-        line(
-            &mut self.ui,
-            rect(tx, y + 132., tw, 12.),
-            &goal,
-            12.,
-            GOLD,
-            Align::Center,
-        );
-        let mut by = y + 156.;
-        if stats_rows > 0 {
-            let s = self.stats;
-            let cells = [
-                ("ACES", s.aces),
-                ("UNDER PAR", s.under),
-                ("PARS", s.pars),
-                ("OVER PAR", s.over),
-                ("BANK SHOTS", s.bank_shots + s.trick_shots),
-                ("SPLASHES", s.splashes),
-                ("BEST STREAK", s.best_streak),
-                ("LIP-OUTS", s.lip_outs),
-            ];
-            self.ui
-                .panel(
-                    rect(tx, by - 6., tw, stats_rows as f32 * 18. + 6. + extra),
-                    PANEL,
-                )
-                .unwrap();
-            let half = tw * 0.5;
-            for (i, (name, value)) in cells.into_iter().enumerate() {
-                let cx = tx + (i % 2) as f32 * half + 10.;
-                let cy = by + (i / 2) as f32 * 18.;
-                line(
-                    &mut self.ui,
-                    rect(cx, cy, half - 60., 11.),
-                    name,
-                    11.,
+            };
+            draw_text_styled(
+                quip,
+                cx,
+                y + 76. + dy,
+                fit(
+                    modern(8., fade(PAPER, la(2))).with_align(TextAlign::Center),
+                    quip,
+                    tw,
+                ),
+            );
+            let mut s = std::mem::take(&mut self.scribe);
+            let shown = self.roll.shown();
+            let big = if to_par == 0 {
+                s.f(format_args!("{shown} strokes · E"))
+            } else {
+                s.f(format_args!("{shown} strokes · {to_par:+}"))
+            };
+            draw_text_styled(
+                big,
+                cx,
+                y + 104. + dy,
+                classic(16., fade(PAPER, la(3))).with_align(TextAlign::Center),
+            );
+            let (best_line, best_color) = match self.round_best {
+                _ if practice || self.auto && !self.capture.player_card => (
+                    match self.best {
+                        Some(b) => s.f(format_args!("Your best full round: {b}")),
+                        None => "Play a full round to set a best.",
+                    },
                     DIM,
-                    Align::Left,
+                ),
+                Some(b @ Best::New(_)) | Some(b @ Best::First) => {
+                    (s.f(format_args!("{}", b.line())), MINT)
+                }
+                Some(b) => (s.f(format_args!("{}", b.line())), CLAY),
+                None => ("", DIM),
+            };
+            draw_text_styled(
+                best_line,
+                cx,
+                y + 122. + dy,
+                fit(
+                    modern(8., fade(best_color, la(4))).with_align(TextAlign::Center),
+                    best_line,
+                    tw,
+                ),
+            );
+            let goal = match card::next_rank(to_par) {
+                Some((better, strokes)) if !practice => s.f(format_args!(
+                    "Next title: {} · {strokes} {} to go",
+                    better.title,
+                    if strokes == 1 { "stroke" } else { "strokes" }
+                )),
+                None if !practice => "Top title. The windmill salutes you.",
+                _ => "Try a full round for a title.",
+            };
+            draw_text_styled(
+                goal,
+                cx,
+                y + 140. + dy,
+                fit(
+                    modern(8., fade(GOLD, la(5))).with_align(TextAlign::Center),
+                    goal,
+                    tw,
+                ),
+            );
+            if stats_rows > 0 {
+                let st = self.stats;
+                let cells: [(&str, u8); 8] = [
+                    ("Aces", st.aces),
+                    ("Under par", st.under),
+                    ("Pars", st.pars),
+                    ("Over par", st.over),
+                    ("Bank shots", st.bank_shots + st.trick_shots),
+                    ("Splashes", st.splashes),
+                    ("Best streak", st.best_streak),
+                    ("Lip-outs", st.lip_outs),
+                ];
+                let by = y + 156. + dy;
+                shapes::fill_rounded_rect(
+                    Rect::new(tx, by - 6., tw, stats_rows as f32 * 18. + 6. + extra),
+                    10.,
+                    Color::new(0., 0., 0., 0.2 * a),
                 );
-                line(
-                    &mut self.ui,
-                    rect(cx + half - 64., cy, 40., 12.),
-                    &value.to_string(),
-                    12.,
-                    PAPER,
-                    Align::Right,
-                );
+                let half = tw * 0.5;
+                for (i, (name, value)) in cells.into_iter().enumerate() {
+                    let ca = a * lines.sample(self.menu_time, 6 + i, self.motion()).alpha;
+                    let cx = tx + (i % 2) as f32 * half + 12.;
+                    let cy = by + (i / 2) as f32 * 18. + 9.;
+                    draw_text_styled(name, cx, cy, modern(8., fade(DIM, ca)));
+                    draw_text_styled(
+                        s.f(format_args!("{value}")),
+                        cx + half - 28.,
+                        cy,
+                        modern(8., fade(PAPER, ca)).with_align(TextAlign::Right),
+                    );
+                }
+                if assists > 0 {
+                    draw_text_styled(
+                        s.f(format_args!(
+                            "★ Secret copper assists {assists}/{} ★",
+                            card::assist_holes()
+                        )),
+                        x + width * 0.5,
+                        by + stats_rows as f32 * 18. + 9.,
+                        modern(8., fade(GOLD, a)).with_align(TextAlign::Center),
+                    );
+                }
             }
-            if assists > 0 {
-                line(
-                    &mut self.ui,
-                    rect(tx, by + stats_rows as f32 * 18., tw, 11.),
-                    &format!(
-                        "* SECRET COPPER ASSISTS {assists}/{} *",
-                        card::assist_holes()
-                    ),
-                    11.,
-                    GOLD,
-                    Align::Center,
-                );
-            }
-            by += grid;
+            self.scribe = s;
         }
-        button(&mut self.ui, 21, rect(tx, by, tw, 44.), "PLAY AGAIN", true);
+        let by = y + 156. + grid;
+        self.kit_button(
+            paint,
+            21,
+            rect(tx, by, tw, 44.),
+            "Play again",
+            ButtonKind::Primary,
+            true,
+            shift(look, 0.),
+        );
         let half = (tw - 8.) * 0.5;
-        button(
-            &mut self.ui,
+        self.kit_button(
+            paint,
             22,
             rect(tx, by + 52., half, 44.),
-            "PRACTICE",
+            "Practice",
+            ButtonKind::Secondary,
             true,
+            shift(look, 0.),
         );
-        button(
-            &mut self.ui,
+        self.kit_button(
+            paint,
             23,
             rect(tx + half + 8., by + 52., half, 44.),
-            "CARD",
+            "Card",
+            ButtonKind::Secondary,
             true,
+            shift(look, 0.),
         );
     }
+}
+
+const PRACTICE_LABELS: [&str; 12] = [
+    "01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12",
+];
+
+/// Entrance appearance without scale, so button hit areas match their paint.
+fn shift(look: Appearance, extra: f32) -> Appearance {
+    Appearance {
+        alpha: look.alpha,
+        offset: [look.offset[0], look.offset[1] + extra],
+        scale: 1.,
+    }
+}
+
+/// Width `kit::key_prompt` will use, for centering before drawing.
+fn prompt_width(keys: &[&str], action: &str, theme: &KitTheme) -> f32 {
+    let style = Type::modern(theme.body, theme.ink);
+    let h = theme.body * 1.5 + 2.;
+    let caps: f32 = keys
+        .iter()
+        .map(|k| (text_width(k, style) + kit::SPACE[2] * 2.).max(h - 3.) + kit::SPACE[0])
+        .sum();
+    caps + kit::SPACE[0] + text_width(action, Type::modern(theme.body, theme.muted))
+}
+
+#[allow(dead_code)]
+fn _face(_: FontFace) {}
+#[allow(dead_code)]
+fn _glow() {
+    let _ = post::post_fx;
 }

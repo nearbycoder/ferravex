@@ -1,24 +1,33 @@
 //! World-space drawing: the arena, entities and world-anchored juice. Reads
 //! game state and presentation only; nothing here can change the simulation.
+//!
+//! Art direction: a dark, slightly blue containment floor lit by its own
+//! emissive things. Everything that matters (the player, drones, bullets,
+//! supplies, lamps and the chain-colored border) is drawn with additive neon
+//! strokes and glows so the post-processing bloom picks it up, while the
+//! floor and cover stay below the bloom threshold and read as matte.
 use crate::game::{
     ARENA, BEACONS, Bullet, COVER, ELITE_HEALTH, Enemy, Game, PLAYER_RADIUS, Phase, Pickup,
     Position, Supply,
 };
-use crate::juice::{self, GOLD, Juice, MAGENTA, VIOLET, fade, tier_color};
+use crate::hud::Line;
+use crate::juice::{GOLD, Juice, VIOLET, fade, tier_color};
 use crate::presentation::Presentation;
-use crate::{AMBER, CORAL, CYAN, FLOOR, INK, LINE, MUTED, PAPER, label, text_width};
+use crate::{AMBER, CORAL, CYAN, FLOOR, INK, MUTED, PAPER};
 use ferravex_play::action::ActionPhase;
 use ferravex_render::canvas::Canvas2D;
+use ferravex_render::post::{glow_circle, with_glow};
 use ferravex_render::prelude::*;
+use ferravex_render::shapes::{self, Cap, Fill, Join, Stroke};
+use ferravex_render::text::{TextAlign, TextStyle, draw_text_styled};
 
 pub(crate) const REPAIR: Color = Color::from_rgba(130, 246, 160, 255);
 pub(crate) const BATTERY: Color = Color::from_rgba(140, 200, 255, 255);
-const BRUTE: Color = Color::from_rgba(226, 104, 196, 255);
+const BRUTE: Color = Color::from_rgba(236, 104, 214, 255);
 const CENTER: Vec2 = vec2(640., 414.);
 
-/// The world camera with presentation-only shake and the final-drone close-up.
-/// Returns the camera and a pointer mapping without shake, so aim follows
-/// what the player sees but never jitters with the camera.
+/// The world camera with presentation-only shake, aim lead and the
+/// final-drone close-up. Pointer mapping excludes shake so aim never jitters.
 pub(crate) struct WorldView {
     pub camera: Camera2D,
     target: Vec2,
@@ -30,7 +39,7 @@ impl WorldView {
     pub fn new(canvas: Canvas2D, juice: &Juice, game: &Game) -> Self {
         let mut camera = canvas.camera();
         let zoom = juice.zoom();
-        let mut target = camera.target;
+        let mut target = camera.target + juice.lead();
         if zoom > 1. {
             // Lean toward the duel: halfway between player and the last drone.
             let last = game.nearest_enemy().unwrap_or(game.player);
@@ -52,6 +61,12 @@ impl WorldView {
     pub fn unproject(&self, screen: Vec2) -> Vec2 {
         let base = self.canvas.unproject(screen);
         self.target + (base - self.canvas.size * 0.5) / self.zoom
+    }
+
+    /// World to logical screen pixels (without shake), e.g. the iris focus.
+    pub fn project(&self, world: Vec2) -> Vec2 {
+        self.canvas
+            .project(self.canvas.size * 0.5 + (world - self.target) * self.zoom)
     }
 }
 
@@ -77,8 +92,55 @@ fn hue(t: f32) -> Color {
     Color::new(r, g, b, 1.)
 }
 
-pub(crate) fn centered(text: &str, x: f32, y: f32, size: u16, color: Color) {
-    label(text, x - text_width(text, size) * 0.5, y, size, color);
+/// World text in the Modern face, centered on `x`.
+pub(crate) fn centered(text: &str, x: f32, y: f32, size: f32, color: Color) {
+    draw_text_styled(
+        text,
+        x,
+        y,
+        TextStyle::modern(size, color).with_align(TextAlign::Center),
+    );
+}
+
+fn neon_poly(center: Vec2, sides: u8, radius: f32, angle: f32, width: f32, color: Color) {
+    let mut points = [Vec2::ZERO; 8];
+    let n = sides.min(8) as usize;
+    for (i, point) in points.iter_mut().take(n).enumerate() {
+        let a = angle.to_radians() + i as f32 / n as f32 * std::f32::consts::TAU;
+        *point = center + Vec2::from_angle(a) * radius;
+    }
+    shapes::polyline(
+        &points[..n],
+        Stroke::new(width, color).join(Join::Miter).closed(true),
+    );
+}
+
+pub(crate) fn backdrop(p: &Presentation) {
+    // Deep, cool backdrop beyond the arena so camera lead/zoom never shows a
+    // hard edge, with a faint radial lift behind the play field.
+    let outer = Rect::new(-700., -500., 2680., 1800.);
+    shapes::fill_rounded_rect(
+        outer,
+        0.,
+        Fill::radial(
+            CENTER,
+            1100.,
+            Color::from_rgba(16, 30, 44, 255),
+            Color::from_rgba(5, 9, 14, 255),
+        ),
+    );
+    // Distant drifting hex dust (parallax: moves slower than the arena).
+    let time = p.juice.time * p.motion_scale();
+    let lead = p.juice.lead() * 0.6;
+    for n in 0..24 {
+        let x = -120. + hash(n + 300) * 1520. + (time * (3. + hash(n) * 4.)).sin() * 10.;
+        let y = -80. + (hash(n + 400) * 960. - time * (4. + hash(n + 9) * 6.)).rem_euclid(960.);
+        let at = vec2(x, y) + lead;
+        if ARENA.contains(at) {
+            continue;
+        }
+        draw_poly(at.x, at.y, 6, 3. + hash(n + 5) * 5., 30., fade(CYAN, 0.06));
+    }
 }
 
 pub(crate) fn arena(game: &Game, p: &Presentation) {
@@ -90,14 +152,19 @@ pub(crate) fn arena(game: &Game, p: &Presentation) {
     } else {
         0
     });
-    draw_rectangle(
-        ARENA.x - 12.,
-        ARENA.y - 12.,
-        ARENA.w + 24.,
-        ARENA.h + 24.,
-        Color::from_rgba(20, 34, 40, 255),
+    let frame = Rect::new(ARENA.x - 12., ARENA.y - 12., ARENA.w + 24., ARENA.h + 24.);
+    shapes::fill_rounded_rect(frame, 10., Color::from_rgba(14, 25, 31, 255));
+    // A soft pool of light in the middle of the floor keeps it from looking flat.
+    shapes::fill_rounded_rect(
+        ARENA,
+        4.,
+        Fill::radial(
+            CENTER,
+            720.,
+            Color::from_rgba(24, 42, 50, 255),
+            Color::from_rgba(13, 23, 29, 255),
+        ),
     );
-    draw_rectangle(ARENA.x, ARENA.y, ARENA.w, ARENA.h, FLOOR);
     // Checker tiles add texture; disco mode tints them like a dance floor.
     let disco = game.style.disco();
     for ty in 0..10 {
@@ -113,14 +180,24 @@ pub(crate) fn arena(game: &Game, p: &Presentation) {
                 };
                 draw_rectangle(x + 2., y + 2., 58., 56., fade(shade, beat));
             } else if (tx + ty) % 2 == 0 {
-                draw_rectangle(x + 2., y + 2., 58., 56., Color::from_rgba(20, 34, 40, 255));
+                draw_rectangle(x + 2., y + 2., 58., 56., Color::new(1., 1., 1., 0.018));
             }
         }
     }
-    // A slow scanner sweep keeps the floor alive without competing with combat.
+    // Thin floor seams with a slow scanner sweep.
+    for x in (134..1208).step_by(124) {
+        draw_line(
+            x as f32,
+            ARENA.y,
+            x as f32,
+            ARENA.bottom(),
+            1.,
+            Color::new(0.38, 0.93, 0.81, 0.035),
+        );
+    }
     if motion > 0. {
         let sweep = ARENA.y + (time * 70.).rem_euclid(ARENA.h + 120.) - 60.;
-        for (offset, alpha) in [(0., 0.06), (8., 0.035), (16., 0.02)] {
+        for (offset, alpha) in [(0., 0.07), (8., 0.04), (16., 0.02)] {
             let y = sweep - offset;
             if y > ARENA.y && y < ARENA.bottom() - 3. {
                 draw_rectangle(ARENA.x, y, ARENA.w, 3., fade(CYAN, alpha));
@@ -132,99 +209,95 @@ pub(crate) fn arena(game: &Game, p: &Presentation) {
         let x = ARENA.x + hash(n) * ARENA.w + (time * (6. + hash(n + 99) * 10.)).sin() * 14.;
         let y = ARENA.y
             + (hash(n + 7) * ARENA.h - time * (8. + hash(n + 31) * 14.)).rem_euclid(ARENA.h);
-        draw_circle(x, y, 1.2 + hash(n + 3) * 1.4, fade(CYAN, 0.18));
+        draw_circle(x, y, 1.2 + hash(n + 3) * 1.4, fade(CYAN, 0.2));
     }
     // Center seal: readable sector number under quiet rotating ticks.
-    draw_circle_lines(
-        CENTER.x,
-        CENTER.y,
-        100.,
-        2.,
-        Color::from_rgba(38, 64, 70, 255),
-    );
-    draw_circle_lines(
-        CENTER.x,
-        CENTER.y,
-        88.,
-        1.,
-        Color::from_rgba(34, 56, 62, 255),
-    );
+    shapes::stroke_circle(CENTER, 100., 2., Color::from_rgba(40, 70, 76, 255));
+    shapes::stroke_circle(CENTER, 88., 1., Color::from_rgba(34, 58, 64, 255));
+    with_glow(|| {
+        shapes::stroke_arc(
+            CENTER,
+            94.,
+            time * 0.4,
+            std::f32::consts::TAU * 0.92,
+            Stroke::new(1.5, fade(tier, 0.18)).cap(Cap::Round),
+        );
+    });
     for i in 0..12 {
         let a = i as f32 / 12. * std::f32::consts::TAU + time * 0.25;
         let d = Vec2::from_angle(a);
         let (a0, a1) = (CENTER + d * 92., CENTER + d * 100.);
         draw_line(a0.x, a0.y, a1.x, a1.y, 3., fade(tier, 0.45));
     }
-    centered(
+    draw_text_styled(
         "07",
         CENTER.x,
-        CENTER.y + 22.,
-        64,
-        Color::from_rgba(48, 84, 90, 255),
+        CENTER.y + 24.,
+        TextStyle::classic(64., Color::from_rgba(44, 80, 86, 255)).with_align(TextAlign::Center),
     );
     centered(
-        "SECTOR",
+        "Sector",
         CENTER.x,
-        CENTER.y - 36.,
-        13,
-        Color::from_rgba(56, 92, 98, 255),
+        CENTER.y - 38.,
+        16.,
+        Color::from_rgba(60, 98, 104, 255),
     );
     for cover in COVER {
-        draw_rectangle(cover.x + 6., cover.y + 9., cover.w, cover.h, INK);
-        draw_rectangle(
-            cover.x,
-            cover.y,
-            cover.w,
-            cover.h,
-            Color::from_rgba(38, 56, 62, 255),
+        let shadow = Rect::new(cover.x + 8., cover.y + 12., cover.w, cover.h);
+        shapes::fill_rounded_rect(shadow, 6., Color::new(0., 0., 0., 0.45));
+        shapes::fill_rounded_rect(
+            cover,
+            6.,
+            Fill::vertical(
+                cover,
+                Color::from_rgba(46, 66, 72, 255),
+                Color::from_rgba(30, 44, 50, 255),
+            ),
         );
-        draw_rectangle(cover.x, cover.y, cover.w, 4., fade(CYAN, 0.45));
-        draw_rectangle_lines(
-            cover.x,
-            cover.y,
-            cover.w,
-            cover.h,
-            1.5,
-            Color::from_rgba(78, 104, 108, 255),
-        );
+        shapes::stroke_rounded_rect(cover, 6., 1.5, Color::from_rgba(82, 110, 114, 255));
+        with_glow(|| {
+            shapes::fill_capsule(
+                vec2(cover.x + 10., cover.y + 4.),
+                vec2(cover.right() - 10., cover.y + 4.),
+                1.6,
+                fade(CYAN, 0.55),
+            );
+        });
         for x in 0..6 {
-            let x0 = cover.x + 10. + x as f32 * 13.;
+            let x0 = cover.x + 12. + x as f32 * 13.;
             draw_line(
                 x0,
                 cover.bottom() - 8.,
                 x0 + 7.,
                 cover.bottom() - 16.,
                 4.,
-                Color::from_rgba(170, 132, 62, 255),
+                Color::from_rgba(176, 136, 62, 255),
             );
         }
     }
     // Chain-tier neon border: the arena itself shows how hot the chain is.
-    let glow = if game.score.chain() > 0 { 0.7 } else { 0.35 };
-    draw_rectangle_lines(
-        ARENA.x - 6.,
-        ARENA.y - 6.,
-        ARENA.w + 12.,
-        ARENA.h + 12.,
-        8.,
-        fade(tier, 0.12 * glow),
-    );
-    draw_rectangle_lines(
-        ARENA.x - 2.,
-        ARENA.y - 2.,
-        ARENA.w + 4.,
-        ARENA.h + 4.,
-        3.,
-        fade(tier, glow),
-    );
+    let glow = if game.score.chain() > 0 { 1. } else { 0.5 };
+    with_glow(|| {
+        shapes::stroke_rounded_rect(
+            Rect::new(ARENA.x - 2., ARENA.y - 2., ARENA.w + 4., ARENA.h + 4.),
+            6.,
+            3.,
+            fade(tier, 0.75 * glow),
+        );
+    });
     for (x, y, sx, sy) in [
         (ARENA.x, ARENA.y, 1., 1.),
         (ARENA.right(), ARENA.y, -1., 1.),
         (ARENA.x, ARENA.bottom(), 1., -1.),
         (ARENA.right(), ARENA.bottom(), -1., -1.),
     ] {
-        draw_line(x, y, x + sx * 34., y, 4., CYAN);
-        draw_line(x, y, x, y + sy * 34., 4., CYAN);
+        let corner = [vec2(x + sx * 36., y), vec2(x, y), vec2(x, y + sy * 36.)];
+        with_glow(|| {
+            shapes::polyline(
+                &corner,
+                Stroke::new(4., CYAN).join(Join::Miter).cap(Cap::Square),
+            )
+        });
     }
     beacons(game, p);
 }
@@ -234,8 +307,8 @@ fn beacons(game: &Game, p: &Presentation) {
     for (i, at) in BEACONS.into_iter().enumerate() {
         let lit = game.style.beacons & (1 << i) != 0;
         let vertical = at.x == ARENA.x || at.x == ARENA.right();
-        let (w, h) = if vertical { (10., 26.) } else { (26., 10.) };
-        draw_rectangle(at.x - w * 0.5, at.y - h * 0.5, w, h, INK);
+        let (w, h) = if vertical { (12., 28.) } else { (28., 12.) };
+        shapes::fill_rounded_rect(Rect::new(at.x - w * 0.5, at.y - h * 0.5, w, h), 4., INK);
         let color = if game.style.disco() {
             hue(i as f32 * 0.25 + time * 0.4 * p.motion_scale())
         } else if lit {
@@ -250,10 +323,12 @@ fn beacons(game: &Game, p: &Presentation) {
             0.55 + 0.35 * ((time * 2.2 + i as f32).sin() * 0.5 + 0.5)
         };
         if lit {
-            draw_circle(at.x, at.y, 15., fade(color, 0.22));
+            glow_circle(at.x, at.y, 70., color, 0.35);
+        } else {
+            glow_circle(at.x, at.y, 26., color, 0.22 * alpha);
         }
-        draw_circle(at.x, at.y, 6., fade(color, alpha));
-        draw_circle_lines(at.x, at.y, 9., 1.5, fade(color, 0.6 * alpha));
+        shapes::fill_circle(at, 6., fade(color, alpha));
+        shapes::stroke_circle(at, 9., 1.5, fade(color, 0.6 * alpha));
     }
 }
 
@@ -270,17 +345,26 @@ pub(crate) fn spawn_preview(game: &Game) {
     let strength = (1. - wait as f32 / 0.6).clamp(0., 1.);
     let color = fade(AMBER, 0.45 + 0.55 * strength);
     for p in game.entry_candidates() {
-        draw_circle(p.x, p.y, 20., fade(AMBER, 0.04 + 0.08 * strength));
-        draw_circle_lines(p.x, p.y, 22., 2., color);
+        shapes::fill_circle(p, 20., fade(AMBER, 0.04 + 0.08 * strength));
+        with_glow(|| {
+            shapes::stroke_arc(
+                p,
+                22.,
+                -std::f32::consts::FRAC_PI_2,
+                std::f32::consts::TAU * strength.max(0.05),
+                Stroke::new(2.5, color).cap(Cap::Round),
+            );
+        });
+        shapes::stroke_circle(p, 22., 1., fade(AMBER, 0.3));
         for i in 0..4 {
             let d = Vec2::from_angle(i as f32 * std::f32::consts::FRAC_PI_2 + 0.785);
-            let (a, b) = (p + d * 30., p + d * 22.);
+            let (a, b) = (p + d * 31., p + d * 24.);
             draw_line(a.x, a.y, b.x, b.y, 3., color);
         }
         if game.wave == 1 {
-            let x = (p.x - 21.).clamp(ARENA.x + 6., ARENA.right() - 50.);
+            let x = p.x.clamp(ARENA.x + 30., ARENA.right() - 30.);
             let y = if p.y < CENTER.y { p.y + 44. } else { p.y - 32. };
-            label("ENTRY", x, y, 13, color);
+            centered("Entry", x, y, 12., color);
         }
     }
 }
@@ -319,55 +403,73 @@ pub(crate) fn entities(game: &Game, p: &Presentation, emphasis: f32) {
         };
         let blink = pickup.remaining < 3. && p.flash_scale() > 0. && (time * 8.).sin() < 0.;
         let color = if blink { MUTED } else { color };
-        draw_circle(at.x, at.y, 22. * pulse, fade(color, 0.12));
+        glow_circle(at.x, at.y, 46. * pulse, color, 0.3);
+        // A gentle bob sells "floating supply" without moving its hitbox.
+        let at = at - vec2(0., (time * 3.).sin() * 2. * motion);
         match pickup.kind {
             Supply::Repair => {
-                draw_poly(at.x, at.y, 4, 15. * pulse, 45., fade(color, 0.3));
-                draw_poly(at.x, at.y, 4, 12. * pulse, 45., INK);
+                draw_poly(at.x, at.y, 4, 15. * pulse, 45., INK);
+                with_glow(|| neon_poly(at, 4, 15. * pulse, 45., 2., color));
                 draw_rectangle(at.x - 7., at.y - 2.5, 14., 5., color);
                 draw_rectangle(at.x - 2.5, at.y - 7., 5., 14., color);
             }
             Supply::Battery => {
-                draw_poly(at.x, at.y, 6, 15. * pulse, 30., fade(color, 0.3));
-                draw_poly(at.x, at.y, 6, 12. * pulse, 30., INK);
-                draw_line(at.x + 3., at.y - 8., at.x - 3., at.y + 1., 3., color);
-                draw_line(at.x - 3., at.y + 1., at.x + 3., at.y - 1., 3., color);
-                draw_line(at.x + 3., at.y - 1., at.x - 3., at.y + 8., 3., color);
+                draw_poly(at.x, at.y, 6, 15. * pulse, 30., INK);
+                with_glow(|| neon_poly(at, 6, 15. * pulse, 30., 2., color));
+                shapes::polyline(
+                    &[
+                        vec2(at.x + 3., at.y - 8.),
+                        vec2(at.x - 3., at.y + 1.),
+                        vec2(at.x + 3., at.y - 1.),
+                        vec2(at.x - 3., at.y + 8.),
+                    ],
+                    Stroke::new(2.5, color).join(Join::Round),
+                );
             }
         }
         if pickup.remaining < 3. {
-            draw_circle_lines(at.x, at.y, 20., 1.5, AMBER);
+            shapes::stroke_arc(
+                at,
+                21.,
+                -std::f32::consts::FRAC_PI_2,
+                std::f32::consts::TAU * (pickup.remaining / 3.),
+                Stroke::new(2., AMBER).cap(Cap::Round),
+            );
         }
         if at.distance(game.player) > 48. {
             let name = match pickup.kind {
-                Supply::Repair => "REPAIR",
-                Supply::Battery => "SHIELD",
+                Supply::Repair => "Repair",
+                Supply::Battery => "Shield",
             };
-            centered(name, at.x, at.y + 34., 11, fade(color, 0.85));
+            centered(name, at.x, at.y + 36., 12., fade(color, 0.9));
         }
     }
     for (pos, enemy) in &mut game.world.query::<(&Position, &Enemy)>() {
         enemy_body(game, pos.0, &enemy, p, motion, time);
     }
-    for (pos, bullet) in &mut game.world.query::<(&Position, &Bullet)>() {
-        let tail = pos.0 - bullet.velocity.normalize() * 24.;
-        draw_line(tail.x, tail.y, pos.0.x, pos.0.y, 8., fade(CYAN, 0.18));
-        draw_line(tail.x, tail.y, pos.0.x, pos.0.y, 3.5, CYAN);
-        draw_circle(pos.0.x, pos.0.y, 3.5, PAPER);
+    with_glow(|| {
+        for (pos, bullet) in &mut game.world.query::<(&Position, &Bullet)>() {
+            let dir = bullet.velocity.normalize_or_zero();
+            let tail = pos.0 - dir * 30.;
+            shapes::fill_capsule(tail, pos.0, 4.5, fade(CYAN, 0.22));
+            shapes::fill_capsule(pos.0 - dir * 18., pos.0, 2.2, CYAN);
+        }
+    });
+    for (pos, _) in &mut game.world.query::<(&Position, &Bullet)>() {
+        shapes::fill_circle(pos.0, 3., PAPER);
     }
     if let Some(marker) = game.hit_marker {
         let color = if marker.lethal { CYAN } else { PAPER };
         let reach = (if marker.lethal { 14. } else { 10. }) * (1. + emphasis * 0.35);
-        for (x, y) in [(-1., -1.), (1., -1.), (-1., 1.), (1., 1.)] {
-            draw_line(
-                marker.position.x + x * 4.,
-                marker.position.y + y * 4.,
-                marker.position.x + x * reach,
-                marker.position.y + y * reach,
-                3.,
-                color,
-            );
-        }
+        with_glow(|| {
+            for (x, y) in [(-1., -1.), (1., -1.), (-1., 1.), (1., 1.)] {
+                let d = vec2(x, y);
+                shapes::polyline(
+                    &[marker.position + d * 4., marker.position + d * reach],
+                    Stroke::new(2.5, color).cap(Cap::Round),
+                );
+            }
+        });
     }
     player(game, p);
 }
@@ -385,12 +487,22 @@ fn enemy_body(game: &Game, at: Vec2, enemy: &Enemy, p: &Presentation, motion: f3
     } else {
         base
     };
-    // Hits puff the body up briefly; spawn flash doubles as a pop-in.
-    let r = enemy.radius * (1. + enemy.flash * 2.4 * motion);
     let to_player = (game.player - at).normalize_or_zero();
     let heading = to_player.to_angle().to_degrees();
+    // Anticipation: a windup crouches and leans in; the strike pops out.
+    let (squash, lean) = match enemy.attack.phase() {
+        ActionPhase::Windup => {
+            let t = enemy.attack.progress();
+            (1. - 0.16 * t, 5. * t)
+        }
+        ActionPhase::Active => (1.18, 8.),
+        _ => (1., 0.),
+    };
+    let at_body = at + to_player * lean * motion;
+    // Hits puff the body up briefly; spawn flash doubles as a pop-in.
+    let r = enemy.radius * (1. + enemy.flash * 2.4 * motion) * (1. + (squash - 1.) * motion);
     if enemy.stagger.active() {
-        draw_circle_lines(at.x, at.y, r + 9., 2.5, CYAN);
+        with_glow(|| shapes::stroke_circle(at, r + 9., 2.5, fade(CYAN, 0.8)));
         for i in 0..3 {
             let a = time * 5. * motion + i as f32 * 2.09;
             let s = at + Vec2::from_angle(a) * (r + 9.) - vec2(0., 2.);
@@ -400,81 +512,130 @@ fn enemy_body(game: &Game, at: Vec2, enemy: &Enemy, p: &Presentation, motion: f3
     match enemy.attack.phase() {
         ActionPhase::Windup => {
             let progress = enemy.attack.progress();
-            // The ring is the actual contact range; progress thickens it.
+            // The ring is the actual contact range; progress fills it.
             let reach = enemy.radius + PLAYER_RADIUS;
-            draw_circle(at.x, at.y, reach, fade(AMBER, 0.08 + 0.12 * progress));
-            draw_circle_lines(at.x, at.y, reach, 2. + progress * 3., AMBER);
+            shapes::fill_circle(at, reach, fade(AMBER, 0.06 + 0.12 * progress));
+            shapes::stroke_circle(at, reach, 1.5, fade(AMBER, 0.6));
+            with_glow(|| {
+                shapes::stroke_arc(
+                    at,
+                    reach,
+                    -std::f32::consts::FRAC_PI_2,
+                    std::f32::consts::TAU * progress.max(0.05),
+                    Stroke::new(3. + progress * 2., AMBER).cap(Cap::Round),
+                );
+            });
             let badge = at - vec2(0., enemy.radius + 24.);
-            draw_circle(badge.x, badge.y, 10., AMBER);
-            centered("!", badge.x, badge.y + 7., 18, INK);
+            shapes::fill_circle(badge, 10., AMBER);
+            draw_text_styled(
+                "!",
+                badge.x,
+                badge.y + 7.,
+                TextStyle::classic(16., INK).with_align(TextAlign::Center),
+            );
         }
         ActionPhase::Active => {
-            draw_circle_lines(at.x, at.y, enemy.radius + PLAYER_RADIUS, 4., CORAL);
+            with_glow(|| {
+                shapes::stroke_circle(at, enemy.radius + PLAYER_RADIUS, 4., CORAL);
+            });
         }
         _ => {}
     }
-    draw_circle(at.x, at.y, r + 7., fade(base, 0.1));
-    let sides = if enemy.heavy { 6 } else { 4 };
-    draw_poly(at.x + 3., at.y + 6., sides, r + 2., heading, INK);
-    draw_poly(at.x, at.y, sides, r, heading, lit);
-    draw_poly(
-        at.x,
-        at.y,
-        sides,
-        r * 0.62,
-        heading,
-        Color::from_rgba(40, 14, 24, 255),
+    glow_circle(
+        at_body.x,
+        at_body.y,
+        r * 2.6,
+        base,
+        if enemy.elite { 0.5 } else { 0.22 },
     );
+    let sides = if enemy.heavy { 6 } else { 4 };
+    draw_poly(
+        at_body.x + 3.,
+        at_body.y + 6.,
+        sides,
+        r + 2.,
+        heading,
+        Color::new(0., 0., 0., 0.5),
+    );
+    draw_poly(
+        at_body.x,
+        at_body.y,
+        sides,
+        r,
+        heading,
+        Color::from_rgba(34, 12, 22, 255),
+    );
+    draw_poly(
+        at_body.x,
+        at_body.y,
+        sides,
+        r * 0.78,
+        heading,
+        fade(base, 0.35),
+    );
+    with_glow(|| neon_poly(at_body, sides, r, heading, 3., lit));
     if enemy.elite {
         // Crown spikes and a violet core make the Overseer unmistakable.
         for i in -1..=1 {
             let a = (heading + 180. + i as f32 * 40.).to_radians();
             let d = Vec2::from_angle(a);
             let side = vec2(-d.y, d.x) * 6.;
-            let base_point = at + d * r * 0.9;
+            let base_point = at_body + d * r * 0.9;
             draw_triangle(
                 base_point - side,
                 base_point + side,
-                at + d * (r + 14.),
+                at_body + d * (r + 14.),
                 lit,
             );
         }
-        draw_circle(at.x, at.y, r * 0.42, VIOLET);
+        shapes::fill_circle(at_body, r * 0.42, VIOLET);
+        glow_circle(at_body.x, at_body.y, r, VIOLET, 0.6);
         let fraction = (enemy.health / ELITE_HEALTH).clamp(0., 1.);
-        draw_rectangle(at.x - 32., at.y - r - 26., 64., 6., INK);
-        draw_rectangle(at.x - 31., at.y - r - 25., 62. * fraction, 4., GOLD);
+        let bar = Rect::new(at.x - 32., at.y - r - 28., 64., 6.);
+        shapes::fill_rounded_rect(bar, 3., INK);
+        shapes::fill_rounded_rect(
+            Rect::new(bar.x + 1., bar.y + 1., (bar.w - 2.) * fraction, bar.h - 2.),
+            2.,
+            GOLD,
+        );
     } else if enemy.heavy {
         for pip in 0..(enemy.health / 24.).ceil() as u32 {
-            draw_rectangle(at.x - 12. + pip as f32 * 9., at.y - r - 12., 6., 4., lit);
+            shapes::fill_rounded_rect(
+                Rect::new(at.x - 13. + pip as f32 * 9., at.y - r - 13., 6., 4.),
+                2.,
+                lit,
+            );
         }
     }
     // A single eye tracks the player: readable facing, mild menace.
-    let eye = at + to_player * r * 0.28;
+    let eye = at_body + to_player * r * 0.28;
     let eye_r = if enemy.heavy { 5. } else { 3.8 };
-    draw_circle(eye.x, eye.y, eye_r, PAPER);
-    let pupil = eye + to_player * eye_r * 0.4;
-    draw_circle(pupil.x, pupil.y, eye_r * 0.5, INK);
+    shapes::fill_circle(eye, eye_r, PAPER);
+    shapes::fill_circle(eye + to_player * eye_r * 0.4, eye_r * 0.5, INK);
 }
 
 fn player(game: &Game, p: &Presentation) {
     let at = game.player;
     let juice = &p.juice;
     let angle = game.facing.to_angle().to_degrees();
+    // A pool of cyan light the player carries across the floor.
+    glow_circle(at.x, at.y, 110., CYAN, 0.16);
     if p.dash > 0.0 {
-        for index in 1..5 {
-            let ghost = at - juice.stretch_dir * index as f32 * 13.;
-            draw_poly(
-                ghost.x,
-                ghost.y,
-                6,
-                15.,
-                angle,
-                fade(CYAN, 0.2 * p.motion_scale() / index as f32),
-            );
-        }
+        with_glow(|| {
+            for index in 1..6 {
+                let ghost = at - juice.stretch_dir * index as f32 * 12.;
+                neon_poly(
+                    ghost,
+                    6,
+                    15.,
+                    angle,
+                    2.,
+                    fade(CYAN, 0.35 * p.motion_scale() / index as f32),
+                );
+            }
+        });
     }
-    draw_circle(at.x, at.y, 30., fade(CYAN, 0.08));
-    draw_circle(at.x + 3., at.y + 6., 17., INK);
+    shapes::fill_circle(at + vec2(3., 6.), 17., Color::new(0., 0., 0., 0.5));
     let color = if game.health == 0 {
         MUTED
     } else if p.hurt > 0.6 {
@@ -483,52 +644,81 @@ fn player(game: &Game, p: &Presentation) {
         CYAN
     };
     let scale = juice.player_scale();
-    let dir = juice.stretch_dir.normalize_or(Vec2::X);
-    stretched_poly(at, 6, 16., angle, scale, dir, color);
-    stretched_poly(at, 6, 10., angle, scale, dir, FLOOR);
-    draw_circle(at.x, at.y, 4., PAPER);
+    let dir = juice.stretch_dir.normalize_or_zero();
+    let dir = if dir == Vec2::ZERO { Vec2::X } else { dir };
+    stretched_poly(
+        at,
+        6,
+        16.,
+        angle,
+        scale,
+        dir,
+        Color::from_rgba(12, 40, 44, 255),
+    );
+    with_glow(|| {
+        let mut points = [Vec2::ZERO; 6];
+        let across = vec2(-dir.y, dir.x);
+        for (i, point) in points.iter_mut().enumerate() {
+            let a = angle.to_radians() + i as f32 / 6. * std::f32::consts::TAU;
+            let local = Vec2::from_angle(a) * 16.;
+            *point = at + dir * local.dot(dir) * scale.x + across * local.dot(across) * scale.y;
+        }
+        shapes::polyline(
+            &points,
+            Stroke::new(3.5, color).join(Join::Miter).closed(true),
+        );
+        let nose = at + game.facing * 26.;
+        shapes::fill_capsule(at + game.facing * 8., nose, 3., color);
+    });
+    shapes::fill_circle(at, 4., PAPER);
     let nose = at + game.facing * 26.;
-    draw_line(at.x, at.y, nose.x, nose.y, 6., color);
     if p.muzzle > 0.0 {
-        draw_circle(nose.x, nose.y, 8., fade(PAPER, p.flash_scale()));
+        glow_circle(nose.x, nose.y, 22., PAPER, 1.2 * p.flash_scale());
     }
     let shield = game.shield.value() / game.shield.maximum();
     if shield > 0. && game.health > 0 {
-        draw_circle_lines(
-            at.x,
-            at.y,
-            23.,
-            1. + 2. * shield,
-            fade(crate::draw::BATTERY, 0.25 + 0.45 * shield),
-        );
+        with_glow(|| {
+            shapes::stroke_arc(
+                at,
+                24.,
+                angle.to_radians() + std::f32::consts::PI * (1. - shield),
+                std::f32::consts::TAU * shield,
+                Stroke::new(1.5 + 1.5 * shield, fade(BATTERY, 0.5)).cap(Cap::Round),
+            );
+        });
     }
     if p.hurt > 0.0 {
-        draw_circle_lines(at.x, at.y, 26., 2., fade(CORAL, p.hurt * p.flash_scale()));
+        shapes::stroke_circle(at, 27., 2., fade(CORAL, p.hurt * p.flash_scale()));
     }
 }
 
 /// Rings, score pops, low-health edge warning and the evade prompt.
 pub(crate) fn overlays(game: &Game, p: &Presentation, world_hint: bool) {
     let juice = &p.juice;
-    for ring in juice.rings.iter().flatten() {
-        let t = ring.progress();
-        let ease = 1. - (1. - t) * (1. - t);
-        let radius = ring.from + (ring.to - ring.from) * ease;
-        draw_circle_lines(
-            ring.at.x,
-            ring.at.y,
-            radius,
-            ring.width * (1. - t * 0.6),
-            fade(ring.color, 1. - t),
-        );
-    }
+    with_glow(|| {
+        for ring in juice.rings.iter().flatten() {
+            let t = ring.progress();
+            let ease = 1. - (1. - t) * (1. - t);
+            let radius = ring.from + (ring.to - ring.from) * ease;
+            shapes::stroke_circle(
+                ring.at,
+                radius,
+                ring.width * (1. - t * 0.6),
+                fade(ring.color, 1. - t),
+            );
+        }
+    });
     for pop in juice.pops.iter().flatten() {
         let rise = juice.rise(pop);
-        let size = pop.size.round() as u16;
         let alpha = pop.alpha();
-        let y = pop.at.y - 18. - rise;
-        centered(&pop.text, pop.at.x + 2., y + 2., size, fade(INK, alpha));
-        centered(&pop.text, pop.at.x, y, size, fade(pop.color, alpha));
+        // Pops land with a tiny overshoot, then rise and fade.
+        let land = (pop.age / 0.12).min(1.);
+        let scale = 1. + (1. - land) * 0.4 * juice.motion();
+        let style = TextStyle::classic(pop.size * scale, fade(pop.color, alpha))
+            .with_outline(fade(INK, alpha))
+            .with_align(TextAlign::Center)
+            .with_pixel_snap(scale == 1.);
+        draw_text_styled(pop.text.as_str(), pop.at.x, pop.at.y - 18. - rise, style);
     }
     if game.phase == Phase::Playing && game.health > 0 && game.health <= 30 {
         // Edge warning: slow pulse, or a steady tint under reduced flashes.
@@ -558,36 +748,36 @@ pub(crate) fn overlays(game: &Game, p: &Presentation, world_hint: bool) {
             .count();
         if threats > 0 {
             let text = if threats == 1 {
-                "EVADE! ATTACK WINDING UP".to_owned()
+                Line::from("Evade! Attack winding up")
             } else {
-                format!("EVADE! {threats} ATTACKS WINDING UP")
+                crate::hud::line!("Evade! {threats} attacks winding up")
             };
-            let width = text_width(&text, 18);
-            draw_rectangle(
-                640. - width * 0.5 - 14.,
-                672.,
-                width + 28.,
-                30.,
-                fade(INK, 0.9),
-            );
-            draw_rectangle(640. - width * 0.5 - 14., 672., 4., 30., AMBER);
-            label(&text, 640. - width * 0.5, 694., 18, AMBER);
+            let style = TextStyle::modern(16., AMBER).with_align(TextAlign::Center);
+            let width = ferravex_render::text::text_width(text.as_str(), style);
+            let pill = Rect::new(640. - width * 0.5 - 16., 670., width + 32., 30.);
+            shapes::fill_rounded_rect(pill, 15., fade(INK, 0.9));
+            shapes::stroke_rounded_rect(pill, 15., 1.5, fade(AMBER, 0.7));
+            draw_text_styled(text.as_str(), 640., 691., style);
         }
     }
 }
 
 /// Mouse reticle; it brightens with the chain tier.
 pub(crate) fn reticle(at: Vec2, game: &Game) {
-    let color = juice::tier_color(if game.score.chain() > 0 {
+    let color = tier_color(if game.score.chain() > 0 {
         game.score.multiplier()
     } else {
         0
     });
-    draw_circle_lines(at.x, at.y, 9., 1.6, color);
-    draw_circle(at.x, at.y, 1.6, color);
-    for d in [Vec2::X, -Vec2::X, Vec2::Y, -Vec2::Y] {
-        let (a, b) = (at + d * 6., at + d * 14.);
-        draw_line(a.x, a.y, b.x, b.y, 1.6, color);
-    }
-    let _ = (LINE, MAGENTA);
+    with_glow(|| {
+        shapes::stroke_circle(at, 9., 1.6, color);
+        for d in [Vec2::X, -Vec2::X, Vec2::Y, -Vec2::Y] {
+            shapes::polyline(
+                &[at + d * 6., at + d * 14.],
+                Stroke::new(1.6, color).cap(Cap::Round),
+            );
+        }
+    });
+    shapes::fill_circle(at, 1.6, color);
+    let _ = FLOOR;
 }

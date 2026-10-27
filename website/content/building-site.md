@@ -10,7 +10,7 @@ python3 -B scripts/test_site.py
 python3 scripts/serve-site.py --port 8080
 ```
 
-Open http://127.0.0.1:8080/. The build audits the workspace, compiles the seventeen catalog examples for WebAssembly, stages their original hosts and shared runtime, generates first-party Rust API documentation and writes `dist/site`. Web, API and site output are rebuilt from clean directories so stale adapters and loaders cannot survive. No external runtime packages are fetched.
+Open http://127.0.0.1:8080/. The build audits the workspace, compiles the eighteen catalog examples for WebAssembly, stages their original hosts and shared runtime, generates first-party Rust API documentation and writes `dist/site`. Web, API and site output are rebuilt from clean directories so stale adapters and loaders cannot survive. No external runtime packages are fetched.
 
 For content-only changes after a complete local build:
 
@@ -30,7 +30,7 @@ The production service builds this Dockerfile from the merged main branch. Verif
 
 Add a first-party workspace crate and a browser host, then record its id, host directory, title, controls, description, source and screenshot in `examples/catalog.json`. The Wasm file uses the package name with hyphens replaced by underscores. The catalog drives staging, documentation pages and size reports. Keep every Cargo dependency within the workspace and original source tree. On the site, each example page also reads its objective and related guide from `GAME_GUIDES`, and its gallery genre from `GAME_GENRE`, in `scripts/build-site.py`; a game without entries falls back to its catalog description and the Arcade genre.
 
-The restored games share `web/runtime.js`; Courtyard and Orbit Breaker keep their specialized hosts. Example pages instantiate only the selected game after Play is pressed. The gallery does not download or run all seventeen modules automatically.
+The restored games share `web/runtime.js`; Courtyard and Orbit Breaker keep their specialized hosts. Example pages instantiate only the selected game after Play is pressed. The gallery does not download or run all eighteen modules automatically.
 
 ## Update documentation
 
@@ -38,7 +38,7 @@ Edit the relevant Markdown or crate README. Search, navigation and sitemap pages
 
 ## Search the whole site
 
-`Command K` on macOS or `Control K` on other systems opens Qikbar. The visible header trigger also works on touch devices. The shortcut stays available while an embedded example game has keyboard focus. Search covers whole guides, individual guide headings, all seventeen example READMEs, public Rust types/functions and locally defined API methods. Results link directly to their section or symbol. Generated Rustdoc pages include the same site-wide command menu alongside their native API search.
+`Command K` on macOS or `Control K` on other systems opens Qikbar. The visible header trigger also works on touch devices. The shortcut stays available while an embedded example game has keyboard focus. Search covers whole guides, individual guide headings, all eighteen example READMEs, public Rust types/functions and locally defined API methods. Results link directly to their section or symbol. Generated Rustdoc pages include the same site-wide command menu alongside their native API search.
 
 The shared corpus is generated into `search.json` from the current rendered pages and documentation. It loads only when the menu is opened, stays in memory for that page visit, and is searched locally. Source requests are debounced and canceled as the query changes. Failed index loads can be retried without reloading the page.
 

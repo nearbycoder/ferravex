@@ -10,6 +10,7 @@
 //! informational, so they remain, but pops no longer rise under reduced motion.
 use super::quips;
 use crate::{BUMPERS, CRANE, PinballFeedback, Table};
+use ferravex_core::session::SessionState;
 use ferravex_render::{input::PlayerInput, preferences, prelude::Color};
 
 const BUMPER_SECONDS: f32 = 0.18;
@@ -130,6 +131,18 @@ pub(super) struct Presentation {
     mashes: u32,
     unsaved_drains: u32,
     pub learned: Learned,
+    /// Seconds left in the lamp light show (jackpots, arming, skill shots).
+    pub show: f32,
+    /// Presentation seconds since the current session state began; drives
+    /// card entrances and the attract-mode front door.
+    pub menu_time: f32,
+    menu_state: Option<SessionState>,
+    /// Black cover after a restart, fading out (a fade is kept under reduced motion).
+    pub cover: f32,
+    /// Eased pointer hover for the Reset button, 0..=1.
+    pub reset_hover: f32,
+    /// Where the latest table flash came from, in table units.
+    pub flash_at: [f32; 2],
 }
 
 impl Presentation {
@@ -166,7 +179,49 @@ impl Presentation {
         let learned = self.learned;
         *self = Self::default();
         self.learned = learned;
+        self.cover = 1.;
         self.begin_frame();
+    }
+
+    /// Track the session state for card entrances; call once per frame.
+    pub fn observe_state(&mut self, state: SessionState, dt: f32) {
+        let dt = if dt.is_finite() {
+            dt.clamp(0., 0.25)
+        } else {
+            0.
+        };
+        if self.menu_state != Some(state) {
+            self.menu_state = Some(state);
+            self.menu_time = 0.;
+        } else {
+            self.menu_time += dt;
+        }
+        self.cover = (self.cover - dt / 0.35).max(0.);
+    }
+
+    /// Ease the Reset button's hover highlight; snaps under reduced motion.
+    pub fn hover(&mut self, hovered: bool, dt: f32) {
+        let target = if hovered { 1. } else { 0. };
+        self.reset_hover = if self.motion_scale == 0. {
+            target
+        } else {
+            let step = (dt.max(0.) * 10.).min(1.);
+            self.reset_hover + (target - self.reset_hover) * step
+        };
+    }
+
+    /// Lamp chase brightness for lamp `index` during a light show or the
+    /// attract loop, 0..=1. Reduced flashes hold the lamps steadily lit.
+    pub fn chase(&self, index: usize, attract: bool) -> f32 {
+        if self.show <= 0. && !attract {
+            return 0.;
+        }
+        if self.flash_scale == 0. {
+            return 0.6;
+        }
+        let speed = if self.show > 0. { 16. } else { 5. };
+        let wave = (self.time * speed - index as f32 * 0.85).sin() * 0.5 + 0.5;
+        wave * wave
     }
 
     fn random(&mut self) -> f32 {
@@ -226,8 +281,9 @@ impl Presentation {
         }
     }
 
-    fn flash_board(&mut self, amount: f32, color: Color) {
+    fn flash_board(&mut self, amount: f32, color: Color, at: [f32; 2]) {
         if self.flash_scale > 0. {
+            self.flash_at = at;
             self.board_flash = self.board_flash.max(amount);
             self.board_flash_color = color;
         }
@@ -265,6 +321,7 @@ impl Presentation {
             0.
         };
         self.time += dt;
+        self.show = (self.show - dt).max(0.);
         self.launch_seconds = (self.launch_seconds - dt).max(0.);
         self.board_flash = (self.board_flash - dt * 2.5).max(0.);
         self.trauma = (self.trauma - dt * 1.6).max(0.);
@@ -387,6 +444,7 @@ impl Presentation {
             );
         }
         if events.crane_arms > 0 {
+            self.show = self.show.max(1.2);
             self.say(
                 "CRANE ARMED!".into(),
                 "SHOOT UNDER THE MAGNET",
@@ -394,9 +452,10 @@ impl Presentation {
                 2.4,
                 Priority::Award,
             );
-            self.flash_board(0.25, GOLD);
+            self.flash_board(0.25, GOLD, CRANE);
         }
         if events.skill_shots > 0 {
+            self.show = self.show.max(1.);
             self.say(
                 format!("SKILL SHOT  +{}", quips::grouped(crate::SKILL_SHOT_POINTS)),
                 "THE FOREMAN NODS. SLOWLY.",
@@ -404,7 +463,7 @@ impl Presentation {
                 2.2,
                 Priority::Award,
             );
-            self.flash_board(0.3, GOLD);
+            self.flash_board(0.3, GOLD, BUMPERS[0]);
             self.burst(BUMPERS[0], 16, 7., &[GOLD, super::CREAM]);
         }
         if events.secrets > 0 {
@@ -415,9 +474,11 @@ impl Presentation {
                 3.,
                 Priority::Jackpot,
             );
-            self.flash_board(0.3, GOLD);
+            self.flash_board(0.3, GOLD, [4.4, 8.]);
         }
         if events.jackpots > 0 {
+            self.show = self.show.max(2.4);
+
             self.say(
                 format!("JACKPOT  +{}", quips::grouped(table.last_jackpot)),
                 quips::jackpot(table.jackpots),
@@ -427,7 +488,7 @@ impl Presentation {
             );
             self.pop([CRANE[0], CRANE[1] + 1.75], table.last_jackpot, true);
             self.shake(0.55);
-            self.flash_board(0.45, super::CREAM);
+            self.flash_board(0.45, super::CREAM, CRANE);
             self.burst(CRANE, 30, 9., &[GOLD, AMBER, super::CREAM, super::RUST]);
         }
         if events.crane_drops > 0 {
@@ -442,12 +503,12 @@ impl Presentation {
                 2.,
                 Priority::Award,
             );
-            self.flash_board(0.2, super::MINT);
+            self.flash_board(0.2, super::MINT, [4.9, 15.]);
         }
         if events.drains > events.saves {
             self.unsaved_drains += 1;
             self.shake(0.35);
-            self.flash_board(0.35, super::RUST);
+            self.flash_board(0.35, super::RUST, [4.9, 15.]);
             self.burst([4.9, 14.9], 14, 6., &[super::RUST, AMBER]);
             if !table.over() {
                 let head = match table.lives {
@@ -500,6 +561,10 @@ impl Presentation {
     }
 
     /// Screen offset in pixels; zero under reduced motion.
+    pub fn flash_scale(&self) -> f32 {
+        self.flash_scale
+    }
+
     pub fn shake_offset(&self) -> [f32; 2] {
         let amount = self.trauma * self.trauma * 12. * self.motion_scale.min(1.);
         [

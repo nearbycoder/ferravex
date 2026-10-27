@@ -20,57 +20,57 @@ pub(crate) enum Fall {
 }
 
 const VOID: [&str; 8] = [
-    "MARBLE OVERBOARD!",
-    "THE VOID SAYS HI",
-    "GRAVITY: STILL UNDEFEATED",
-    "YOU LOST YOUR MARBLE",
-    "THAT WAS NOT THE SHORTCUT",
-    "A BOLD LINE. A WRONG LINE.",
-    "ROLLED RIGHT OFF THE MAP",
-    "PHYSICS: CONFIRMED WORKING",
+    "Marble overboard!",
+    "The void says hi",
+    "Gravity: still undefeated",
+    "You lost your marble",
+    "That was not the shortcut",
+    "A bold line. A wrong line.",
+    "Rolled right off the map",
+    "Physics: confirmed working",
 ];
 
 const ICE: [&str; 6] = [
-    "ICE TO MEET YOU",
-    "SLIP. SLIDE. SAYONARA.",
-    "FRICTION HAS LEFT THE CHAT",
-    "THAT ICE WAS VERY ICY",
-    "WHEEE... OH NO",
-    "A GRACEFUL, FROSTY EXIT",
+    "Ice to meet you",
+    "Slip. Slide. Sayonara.",
+    "Friction has left the chat",
+    "That ice was very icy",
+    "Wheee… oh no",
+    "A graceful, frosty exit",
 ];
 
 const SWEPT: [&str; 6] = [
-    "SWEPT CLEAN OFF THE COURSE",
-    "THE SWEEPER SAYS NO",
-    "BONKED INTO ORBIT",
-    "CLOCKWORK 1, MARBLE 0",
-    "TIMING IS EVERYTHING",
-    "SWATTED LIKE A FLY",
+    "Swept clean off the course",
+    "The sweeper says no",
+    "Bonked into orbit",
+    "Clockwork 1, marble 0",
+    "Timing is everything",
+    "Swatted like a fly",
 ];
 
 const MANUAL: [&str; 5] = [
-    "TACTICAL RESET",
-    "STRATEGIC RETREAT",
-    "LET'S PRETEND THAT NEVER HAPPENED",
-    "REWIND. REROLL.",
-    "NOTHING TO SEE HERE",
+    "Tactical reset",
+    "Strategic retreat",
+    "Let's pretend that never happened",
+    "Rewind. Reroll.",
+    "Nothing to see here",
 ];
 
 /// Three or more falls since the latest checkpoint.
 const STUBBORN: [&str; 6] = [
-    "PRACTICE MAKES PLATFORMS",
-    "THIS IS THE ONE. PROBABLY.",
-    "SAME SPOT? BOLD STRATEGY",
-    "THE MARBLE BELIEVES IN YOU",
-    "DETERMINATION: MAXIMUM",
-    "BRAKING IS ALLOWED, YOU KNOW",
+    "Practice makes platforms",
+    "This is the one. Probably.",
+    "Same spot? Bold strategy",
+    "The marble believes in you",
+    "Determination: maximum",
+    "Braking is allowed, you know",
 ];
 
 const CHECKPOINT: [&str; 4] = [
-    "CHECKPOINT! FALL WITH CONFIDENCE",
-    "PROGRESS BANKED",
-    "SAFE AND SOUND. FOR NOW.",
-    "CHECKPOINT GET!",
+    "Checkpoint! Fall with confidence",
+    "Progress banked",
+    "Safe and sound. For now.",
+    "Checkpoint get!",
 ];
 
 const BONK: [&str; 5] = ["BONK!", "BOING!", "THWACK!", "CLONK!", "BONK!!"];
@@ -84,11 +84,11 @@ const CLUTCH: [&str; 5] = [
 const AIR: [&str; 4] = ["AIRBORNE!", "BIG AIR!", "WHEEE!", "LIFTOFF!"];
 
 const PAUSE: [&str; 5] = [
-    "THE MARBLE WILL WAIT. IT'S A MARBLE.",
-    "STRETCH THOSE THUMBS",
-    "THE SWEEPERS ARE ON BREAK TOO",
-    "TIME IS FROZEN. VERY SCIENTIFIC.",
-    "HYDRATE. THE ICE INSISTS.",
+    "The marble will wait. It's a marble.",
+    "Stretch those thumbs",
+    "The sweepers are on break too",
+    "Time is frozen. Very scientific.",
+    "Hydrate. The ice insists.",
 ];
 
 pub(crate) fn pause(count: u32) -> &'static str {
@@ -156,34 +156,34 @@ pub(crate) fn rank(run: Summary) -> Rank {
     let flawless = run.medal == "GOLD" && run.falls == 0;
     let (title, quip) = if run.secret && flawless {
         (
-            "MOONSTONE MONARCH",
-            "GOLD, NO FALLS AND THE MOONSTONE. SHOW-OFF.",
+            "Moonstone Monarch",
+            "Gold, no falls and the moonstone. Show-off.",
         )
     } else if run.secret {
         (
-            "MAGPIE OF THE PEAKS",
-            "YOU FOUND THE MOONSTONE. SHINY THINGS: SECURED.",
+            "Magpie of the Peaks",
+            "You found the moonstone. Shiny things: secured.",
         )
     } else if flawless && run.elapsed <= run.gold * 0.85 {
-        ("GLASS LIGHTNING", "BLINK AND THE ARCH MISSED YOU")
+        ("Glass Lightning", "Blink and the arch missed you")
     } else if run.falls >= 8 {
-        ("GRAVITY'S PEN PAL", "YOU AND THE VOID WRITE EVERY WEEK")
+        ("Gravity's Pen Pal", "You and the void write every week")
     } else if run.falls >= 4 {
-        ("PROFESSIONAL FALLER", "THE ABYSS KNOWS YOU BY NAME")
+        ("Professional Faller", "The abyss knows you by name")
     } else if run.bonks >= 3 {
-        ("PINBALL WIZARD", "THE SWEEPERS DID MOST OF THE STEERING")
+        ("Pinball Wizard", "The sweepers did most of the steering")
     } else if run.clutches >= 2 {
-        ("EDGE WHISPERER", "YOU LIVE ON THE EDGE. LITERALLY.")
+        ("Edge Whisperer", "You live on the edge. Literally.")
     } else if run.best_air >= 0.7 {
         (
-            "FREQUENT FLYER",
-            "TECHNICALLY A MARBLE. SPIRITUALLY A BIRD.",
+            "Frequent Flyer",
+            "Technically a marble. Spiritually a bird.",
         )
     } else {
         match run.medal {
-            "GOLD" => ("POLISHED TO A SHINE", "SMOOTH, QUICK AND SPOTLESS"),
-            "SILVER" => ("SMOOTH OPERATOR", "SOLID ROLL. GOLD IS RIGHT THERE."),
-            _ => ("SUNDAY ROLLER", "THE SCENIC ROUTE. THE SCENERY APPROVES."),
+            "GOLD" => ("Polished to a Shine", "Smooth, quick and spotless"),
+            "SILVER" => ("Smooth Operator", "Solid roll. Gold is right there."),
+            _ => ("Sunday Roller", "The scenic route. The scenery approves."),
         }
     };
     Rank { title, quip }
@@ -194,17 +194,14 @@ pub(crate) fn rank(run: Summary) -> Rank {
 pub(crate) fn next_goal(course: &Course, medal: &str, best: Option<f32>, secret: bool) -> String {
     match medal {
         "BRONZE" => format!(
-            "NEXT: SILVER UNDER {:.1} SEC WITH 2 FALLS OR FEWER",
+            "Next: silver under {:.1}s with 2 falls or fewer",
             course.gold_seconds * 1.5
         ),
-        "SILVER" => format!(
-            "NEXT: GOLD UNDER {:.0} SEC WITH NO FALLS",
-            course.gold_seconds
-        ),
-        _ if !secret => "RUMOUR: A MOONSTONE HIDES OFF THE BEATEN PATH".into(),
+        "SILVER" => format!("Next: gold under {:.0}s with no falls", course.gold_seconds),
+        _ if !secret => "Rumour: a moonstone hides off the beaten path".into(),
         _ => best.map_or_else(
-            || "NEXT: GO FASTER. THE ARCH IS WAITING.".into(),
-            |best| format!("NEXT: BEAT YOUR BEST OF {}", crate::hud::stopwatch(best)),
+            || "Next: go faster. The arch is waiting.".into(),
+            |best| format!("Next: beat your best of {}", crate::hud::stopwatch(best)),
         ),
     }
 }
@@ -262,14 +259,14 @@ mod tests {
             best_air: 0.,
             secret: false,
         };
-        assert_eq!(rank(base).title, "POLISHED TO A SHINE");
+        assert_eq!(rank(base).title, "Polished to a Shine");
         assert_eq!(
             rank(Summary {
                 elapsed: 29.,
                 ..base
             })
             .title,
-            "GLASS LIGHTNING"
+            "Glass Lightning"
         );
         assert_eq!(
             rank(Summary {
@@ -277,7 +274,7 @@ mod tests {
                 ..base
             })
             .title,
-            "MOONSTONE MONARCH"
+            "Moonstone Monarch"
         );
         let silver = Summary {
             medal: "SILVER",
@@ -290,20 +287,20 @@ mod tests {
                 ..silver
             })
             .title,
-            "MAGPIE OF THE PEAKS"
+            "Magpie of the Peaks"
         );
         assert_eq!(
             rank(Summary { falls: 9, ..silver }).title,
-            "GRAVITY'S PEN PAL"
+            "Gravity's Pen Pal"
         );
-        assert_eq!(rank(Summary { bonks: 3, ..silver }).title, "PINBALL WIZARD");
+        assert_eq!(rank(Summary { bonks: 3, ..silver }).title, "Pinball Wizard");
         assert_eq!(
             rank(Summary {
                 clutches: 2,
                 ..silver
             })
             .title,
-            "EDGE WHISPERER"
+            "Edge Whisperer"
         );
         assert_eq!(
             rank(Summary {
@@ -311,28 +308,28 @@ mod tests {
                 ..silver
             })
             .title,
-            "FREQUENT FLYER"
+            "Frequent Flyer"
         );
-        assert_eq!(rank(silver).title, "SMOOTH OPERATOR");
+        assert_eq!(rank(silver).title, "Smooth Operator");
         assert_eq!(
             rank(Summary {
                 medal: "BRONZE",
                 ..silver
             })
             .title,
-            "SUNDAY ROLLER"
+            "Sunday Roller"
         );
     }
 
     #[test]
     fn next_goal_climbs_medals_then_hints_the_secret_then_chases_the_best() {
         let c = &COURSES[0];
-        assert!(next_goal(c, "BRONZE", None, false).contains("SILVER UNDER 52.5 SEC"));
-        assert!(next_goal(c, "SILVER", None, true).contains("GOLD UNDER 35 SEC"));
-        assert!(next_goal(c, "GOLD", Some(30.), false).contains("MOONSTONE"));
+        assert!(next_goal(c, "BRONZE", None, false).contains("silver under 52.5s"));
+        assert!(next_goal(c, "SILVER", None, true).contains("gold under 35s"));
+        assert!(next_goal(c, "GOLD", Some(30.), false).contains("moonstone"));
         assert_eq!(
             next_goal(c, "GOLD", Some(30.256), true),
-            "NEXT: BEAT YOUR BEST OF 0:30.26"
+            "Next: beat your best of 0:30.26"
         );
     }
 }

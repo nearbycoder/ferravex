@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Glowtide · Ferravex</title>
+<style>
+* { box-sizing: border-box; }
+html { background: #101a21; color: #e2ece2; font: 16px/1.5 system-ui, sans-serif; }
+body { margin: 0; min-height: 100vh; }
+nav#game-toolbar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .5rem;
+  /* Shared Details styles assume a single row. Keep wrapped tools above the arena. */
+  height: auto; min-height: 48px;
+  padding: .5rem max(.75rem, env(safe-area-inset-right)) .5rem max(.75rem, env(safe-area-inset-left));
+  border-bottom: 1px solid #40545b;
+}
+#game-toolbar > a { display: inline-flex; align-items: center; min-height: 44px; padding: .25rem .5rem; }
+#game-toolbar .game-name { flex: 1 1 16rem; }
+a { color: #a9ded0; text-underline-offset: .2em; }
+#game-toolbar > button {
+  flex: 0 1 auto; min-height: 44px; max-width: 100%; padding: .4rem .65rem;
+  font: inherit; color: #e2ece2; background: #18262b;
+  border: 1px solid #678080; border-radius: 4px; cursor: pointer;
+}
+#game-toolbar > button:disabled { color: #a8b9b9; cursor: wait; }
+#game-toolbar > button:hover:not(:disabled) { background: #293f46; }
+a:focus-visible, button:focus-visible, [tabindex]:focus-visible { outline: 3px solid #ffdc91; outline-offset: 3px; }
+.arena { position: relative; }
+canvas {
+  display: block; width: 100%; height: 72vh; height: 72svh; min-height: 324px;
+  background: #091016; touch-action: none;
+}
+canvas:focus-visible { outline: 3px solid #ffdc91; outline-offset: -4px; }
+#game-status {
+  position: absolute; inset: 1rem 1rem auto; margin: 0; padding: .75rem;
+  background: #101a21; text-align: center; overflow-wrap: anywhere; pointer-events: none;
+}
+#game-status:empty { display: none; }
+#game-instructions {
+  max-width: 72rem; margin: 0 auto;
+  padding: 1rem max(1rem, env(safe-area-inset-right)) max(2rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+  overflow-wrap: anywhere; -webkit-user-select: text; user-select: text;
+}
+#game-instructions h1 { margin: 0 0 .5rem; font-size: 1.5rem; }
+#game-instructions h2 { font-size: 1.125rem; }
+#game-instructions p { margin: .75rem 0; }
+.guide-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2rem; }
+#game-instructions dl { margin: 0; }
+#game-instructions dt { font-weight: 650; margin-top: .75rem; }
+#game-instructions dd { margin: .15rem 0 .75rem; }
+#game-instructions kbd { font: inherit; font-weight: 600; }
+@media (max-width: 42rem) {
+  .guide-columns { grid-template-columns: minmax(0, 1fr); gap: .5rem; }
+  #game-toolbar .game-name { flex-basis: 100%; }
+}
+@media (forced-colors: active) {
+  a:focus-visible, button:focus-visible, [tabindex]:focus-visible { outline-color: Highlight; }
+}
+</style>
+</head>
+<body>
+<nav id="game-toolbar" aria-label="Game and player tools">
+  <a class="game-name" href="../">FERRAVEX / Glowtide — all games</a>
+  <a href="#game-instructions">How to play</a>
+  <button type="button" data-controls title="View or change controls (F2)" aria-pressed="false" disabled>Controls</button>
+  <button type="button" data-audio title="Enable sound" aria-pressed="false" disabled>Sound off</button>
+</nav>
+<main>
+  <div class="arena">
+    <canvas tabindex="0" data-game="glowtide" aria-label="Glowtide game canvas" aria-describedby="game-description game-keyboard-help">
+      Glowtide is a visual underwater survival game. Read the instructions below for its objective and controls. Playing requires JavaScript, WebAssembly and WebGL2.
+    </canvas>
+    <p id="game-status" role="status" aria-live="polite" aria-atomic="true">Loading original Rust engine…</p>
+  </div>
+  <section id="game-instructions" tabindex="-1" aria-labelledby="game-heading">
+    <h1 id="game-heading">Glowtide: how to play</h1>
+    <p id="game-description">Guide a tiny lantern spirit through a bioluminescent ocean. Weapons fire automatically: steer through the horde, collect glowing motes and build a loadout before the tide ends.</p>
+    <p id="game-goals">Survive a ten-minute tide or choose a five-minute Quick Tide. Level up to pick weapons and passives; pair a level-seven weapon with its matching passive, then open a chest to evolve it. Defeat the final boss to see dawn. Glimmer earned during runs unlocks characters and permanent shrine upgrades on this device.</p>
+    <p id="game-keyboard-help">Focus the game to use its controls. Pause before leaving the arena, then use <kbd>Shift</kbd> + <kbd>Tab</kbd> to move to the toolbar. From there, use <strong>How to play</strong> to reach these instructions. <strong>Controls</strong> shows your current bindings.</p>
+    <div class="guide-columns">
+      <div>
+        <h2>Default keyboard and mouse controls</h2>
+        <p id="binding-help">These are defaults. Saved bindings may differ: open <strong>Controls</strong> or press <kbd>F2</kbd> in the game to inspect or remap them. Dash is listed as <strong>Boost / dash</strong>.</p>
+        <dl aria-describedby="binding-help">
+          <dt>Move</dt><dd><kbd>W A S D</kbd> or the arrow keys.</dd>
+          <dt>Weapons</dt><dd>Fire automatically at nearby creatures. Move to collect their motes.</dd>
+          <dt>Dash</dt><dd>Press <kbd>Space</kbd> or either <kbd>Shift</kbd> key. The dash briefly protects you from damage.</dd>
+          <dt>Upgrade cards</dt><dd>Choose with <kbd>1</kbd>–<kbd>4</kbd> or click a card. <kbd>E</kbd> rerolls; <kbd>Q</kbd> toggles banishing a card when charges remain.</dd>
+          <dt>Pause or resume</dt><dd><kbd>Escape</kbd> (the Pause / menu action).</dd>
+          <dt>Restart</dt><dd><kbd>R</kbd> starts a fresh run.</dd>
+        </dl>
+      </div>
+      <div>
+        <h2>Menus and returning to play</h2>
+        <p>In the game menu, use <kbd>Tab</kbd> or the up/down arrows to select a button. The default <strong>Play / confirm</strong> binding is <kbd>Enter</kbd>: select a menu button. Choose <strong>Dive in</strong>, a character, then <strong>Dive!</strong> to begin your tide. You can also click those buttons. On touchscreens, drag anywhere in the play field to steer and use the dash button. On a gamepad, use the left stick to move, A to dash, and the directional controls plus confirm to choose cards.</p>
+        <p>In Controls, use <kbd>Tab</kbd> or the up/down arrows to navigate and <kbd>Enter</kbd> to select. <kbd>Escape</kbd> cancels a pending rebind; otherwise it closes the panel. <kbd>F2</kbd> also closes Controls. Closing Controls does not resume a paused run.</p>
+        <p>Opening Controls or switching away from the browser window or tab pauses a manual run. On return, release held gameplay buttons, focus the game and choose <strong>Resume</strong>. Escape may first leave fullscreen or close a player panel.</p>
+        <p>Use <strong>Details → Player tools</strong> for presentation preferences, screenshots and settings backups. Enable audio with <strong>Sound</strong> in the toolbar.</p>
+      </div>
+    </div>
+    <noscript><p>JavaScript is disabled. Enable it to load the game; these instructions and the all-games link remain available.</p></noscript>
+  </section>
+</main>
+<script type="module">
+const canvas = document.querySelector('canvas');
+// The shared player adds its own help during boot. Keep both descriptions,
+// including after later player initialization, without replacing its hooks.
+function describeGame() {
+  const current = canvas.getAttribute('aria-describedby') || '';
+  const ids = new Set(['game-description', 'game-keyboard-help', ...current.split(/\s+/).filter(Boolean)]);
+  const next = [...ids].join(' ');
+  if (next !== current) canvas.setAttribute('aria-describedby', next);
+}
+const descriptionObserver = new MutationObserver(describeGame);
+descriptionObserver.observe(canvas, {attributes: true, attributeFilter: ['aria-describedby']});
+describeGame();
+
+// The shared bridge handles keyboard input on window. Page navigation must
+// retain native link/scroll behavior; keyup still reaches it to release any
+// gameplay key held when focus moved. Game/menu keys keep their normal path.
+for (const id of ['game-toolbar', 'game-instructions']) {
+  document.getElementById(id).addEventListener('keydown', event => event.stopPropagation());
+}
+canvas.addEventListener('keydown', event => {
+  if (event.key === 'Tab' && event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey && !event.isComposing) {
+    event.stopPropagation(); // Native backward tab leaves the canvas; no game action is synthesized.
+  }
+});
+</script>
+<script type="module" src="../runtime.js"></script>
+</body>
+</html>

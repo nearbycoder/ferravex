@@ -236,8 +236,8 @@ fn eliminations_tip_operators_over_with_confetti_and_respect_reduced_motion() {
             assert_eq!(lab.hit_marker, 0.);
         } else {
             assert_eq!(
-                confetti, 12,
-                "coral, teal and cream; gold shares the spark mesh"
+                confetti, 16,
+                "every confetti color; white sparks become embers"
             );
             assert_eq!(lab.juice.marker, juice::Marker::Elimination);
             assert!(lab.hit_marker > 0.18);

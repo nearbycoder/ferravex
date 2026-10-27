@@ -71,7 +71,7 @@ impl CompactHud {
             // The shared fullscreen game menu owns the top-right 72 units.
             let right = bar_right(w);
             draw_rectangle(0., 0., w, 64., Color::new(0.08, 0.13, 0.11, 0.96));
-            draw_rectangle(0., 62., w, 2., hud::fade(ORANGE, 0.5));
+            draw_rectangle(0., 62., w, 2., crate::style::fade(ORANGE, 0.5));
             let elapsed = game.trial.elapsed();
             label(
                 &format!("{elapsed:.2}S"),
@@ -81,7 +81,7 @@ impl CompactHud {
                 hud::medal_color(hud::pace(elapsed)),
             );
             let embers = format!("{collected}/{}", game.embers.len());
-            hud::right_label(&embers, right, 28., 16., CREAM);
+            right_label(&embers, right, 28., 16., CREAM);
             diamond(
                 vec2(right - text_width(&embers, 16.) - 12., 22.),
                 7.,
@@ -106,7 +106,7 @@ impl CompactHud {
             if game.score.multiplier() > 1 && game.score.chain() > 0 && w >= 360. {
                 points = format!("×{} {points}", game.score.multiplier());
             }
-            hud::right_label(&points, right, 56., 14., ORANGE);
+            right_label(&points, right, 56., 14., ORANGE);
 
             if let Some(toast) = &juice.toast {
                 let alpha = toast.alpha();
@@ -127,14 +127,14 @@ impl CompactHud {
                     .chain(sub.iter().map(|l| (l, CREAM)))
                 {
                     if !text.is_empty() {
-                        centered_label(text, center, y, 14., hud::fade(color, alpha));
+                        centered_label(text, center, y, 14., crate::style::fade(color, alpha));
                         y += 20.;
                     }
                 }
             } else if best.is_none()
-                && let Some(text) = hud::coach(game, ControlHint::new(input, "jump").text())
+                && let Some(text) = hud::coach(game)
             {
-                let lines = wrap(&text, w - 40.);
+                let lines = wrap(text.text(), w - 40.);
                 let rows = lines.iter().filter(|l| !l.is_empty()).count() as f32;
                 // Share the toast slot: in landscape the lower band is the course.
                 let top = 72.;
@@ -196,7 +196,13 @@ impl CompactHud {
             card.h,
             Color::new(0.08, 0.13, 0.11, 0.98 * alpha),
         );
-        draw_rectangle(card.x, card.y, card.w, 3., hud::fade(ORANGE, alpha));
+        draw_rectangle(
+            card.x,
+            card.y,
+            card.w,
+            3.,
+            crate::style::fade(ORANGE, alpha),
+        );
         let line = |text: &str, y: f32, size: f32, color: Color| {
             fitted_centered_label(
                 text,
@@ -204,7 +210,7 @@ impl CompactHud {
                 card.y + y,
                 card.w - 24.,
                 size,
-                hud::fade(color, alpha),
+                crate::style::fade(color, alpha),
             )
         };
         let ready = game.session.state() == SessionState::Ready;
@@ -351,6 +357,10 @@ fn hint_text(text: &str, width: f32) -> &str {
     } else {
         "SEE CONTROLS"
     }
+}
+
+fn right_label(text: &str, right: f32, y: f32, size: f32, color: Color) {
+    crate::style::right(text, right, y, crate::style::body(size, color));
 }
 
 #[cfg(test)]

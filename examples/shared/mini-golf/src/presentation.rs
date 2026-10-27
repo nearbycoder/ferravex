@@ -9,15 +9,18 @@ use crate::{
 };
 mod draw;
 mod hud;
+mod scenery;
 use draw::terrain_mesh;
 use ferravex_core::session::GameSession;
+use ferravex_play::tween::{Motion, RollCounter};
+use ferravex_render::ui::kit::{ButtonMotion, KitTheme};
 use ferravex_render::{
     audio::{Cue, GameAudio, Surface as SoundSurface},
     input::{ActionKind, Binding, InputCode, PlayerInput},
     mesh::Mesh3d,
     preferences,
     prelude::*,
-    ui::{Align, ButtonStyle, TextStyle, Ui, UiRect, Viewport},
+    ui::{Ui, UiRect, Viewport},
 };
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
@@ -33,9 +36,7 @@ enum Menu {
 }
 const PAPER: Color = Color::from_rgba(246, 239, 218, 255);
 const DARK: Color = Color::from_rgba(27, 51, 43, 255);
-const PANEL: Color = Color::from_rgba(36, 66, 53, 255);
 const DIM: Color = Color::from_rgba(170, 186, 160, 255);
-const GREEN: Color = Color::from_rgba(100, 153, 107, 255);
 const COPPER: Color = Color::from_rgba(199, 111, 65, 255);
 const GOLD: Color = Color::from_rgba(232, 193, 109, 255);
 /// Seconds the hole title card stays up before fading.
@@ -61,70 +62,6 @@ fn mix(a: Color, b: Color, t: f32) -> Color {
         a.b + (b.b - a.b) * t,
         a.a + (b.a - a.a) * t,
     )
-}
-/// Wrapped copy for paragraphs.
-fn label(ui: &mut Ui, r: UiRect, s: &str, size: f32, color: Color) {
-    ui.text(
-        r,
-        s,
-        TextStyle {
-            size,
-            color,
-            wrap: true,
-            ..Default::default()
-        },
-    )
-    .expect("bounded golf text");
-}
-/// One line that shrinks to fit its rectangle instead of clipping.
-fn line(ui: &mut Ui, r: UiRect, s: &str, size: f32, color: Color, align: Align) {
-    ui.text(
-        r,
-        s,
-        TextStyle {
-            size,
-            color,
-            align,
-            wrap: false,
-            shadow: false,
-        },
-    )
-    .expect("bounded golf text");
-}
-/// A shadowed line for copy drawn over the course.
-fn overlay(ui: &mut Ui, r: UiRect, s: &str, size: f32, color: Color) {
-    ui.text(
-        r,
-        s,
-        TextStyle {
-            size,
-            color,
-            align: Align::Center,
-            wrap: false,
-            shadow: true,
-        },
-    )
-    .expect("bounded golf text");
-}
-fn button(ui: &mut Ui, id: u64, r: UiRect, s: &str, enabled: bool) {
-    ui.button(
-        id,
-        r,
-        s,
-        enabled,
-        ButtonStyle {
-            fill: if matches!(id, 14 | 20 | 21 | 24) {
-                COPPER
-            } else {
-                Color::from_rgba(43, 76, 60, 255)
-            },
-            ink: PAPER,
-            focus: GOLD,
-            disabled: Color::from_rgba(68, 81, 71, 255),
-            size: 16.,
-        },
-    )
-    .expect("bounded golf button");
 }
 fn ease_out(t: f32) -> f32 {
     1. - (1. - t.clamp(0., 1.)).powi(3)
@@ -351,6 +288,16 @@ pub struct App {
     saved: bool,
     material: ferravex_render::shaders::LitMaterial,
     capture: Capture,
+    scenery: scenery::Scenery,
+    ambient: f32,
+    menu_time: f32,
+    frame_dt: f32,
+    last_screen: (Menu, bool, Phase),
+    theme: KitTheme,
+    buttons: [ButtonMotion; hud::SLOTS],
+    scribe: hud::Scribe,
+    roll: RollCounter,
+    shadow_mesh: Mesh3d,
 }
 impl App {
     pub fn new(view: View, autoplay: bool) -> Self {
@@ -514,6 +461,21 @@ impl App {
             saved: false,
             material: ferravex_render::shaders::LitMaterial::new().expect("built-in lighting"),
             capture,
+            scenery: scenery::Scenery::empty(),
+            ambient: 0.,
+            menu_time: 0.,
+            frame_dt: 0.,
+            last_screen: (Menu::Welcome, false, Phase::Aiming),
+            theme: hud::golf_theme(),
+            buttons: std::array::from_fn(|_| ButtonMotion::default()),
+            scribe: hud::Scribe::default(),
+            roll: RollCounter::new(0),
+            shadow_mesh: Mesh3d::cylinder(
+                RADIUS * 1.5,
+                0.002,
+                Color::new(0.02, 0.06, 0.04, 0.3),
+                20,
+            ),
         };
         if app.capture.hole.is_some() {
             app.aim = (app.round.course.cup - app.round.ball).normalize_or_zero();
@@ -605,21 +567,25 @@ impl App {
         }
         self.ui
             .begin(Viewport::responsive([w, h], [0.; 4]).expect("positive screen"));
-        // Only the score and the shot belong in the permanent HUD. Course notes,
-        // bindings and player preferences live in the on-demand game menu.
         let modal = self.modal_open();
         let sheet = self.sheet_open();
-        if !modal && !sheet {
-            self.hud(w, h, scene);
+        self.frame_dt = if dt.is_finite() {
+            dt.clamp(0., 0.1)
+        } else {
+            0.
+        };
+        let screen = (self.menu, self.manual_pause, self.round.phase);
+        if self.last_screen != screen {
+            self.menu_time = 0.;
+            self.last_screen = screen;
         }
-        if !modal {
-            self.banner(w, scene);
+        self.menu_time += self.frame_dt;
+        if !self.motion().is_reduced() && !self.manual_pause {
+            self.ambient += self.frame_dt;
         }
-        if sheet {
-            self.hole_sheet(w, h);
-        } else if modal {
-            self.modal(w, h);
-        }
+        self.roll.set_target(i64::from(self.round.total()));
+        self.roll.advance(self.frame_dt, self.motion());
+        self.screen(false, w, h, scene);
         let controls_open = self.input.controls_open();
         self.ui.set_auto_focus(modal || sheet);
         self.ui.finish_player(&mut self.input, !controls_open);
@@ -704,6 +670,10 @@ impl App {
         if self.view == View::ThreeD && self.terrain_hole != self.round.hole_index {
             self.terrain = terrain_mesh(&self.round.course);
             self.terrain_hole = self.round.hole_index;
+        }
+        if self.scenery.hole != self.round.hole_index {
+            self.scenery =
+                scenery::Scenery::build(&self.round.course, self.round.hole_index, self.view);
         }
         self.capture.end_frame();
     }
@@ -949,19 +919,28 @@ impl App {
             }
         }
         let scene = scene.shifted(self.juice.shake());
+        set_post_fx(
+            PostFx::warm_film()
+                .bloom(0.65, 0.9, 1.1)
+                .vignette(0.28, 0.6)
+                .auto_hud(false),
+        );
         clear_background(Color::from_rgba(32, 62, 49, 255));
+        draw::backdrop(w, h, vec2(w * 0.5, h * 0.4), w.max(h) * 0.6);
         if self.view == View::TwoD {
             self.draw_2d(scene);
         } else {
             self.draw_3d(scene, w, h);
         }
         set_default_camera();
-        self.draw_juice(&Projector::new(self.view, scene, w, h));
+        self.draw_world_overlay(&Projector::new(self.view, scene, w, h));
         let flash = self.juice.flash_level();
         if flash > 0. {
             draw_rectangle(0., 0., w, h, fade(GOLD, 0.3 * flash));
         }
+        post_fx_hud_begin();
         self.ui.paint();
+        self.screen(true, w, h, base);
         self.input.draw_controls();
     }
 }

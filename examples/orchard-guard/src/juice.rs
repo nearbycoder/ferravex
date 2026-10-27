@@ -631,6 +631,11 @@ impl Juice {
         (1. - (1. - t).powi(2)) * 36. * self.motion
     }
 
+    /// Flash scale from preferences: zero under reduced flash.
+    pub fn flash_amount(&self) -> f32 {
+        self.flash_scale
+    }
+
     /// Ambient sway for tree `variant`; zero under reduced motion.
     pub fn sway(&self, variant: usize) -> f32 {
         (self.clock * 1.3 + variant as f32 * 0.9).sin() * 1.8 * self.motion

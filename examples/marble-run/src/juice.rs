@@ -90,6 +90,8 @@ impl Before {
 
 pub(crate) struct Juice {
     pub particles: ParticlePool,
+    /// Emissive sparks drawn additively; they feed the bloom.
+    pub sparks: ParticlePool,
     pub trail: Trail,
     pub pops: [Option<Pop>; POPS],
     pub banner: Option<Banner>,
@@ -121,7 +123,8 @@ fn color4(c: Color, a: f32) -> [f32; 4] {
 impl Juice {
     pub fn new() -> Self {
         Self {
-            particles: ParticlePool::new(640),
+            particles: ParticlePool::new(320),
+            sparks: ParticlePool::new(480),
             trail: Trail::new(TrailConfig {
                 capacity: 96,
                 lifetime: 0.4,
@@ -174,6 +177,7 @@ impl Juice {
         };
         if self.motion == 0. {
             self.particles.clear();
+            self.sparks.clear();
             self.trail.clear();
             self.squash = 0.;
             self.pop_in = 0.;
@@ -223,6 +227,7 @@ impl Juice {
     #[allow(clippy::too_many_arguments)]
     fn burst(
         &mut self,
+        glow: bool,
         at: Vec3,
         count: u32,
         speed: f32,
@@ -245,7 +250,12 @@ impl Juice {
                 self.next() * 3.,
                 8. * self.next(),
             );
-            let _ = self.particles.spawn_with(
+            let pool = if glow {
+                &mut self.sparks
+            } else {
+                &mut self.particles
+            };
+            let _ = pool.spawn_with(
                 ParticleDesc {
                     position: at.to_array(),
                     velocity: (dir * speed + Vec3::Y * up).to_array(),
@@ -266,14 +276,29 @@ impl Juice {
     }
 
     /// Flat outward ring in the XZ plane: checkpoint pings and landing dust.
-    fn ring(&mut self, at: Vec3, count: u32, radius: f32, speed: f32, life: f32, color: Color) {
+    #[allow(clippy::too_many_arguments)]
+    fn ring(
+        &mut self,
+        glow: bool,
+        at: Vec3,
+        count: u32,
+        radius: f32,
+        speed: f32,
+        life: f32,
+        color: Color,
+    ) {
         if self.motion == 0. {
             return;
         }
         for i in 0..count {
             let angle = i as f32 / count as f32 * std::f32::consts::TAU;
             let dir = vec3(angle.cos(), 0., angle.sin());
-            let _ = self.particles.spawn_with(
+            let pool = if glow {
+                &mut self.sparks
+            } else {
+                &mut self.particles
+            };
+            let _ = pool.spawn_with(
                 ParticleDesc {
                     position: (at + dir * radius).to_array(),
                     velocity: (dir * speed + Vec3::Y * 0.6).to_array(),
@@ -359,19 +384,19 @@ impl Juice {
         let r = run.level.tuning.radius;
         if let Some(index) = events.gem {
             let at = run.level.gems[index];
-            self.burst(at, 24, 3.4, 1.8, -7., 0.65, 0.28, &[GOLD, CREAM]);
+            self.burst(true, at, 24, 3.4, 1.8, -7., 0.65, 0.28, &[GOLD, CREAM]);
             let (gems, total) = (run.gems(), run.level.gems.len());
             if gems == total {
                 self.pop(at, "ALL CRYSTALS!".into(), GOLD, 26.);
-                self.banner("ALL CRYSTALS!", "THE FINISH ARCH IS OPEN. GO GO GO!", GOLD);
+                self.banner("All crystals!", "The finish arch is open. Go go go!", GOLD);
             } else {
                 self.pop(at, format!("{gems}/{total}"), GOLD, 26.);
             }
         }
         if run.checkpoint > before.checkpoint {
             let marker = run.level.checkpoints[run.checkpoint - 1].marker;
-            self.ring(marker + Vec3::Y * 0.1, 28, 1.25, 3.4, 0.7, TEAL);
-            self.ring(marker + Vec3::Y * 0.2, 16, 0.6, 2.2, 0.55, GOLD);
+            self.ring(true, marker + Vec3::Y * 0.1, 28, 1.25, 3.4, 0.7, TEAL);
+            self.ring(true, marker + Vec3::Y * 0.2, 16, 0.6, 2.2, 0.55, GOLD);
             self.checkpoint_line = quips::checkpoint(run.checkpoint);
             self.split = split;
             self.falls_here = 0;
@@ -394,19 +419,29 @@ impl Juice {
             self.trail.clear();
             self.squash = 0.;
             self.pop_in = if self.motion > 0. { 0.3 } else { 0. };
-            self.ring(p - Vec3::Y * (r * 0.9), 20, 0.5, 2.6, 0.5, CREAM);
+            self.ring(false, p - Vec3::Y * (r * 0.9), 20, 0.5, 2.6, 0.5, CREAM);
             self.kick(0.35, 0.25);
         }
         if let Some((at, change)) = events.bonk {
             let count = run.stats.bonks;
-            self.burst(at, 16, 4.5, 0.8, -9., 0.4, 0.14, &[CORAL, CREAM, GOLD]);
+            self.burst(
+                true,
+                at,
+                16,
+                4.5,
+                0.8,
+                -9.,
+                0.4,
+                0.14,
+                &[CORAL, CREAM, GOLD],
+            );
             self.pop(at + Vec3::Y * 0.4, quips::bonk(count).into(), CORAL, 28.);
             self.squash = (self.squash + 0.5).min(1.);
             self.kick((0.45 + change * 0.05).min(0.9), 0.3);
         }
         if let Some(air) = events.landed {
             self.airs += 1;
-            self.ring(p - Vec3::Y * (r * 0.9), 14, 0.4, 2.4, 0.45, DUST);
+            self.ring(false, p - Vec3::Y * (r * 0.9), 14, 0.4, 2.4, 0.45, DUST);
             self.squash = (air * 1.4).clamp(0.35, 1.);
             if air >= 0.45 {
                 self.pop(
@@ -419,7 +454,7 @@ impl Juice {
             }
         }
         if events.clutch {
-            self.burst(p, 10, 2.2, 1.8, -4., 0.5, 0.14, &[TEAL, CREAM]);
+            self.burst(true, p, 10, 2.2, 1.8, -4., 0.5, 0.14, &[TEAL, CREAM]);
             self.pop(
                 p + Vec3::Y * 0.5,
                 quips::clutch(run.stats.clutches).into(),
@@ -430,11 +465,21 @@ impl Juice {
         if events.secret
             && let Some(at) = run.secret
         {
-            self.burst(at, 34, 4., 2.4, -6., 0.9, 0.22, &[VIOLET, CREAM, GOLD]);
+            self.burst(
+                true,
+                at,
+                34,
+                4.,
+                2.4,
+                -6.,
+                0.9,
+                0.22,
+                &[VIOLET, CREAM, GOLD],
+            );
             self.pop(at, "MOONSTONE!".into(), VIOLET, 24.);
             self.banner(
-                "SECRET MOONSTONE!",
-                "SHINY! IT'LL BE ON YOUR RESULTS CARD",
+                "Secret moonstone!",
+                "Shiny! It'll be on your results card",
                 VIOLET,
             );
             self.glow = 0.7;
@@ -448,8 +493,18 @@ impl Juice {
         }
         if run.finished && !before.finished {
             let arch = run.level.finish + Vec3::Y * 2.6;
-            self.burst(arch, 90, 6., 3.5, -7., 2., 0.22, &CONFETTI);
-            self.burst(run.level.finish, 30, 3., 2., -6., 1.2, 0.18, &[GOLD, CREAM]);
+            self.burst(false, arch, 90, 6., 3.5, -7., 2., 0.22, &CONFETTI);
+            self.burst(
+                true,
+                run.level.finish,
+                30,
+                3.,
+                2.,
+                -6.,
+                1.2,
+                0.18,
+                &[GOLD, CREAM],
+            );
             self.kick(0.4, 0.35);
             self.celebrate = Some(0.);
             self.glow = 0.6;
@@ -476,7 +531,7 @@ impl Juice {
                 if self.sparkle <= 0. {
                     self.sparkle = 0.05;
                     let jitter = vec3(self.next(), self.next(), self.next()) * r * 0.6;
-                    self.burst(p + jitter, 1, 0.6, 0.6, -2., 0.45, 0.12, &[GOLD]);
+                    self.burst(true, p + jitter, 1, 0.6, 0.6, -2., 0.45, 0.12, &[GOLD]);
                 }
             }
         }
@@ -485,11 +540,11 @@ impl Juice {
     fn pace_banner(&mut self, pace: (&'static str, Option<f32>)) {
         match pace {
             ("SILVER", Some(deadline)) => self.banner(
-                "GOLD SLIPPED AWAY",
-                format!("SILVER STILL ON: FINISH UNDER {deadline:.1}s"),
+                "Gold slipped away",
+                format!("Silver still on: finish under {deadline:.1}s"),
                 SILVER,
             ),
-            _ => self.banner("BRONZE IT IS", "NO PRESSURE NOW. ENJOY THE VIEW!", BRONZE),
+            _ => self.banner("Bronze it is", "No pressure now. Enjoy the view!", BRONZE),
         }
     }
 
@@ -501,6 +556,7 @@ impl Juice {
         }
         self.time += dt;
         let _ = self.particles.update(dt);
+        let _ = self.sparks.update(dt);
         self.squash = (self.squash - dt * 5.).max(0.);
         self.pop_in = (self.pop_in - dt).max(0.);
         self.glow = (self.glow - dt * 1.2).max(0.);
@@ -526,6 +582,7 @@ impl Juice {
         if let Some(t) = &mut self.celebrate {
             *t += dt.clamp(0., 0.1);
             let _ = self.particles.update(dt.clamp(0., 0.1));
+            let _ = self.sparks.update(dt.clamp(0., 0.1));
             self.glow = (self.glow - dt * 1.2).max(0.);
         }
     }
@@ -650,22 +707,22 @@ mod tests {
         );
         tick(&mut juice, &mut run, Controls::default());
         assert_eq!(run.gems(), 1);
-        assert!(!juice.particles.is_empty(), "accepted pickup bursts");
+        assert!(!juice.sparks.is_empty(), "accepted pickup bursts");
         assert!(juice.pops.iter().flatten().any(|p| p.text == "1/6"));
         juice.kick(1., 0.2);
         juice.squash = 1.;
         juice.apply_policy(FeedbackPolicy::new(true, false, 1.).unwrap());
-        assert!(juice.particles.is_empty());
+        assert!(juice.particles.is_empty() && juice.sparks.is_empty());
         assert!(juice.take_shake().is_none());
         assert_eq!(juice.marble_scale(), Vec3::ONE);
         assert!(
             juice.pops.iter().flatten().count() == 1,
             "information stays"
         );
-        juice.burst(gem, 10, 1., 1., -1., 1., 0.1, &[GOLD]);
-        assert!(juice.particles.is_empty(), "no new bursts while reduced");
+        juice.burst(true, gem, 10, 1., 1., -1., 1., 0.1, &[GOLD]);
+        assert!(juice.sparks.is_empty(), "no new bursts while reduced");
         juice.apply_policy(FeedbackPolicy::default());
-        assert!(juice.particles.is_empty(), "re-enabling revives nothing");
+        assert!(juice.sparks.is_empty(), "re-enabling revives nothing");
     }
 
     #[test]
@@ -730,7 +787,7 @@ mod tests {
         let course = &COURSES[0];
         run.elapsed = course.gold_seconds - 0.001;
         tick(&mut juice, &mut run, Controls::default());
-        assert_eq!(juice.banner.as_ref().unwrap().head, "GOLD SLIPPED AWAY");
+        assert_eq!(juice.banner.as_ref().unwrap().head, "Gold slipped away");
         let mut fresh = Run::new();
         let mut juice = Juice::new();
         fresh.physics.bodies[fresh.marble]

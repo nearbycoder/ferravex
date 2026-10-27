@@ -740,5 +740,40 @@
     "controls": "Drag toward the target and release to putt \u00b7 Arrows aim / power \u00b7 Space putt \u00b7 P pause \u00b7 C scorecard \u00b7 R return (+1)",
     "image": "mini-golf-3d.png",
     "source": "examples/mini-golf-3d/src/lib.rs"
+  },
+  {
+    "id": "glowtide",
+    "title": "Glowtide",
+    "dimension": "2D",
+    "kind": "game",
+    "host": "glowtide",
+    "genre": "Bullet-heaven roguelite",
+    "description": "A tiny lantern against an ocean of glowing creatures. Build eight evolving weapons, dash through danger and survive until dawn.",
+    "controls": "WASD / Arrows move \u00b7 Space / Shift dash \u00b7 1\u20134 choose upgrades \u00b7 E reroll \u00b7 Q banish \u00b7 Escape pause \u00b7 R restart",
+    "image": "glowtide.png",
+    "source": "examples/glowtide/src/lib.rs",
+    "capabilities": {
+      "schema_version": 1,
+      "controls": {
+        "action_map": {
+          "evidence": [
+            {
+              "path": "examples/glowtide/src/lib.rs",
+              "snippet": "let mut input = PlayerInput::preset("
+            }
+          ]
+        }
+      },
+      "pause": {
+        "simulation": {
+          "evidence": [
+            {
+              "path": "examples/glowtide/src/run.rs",
+              "snippet": "self.session.set_paused(true)"
+            }
+          ]
+        }
+      }
+    }
   }
 ]

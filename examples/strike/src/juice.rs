@@ -12,19 +12,22 @@
 use crate::crew::{self, Who};
 use crate::geometry::rgb;
 use crate::scoreboard::{Moment, Tracker};
+use crate::style::{self, BODY, DISPLAY, LIME, SMALL, TITLE, fade};
 use ferravex_play::feedback::FeedbackPolicy;
 use ferravex_play::rounds::{Phase, Team};
+use ferravex_play::tween::Ease;
 use ferravex_render::audio::{Cue, GameAudio, Surface};
+use ferravex_render::post;
 use ferravex_render::prelude::*;
-use ferravex_render::ui::{Align, TextStyle, Ui, UiRect};
+use ferravex_render::shapes::{self, Fill};
+use ferravex_render::text::TextAlign;
 use std::fmt::Write as _;
 
-pub(super) const INK: Color = Color::new(0.94, 0.93, 0.87, 1.0);
-pub(super) const MUTED: Color = Color::new(0.70, 0.74, 0.69, 1.0);
-pub(super) const GOLD: Color = Color::new(0.97, 0.80, 0.42, 1.0);
-pub(super) const RED: Color = Color::new(0.96, 0.45, 0.36, 1.0);
-pub(super) const TEAL: Color = Color::new(0.55, 0.86, 0.80, 1.0);
-const PANEL: Color = Color::new(0.03, 0.05, 0.045, 0.72);
+pub(super) const INK: Color = style::INK;
+pub(super) const MUTED: Color = style::MUTED;
+pub(super) const GOLD: Color = style::AMBER;
+pub(super) const RED: Color = style::SIGNAL;
+pub(super) const TEAL: Color = style::TEAL;
 const FEED: usize = 4;
 const POPS: usize = 2;
 const FEED_LIFE: f32 = 5.;
@@ -448,45 +451,58 @@ impl Juice {
         Some((base + rise, 0.6 + t * 11., 1.3 * (1. - t / 1.4).max(0.1)))
     }
 
-    /// Gold edge glow for multi-kills, streaks and secrets.
+    /// Amber edge glow for multi-kills, streaks and secrets (reduced flash: off).
     pub fn draw_glow(&self) {
         if self.glow <= 0. || self.flash == 0. {
             return;
         }
         let (w, h) = (screen_width(), screen_height());
-        let a = self.glow * 0.32;
-        for i in 0..6 {
-            let t = i as f32 * 4.;
-            let c = Color::new(GOLD.r, GOLD.g, GOLD.b, a * (1. - i as f32 / 6.));
-            draw_rectangle(t, t, w - 2. * t, 4., c);
-            draw_rectangle(t, h - t - 4., w - 2. * t, 4., c);
-            draw_rectangle(t, t + 4., 4., h - 2. * t - 8., c);
-            draw_rectangle(w - t - 4., t + 4., 4., h - 2. * t - 8., c);
+        let a = self.glow * 0.5 * self.flash.min(1.);
+        let edge = fade(GOLD, a);
+        let clear = fade(GOLD, 0.);
+        let band = 46.;
+        for (rect, fill) in [
+            (
+                Rect::new(0., 0., w, band),
+                Fill::vertical(Rect::new(0., 0., w, band), edge, clear),
+            ),
+            (
+                Rect::new(0., h - band, w, band),
+                Fill::vertical(Rect::new(0., h - band, w, band), clear, edge),
+            ),
+            (
+                Rect::new(0., 0., band, h),
+                Fill::horizontal(Rect::new(0., 0., band, h), edge, clear),
+            ),
+            (
+                Rect::new(w - band, 0., band, h),
+                Fill::horizontal(Rect::new(w - band, 0., band, h), clear, edge),
+            ),
+        ] {
+            post::with_glow(|| shapes::fill_rounded_rect(rect, 0., fill));
         }
     }
 
-    /// Rising score pops beside the crosshair.
-    pub fn draw_pops(&self, ui: &mut Ui) {
+    /// Rising score pops beside the crosshair, newest at the bottom.
+    pub fn draw_pops(&self) {
         let (cx, cy) = (screen_width() * 0.5, screen_height() * 0.5);
         for p in self.pops.iter().flatten() {
-            // Newest at the bottom; each older pop sits a full row above it.
             let rank = self.pops.iter().flatten().filter(|o| o.age < p.age).count() as f32;
             let rise = if self.motion > 0. { p.age * 30. } else { 0. };
             let alpha = (1. - (p.age - 0.55).max(0.) / 0.35).clamp(0., 1.);
             let grow = if self.motion > 0. {
-                1. + 0.4 * (1. - p.age / 0.14).max(0.).powi(2)
+                1. + 0.4 * (1. - p.age / 0.16).max(0.).powi(2)
             } else {
                 1.
             };
-            let width = measure(p.text, p.size);
-            text(
-                ui,
+            let style = style::classic(p.size * grow, fade(p.color, alpha));
+            let width = style::width(p.text, style);
+            style::line(
+                p.text,
                 (cx + 26.).min(screen_width() - 8. - width),
                 cy - 12. - rank * 26. - rise.min(18.),
-                p.size * grow,
-                fade(p.color, alpha),
-                Align::Left,
-                format_args!("{}", p.text),
+                style,
+                TextAlign::Left,
             );
         }
     }
@@ -494,187 +510,162 @@ impl Juice {
     /// Callout banner and radio subtitle. `top` is the first free row below
     /// the scoreline/objective strip; `bottom` the last free row above
     /// footers, vitals and touch controls.
-    pub fn draw_banners(&self, ui: &mut Ui, top: f32, bottom: f32) {
+    pub fn draw_banners(&self, top: f32, bottom: f32) {
         let top = top.max(crate::hud::MENU_CORNER[1]);
         let w = screen_width();
         let h = screen_height();
         if let Some(c) = &self.callout {
             let alpha = ((c.life - c.age) / 0.35).clamp(0., 1.);
-            let stamp = if self.motion > 0. {
-                1. + 0.45 * (1. - c.age / 0.16).max(0.).powi(2)
+            // Stamp in with a little overshoot, then hold.
+            let enter = if self.motion > 0. {
+                Ease::BackOut.apply((c.age / 0.22).min(1.))
             } else {
                 1.
             };
-            let base = fit_size(c.head, 34., w - 40.);
-            let size = (base * stamp).min(fit_size(c.head, 80., w - 16.));
-            let y = (h * 0.22).max(top + base + 12.);
-            let band = (measure(c.head, base).max(measure(&c.sub, 15.)) + 48.).min(w - 16.);
-            let _ = ui.panel(
-                UiRect {
-                    min: [(w - band) * 0.5, y - base - 10.],
-                    size: [band, base + 38.],
-                },
-                fade(PANEL, alpha),
+            let base = style::fit(c.head, style::classic(DISPLAY, c.color), w - 64., 16.);
+            let size = base.size * (0.7 + 0.3 * enter);
+            let head = base.with_size(size).with_color(fade(c.color, alpha));
+            let sub = style::fit(&c.sub, style::modern(BODY, INK), w - 48., 12.);
+            let y = (h * 0.22).max(top + base.size + 14.);
+            let band =
+                (style::width(c.head, base).max(style::width(&c.sub, sub)) + 56.).min(w - 16.);
+            let rect = Rect::new((w - band) * 0.5, y - base.size - 12., band, base.size + 40.);
+            style::plate(rect, 8., style::PLATE, alpha);
+            // Accent rules sweep out from the center.
+            let sweep = if self.motion > 0. {
+                Ease::CubicOut.apply((c.age / 0.3).min(1.))
+            } else {
+                1.
+            };
+            let rule = (band - 24.) * 0.5 * sweep;
+            shapes::fill_rounded_rect(
+                Rect::new(w * 0.5 - rule, rect.y + rect.h - 3., rule * 2., 2.),
+                1.,
+                fade(c.color, alpha * 0.9),
             );
-            text(
-                ui,
-                w * 0.5,
-                y,
-                size,
-                fade(c.color, alpha),
-                Align::Center,
-                format_args!("{}", c.head),
-            );
-            let sub = fit_size(&c.sub, 15., w - 40.);
-            text(
-                ui,
+            if self.flash > 0. {
+                post::with_glow(|| {
+                    shapes::glow_disc(
+                        vec2(w * 0.5, y - base.size * 0.45),
+                        band * 0.35,
+                        fade(c.color, 0.10 * alpha * self.flash.min(1.)),
+                    )
+                });
+            }
+            style::line(c.head, w * 0.5, y, head, TextAlign::Center);
+            style::line(
+                &c.sub,
                 w * 0.5,
                 y + 22.,
-                sub,
-                fade(INK, alpha),
-                Align::Center,
-                format_args!("{}", c.sub),
+                sub.with_color(fade(INK, alpha)),
+                TextAlign::Center,
             );
         }
         if let Some(s) = &self.subtitle {
             let alpha = ((2.6 - s.age) / 0.4).clamp(0., 1.);
-            let y = (h * 0.5 + 92.).min(bottom - 6.).max(h * 0.5 + 52.);
-            // Speaker and line on one row when they fit, else two rows.
-            let mut line = String::new();
-            let _ = write!(line, "\"{}\"", s.line);
-            let speaker_width = measure_display(s.speaker, 14.);
-            let row = speaker_width + 14. + measure(&line, 14.);
-            if row <= w - 40. {
-                let left = (w - row) * 0.5;
-                let _ = ui.panel(
-                    UiRect {
-                        min: [left - 10., y - 17.],
-                        size: [row + 20., 24.],
-                    },
-                    fade(PANEL, alpha * 0.8),
-                );
-                text(
-                    ui,
-                    left,
-                    y,
-                    14.,
-                    fade(GOLD, alpha),
-                    Align::Left,
-                    format_args!("{}:", s.speaker),
-                );
-                text(
-                    ui,
-                    left + speaker_width + 14.,
-                    y,
-                    14.,
-                    fade(INK, alpha),
-                    Align::Left,
-                    format_args!("{line}"),
-                );
+            let rise = if self.motion > 0. {
+                8. * (1. - Ease::CubicOut.apply((s.age / 0.25).min(1.)))
             } else {
-                let size = fit_size(&line, 14., w - 32.);
-                let _ = ui.panel(
-                    UiRect {
-                        min: [12., y - 35.],
-                        size: [w - 24., 44.],
-                    },
-                    fade(PANEL, alpha * 0.8),
-                );
-                text(
-                    ui,
-                    w * 0.5,
-                    y - 18.,
-                    14.,
-                    fade(GOLD, alpha),
-                    Align::Center,
-                    format_args!("{}", s.speaker),
-                );
-                text(
-                    ui,
-                    w * 0.5,
-                    y,
-                    size,
-                    fade(INK, alpha),
-                    Align::Center,
-                    format_args!("{line}"),
-                );
+                0.
+            };
+            let y = (h * 0.5 + 92.).min(bottom - 6.).max(h * 0.5 + 52.) + rise;
+            let name = style::Buf::<40>::fmt(format_args!("{}", s.speaker));
+            let quote = style::Buf::<80>::fmt(format_args!("“{}”", s.line));
+            let speaker = style::modern(SMALL, fade(GOLD, alpha));
+            let words = style::modern(BODY, fade(INK, alpha));
+            let sw = style::width(name.as_str(), speaker);
+            let qw = style::width(quote.as_str(), words);
+            let row = sw + 12. + qw;
+            if row + 40. <= w {
+                let left = (w - row) * 0.5;
+                let rect = Rect::new(left - 14., y - 18., row + 28., 26.);
+                style::plate(rect, 6., style::PLATE, alpha);
+                style::accent(rect, TEAL, alpha);
+                style::line(name.as_str(), left, y - 1., speaker, TextAlign::Left);
+                style::line(quote.as_str(), left + sw + 12., y, words, TextAlign::Left);
+            } else {
+                let words = style::fit(quote.as_str(), words, w - 40., 12.);
+                let rect = Rect::new(12., y - 36., w - 24., 46.);
+                style::plate(rect, 6., style::PLATE, alpha);
+                style::accent(rect, TEAL, alpha);
+                style::line(name.as_str(), w * 0.5, y - 20., speaker, TextAlign::Center);
+                style::line(quote.as_str(), w * 0.5, y, words, TextAlign::Center);
             }
         }
     }
 
     /// Recent eliminations, newest first. Returns the bottom of the feed.
-    pub fn draw_feed(
-        &self,
-        ui: &mut Ui,
-        local: u8,
-        bots: bool,
-        x_right: f32,
-        top: f32,
-        max_rows: usize,
-    ) -> f32 {
-        let size = 14.;
+    pub fn draw_feed(&self, local: u8, bots: bool, x_right: f32, top: f32, max_rows: usize) -> f32 {
         let mut y = top.max(crate::hud::MENU_CORNER[1] + 4.);
-        for entry in self.feed.iter().flatten().take(max_rows) {
+        for (row, entry) in self.feed.iter().flatten().take(max_rows).enumerate() {
             let alpha = ((FEED_LIFE - entry.age) / 0.5).clamp(0., 1.);
-            let who = |id| Who { id, local, bots };
-            let a = measure_display(who(entry.attacker), size);
-            let sep = if entry.headshot { " HS→ " } else { " → " };
-            let s = measure(sep, size);
-            let v = measure_display(who(entry.victim), size);
-            let width = a + s + v + 16.;
-            let left = (x_right - width).max(8.);
-            let mine = entry.attacker == local;
-            let _ = ui.panel(
-                UiRect {
-                    min: [left, y],
-                    size: [width, 22.],
-                },
-                fade(
-                    if mine {
-                        Color::new(0.20, 0.16, 0.06, 0.78)
-                    } else {
-                        PANEL
-                    },
-                    alpha,
-                ),
-            );
-            let baseline = y + 16.;
-            let color = |id: u8| {
-                if id == local { GOLD } else { INK }
+            // Newest rows slide in from the right.
+            let slide = if self.motion > 0. && row == 0 {
+                24. * (1. - Ease::CubicOut.apply((entry.age / 0.2).min(1.)))
+            } else {
+                0.
             };
-            text(
-                ui,
-                left + 8.,
-                baseline,
-                size,
-                fade(color(entry.attacker), alpha),
-                Align::Left,
-                format_args!("{}", who(entry.attacker)),
-            );
-            text(
-                ui,
-                left + 8. + a,
-                baseline,
-                size,
-                fade(if entry.headshot { RED } else { MUTED }, alpha),
-                Align::Left,
-                format_args!("{sep}"),
-            );
-            text(
-                ui,
-                left + 8. + a + s,
-                baseline,
-                size,
+            let who = |id| Who { id, local, bots };
+            let attacker = style::Buf::<40>::fmt(format_args!("{}", who(entry.attacker)));
+            let victim = style::Buf::<40>::fmt(format_args!("{}", who(entry.victim)));
+            let tint = |id: u8| if id == local { GOLD } else { INK };
+            let a_style = style::modern(SMALL, fade(tint(entry.attacker), alpha));
+            let v_style = style::modern(
+                SMALL,
                 fade(
                     if entry.victim == local {
                         RED
                     } else {
-                        color(entry.victim)
+                        tint(entry.victim)
                     },
                     alpha,
                 ),
-                Align::Left,
-                format_args!("{}", who(entry.victim)),
+            );
+            let a = style::width(attacker.as_str(), a_style);
+            let v = style::width(victim.as_str(), v_style);
+            let mid = if entry.headshot { 30. } else { 22. };
+            let width = a + mid + v + 20.;
+            let left = (x_right - width).max(8.) + slide;
+            let rect = Rect::new(left, y, width, 22.);
+            let mine = entry.attacker == local;
+            style::plate(
+                rect,
+                5.,
+                if mine {
+                    Color::new(0.16, 0.12, 0.04, 0.8)
+                } else {
+                    style::PLATE
+                },
+                alpha,
+            );
+            if mine || entry.victim == local {
+                style::accent(rect, if mine { GOLD } else { RED }, alpha);
+            }
+            let baseline = y + 15.;
+            style::line(
+                attacker.as_str(),
+                left + 10.,
+                baseline,
+                a_style,
+                TextAlign::Left,
+            );
+            let arrow_x = left + 10. + a + 5.;
+            style::line(
+                "→",
+                arrow_x,
+                baseline,
+                style::modern(SMALL, fade(MUTED, alpha)),
+                TextAlign::Left,
+            );
+            if entry.headshot {
+                style::headshot_icon(vec2(arrow_x + 19., y + 11.), 4.5, fade(RED, alpha));
+            }
+            style::line(
+                victim.as_str(),
+                arrow_x + mid - 5.,
+                baseline,
+                v_style,
+                TextAlign::Left,
             );
             y += 26.;
         }
@@ -685,7 +676,7 @@ impl Juice {
     /// error row, scoreline/objective strip, kill feed, callout banner, radio
     /// subtitle, onboarding hint and score pops. The fullscreen menu corner,
     /// vitals, replay footer and touch controls stay clear.
-    pub fn draw_play(&self, ui: &mut Ui, board: &Tracker, l: PlayLayout<'_>) {
+    pub fn draw_play(&self, board: &Tracker, l: PlayLayout<'_>) {
         let (w, h) = (screen_width(), screen_height());
         let mut top: f32 = if l.notice { 44. } else { 12. };
         if l.touch {
@@ -697,7 +688,7 @@ impl Juice {
         // Right end of whatever strip sits at the top center.
         let strip_right = if l.practice {
             let (left, width, _) = scoreline_rect(w, top);
-            top = self.draw_scoreline(ui, board, top) + 8.;
+            top = self.draw_scoreline(board, top) + 8.;
             left + width
         } else if l.round {
             let (left, width) = crate::hud::tactical_strip(w);
@@ -707,22 +698,22 @@ impl Juice {
         };
         if w - 16. - strip_right - 24. >= 250. && !l.touch {
             // Top-right, below the fullscreen menu corner.
-            self.draw_feed(ui, l.local, l.bots, w - 16., 64., 4);
+            self.draw_feed(l.local, l.bots, w - 16., 64., 4);
         } else if !self.has_callout() {
             // Narrow views stack the feed under the strip; a callout banner
             // borrows those rows while it is showing.
             let rows = if h < 600. { 2 } else { 3 };
-            top = self.draw_feed(ui, l.local, l.bots, w - 12., top, rows) + 4.;
+            top = self.draw_feed(l.local, l.bots, w - 12., top, rows) + 4.;
         }
         let anchor = if l.touch {
-            top.max(crate::hud::MENU_CORNER[1]) + 18.
+            top.max(crate::hud::MENU_CORNER[1]) + 24.
         } else if l.footer {
             h - 164.
         } else {
             h - 86.
         };
-        if let Some(line) = l.hint {
-            draw_hint(ui, line, anchor);
+        if let Some(hint) = l.hint {
+            draw_hint(hint, anchor, self.time);
         }
         let bottom = if l.touch {
             h - 236.
@@ -737,28 +728,23 @@ impl Juice {
             } else {
                 top
             };
-            self.draw_banners(ui, banner_top, bottom);
+            self.draw_banners(banner_top, bottom);
             if l.alive {
-                self.draw_pops(ui);
+                self.draw_pops();
             }
         }
     }
 
     /// Practice scoreline: YOU frags, the authoritative clock, CREW frags.
     /// Returns the bottom of the strip.
-    pub fn draw_scoreline(&self, ui: &mut Ui, tracker: &Tracker, top: f32) -> f32 {
+    pub fn draw_scoreline(&self, tracker: &Tracker, top: f32) -> f32 {
         let w = screen_width();
         let Some(seconds) = tracker.remaining_seconds() else {
             return top;
         };
         let (left, width, top) = scoreline_rect(w, top);
-        let _ = ui.panel(
-            UiRect {
-                min: [left, top],
-                size: [width, 48.],
-            },
-            PANEL,
-        );
+        let rect = Rect::new(left, top, width, 48.);
+        style::plate(rect, 8., style::PLATE, 1.);
         let you = tracker.lines[usize::from(tracker.local())].kills;
         let crew: u32 = tracker
             .lines
@@ -769,80 +755,88 @@ impl Juice {
             .sum();
         let urgent = seconds <= 10;
         let pulse = if urgent && self.motion > 0. {
-            1. + 0.12 * (self.time * 6.).sin().max(0.)
+            (self.time * 6.).sin().max(0.)
         } else {
-            1.
+            0.
         };
-        text(
-            ui,
+        if urgent && self.flash > 0. {
+            post::with_glow(|| {
+                shapes::glow_disc(
+                    vec2(w * 0.5, top + 24.),
+                    46. + 10. * pulse,
+                    fade(RED, 0.16 * self.flash.min(1.)),
+                )
+            });
+        }
+        style::line_fmt(
             w * 0.5,
-            top + 34.,
-            26. * pulse,
-            if urgent { RED } else { INK },
-            Align::Center,
+            top + 36.,
+            style::classic(
+                DISPLAY * (1. + 0.08 * pulse),
+                if urgent { RED } else { INK },
+            ),
+            TextAlign::Center,
             format_args!("{}:{:02}", seconds / 60, seconds % 60),
         );
         // Big numbers on the outside, small labels toward the clock.
-        text(
-            ui,
+        let number = style::classic(TITLE, GOLD);
+        let n = style::line_fmt(
             left + 14.,
-            top + 35.,
-            24.,
-            GOLD,
-            Align::Left,
+            top + 34.,
+            number,
+            TextAlign::Left,
             format_args!("{you}"),
         );
-        let you_w = measure_display(you, 24.);
-        text(
-            ui,
-            left + 22. + you_w,
+        style::line(
+            "You",
+            n.x + n.w + 6.,
             top + 33.,
-            13.,
-            MUTED,
-            Align::Left,
-            format_args!("YOU"),
+            style::modern(SMALL, MUTED),
+            TextAlign::Left,
         );
-        text(
-            ui,
+        let c = style::line_fmt(
             left + width - 14.,
-            top + 35.,
-            24.,
-            INK,
-            Align::Right,
+            top + 34.,
+            number.with_color(TEAL),
+            TextAlign::Right,
             format_args!("{crew}"),
         );
-        let crew_w = measure_display(crew, 24.);
-        text(
-            ui,
-            left + width - 22. - crew_w,
+        style::line(
+            "Crew",
+            c.x - 6.,
             top + 33.,
-            13.,
-            MUTED,
-            Align::Right,
-            format_args!("CREW"),
+            style::modern(SMALL, MUTED),
+            TextAlign::Right,
         );
         let mut bottom = top + 48.;
         if tracker.streak >= 2 {
-            let _ = ui.panel(
-                UiRect {
-                    min: [w * 0.5 - 64., bottom + 4.],
-                    size: [128., 22.],
-                },
-                Color::new(0.20, 0.16, 0.06, 0.78),
-            );
-            text(
-                ui,
+            let chip = Rect::new(w * 0.5 - 56., bottom + 5., 112., 22.);
+            style::plate(chip, 11., Color::new(0.14, 0.17, 0.05, 0.85), 1.);
+            style::line_fmt(
                 w * 0.5,
-                bottom + 20.,
-                14.,
-                GOLD,
-                Align::Center,
-                format_args!("STREAK {}", tracker.streak),
+                bottom + 21.,
+                style::modern(SMALL, LIME),
+                TextAlign::Center,
+                format_args!("▲ Streak {}", tracker.streak),
             );
-            bottom += 26.;
+            bottom += 27.;
         }
         bottom
     }
+}
+
+/// Which first-match hint to show.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum HintKind {
+    FireReload,
+    Scoreboard,
+}
+
+/// A hint and the player's current key labels for it.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Hint<'a> {
+    pub kind: HintKind,
+    pub keys: [&'a str; 2],
 }
 
 /// What the in-play overlay needs to know about the frame.
@@ -856,7 +850,7 @@ pub(super) struct PlayLayout<'a> {
     pub footer: bool,
     pub roster: bool,
     pub alive: bool,
-    pub hint: Option<&'a str>,
+    pub hint: Option<Hint<'a>>,
     pub local: u8,
     pub bots: bool,
 }
@@ -870,48 +864,75 @@ pub(super) struct Onboarding {
 
 impl Onboarding {
     /// The single most useful unlearned hint, if any.
-    pub fn line(
-        &self,
-        input: &ferravex_render::input::PlayerInput,
-        frags: u32,
-        out: &mut String,
-    ) -> bool {
-        out.clear();
-        let mut a = [0; 64];
-        let mut b = [0; 64];
+    pub fn hint(&self, frags: u32) -> Option<HintKind> {
         if !self.fired {
-            let fire = crate::controls::hint(input, "fire", &mut a);
-            let reload = crate::controls::hint(input, "reload", &mut b);
-            let _ = write!(out, "{fire} FIRE  ·  {reload} RELOAD  ·  SHOOT THE CREW");
+            Some(HintKind::FireReload)
         } else if !self.roster && frags >= 1 {
-            let roster = crate::controls::hint(input, "roster", &mut a);
-            let _ = write!(out, "HOLD {roster} TO SEE THE SCOREBOARD");
+            Some(HintKind::Scoreboard)
+        } else {
+            None
         }
-        !out.is_empty()
     }
 }
 
-/// One centered hint pill.
-pub(super) fn draw_hint(ui: &mut Ui, line: &str, y: f32) {
+/// A small key cap; returns its width.
+fn keycap(x: f32, y: f32, label: &str, alpha: f32) -> f32 {
+    let style = style::modern(SMALL, fade(INK, alpha));
+    let w = (style::width(label, style) + 14.).max(22.);
+    let lip = Rect::new(x, y + 2., w, 20.);
+    let cap = Rect::new(x, y, w, 20.);
+    shapes::fill_rounded_rect(lip, 5., fade(Color::new(0.01, 0.015, 0.015, 0.9), alpha));
+    shapes::fill_rounded_rect(
+        cap,
+        5.,
+        Fill::vertical(
+            cap,
+            fade(Color::from_hex(0x3a4744), alpha),
+            fade(Color::from_hex(0x27312f), alpha),
+        ),
+    );
+    shapes::stroke_rounded_rect(cap, 5., 1., fade(Color::new(1., 1., 1., 0.16), alpha));
+    style::line(label, x + w * 0.5, y + 14., style, TextAlign::Center);
+    w
+}
+
+fn keycap_width(label: &str) -> f32 {
+    (style::width(label, style::modern(SMALL, INK)) + 14.).max(22.)
+}
+
+/// One centered hint pill made of key caps and short actions.
+pub(super) fn draw_hint(hint: Hint<'_>, y: f32, time: f32) {
     let w = screen_width();
-    let size = fit_size(line, 14., w - 48.);
-    let width = (measure(line, size) + 28.).min(w - 16.);
-    let _ = ui.panel(
-        UiRect {
-            min: [(w - width) * 0.5, y - 18.],
-            size: [width, 26.],
-        },
-        PANEL,
-    );
-    text(
-        ui,
-        w * 0.5,
-        y,
-        size,
-        INK,
-        Align::Center,
-        format_args!("{line}"),
-    );
+    let (parts, n): ([(&str, &str); 2], usize) = match hint.kind {
+        HintKind::FireReload => ([(hint.keys[0], "Fire"), (hint.keys[1], "Reload")], 2),
+        HintKind::Scoreboard => ([(hint.keys[0], "Hold for scoreboard"), ("", "")], 1),
+    };
+    let label = style::modern(SMALL, MUTED);
+    let gap = 16.;
+    let total: f32 = parts[..n]
+        .iter()
+        .map(|(key, action)| keycap_width(key) + 6. + style::width(action, label))
+        .sum::<f32>()
+        + gap * (n as f32 - 1.);
+    let scale = ((w - 40.) / (total + 28.)).min(1.);
+    if scale < 0.75 {
+        return;
+    }
+    let breathe = 0.85 + 0.15 * (time * 2.4).sin().abs();
+    let rect = Rect::new((w - total - 28.) * 0.5, y - 19., total + 28., 30.);
+    style::plate(rect, 8., style::PLATE, 1.);
+    let mut x = rect.x + 14.;
+    for (key, action) in &parts[..n] {
+        x += keycap(x, y - 14., key, 1.) + 6.;
+        let r = style::line(
+            action,
+            x,
+            y + 0.5,
+            label.with_color(fade(INK, breathe)),
+            TextAlign::Left,
+        );
+        x += r.w + gap;
+    }
 }
 
 /// The practice scoreline: centered, and below the fullscreen menu corner
@@ -928,29 +949,15 @@ pub(super) fn scoreline_rect(w: f32, top: f32) -> (f32, f32, f32) {
     (left, width, top)
 }
 
-pub(super) fn fade(c: Color, alpha: f32) -> Color {
-    Color::new(c.r, c.g, c.b, c.a * alpha.clamp(0., 1.))
+/// Flat duck colors, shared by the model builder.
+pub(super) fn duck_colors() -> [Color; 3] {
+    [rgb(0xf2c84b), rgb(0xe8873a), rgb(0x1f2421)]
 }
 
-/// Width of `text` in the first-party bitmap font at `size`.
+/// Legacy fixed-cell metrics retained for the results layout contract.
 pub(super) fn measure(text: &str, size: f32) -> f32 {
     text.chars().count() as f32 * 6. * size / 8.
 }
-
-fn measure_display(value: impl std::fmt::Display, size: f32) -> f32 {
-    struct Count(usize);
-    impl std::fmt::Write for Count {
-        fn write_str(&mut self, s: &str) -> std::fmt::Result {
-            self.0 += s.chars().count();
-            Ok(())
-        }
-    }
-    let mut count = Count(0);
-    let _ = write!(count, "{value}");
-    count.0 as f32 * 6. * size / 8.
-}
-
-/// Largest size up to `size` (and at least 12px) that fits `width`.
 pub(super) fn fit_size(text: &str, size: f32, width: f32) -> f32 {
     let natural = measure(text, size);
     if natural <= width {
@@ -958,50 +965,6 @@ pub(super) fn fit_size(text: &str, size: f32, width: f32) -> f32 {
     } else {
         (size * width / natural.max(1.)).max(12.)
     }
-}
-
-/// Baseline-positioned shadowed text, like the HUD's existing labels.
-pub(super) fn text(
-    ui: &mut Ui,
-    x: f32,
-    y: f32,
-    size: f32,
-    color: Color,
-    align: Align,
-    args: std::fmt::Arguments<'_>,
-) {
-    let w = screen_width();
-    let (left, width) = match align {
-        Align::Left => (x, (w - x).max(0.)),
-        Align::Right => (0., x.max(0.)),
-        Align::Center => (0., (x * 2.).max(0.)),
-    };
-    let rect = crate::hud::tight(
-        UiRect {
-            min: [left, y - size * 0.875],
-            size: [width, size],
-        },
-        align,
-        crate::hud::char_count(args),
-        size,
-    );
-    let _ = ui.text_fmt(
-        rect,
-        TextStyle {
-            size,
-            color,
-            align,
-            // Shadows are opaque; drop them while text fades out.
-            shadow: color.a >= 0.98,
-            ..Default::default()
-        },
-        args,
-    );
-}
-
-/// Flat duck colors, shared by the model builder.
-pub(super) fn duck_colors() -> [Color; 3] {
-    [rgb(0xf2c84b), rgb(0xe8873a), rgb(0x1f2421)]
 }
 
 #[cfg(test)]

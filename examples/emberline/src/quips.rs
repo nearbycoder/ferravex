@@ -14,50 +14,50 @@ pub(super) enum DeathCause {
 }
 
 const SPIKES: [&str; 8] = [
-    "SPIKES 1, YOU 0",
-    "THAT ONE HAD A POINT",
-    "OUCH. ALSO: OUCH.",
-    "THE SPIKES SEND THEIR REGARDS",
-    "STICK THE LANDING, NOT THE SPIKES",
-    "POKED. RESPECTFULLY.",
-    "SHARP OBSERVATION: DON'T",
-    "THAT'S GOING IN THE BLOOPER REEL",
+    "Spikes 1, you 0.",
+    "That one had a point.",
+    "Ouch. Also: ouch.",
+    "The spikes send their regards.",
+    "Stick the landing, not the spikes.",
+    "Poked. Respectfully.",
+    "Sharp observation: don't.",
+    "That's going in the blooper reel.",
 ];
 
 const FISSURE: [&str; 8] = [
-    "THE FLOOR IS LAVA. LITERALLY.",
-    "GRAVITY: UNDEFEATED",
-    "A BOLD STEP INTO NOTHING",
-    "THE DARK SAYS HI",
-    "MIND THE GAP. PLEASE.",
-    "YOU FELL FOR IT",
-    "WARM DOWN THERE, ISN'T IT?",
-    "THE FISSURE THANKS YOU",
+    "The floor is lava. Literally.",
+    "Gravity: still undefeated.",
+    "A bold step into nothing.",
+    "The dark says hi.",
+    "Mind the gap. Please.",
+    "You fell for it.",
+    "Warm down there, isn't it?",
+    "The fissure thanks you.",
 ];
 
 /// Lines for a stubborn section: three or more falls since the last lantern.
 const STUBBORN: [&str; 6] = [
-    "PERSISTENCE IS A FLAME TOO",
-    "PRACTICE MAKES PLATFORMS",
-    "THIS IS THE ONE. PROBABLY.",
-    "THE LANTERN BELIEVES IN YOU",
-    "SAME SPOT? BOLD STRATEGY",
-    "DETERMINATION: MAXIMUM",
+    "Persistence is a flame too.",
+    "Practice makes platforms.",
+    "This is the one. Probably.",
+    "The lantern believes in you.",
+    "Same spot? Bold strategy.",
+    "Determination: maximum.",
 ];
 
 const LANTERN: [&str; 4] = [
-    "RESPAWN SAVED. FALL WITH CONFIDENCE.",
-    "THE DARK IS NOW SLIGHTLY LESS DARK",
-    "CHECKPOINT GET. NOTHING CAN STOP YOU.",
-    "WARM HANDS, SAVED PROGRESS",
+    "Respawn saved. Fall with confidence.",
+    "The dark is now slightly less dark.",
+    "Checkpoint get. Nothing can stop you now.",
+    "Warm hands, saved progress.",
 ];
 
 const PAUSE: [&str; 5] = [
-    "THE EMBERS WILL WAIT. PROBABLY.",
-    "STRETCH THOSE THUMBS",
-    "THE SPIKES ARE ALSO TAKING FIVE",
-    "TIME IS FROZEN. VERY SPOOKY.",
-    "HYDRATE. THE LANTERN INSISTS.",
+    "The embers will wait. Probably.",
+    "Stretch those thumbs.",
+    "The spikes are also taking five.",
+    "Time is frozen. Very spooky.",
+    "Hydrate. The lantern insists.",
 ];
 
 /// Advances by a stride coprime with the table length, so the same table
@@ -125,44 +125,57 @@ pub(super) fn rank(run: RunSummary) -> Rank {
     let (title, quip) = if run.secret && all && run.falls == 0 {
         (
             "KEEPER OF ALL LIGHT",
-            "EVERY EMBER, THE MOTH AND NOT ONE FALL. LEGEND.",
+            "Every ember, the moth and not one fall. Legend.",
         )
     } else if run.secret {
         (
             "FRIEND OF MOTHS",
-            "THE MOTH WILL TELL ITS GRANDKIDS ABOUT YOU",
+            "The moth will tell its grandkids about you.",
         )
     } else if all && run.falls == 0 {
-        ("THE LAMPLIGHTER", "FLAWLESS AND FULLY STOCKED. SHOW-OFF.")
+        ("THE LAMPLIGHTER", "Flawless and fully stocked. Show-off.")
     } else if all {
         (
             "EMBER HOARDER",
-            "EVERY LAST SPARK. YOUR POCKETS ARE TOASTY.",
+            "Every last spark. Your pockets are toasty.",
         )
     } else if run.falls >= 10 {
-        ("PROFESSIONAL FALLER", "GRAVITY THANKS YOU FOR YOUR LOYALTY")
+        (
+            "PROFESSIONAL FALLER",
+            "Gravity thanks you for your loyalty.",
+        )
     } else if run.falls >= 4 {
-        ("GRAVITY'S FAVOURITE", "THE FISSURES KNOW YOU BY NAME NOW")
+        ("GRAVITY'S FAVOURITE", "The fissures know you by name now.")
     } else if run.close_calls >= 3 {
         (
             "SPIKE WHISPERER",
-            "YOU AND DANGER ARE ON A FIRST-NAME BASIS",
+            "You and danger are on a first-name basis.",
         )
     } else {
         match run.medal {
             Medal::Gold if run.falls == 0 => {
-                ("SPARK OF SPEED", "BLINK AND THE LANTERNS MISSED YOU")
+                ("SPARK OF SPEED", "Blink and the lanterns missed you.")
             }
-            Medal::Gold => ("QUICKWICK", "SHORT WICK, FAST FLAME"),
-            Medal::Silver => ("STEADY FLAME", "SOLID. WARM. DEPENDABLE. LIKE SOUP."),
-            Medal::Bronze => ("SLOW BURNER", "THE SCENIC ROUTE. THE SCENERY APPROVES."),
+            Medal::Gold => ("QUICKWICK", "Short wick, fast flame."),
+            Medal::Silver => ("STEADY FLAME", "Solid. Warm. Dependable. Like soup."),
+            Medal::Bronze => ("SLOW BURNER", "The scenic route. The scenery approves."),
             Medal::Unranked => (
                 "CANDLE IN THE WIND",
-                "YOU MADE IT. THAT'S WHAT COUNTS. MOSTLY.",
+                "You made it. That's what counts. Mostly.",
             ),
         }
     };
     Rank { title, quip }
+}
+
+/// Mixed-case medal name for Modern-face copy.
+pub(super) fn medal_label(medal: Medal) -> &'static str {
+    match medal {
+        Medal::Gold => "Gold",
+        Medal::Silver => "Silver",
+        Medal::Bronze => "Bronze",
+        Medal::Unranked => "No medal",
+    }
 }
 
 pub(super) fn medal_name(medal: Medal) -> &'static str {
@@ -178,9 +191,9 @@ pub(super) fn medal_name(medal: Medal) -> &'static str {
 pub(super) fn next_medal(medal: Medal, targets: [f32; 3]) -> Option<(&'static str, f32)> {
     match medal {
         Medal::Gold => None,
-        Medal::Silver => Some(("GOLD", targets[0])),
-        Medal::Bronze => Some(("SILVER", targets[1])),
-        Medal::Unranked => Some(("BRONZE", targets[2])),
+        Medal::Silver => Some(("gold", targets[0])),
+        Medal::Bronze => Some(("silver", targets[1])),
+        Medal::Unranked => Some(("bronze", targets[2])),
     }
 }
 
@@ -274,7 +287,7 @@ mod tests {
         }
         assert_eq!(
             next_medal(Medal::Silver, [12., 18., 30.]),
-            Some(("GOLD", 12.))
+            Some(("gold", 12.))
         );
         assert_eq!(next_medal(Medal::Gold, [12., 18., 30.]), None);
     }

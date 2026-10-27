@@ -25,8 +25,10 @@ use ferravex_render::{preferences, prelude::*, ui};
 mod capture;
 mod hud;
 mod juice;
+mod look;
 mod presentation;
 mod quips;
+mod scene;
 mod toys;
 
 use toys::{Fun, Scenario};
@@ -753,23 +755,6 @@ fn register_lab_actions(input: &mut PlayerInput) {
         .expect("valid lab input binding");
 }
 
-fn faded(color: Color, alpha: f32) -> Color {
-    Color {
-        a: color.a * alpha.clamp(0., 1.),
-        ..color
-    }
-}
-
-fn mix(a: Color, b: Color, t: f32) -> Color {
-    let t = t.clamp(0., 1.);
-    Color::new(
-        a.r + (b.r - a.r) * t,
-        a.g + (b.g - a.g) * t,
-        a.b + (b.b - a.b) * t,
-        a.a,
-    )
-}
-
 ferravex_render::game!(window_conf, game);
 async fn game() {
     let mut demo = ferravex_render::demo::Demo::new();
@@ -779,6 +764,8 @@ async fn game() {
     let mut juice = juice::Juice::new();
     juice.rebuild(lab.sandbox.bodies.len());
     let mut hud = hud::Hud::default();
+    let mut grading = look::Grading::default();
+    let mut ambient = 0.;
     // Personal bests are optional; autoplay demos never claim one.
     #[allow(unused_mut)]
     let mut bests = hud::Bests::load(!demo.autoplay);
@@ -815,8 +802,7 @@ async fn game() {
         // Shake and the collapse beat move the camera, never the simulation.
         let (focus, beat) = juice.beat().unwrap_or((Vec2::ZERO, 0.));
         let view = layout.zoomed(focus, 1. + 0.08 * beat, juice.shake());
-        let scale = view.scale;
-        let to_screen = |point| view.to_screen(point);
+
         let pointer = player_input.cursor(dt, 600.);
         let pointer_in_scene = active && layout.contains_scene(pointer) && hud.card.is_none();
         let spawn_position = Lab::drop_position(view.to_world(pointer));
@@ -921,7 +907,46 @@ async fn game() {
         juice.on_frame(&lab, reset);
         juice.advance_sim(frame.steps as f32 * frame.dt);
         juice.advance_render(dt);
-        hud.advance(&lab, active, dt);
+        let tools = std::array::from_fn(|i| look::ToolState {
+            hovered: hovered == Some(i),
+            pressed: hovered == Some(i) && is_mouse_button_down(MouseButton::Left),
+            selected: match i {
+                0 => lab.ball,
+                1 => !lab.ball,
+                3 => lab.sandbox.pulse_time > 0.,
+                4 => lab.session.is_paused(),
+                8 => lab.fun.scenario == Scenario::Dominoes,
+                _ => false,
+            },
+            enabled: active && lab.button_enabled(i),
+        });
+        let motion = ferravex_play::tween::Motion::from_reduced(
+            preferences::feedback_policy().reduced_motion(),
+        );
+        hud.advance(
+            &lab,
+            active,
+            dt,
+            motion,
+            &tools,
+            reset,
+            clicked_mouse || primary || clicked.iter().any(|c| *c),
+        );
+        for (i, clicked) in clicked.iter().enumerate() {
+            if *clicked {
+                hud.tool_kick(i);
+            }
+        }
+        if active && !lab.session.is_paused() && !motion.is_reduced() {
+            ambient += dt.clamp(0., 0.1);
+        }
+        grading.apply(if lab.session.is_paused() {
+            look::Grade::Paused
+        } else if lab.fun.scenario == Scenario::Dominoes {
+            look::Grade::Dominoes
+        } else {
+            look::Grade::Workshop
+        });
         if lab.pulsed {
             pulse_visual.accepted_pulse(lab.sandbox.pulse_center);
             sound.cue(Cue::Impact(Surface::Metal), 0.5);
@@ -968,252 +993,22 @@ async fn game() {
         if inspect && !reset {
             lab.select_body(inspection.as_ref().and_then(|result| result.as_ref().ok()));
         }
-        let sandbox = &lab.sandbox;
         ferravex_render::set_world_colors(true);
-        let grid = Color::from_rgba(25, 38, 53, 255);
-        for x in -12..=12 {
-            let start = to_screen(vec2(x as f32, 0.0));
-            let end = to_screen(vec2(x as f32, 13.0));
-            draw_line(start.x, start.y, end.x, end.y, 1.0, grid);
-        }
-        for y in 0..=13 {
-            let start = to_screen(vec2(-12.0, y as f32));
-            let end = to_screen(vec2(12.0, y as f32));
-            draw_line(start.x, start.y, end.x, end.y, 1.0, grid);
-        }
-        // Tall narrow screens show open sky above the lab, where launches go.
-        let sky = view.to_world(vec2(0., 100.)).y.floor().clamp(13., 40.) as i32;
-        for y in 14..=sky {
-            let fade = 1. - (y - 13) as f32 / (sky - 12) as f32;
-            let start = to_screen(vec2(-12.0, y as f32));
-            let end = to_screen(vec2(12.0, y as f32));
-            draw_line(start.x, start.y, end.x, end.y, 1.0, faded(grid, fade));
-        }
-        for (position, half) in &sandbox.platforms {
-            let top_left = to_screen(*position + vec2(-half.x, half.y));
-            draw_rectangle(
-                top_left.x,
-                top_left.y,
-                half.x * scale * 2.0,
-                half.y * scale * 2.0,
-                Color::from_rgba(43, 59, 73, 255),
-            );
-            draw_line(
-                top_left.x,
-                top_left.y,
-                top_left.x + half.x * scale * 2.0,
-                top_left.y,
-                2.0,
-                ui::MUTED,
-            );
-        }
-        for id in &sandbox.links {
-            if let Some([a, b]) = sandbox.physics.joint_anchors(*id) {
-                let a = to_screen(vec2(a.x, a.y));
-                let b = to_screen(vec2(b.x, b.y));
-                draw_line(a.x, a.y, b.x, b.y, 2., ui::MUTED);
-                draw_circle(a.x, a.y, 3.5, ui::AMBER);
-            }
-        }
-        for (index, body) in sandbox.bodies.iter().enumerate() {
-            let rigid_body = &sandbox.physics.bodies[body.handle];
-            let position = body
-                .previous_position
-                .lerp(Vec2::from_array(rigid_body.translation().to_array()), alpha);
-            let axis = *rigid_body.rotation() * d2::Vector::X;
-            let angle_now = axis.y.atan2(axis.x);
-            let difference = (angle_now - body.previous_angle + std::f32::consts::PI)
-                .rem_euclid(std::f32::consts::TAU)
-                - std::f32::consts::PI;
-            let angle = body.previous_angle + difference * alpha;
-            let center = to_screen(position);
-            let rotation = Vec2::from_angle(angle);
-            // Spawn pop-in scales the drawing only; the collider never changes.
-            let pop = juice.body_scale(index);
-            let flash = juice.body_flash(index);
-            let fill = mix(body.color, WHITE, flash * 0.75);
-            match body.shape {
-                Shape::Dumbbell => {
-                    let a = to_screen(position + rotation.rotate(vec2(-0.75, 0.)));
-                    let b = to_screen(position + rotation.rotate(vec2(0.75, 0.)));
-                    draw_line(a.x, a.y, b.x, b.y, 0.2 * scale, ui::MUTED);
-                    for p in [a, b] {
-                        draw_circle(p.x, p.y, 0.28 * scale, fill);
-                        draw_circle_lines(p.x, p.y, 0.28 * scale, 1.5, ui::AMBER);
-                    }
-                }
-                Shape::Ball(radius) => {
-                    let r = radius * scale * pop;
-                    draw_circle(center.x, center.y, r, fill);
-                    draw_circle_lines(
-                        center.x,
-                        center.y,
-                        r,
-                        1.5,
-                        Color::from_rgba(191, 239, 230, 255),
-                    );
-                    let end = center + vec2(rotation.x, -rotation.y) * r * 0.72;
-                    draw_line(center.x, center.y, end.x, end.y, 2.0, ui::BACKGROUND);
-                }
-                Shape::Box(half) | Shape::Plank(half) => {
-                    let corners = [
-                        vec2(-half.x, -half.y),
-                        vec2(half.x, -half.y),
-                        vec2(half.x, half.y),
-                        vec2(-half.x, half.y),
-                    ]
-                    .map(|p| to_screen(position + rotation.rotate(p * pop)));
-                    draw_triangle(corners[0], corners[1], corners[2], fill);
-                    draw_triangle(corners[0], corners[2], corners[3], fill);
-                    let plank = matches!(body.shape, Shape::Plank(_));
-                    let edge = if plank {
-                        Color::from_rgba(70, 64, 58, 255)
-                    } else {
-                        Color::from_rgba(250, 212, 147, 255)
-                    };
-                    for index in 0..4 {
-                        let a = corners[index];
-                        let b = corners[(index + 1) % 4];
-                        draw_line(a.x, a.y, b.x, b.y, 1.5, edge);
-                    }
-                    if plank {
-                        // Domino face: a divider and two pips.
-                        let mid_a = to_screen(position + rotation.rotate(vec2(-half.x, 0.)));
-                        let mid_b = to_screen(position + rotation.rotate(vec2(half.x, 0.)));
-                        draw_line(mid_a.x, mid_a.y, mid_b.x, mid_b.y, 1.5, edge);
-                        for y in [-0.4, 0.4] {
-                            let pip = to_screen(position + rotation.rotate(vec2(0., y * half.y)));
-                            draw_circle(pip.x, pip.y, (half.x * 0.45 * scale).max(1.5), edge);
-                        }
-                    } else {
-                        draw_line(
-                            corners[0].x,
-                            corners[0].y,
-                            corners[2].x,
-                            corners[2].y,
-                            1.0,
-                            Color::from_rgba(189, 126, 57, 255),
-                        );
-                    }
-                }
-            }
-            if lab.selected == Some(body.handle) {
-                let radius = match body.shape {
-                    Shape::Ball(radius) => radius,
-                    Shape::Box(half) | Shape::Plank(half) => half.length(),
-                    Shape::Dumbbell => 1.03,
-                };
-                // A steady outline carries selection without flashing or shake.
-                draw_circle_lines(center.x, center.y, radius * scale + 4., 2., ui::INK);
-            }
-        }
-        for particle in juice.particles.iter() {
-            let p = to_screen(vec2(particle.position[0], particle.position[1]));
-            let [r, g, b, a] = particle.color;
-            draw_poly(
-                p.x,
-                p.y,
-                4,
-                (particle.size * scale).max(1.),
-                particle.rotation.to_degrees(),
-                Color::new(r, g, b, a),
-            );
-        }
-        if pointer_in_scene && sandbox.bodies.len() < MAX_BODIES {
-            let preview = to_screen(spawn_position);
-            if lab.ball {
-                draw_circle_lines(preview.x, preview.y, 0.44 * scale, 1.0, ui::CYAN);
-            } else {
-                draw_rectangle_lines(
-                    preview.x - 0.48 * scale,
-                    preview.y - 0.48 * scale,
-                    0.96 * scale,
-                    0.96 * scale,
-                    1.0,
-                    ui::AMBER,
-                );
-            }
-            // A faint drop line shows where the shape will fall.
-            let floor = to_screen(vec2(spawn_position.x, 0.));
-            draw_line(
-                preview.x,
-                preview.y,
-                floor.x,
-                floor.y,
-                1.,
-                faded(ui::MUTED, 0.25),
-            );
-        }
-        if let Some((center, age)) = pulse_visual.ring {
-            let point = to_screen(center);
-            draw_circle_lines(
-                point.x,
-                point.y,
-                age * 12. * scale,
-                2.,
-                Color::new(
-                    0.4,
-                    0.9,
-                    0.85,
-                    (1. - age / 0.65).max(0.) * pulse_visual.intensity,
-                ),
-            );
-        }
+        scene::draw(&scene::World {
+            lab: &lab,
+            view,
+            juice: &juice,
+            ring: pulse_visual.ring,
+            ring_intensity: pulse_visual.intensity,
+            alpha,
+            preview: (pointer_in_scene && lab.sandbox.bodies.len() < MAX_BODIES)
+                .then_some((spawn_position, lab.ball)),
+            time: ambient,
+            motion,
+        });
         ferravex_render::set_world_colors(false);
-        if beat > 0. {
-            // Cinematic letterbox for the collapse beat (motion only).
-            let bar = 28. * beat;
-            let top = 44.;
-            draw_rectangle(0., top, screen_width(), bar, Color::new(0., 0., 0., 0.85));
-            draw_rectangle(
-                0.,
-                layout.footer_y - bar,
-                screen_width(),
-                bar,
-                Color::new(0., 0., 0., 0.85),
-            );
-        }
-        ui::panel(Rect::new(
-            16.,
-            layout.footer_y,
-            screen_width() - 32.,
-            layout.footer_height,
-        ));
-        let labels = [
-            "BALL",
-            "CRATE",
-            "DROP",
-            "PULSE",
-            if lab.session.is_paused() {
-                "RESUME"
-            } else {
-                "PAUSE"
-            },
-            "STEP",
-            "RESET",
-            "CHAOS",
-            "DOMINO",
-        ];
-        for (i, label) in labels.iter().enumerate() {
-            let selected = match i {
-                0 => lab.ball,
-                1 => !lab.ball,
-                3 => lab.sandbox.pulse_time > 0.,
-                4 => lab.session.is_paused(),
-                8 => lab.fun.scenario == Scenario::Dominoes,
-                _ => false,
-            };
-            ui::button_with_options(
-                layout.button(i),
-                label,
-                ui::ButtonOptions {
-                    enabled: active && lab.button_enabled(i),
-                    selected,
-                },
-            );
-        }
         let inspection = inspection.as_ref().and_then(|query| query.as_ref().ok());
-        hud.draw(&hud::Frame {
+        let hud_frame = hud::Frame {
             lab: &lab,
             layout: &layout,
             view: &view,
@@ -1223,7 +1018,10 @@ async fn game() {
             hovered,
             inspection,
             active,
-        });
+            tools,
+        };
+        hud.draw_world_overlay(&hud_frame, beat);
+        hud.draw(&hud_frame);
         if player_input.gameplay_active() && player_input.cursor_is_virtual() {
             draw_circle_lines(pointer.x, pointer.y, 5., 1.3, WHITE);
         }

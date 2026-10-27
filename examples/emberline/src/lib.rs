@@ -20,6 +20,7 @@ mod journey200_tests;
 mod juice;
 mod presentation;
 mod quips;
+mod style;
 use animation::EmberAnimation;
 use ferravex_core::session::{GameSession, SessionState};
 use ferravex_physics::character::{
@@ -913,7 +914,10 @@ fn world(
     };
     draw_triangle(
         at(5.0, 18.0),
-        at(12.0 - motion.facing() * 25.0, 22.0 + left * 0.4 + body),
+        at(
+            12.0 - motion.facing() * 25.0 + juice.cape().x,
+            22.0 + left * 0.4 + body + juice.cape().y,
+        ),
         at(5.0, 26.0),
         Color::from_hex(0x9e5033),
     );
@@ -1015,6 +1019,7 @@ async fn game() {
     let mut game = Game::new(demo.autoplay);
     let mut motion = EmberAnimation::new();
     let mut juice = Juice::new();
+    let mut overlay = hud::Overlay::new(game.session.state());
     let mut particles = ferravex_render::effects::ParticleRenderer::new(384)
         .expect("bounded presentation particles");
     // Personal bests are optional: a storage failure still leaves a playable game.
@@ -1202,6 +1207,14 @@ async fn game() {
         if game.won() {
             juice.advance_celebration(demo.dt());
         }
+        overlay.frame(
+            &game,
+            demo.dt(),
+            policy,
+            restarted,
+            game.feedback.respawned,
+            player_input.held("confirm"),
+        );
         let camera_x = camera
             .update(
                 simulated,
@@ -1212,7 +1225,7 @@ async fn game() {
             .center
             .x
             - WIDTH * 0.5;
-        let shake = juice.shake();
+        let shake = juice.camera_offset();
         let mut view = canvas.camera();
         view.target.y -= shake.y;
         set_camera(&view);
@@ -1268,12 +1281,12 @@ async fn game() {
                             let time = us as f64 / 1_000_000.;
                             (time, hud::pace(time))
                         });
-                    hud::ready(&hints, best, &juice);
+                    hud::ready(&hints, best, &overlay);
                 }
-                SessionState::Paused => hud::paused(&game, &hints, &juice),
-                SessionState::Won => hud::won(&game, &hints, &juice, &results),
+                SessionState::Paused => hud::paused(&game, &hints, &overlay),
+                SessionState::Won => hud::won(&game, &hints, &juice, &overlay, &results),
                 _ => {
-                    hud::play(&game, &juice, &hints, veteran, corner.right);
+                    hud::play(&game, &juice, &overlay, &hints, veteran, corner.right);
                     if touch_mode
                         && !player_input.touch_customized()
                         && [
@@ -1305,6 +1318,7 @@ async fn game() {
             }
         }
         set_default_camera();
+        overlay.draw_transition(vec2(screen_width() * 0.5, screen_height() * 0.5));
         player_input.draw_controls();
         #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
         capture.end_frame();

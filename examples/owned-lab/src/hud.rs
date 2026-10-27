@@ -96,12 +96,11 @@ fn lines(text: &str, width: f32, size: u16, max: usize) -> Vec<&str> {
 }
 
 fn text(copy: &str, x: f32, top: f32, size: u16, color: render::Color) -> f32 {
-    render::draw_text(
+    render::text::draw_text_styled(
         copy,
         x,
         top + metrics(size).baseline(),
-        f32::from(size),
-        color,
+        render::text::TextStyle::modern(f32::from(size), color),
     )
     .width
 }
@@ -114,7 +113,10 @@ fn shadowed(copy: &str, x: f32, top: f32, size: u16, color: render::Color) {
 }
 
 fn centered(copy: &str, center: f32, top: f32, size: u16, color: render::Color, shadow: bool) {
-    let width = metrics(size).measure_line(copy).unwrap().width;
+    let width = render::text::text_width(
+        copy,
+        render::text::TextStyle::modern(f32::from(size), color),
+    );
     if shadow {
         shadowed(copy, center - width * 0.5, top, size, color);
     } else {

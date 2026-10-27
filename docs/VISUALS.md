@@ -1,6 +1,6 @@
 # Visual presets and demo polish
 
-All fifteen examples share **Controls (F2) → Devices → Visual style**. Use the
+All catalog examples share **Controls (F2) → Devices → Visual style**. Use the
 page arrows to reach the second Devices page. Authored preserves each game's
 palette. Warm shifts toward ochre; Cool emphasizes teal; Ink uses a blue-grey
 luminance palette. The choice saves on the current device, separately for each

@@ -14,11 +14,12 @@ latest source by a revision or two.
 
 ## The games
 
-Seventeen games and labs run in the browser with nothing to install. Each one is
+Eighteen games and labs run in the browser with nothing to install. Each one is
 built on the same engine, and its source is a click away.
 
 | Game | What it is | View |
 | --- | --- | --- |
+| [Glowtide](https://ferravex.com/examples/glowtide/) | Bioluminescent roguelite: evolving weapons, four spirits and a tide to survive | 2D |
 | [Copper Greens 2D](https://ferravex.com/examples/mini-golf-2d/) | Twelve holes of top-down mini golf: bank shots, lip-outs, ace confetti | 2D |
 | [Copper Greens 3D](https://ferravex.com/examples/mini-golf-3d/) | The same course on raised greens with moving copper gates | 3D |
 | [Emberline](https://ferravex.com/examples/emberline/) | Precision platformer with lanterns, medals and a secret moth | 2D |
@@ -38,10 +39,12 @@ built on the same engine, and its source is a click away.
 | [3D Physics Lab](https://ferravex.com/examples/physics-3d/) | Bowl into a 30-crate stack, drop CHAOS piles, earn titles | 3D |
 
 The [catalog](examples/catalog.json) is the source of truth for IDs, controls and
-hosts. Fifteen games use the shared `ferravex-render` runtime; Courtyard keeps its
+hosts. Sixteen games use the shared `ferravex-render` runtime; Courtyard keeps its
 instanced WebGL2 renderer and Orbit Breaker presents its Rust framebuffer through
 Canvas2D. The [player guide](docs/PLAYER_GUIDE.md) covers the controls, settings,
 accessibility options and troubleshooting tools every game shares.
+See the [modernization notes](docs/MODERNIZATION_2026.md) for the new rendering
+tools, Glowtide and verification limits.
 
 ## Play locally
 

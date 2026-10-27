@@ -4,13 +4,10 @@
 //! display (DMD) under the table shows a single message at a time: an event
 //! callout when one is fresh, otherwise the next objective. One footer line
 //! carries the launch prompt and a flipper hint that retires once learned.
-use super::presentation::{AMBER, FLIPS_TO_LEARN, GOLD, Presentation};
+use super::presentation::{FLIPS_TO_LEARN, GOLD, Presentation};
 use super::quips;
 use super::*;
 
-const DMD_BACK: Color = Color::from_rgba(24, 14, 8, 255);
-const DMD_DOT: Color = Color::from_rgba(44, 26, 14, 255);
-const DMD_DIM: Color = Color::from_rgba(196, 128, 64, 255);
 const CARD: Color = Color::new(0.06, 0.09, 0.09, 0.97);
 pub(super) const RESULTS_HEIGHT: f32 = 248.;
 const READY_GOALS: [&str; 2] = ["3 BUMPERS ARM THE CRANE", "SHOOT UNDER IT FOR A JACKPOT"];
@@ -139,53 +136,7 @@ pub(super) fn objective(table: &Table, state: SessionState) -> (String, &'static
     }
 }
 
-/// The DMD strip: one message, amber on a dotted panel.
-pub(super) fn dmd(rect: Rect, table: &Table, view: &Presentation, state: SessionState) {
-    draw_rectangle(rect.x - 3., rect.y - 3., rect.w + 6., rect.h + 6., BRASS);
-    draw_rectangle(rect.x, rect.y, rect.w, rect.h, DMD_BACK);
-    let mut y = rect.y + 3.;
-    while y < rect.y + rect.h - 1. {
-        let mut x = rect.x + 3.;
-        while x < rect.x + rect.w - 1. {
-            draw_rectangle(x, y, 1.5, 1.5, DMD_DOT);
-            x += 4.;
-        }
-        y += 4.;
-    }
-    let inner = rect.w - 20.;
-    let center = rect.x + rect.w * 0.5;
-    let (head, sub, color, alpha) = match &view.callout {
-        Some(callout) => {
-            let fade = ((callout.life - callout.age) / 0.2).clamp(0., 1.);
-            (callout.head.clone(), callout.sub, callout.color, fade)
-        }
-        None => {
-            let (head, sub) = objective(table, state);
-            (head, sub, AMBER, 1.)
-        }
-    };
-    let head_color = Color::new(color.r, color.g, color.b, alpha);
-    let sub_color = Color::new(DMD_DIM.r, DMD_DIM.g, DMD_DIM.b, alpha);
-    if sub.is_empty() {
-        centered_in(
-            &head,
-            vec2(center, rect.y + rect.h * 0.5 + 6.),
-            17.,
-            inner,
-            head_color,
-        );
-    } else {
-        centered_in(&head, vec2(center, rect.y + 20.), 16., inner, head_color);
-        centered_in(
-            sub,
-            vec2(center, rect.y + rect.h - 8.),
-            13.,
-            inner,
-            sub_color,
-        );
-    }
-}
-
+// The DMD strip: one message, amber on a dotted panel.
 /// The launch prompt while a ball waits; otherwise a flipper lesson that
 /// fades out once the player has flipped a few times.
 pub(super) fn footer_hint(y: f32, table: &Table, view: &Presentation, hints: &Hints) {
@@ -230,16 +181,21 @@ fn card(center: Vec2, height: f32, accent: Color) -> (Rect, f32) {
     let width = (screen_width() - 24.).clamp(1., 460.);
     let top = (center.y - height * 0.5).max(hud_layout(screen_width()).header + 4.);
     let rect = Rect::new(center.x - width * 0.5, top, width, height);
-    draw_rectangle(
-        rect.x + 5.,
-        rect.y + 7.,
-        rect.w,
-        rect.h,
-        Color::new(0., 0., 0., 0.45),
+    use ferravex_render::shapes::{self, Shadow};
+    shapes::drop_shadow(
+        rect,
+        16.,
+        Shadow::soft(Color::new(0., 0., 0., 0.45))
+            .offset(vec2(0., 7.))
+            .blur(18.),
     );
-    draw_rectangle(rect.x, rect.y, rect.w, rect.h, CARD);
-    draw_rectangle(rect.x, rect.y, rect.w, 4., accent);
-    draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 1., BRASS);
+    shapes::fill_rounded_rect(rect, 16., CARD);
+    shapes::fill_rounded_rect(
+        Rect::new(rect.x + 16., rect.y, rect.w - 32., 4.),
+        2.,
+        accent,
+    );
+    shapes::stroke_rounded_rect(rect, 16., 1., BRASS);
     (rect, width - 28.)
 }
 
@@ -388,6 +344,118 @@ pub(super) fn results(center: Vec2, table: &Table, results: Results, hints: &Hin
         format!("{} / {} TO CLOCK IN AGAIN", hints.restart, hints.confirm)
     };
     action_bar(rect, rect.y + rect.h - 18., &action, inner);
+}
+
+/// Reused text storage for the table and dot matrix display.
+pub(super) struct Buffers {
+    pub pop: String,
+    pub head: String,
+    pub sub: String,
+}
+impl Buffers {
+    pub fn new() -> Self {
+        Self {
+            pop: String::with_capacity(64),
+            head: String::with_capacity(128),
+            sub: String::with_capacity(128),
+        }
+    }
+}
+
+pub(super) fn side_panels(
+    layout: &layout::Layout,
+    table: &Table,
+    view: &Presentation,
+    best: Option<u32>,
+    hints: &Hints,
+) {
+    use ferravex_render::{
+        shapes,
+        text::{self, TextStyle},
+    };
+    for rect in [
+        layout.left,
+        Rect::new(
+            layout.right.x,
+            layout.dmd.y + layout.dmd.h + 16.,
+            layout.right.w,
+            layout.right.h - layout.dmd.h - 16.,
+        ),
+    ] {
+        shapes::fill_rounded_rect(rect, 18., PANEL);
+        shapes::stroke_rounded_rect(rect, 18., 1., with_alpha(BRASS, 0.5));
+    }
+    let x = layout.left.x + 20.;
+    let y = layout.left.y + 34.;
+    for (label, offset, size, color) in [
+        ("Salvage Pinball", 0., 24., CREAM),
+        ("Your shift", 38., 16., MINT),
+        ("Score", 100., 16., BRASS),
+    ] {
+        text::draw_text_styled(label, x, y + offset, TextStyle::modern(size, color));
+    }
+    text::draw_text_styled(
+        &quips::grouped(view.shown_score.round() as u32),
+        x,
+        y + 144.,
+        TextStyle::classic(32., CREAM),
+    );
+    text::draw_text_styled(
+        &best.map_or_else(
+            || "First shift? Make it count.".into(),
+            |v| format!("Best {}", quips::grouped(v)),
+        ),
+        x,
+        y + 180.,
+        TextStyle::modern(16., MINT),
+    );
+    text::draw_text_styled(
+        &format!(
+            "{} balls left · {}× multiplier",
+            table.lives, table.multiplier
+        ),
+        x,
+        y + 220.,
+        TextStyle::modern(16., GOLD),
+    );
+    let reset = layout.reset;
+    shapes::fill_rounded_rect(
+        reset,
+        10.,
+        Color::new(0.1 + view.reset_hover * 0.05, 0.15, 0.14, 1.),
+    );
+    centered_in(
+        "Reset",
+        reset.center() + vec2(0., 6.),
+        16.,
+        reset.w - 12.,
+        MINT,
+    );
+    let x = layout.right.x + 18.;
+    let y = layout.dmd.y + layout.dmd.h + 40.;
+    text::draw_text_styled("Work orders", x, y, TextStyle::modern(24., CREAM));
+    for (i, line) in [
+        "Light all three bumpers",
+        "Catch a crane jackpot",
+        "Try the lit skill shot",
+        "Keep the ball alive",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        text::draw_text_styled(
+            line,
+            x,
+            y + 38. + i as f32 * 30.,
+            TextStyle::modern(16., MINT),
+        );
+    }
+    text::draw_text_styled(
+        &format!("{} / {} to flip", hints.left, hints.right),
+        x,
+        (y + 228.).min(layout.right.y + layout.right.h - 20.),
+        TextStyle::modern(16., BRASS),
+    );
 }
 
 #[cfg(test)]

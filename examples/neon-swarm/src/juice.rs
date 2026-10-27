@@ -6,6 +6,7 @@
 //! timing, scoring or input. Reduced motion clears and blocks shake, kick,
 //! zoom, stretch and rings, and keeps pops/callouts still. Reduced flash only
 //! affects the separate additive particles and flashes owned by Presentation.
+use crate::hud::Line;
 use crate::{AMBER, CORAL, CYAN};
 use ferravex_render::prelude::{Color, Vec2, vec2};
 
@@ -18,7 +19,7 @@ pub(crate) const VIOLET: Color = Color::from_rgba(168, 128, 255, 255);
 #[derive(Clone, Debug)]
 pub(crate) struct Pop {
     pub at: Vec2,
-    pub text: String,
+    pub text: Line,
     pub color: Color,
     pub age: f32,
     pub life: f32,
@@ -58,8 +59,8 @@ pub(crate) enum Priority {
 
 #[derive(Clone, Debug)]
 pub(crate) struct Callout {
-    pub head: String,
-    pub sub: String,
+    pub head: Line,
+    pub sub: Line,
     pub color: Color,
     pub age: f32,
     pub life: f32,
@@ -194,6 +195,10 @@ impl Juice {
     }
 
     /// Camera zoom factor for the final-drone close-up.
+    pub fn lead(&self) -> Vec2 {
+        -self.kick * 0.6 * self.motion
+    }
+
     pub fn zoom(&self) -> f32 {
         let t = self.focus * self.focus * (3. - 2. * self.focus);
         1. + 0.08 * t * self.motion
@@ -244,7 +249,7 @@ impl Juice {
         });
     }
 
-    pub fn pop(&mut self, at: Vec2, text: String, color: Color, size: f32) {
+    pub fn pop(&mut self, at: Vec2, text: Line, color: Color, size: f32) {
         // Stack simultaneous pops instead of printing them on top of each other.
         let crowd = self
             .pops
@@ -270,7 +275,7 @@ impl Juice {
 
     /// One announcer slot: higher priority wins; equal or lower priority
     /// replaces a callout only once it has been readable for a moment.
-    pub fn callout(&mut self, head: String, sub: String, color: Color, priority: Priority) {
+    pub fn callout(&mut self, head: Line, sub: Line, color: Color, priority: Priority) {
         if self
             .callout
             .as_ref()
@@ -327,8 +332,8 @@ mod tests {
         juice.recoil(Vec2::X);
         juice.dash(Vec2::Y);
         juice.ring(Vec2::ZERO, 10., 60., 0.4, CYAN);
-        juice.pop(Vec2::ZERO, "+100".into(), CYAN, 18.);
-        juice.callout("ON FIRE".into(), String::new(), AMBER, Priority::Combo);
+        juice.pop(Vec2::ZERO, Line::from("+100"), CYAN, 18.);
+        juice.callout(Line::from("ON FIRE"), Line::new(), AMBER, Priority::Combo);
         juice.age(0.01, true);
         assert!(juice.shake().length() > 0.);
         juice.age(0.5, true);
@@ -363,14 +368,14 @@ mod tests {
     #[test]
     fn callouts_respect_priority_and_storage_stays_bounded() {
         let mut juice = Juice::new();
-        juice.callout("OVERSEER".into(), String::new(), GOLD, Priority::Epic);
-        juice.callout("NOT TODAY!".into(), String::new(), CYAN, Priority::Minor);
+        juice.callout(Line::from("OVERSEER"), Line::new(), GOLD, Priority::Epic);
+        juice.callout(Line::from("NOT TODAY!"), Line::new(), CYAN, Priority::Minor);
         assert_eq!(juice.callout.as_ref().unwrap().head, "OVERSEER");
         juice.age(0.8, false);
-        juice.callout("NOT TODAY!".into(), String::new(), CYAN, Priority::Minor);
+        juice.callout(Line::from("NOT TODAY!"), Line::new(), CYAN, Priority::Minor);
         assert_eq!(juice.callout.as_ref().unwrap().head, "NOT TODAY!");
         for n in 0..100 {
-            juice.pop(Vec2::ZERO, format!("+{n}"), CYAN, 18.);
+            juice.pop(Vec2::ZERO, crate::hud::line!("+{n}"), CYAN, 18.);
             juice.ring(Vec2::ZERO, 1., 2., 1., CYAN);
             juice.age(0.01, false);
         }

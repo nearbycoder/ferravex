@@ -107,7 +107,16 @@ fn offenders(w: f32, h: f32, paint: impl FnOnce(&mut Ui)) -> Vec<String> {
     let mut out = Vec::new();
     host_frame(0., w as u32, h as u32, || {
         ui.begin(Viewport::fit([w, h], [w, h], [0.; 4]).unwrap());
-        paint(&mut ui);
+        let (_, painted) = crate::style::recording(|| paint(&mut ui));
+        for rect in painted {
+            let bounds = ferravex_render::ui::UiRect {
+                min: [rect.x, rect.y],
+                size: [rect.w, rect.h],
+            };
+            if rect.w < w - 1. && in_menu_corner(w, bounds) {
+                out.push(format!("styled text/plate {bounds:?}"));
+            }
+        }
         for e in ui.inspect().into_iter().flatten() {
             let Some(rect) = e.visible_bounds else {
                 continue;
@@ -169,6 +178,7 @@ fn in_play_hud_keeps_the_fullscreen_menu_corner_clear() {
                                     shot_timer: 0.,
                                     round_phase: round.then_some(Phase::Planted),
                                     error,
+                                    weapon: "Rifle",
                                     marker: Marker::Headshot,
                                     death: Some(crate::juice::Death {
                                         killer: crew::Who {
@@ -190,7 +200,6 @@ fn in_play_hud_keeps_the_fullscreen_menu_corner_clear() {
                                 &input,
                             );
                             j.draw_play(
-                                ui,
                                 &board,
                                 PlayLayout {
                                     practice,
@@ -200,7 +209,10 @@ fn in_play_hud_keeps_the_fullscreen_menu_corner_clear() {
                                     footer: false,
                                     roster: false,
                                     alive: local.health > 0,
-                                    hint: Some("HOLD TAB TO SEE THE SCOREBOARD"),
+                                    hint: Some(crate::juice::Hint {
+                                        kind: crate::juice::HintKind::Scoreboard,
+                                        keys: ["Tab", ""],
+                                    }),
                                     local: 0,
                                     bots: practice,
                                 },

@@ -131,6 +131,7 @@ pub(super) fn text_width(text: &str, size: u16) -> f32 {
         .width
 }
 
+#[cfg(test)]
 pub(super) fn fitted_size(text: &str, width: f32, size: u16) -> f32 {
     let measured = text_width(text, size).max(1.);
     (size as f32 * (width.max(1.) / measured).min(1.)).max(1.)

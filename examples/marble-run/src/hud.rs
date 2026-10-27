@@ -1,13 +1,32 @@
 use crate::{
-    CREAM, GOLD, TEAL,
     courses::Course,
     juice::{self, Juice},
+    look::{self, GOLD, INK, Line, MUTED, TEAL, line},
     sim::Run,
     text,
     trial::Trial,
 };
-use ferravex_render::{input::PlayerInput, prelude::*};
+use ferravex_render::{
+    input::PlayerInput,
+    prelude::*,
+    shapes::{self, Fill, Shadow, Stroke},
+    text::{TextStyle, text_width},
+    ui::kit::{self, KitTheme},
+};
+use std::fmt::Write;
 
+/// Remapped hint for `action` in a stack line (no heap allocation).
+pub(crate) fn hint_line(player: &PlayerInput, action: &str) -> Line {
+    let mut buffer = [0; 160];
+    Line::of(format_args!(
+        "{}",
+        player
+            .format_hint(action, &mut buffer)
+            .unwrap_or("Controls")
+    ))
+}
+
+#[cfg(test)]
 pub(crate) fn hint(player: &PlayerInput, action: &str) -> String {
     let mut buffer = [0; 512];
     player
@@ -50,17 +69,17 @@ pub(crate) fn centered_in(label: &str, y: f32, size: u16, color: Color, width: f
     text(&label, (screen_width() - width) * 0.5, y, size, color);
 }
 
-pub(crate) fn goal(run: &Run) -> String {
-    let (label, position) = if run.gems() == run.level.gems.len() {
-        ("FINISH ARCH".to_owned(), run.level.finish)
+pub(crate) fn goal(run: &Run) -> Line {
+    let (position, what) = if run.gems() == run.level.gems.len() {
+        (run.level.finish, line!("the finish arch"))
     } else if let Some(cp) = run.level.checkpoints.get(run.checkpoint) {
-        (format!("CHECKPOINT {}", run.checkpoint + 1), cp.position)
+        (cp.position, line!("checkpoint {}", run.checkpoint + 1))
     } else if let Some(index) = run.collected.iter().position(|&collected| !collected) {
-        (format!("CRYSTAL {}", index + 1), run.level.gems[index])
+        (run.level.gems[index], line!("crystal {}", index + 1))
     } else {
-        ("FINISH ARCH".to_owned(), run.level.finish)
+        (run.level.finish, line!("the finish arch"))
     };
-    format!("NEXT {label} / {:.0}m", run.position().distance(position))
+    line!("Next: {what} · {:.0}m", run.position().distance(position))
 }
 
 /// Transient gameplay notices yield to pause/focus/Controls overlays. Their
@@ -71,119 +90,129 @@ pub(crate) fn notice(
     trial: &Trial,
     player: &PlayerInput,
     juice: &Juice,
-) -> Option<(String, String)> {
+) -> Option<(Line, Line)> {
     if !trial.session.is_playing() {
         return None;
     }
     if let Some(count) = trial.countdown() {
-        Some((count.to_string(), String::new()))
+        Some((line!("{count}"), Line::new()))
     } else if trial.showing_go() {
-        Some(("GO!".to_string(), String::new()))
+        Some((line!("GO!"), Line::new()))
     } else if run.notice > 0. {
         Some(if run.recovered {
-            (
-                if juice.fall_line.is_empty() {
-                    "BACK ON TRACK"
-                } else {
-                    juice.fall_line
-                }
-                .to_string(),
-                format!(
-                    "{} / CRYSTALS KEPT / FALL {}",
-                    if run.checkpoint == 0 {
-                        "START".to_string()
-                    } else {
-                        format!("CHECKPOINT {}", run.checkpoint)
-                    },
-                    run.falls
-                ),
-            )
+            let title = if juice.fall_line.is_empty() {
+                "Back on track"
+            } else {
+                juice.fall_line
+            };
+            let mut detail = if run.checkpoint == 0 {
+                line!("Back at the start")
+            } else {
+                line!("Back at checkpoint {}", run.checkpoint)
+            };
+            let _ = write!(detail, " · crystals kept · fall {}", run.falls);
+            (line!("{title}"), detail)
         } else {
-            (
-                if juice.checkpoint_line.is_empty() {
-                    "CHECKPOINT SAVED"
-                } else {
-                    juice.checkpoint_line
-                }
-                .to_string(),
-                match (&juice.split, run.falls == 0 && run.checkpoint == 1) {
-                    (_, true) => format!(
-                        "CHECKPOINT {} OF {} / {} RETURNS YOU HERE",
-                        run.checkpoint,
-                        run.level.checkpoints.len(),
-                        hint(player, "recover")
-                    ),
-                    (Some(split), false) => spell_seconds(split),
-                    (None, false) => format!(
-                        "CHECKPOINT {} OF {}",
-                        run.checkpoint,
-                        run.level.checkpoints.len()
-                    ),
-                },
-            )
+            let title = if juice.checkpoint_line.is_empty() {
+                "Checkpoint saved"
+            } else {
+                juice.checkpoint_line
+            };
+            let detail = match (&juice.split, run.falls == 0 && run.checkpoint == 1) {
+                (_, true) => line!(
+                    "Checkpoint {} of {} · {} brings you back here",
+                    run.checkpoint,
+                    run.level.checkpoints.len(),
+                    hint_line(player, "recover")
+                ),
+                (Some(split), false) => pretty_split(split),
+                (None, false) => line!(
+                    "Checkpoint {} of {}",
+                    run.checkpoint,
+                    run.level.checkpoints.len()
+                ),
+            };
+            (line!("{title}"), detail)
         })
     } else {
         None
     }
 }
 
-/// Keyboard roll keys as one short label, e.g. `WASD / ARROWS`, following remaps.
-pub(crate) fn roll_hint(player: &PlayerInput) -> String {
-    let keys = ["move_forward", "move_left", "move_back", "move_right"].map(|a| hint(player, a));
-    let first: Vec<&str> = keys
-        .iter()
-        .map(|k| k.split(" / ").next().unwrap_or(""))
-        .collect();
+/// "CP 1 SPLIT 9.00s / -1.00s SESSION" → "Split 9.00s · −1.00s vs session best".
+pub(crate) fn pretty_split(label: &str) -> Line {
+    let mut parts = label.split(" / ");
+    let split = parts
+        .next()
+        .and_then(|s| s.split(" SPLIT ").nth(1))
+        .unwrap_or(label);
+    match parts.next().and_then(|d| d.strip_suffix(" SESSION")) {
+        Some(delta) => line!("Split {split} · {delta} vs session best"),
+        None => line!("Split {split}"),
+    }
+}
+
+/// Finish comparison from the record summary, in friendly mixed case.
+pub(crate) fn pretty_finish(label: &str) -> (Line, bool) {
+    if let Some(delta) = label.strip_prefix("NEW BEST / ") {
+        (line!("New personal best! {delta}"), true)
+    } else if let Some(delta) = label.strip_prefix("VS BEST / ") {
+        (line!("{delta} vs your best"), false)
+    } else {
+        (
+            match label {
+                "FIRST RECORDED TIME" => line!("First recorded time"),
+                "MATCHED BEST TIME" => line!("Matched your best, to the hundredth"),
+                _ => line!("Time comparison unavailable"),
+            },
+            false,
+        )
+    }
+}
+
+/// Keyboard roll keys as key-cap labels, e.g. (`WASD`, true when the arrow
+/// keys are also bound), following remaps; `STICK` for pads.
+pub(crate) fn roll_keys(player: &PlayerInput) -> (Line, bool) {
+    let keys =
+        ["move_forward", "move_left", "move_back", "move_right"].map(|a| hint_line(player, a));
     if keys
         .iter()
-        .any(|k| k.starts_with("Pad") || k.starts_with("Touch"))
+        .any(|k| k.as_str().starts_with("Pad") || k.as_str().starts_with("Touch"))
     {
-        return "STICK".into();
+        return (line!("Stick"), false);
     }
-    let second: Vec<&str> = keys.iter().filter_map(|k| k.split(" / ").nth(1)).collect();
-    let mut label = if first.iter().all(|k| k.chars().count() == 1) {
-        first.concat()
-    } else {
-        first.join("/")
-    };
-    if second == ["Up", "Left", "Down", "Right"] {
-        label.push_str(" / ARROWS");
+    let first = keys.map(|k| {
+        let mut l = Line::new();
+        let _ = l.write_str(k.as_str().split(" / ").next().unwrap_or(""));
+        l
+    });
+    let arrows = keys
+        .iter()
+        .zip(["Up", "Left", "Down", "Right"])
+        .all(|(k, a)| k.as_str().split(" / ").nth(1) == Some(a));
+    let single = first.iter().all(|k| k.as_str().chars().count() == 1);
+    let mut label = Line::new();
+    for (i, k) in first.iter().enumerate() {
+        if i > 0 && !single {
+            let _ = label.write_str("/");
+        }
+        let _ = label.write_str(k.as_str());
     }
-    label.to_uppercase()
+    (label, arrows)
 }
 
-/// HUD backing ink. Deliberately not the modal overlay's exact (0.07, 0.13)
-/// red/green, which the release-Wasm browser contract uses to detect menus;
-/// fading HUD alpha could otherwise briefly match it.
-const HUD_INK: Color = Color::new(0.06, 0.12, 0.13, 1.);
-
-fn pill(x: f32, y: f32, w: f32, h: f32, alpha: f32) {
-    draw_rectangle(
-        x,
-        y,
-        w,
-        h,
-        Color::new(HUD_INK.r, HUD_INK.g, HUD_INK.b, 0.78 * alpha),
-    );
+fn clock(seconds: f32) -> Line {
+    line!("{:02}:{:04.1}", (seconds / 60.) as u32, seconds % 60.)
 }
 
-fn with_alpha(c: Color, a: f32) -> Color {
-    Color::new(c.r, c.g, c.b, c.a * a)
-}
-
-fn width_of(label: &str, size: f32) -> f32 {
-    measure_text(label, None, size as u16, 1.).width
-}
-
-fn clock(seconds: f32) -> String {
-    format!("{:02}:{:04.1}", (seconds / 60.) as u32, seconds % 60.)
-}
-
-/// `M:SS.cc`: the bitmap font draws a lowercase `s` unit as `S`, which reads
-/// like a `5` after digits, so finished times use clock notation instead.
+/// `M:SS.cc` for finished times and bests.
 pub(crate) fn stopwatch(seconds: f32) -> String {
+    stopwatch_line(seconds).as_str().to_owned()
+}
+
+pub(crate) fn stopwatch_line(seconds: f32) -> Line {
     let centis = (seconds.max(0.) * 100.).round() as u64;
-    format!(
+    line!(
         "{}:{:02}.{:02}",
         centis / 6000,
         centis / 100 % 60,
@@ -191,24 +220,13 @@ pub(crate) fn stopwatch(seconds: f32) -> String {
     )
 }
 
-/// Spell out a trailing seconds unit after digits ("-1.00s" -> "-1.00 SEC").
-pub(crate) fn spell_seconds(label: &str) -> String {
-    let mut out = String::with_capacity(label.len() + 8);
-    let mut previous = ' ';
-    for c in label.chars() {
-        if c == 's' && previous.is_ascii_digit() {
-            out.push_str(" SEC");
-        } else {
-            out.push(c);
-        }
-        previous = c;
-    }
-    out
-}
-
-/// Baseline that vertically centres bitmap text of `size` on `centre`.
-fn baseline(centre: f32, size: f32) -> f32 {
-    centre + size * 0.4375
+/// What the bottom of the screen teaches right now.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Tip {
+    /// Roll / brake / overview key caps, fading as the player learns.
+    Controls(f32),
+    /// After two falls in one section: brake and recover.
+    Brake,
 }
 
 /// Everything the in-play HUD reads; all of it is already-accepted state.
@@ -220,8 +238,7 @@ pub(crate) struct Hud<'a> {
     pub juice: &'a Juice,
     pub touch: bool,
     pub overview: bool,
-    /// Onboarding tip and its opacity; `None` once learned.
-    pub tip: Option<(String, f32)>,
+    pub tip: Option<Tip>,
     /// Countdown hook: attempt, target and best.
     pub countdown_line: &'a str,
 }
@@ -230,15 +247,43 @@ pub(crate) struct Hud<'a> {
 /// the HUD keeps this corner (x > w - 72, y < 60) free of text and controls.
 pub(crate) const MENU_CORNER: (f32, f32) = (72., 60.);
 
+fn wide(w: f32) -> bool {
+    w >= 560.
+}
+
+/// Styles for the crystals count and the clock.
+fn status_styles(w: f32) -> (TextStyle, TextStyle) {
+    if wide(w) {
+        (look::body(16., GOLD), look::punch(24., INK))
+    } else {
+        (look::body(16., GOLD), look::punch(16., INK))
+    }
+}
+
+/// Size of the crystals/clock card for these labels.
+fn status_size(w: f32, gems: &str, time: &str) -> Vec2 {
+    let (g, t) = status_styles(w);
+    vec2(
+        16. + text_width(gems, g) + 18. + text_width(time, t) + 16.,
+        if wide(w) { 44. } else { 38. },
+    )
+}
+
 /// Top-left of the crystals/clock card: inset left of the menu corner on wide
 /// screens, stacked under the course button on narrow ones.
 fn status_origin(w: f32, card_w: f32) -> (f32, f32) {
-    if w >= 560. {
+    if wide(w) {
         (w - MENU_CORNER.0 - 12. - card_w, 8.)
     } else {
         // Stacked rows start below the corner, so long clocks may run wide.
         (12., MENU_CORNER.1 + 2.)
     }
+}
+
+const CHIP_H: f32 = 28.;
+
+fn chip_width(label: &str) -> f32 {
+    28. + text_width(label, look::body(16., INK)) + 14.
 }
 
 /// Right edge of the wide pace chip, clear of the corner and the touch
@@ -253,181 +298,201 @@ fn pace_right(w: f32, touch: bool) -> f32 {
 
 /// Bottom of the stacked top HUD, so centred notices never overlap it.
 fn hud_bottom(w: f32, h: f32) -> f32 {
-    if w >= 560. {
-        86.
+    if wide(w) {
+        92.
     } else if h >= 300. {
-        160.
+        170.
     } else {
         104.
     }
 }
 
+fn chip(x: f32, y: f32, width: f32) {
+    look::glass(Rect::new(x, y, width, CHIP_H), CHIP_H * 0.5, 1.);
+}
+
 pub(crate) fn draw(hud: &Hud) {
     let Hud { run, course, .. } = *hud;
     let (w, h) = (screen_width(), screen_height());
-    let wide = w >= 560.;
+    let wide = wide(w);
     let motion = hud.juice.motion();
 
-    // Gems and the clock: the two numbers that matter most, top right.
-    let (gem_size, time_size) = if wide { (20., 26.) } else { (16., 20.) };
-    let gems = format!("{}/{}", run.gems(), run.level.gems.len());
+    // Crystals and the clock: the two numbers that matter most.
+    let gems = line!("♦ {}/{}", run.gems(), run.level.gems.len());
     let time = clock(run.elapsed);
-    let inner = 18. + 6. + width_of(&gems, gem_size) + 20. + width_of(&time, time_size);
-    let card_w = inner + 28.;
-    let card_h = if wide { 44. } else { 40. };
-    let (cx, cy) = status_origin(w, card_w);
-    pill(cx, cy, card_w, card_h, 1.);
+    let size = status_size(w, gems.as_str(), time.as_str());
+    let (cx, cy) = status_origin(w, size.x);
+    let card = Rect::new(cx, cy, size.x, size.y);
+    look::glass(card, 12., 1.);
     let all = run.gems() == run.level.gems.len();
-    let mid = cy + card_h * 0.5;
-    draw_poly(cx + 22., mid, 4, 8., 0., if all { GOLD } else { CREAM });
-    draw_poly(cx + 22., mid, 4, 5., 0., GOLD);
-    text(&gems, cx + 38., baseline(mid, gem_size), gem_size, GOLD);
-    text(
-        &time,
-        cx + card_w - 14. - width_of(&time, time_size),
-        baseline(mid, time_size),
-        time_size,
-        CREAM,
+    let mid = cy + size.y * 0.5;
+    let (g, t) = status_styles(w);
+    if all {
+        shapes::glow_disc(vec2(cx + 22., mid), 18., look::fade(GOLD, 0.35));
+    }
+    look::draw(gems.as_str(), cx + 16., g.centered_baseline(mid), g);
+    look::draw(
+        time.as_str(),
+        cx + size.x - 16. - text_width(time.as_str(), t),
+        t.centered_baseline(mid),
+        t,
     );
 
     // Medal pace: which medal is still on, and how long it stays on.
-    let row_h = 26.;
+    let mut stack = cy + size.y + 6.;
     if wide || h >= 300. {
         let (medal, deadline) = course.pace(run.elapsed, run.falls);
+        let name = match medal {
+            "GOLD" => "Gold",
+            "SILVER" => "Silver",
+            _ => "Bronze",
+        };
         let counting = hud.trial.countdown().is_some();
         let label = match deadline {
-            Some(deadline) if deadline - run.elapsed < 5. => {
-                format!("{medal} PACE · {:.1} SEC LEFT", deadline - run.elapsed)
+            Some(deadline) if deadline - run.elapsed < 5. && !counting => {
+                line!("{name} pace · {:.1}s left", deadline - run.elapsed)
             }
-            Some(deadline) => format!(
-                "{medal} PACE · {:.0} SEC LEFT",
-                (deadline - run.elapsed).ceil()
-            ),
-            None => "BRONZE · JUST FINISH!".into(),
+            Some(deadline) => line!("{name} pace · {:.0}s left", (deadline - run.elapsed).ceil()),
+            None => line!("Bronze · just finish!"),
         };
         let urgent = deadline.is_some_and(|d| d - run.elapsed < 5.) && !counting;
-        let (label, size, measured) = fitted(&label, w - 60., 13);
-        let chip_w = measured + 34.;
-        let right = pace_right(w, hud.touch);
+        let chip_w = chip_width(label.as_str());
         let (x, y) = if wide {
-            (right - chip_w, 58.)
+            (pace_right(w, hud.touch) - chip_w, 58.)
         } else {
-            (12., cy + card_h + 6.)
+            (12., stack)
         };
-        pill(x, y, chip_w, row_h, 1.);
+        stack = y + CHIP_H + 6.;
+        chip(x, y, chip_w);
         let dot = juice::medal_color(medal);
         let pulse = if urgent && motion > 0. {
-            1. + 0.25 * (hud.juice.time * 9.).sin().abs()
+            1. + 0.3 * (hud.juice.time * 9.).sin().abs()
         } else {
             1.
         };
-        draw_circle(x + 14., y + row_h * 0.5, 5. * pulse, dot);
-        text(
-            &label,
-            x + 26.,
-            baseline(y + row_h * 0.5, size),
-            size,
-            if urgent { juice::CORAL } else { CREAM },
+        let centre = vec2(x + 15., y + CHIP_H * 0.5);
+        shapes::glow_disc(centre, 11. * pulse, look::fade(dot, 0.45));
+        shapes::fill_circle(centre, 4.5 * pulse, dot);
+        let style = look::body(16., if urgent { juice::CORAL } else { INK });
+        look::draw(
+            label.as_str(),
+            x + 28.,
+            style.centered_baseline(y + CHIP_H * 0.5),
+            style,
         );
     }
 
     // Checkpoint pips and falls under the course button.
-    if h >= 240. {
-        let (x, y) = if wide {
-            (12., 58.)
-        } else {
-            (12., cy + card_h + 6. + row_h + 6.)
+    if h >= 240. && (wide || h >= 300.) {
+        let (x, y) = if wide { (12., 58.) } else { (12., stack) };
+        let total = run.level.checkpoints.len();
+        let pips = total.min(8);
+        let label_style = look::body(16., MUTED);
+        let falls = line!("Falls {}", run.falls);
+        let falls_style = look::body(16., if run.falls == 0 { INK } else { juice::CORAL });
+        let count = (total > 8).then(|| line!("{}/{}", run.checkpoint, total));
+        let mut width = 14. + text_width("CP", label_style) + 12.;
+        width += match &count {
+            Some(c) => text_width(c.as_str(), label_style) + 10.,
+            None => pips as f32 * 16.,
         };
-        if !wide && h < 300. {
-            // Short phones keep only the essentials above.
+        width += text_width(falls.as_str(), falls_style) + 14.;
+        if run.secret_found {
+            width += 22.;
+        }
+        chip(x, y, width);
+        let base = y + CHIP_H * 0.5;
+        let mut cursor = x + 14.;
+        cursor += look::draw(
+            "CP",
+            cursor,
+            label_style.centered_baseline(base),
+            label_style,
+        ) + 14.;
+        if let Some(c) = &count {
+            let s = look::body(16., TEAL);
+            cursor += look::draw(c.as_str(), cursor - 4., s.centered_baseline(base), s) + 10.;
         } else {
-            let total = run.level.checkpoints.len();
-            let falls = format!("FALLS {}", run.falls);
-            let pips = total.min(8);
-            let mut width = 12. + width_of("CP", 13.) + 10. + pips as f32 * 16. + 10.;
-            let cp_text = (total > 8).then(|| format!("{}/{}", run.checkpoint, total));
-            if let Some(t) = &cp_text {
-                width += width_of(t, 13.);
-            }
-            width += width_of(&falls, 13.) + 12.;
-            if run.secret_found {
-                width += 22.;
-            }
-            pill(x, y, width, row_h, 1.);
-            let base = y + row_h * 0.5;
-            let mut cursor = x + 12.;
-            text("CP", cursor, baseline(base, 13.), 13., CREAM);
-            cursor += width_of("CP", 13.) + 14.;
-            if let Some(t) = &cp_text {
-                text(t, cursor - 4., baseline(base, 13.), 13., TEAL);
-                cursor += width_of(t, 13.);
-            } else {
-                for i in 0..pips {
-                    let px = cursor + i as f32 * 16.;
-                    if i < run.checkpoint {
-                        draw_circle(px, base, 5., TEAL);
-                    } else if i == run.checkpoint {
-                        draw_circle_lines(px, base, 5., 2., GOLD);
-                    } else {
-                        draw_circle_lines(px, base, 5., 1.5, with_alpha(CREAM, 0.5));
-                    }
+            for i in 0..pips {
+                let p = vec2(cursor + i as f32 * 16., base);
+                if i < run.checkpoint {
+                    shapes::fill_circle(p, 5., TEAL);
+                } else if i == run.checkpoint {
+                    shapes::glow_disc(p, 10., look::fade(GOLD, 0.35));
+                    shapes::stroke_circle(p, 5., 2., GOLD);
+                } else {
+                    shapes::stroke_circle(p, 5., 1.5, look::fade(INK, 0.45));
                 }
-                cursor += pips as f32 * 16.;
             }
-            text(
-                &falls,
-                cursor + 2.,
-                baseline(base, 13.),
-                13.,
-                if run.falls == 0 { CREAM } else { juice::CORAL },
-            );
-            if run.secret_found {
-                let gx = cursor + 2. + width_of(&falls, 13.) + 14.;
-                draw_poly(gx, base, 4, 6., 0., juice::VIOLET);
-            }
+            cursor += pips as f32 * 16. - 2.;
+        }
+        cursor += look::draw(
+            falls.as_str(),
+            cursor,
+            falls_style.centered_baseline(base),
+            falls_style,
+        );
+        if run.secret_found {
+            let s = look::body(16., juice::VIOLET);
+            look::draw("♦", cursor + 8., s.centered_baseline(base), s);
         }
     }
 
     // One centred message at a time: countdown, then sim notices, then banners.
     let top = hud_bottom(w, h) + 20.;
-    let centre_y = (h * 0.3).max(top + 32.).min(h - 60.);
+    let centre_y = (h * 0.3).max(top + 36.).min(h - 64.);
     if let Some(count) = hud.trial.countdown() {
         let progress = hud.trial.countdown_progress();
-        let scale = if motion > 0. {
-            1. + 0.25 * (1. - (progress / 0.18).min(1.))
+        let pop = if motion > 0. {
+            1. - ferravex_engine::play::tween::Ease::BackOut.apply((progress / 0.22).min(1.))
         } else {
-            1.
+            0.
         };
-        let size = (56. * scale / 8.).round() * 8.;
-        let label = count.to_string();
-        let lw = width_of(&label, size);
-        draw_circle(
-            w * 0.5,
-            centre_y,
-            44.,
-            Color::new(HUD_INK.r, HUD_INK.g, HUD_INK.b, 0.86),
+        let c = vec2(w * 0.5, centre_y);
+        let r = 46. * (1. + 0.12 * pop);
+        shapes::drop_shadow(
+            Rect::new(c.x - r, c.y - r, 2. * r, 2. * r),
+            r,
+            Shadow::soft(Color::new(0., 0., 0., 0.35))
+                .offset(vec2(0., 5.))
+                .blur(18.),
         );
-        draw_circle_lines(w * 0.5, centre_y, 44., 3., GOLD);
-        text(
-            &label,
-            (w - lw) * 0.5,
-            baseline(centre_y, size),
-            size,
-            CREAM,
+        shapes::fill_circle(c, r, Fill::radial(c, r, look::GLASS_TOP, look::GLASS));
+        shapes::stroke_arc(
+            c,
+            r - 2.,
+            -std::f32::consts::FRAC_PI_2,
+            std::f32::consts::TAU * (1. - progress),
+            Stroke::new(4., GOLD).cap(shapes::Cap::Round),
         );
+        let style = look::centered(
+            look::punch(56. * (1. + 0.25 * pop), INK).with_outline(look::fade(look::SHADOW, 0.8)),
+        );
+        let label = line!("{count}");
+        look::draw(label.as_str(), c.x, style.centered_baseline(c.y), style);
         if !hud.countdown_line.is_empty() {
-            let (line, size, lw) = fitted(hud.countdown_line, w - 48., 14);
-            let y = centre_y + 62.;
-            pill((w - lw) * 0.5 - 14., y - 16., lw + 28., 26., 1.);
-            text(&line, (w - lw) * 0.5, baseline(y - 3., size), size, CREAM);
+            let s = look::fit(hud.countdown_line, w - 64., look::body(16., INK));
+            let lw = text_width(hud.countdown_line, s);
+            let y = centre_y + r + 14.;
+            chip((w - lw) * 0.5 - 16., y, lw + 32.);
+            look::draw(
+                hud.countdown_line,
+                (w - lw) * 0.5,
+                s.centered_baseline(y + CHIP_H * 0.5),
+                s,
+            );
         }
     } else if hud.trial.showing_go() {
-        let size = 64.;
-        let lw = width_of("GO!", size);
-        text("GO!", (w - lw) * 0.5, baseline(centre_y, size), size, GOLD);
+        let c = vec2(w * 0.5, centre_y);
+        if motion > 0. {
+            shapes::glow_disc(c, 90., look::fade(GOLD, 0.35));
+        }
+        let style =
+            look::centered(look::punch(64., GOLD).with_outline(look::fade(look::SHADOW, 0.9)));
+        look::draw("GO!", c.x, style.centered_baseline(c.y), style);
     } else if let Some((title, detail)) = notice(run, hud.trial, hud.player, hud.juice) {
         let color = if run.recovered { juice::CORAL } else { TEAL };
-        message(w, centre_y, &title, &detail, color, 1.);
+        message(w, centre_y, title.as_str(), detail.as_str(), color, 1.);
     } else if let Some(banner) = &hud.juice.banner {
         message(
             w,
@@ -441,74 +506,181 @@ pub(crate) fn draw(hud: &Hud) {
 
     // Bottom line: the overview's route guidance, otherwise onboarding tips.
     if hud.overview && !hud.touch {
-        let line = format!("{} / {}", goal(run), course.challenge.to_uppercase());
-        bottom_line(w, h, &line, 1.);
-    } else if let Some((tip, alpha)) = &hud.tip
+        let mut l = goal(run);
+        let _ = write!(l, " · {}", course.challenge);
+        bottom_line(w, h, l.as_str(), 1.);
+    } else if let Some(tip) = hud.tip
         && !hud.touch
     {
-        bottom_line(w, h, tip, *alpha);
+        tips(w, h, hud.player, tip);
     }
 }
 
 fn message(w: f32, y: f32, title: &str, detail: &str, accent: Color, alpha: f32) {
-    let width = (w - 24.).min(460.);
-    let x = (w - width) * 0.5;
-    draw_rectangle(
-        x,
-        y - 30.,
-        width,
-        62.,
-        Color::new(HUD_INK.r, HUD_INK.g, HUD_INK.b, 0.86 * alpha),
+    if alpha <= 0. {
+        return;
+    }
+    let width = (w - 24.).min(480.);
+    let rect = Rect::new((w - width) * 0.5, y - 34., width, 68.);
+    look::glass(rect, 16., alpha);
+    shapes::fill_rounded_rect(
+        Rect::new(rect.x + 8., rect.y + 12., 4., rect.h - 24.),
+        2.,
+        look::fade(accent, alpha),
     );
-    draw_rectangle(x, y - 30., 5., 62., with_alpha(accent, alpha));
-    centered_in(title, y - 2., 22, with_alpha(CREAM, alpha), width - 28.);
+    let t = look::fit(
+        title,
+        width - 40.,
+        look::centered(look::body(24., look::fade(INK, alpha))),
+    );
+    look::draw(title, w * 0.5, t.centered_baseline(rect.y + 24.), t);
     if !detail.is_empty() {
-        centered_in(detail, y + 20., 13, with_alpha(accent, alpha), width - 28.);
+        let tint = shapes::mix(accent, INK, 0.35);
+        let d = look::fit(
+            detail,
+            width - 40.,
+            look::centered(look::body(16., look::fade(tint, alpha))),
+        );
+        look::draw(detail, w * 0.5, d.centered_baseline(rect.y + 50.), d);
     }
 }
 
-fn bottom_line(w: f32, h: f32, line: &str, alpha: f32) {
-    let (line, size, lw) = fitted(line, w - 56., 14);
-    let y = h - 22.;
-    pill((w - lw) * 0.5 - 16., y - 17., lw + 32., 28., alpha);
-    text(
-        &line,
+fn bottom_line(w: f32, h: f32, label: &str, alpha: f32) {
+    let s = look::fit(label, w - 64., look::body(16., look::fade(INK, alpha)));
+    let lw = text_width(label, s);
+    let y = h - 18. - CHIP_H;
+    look::glass(
+        Rect::new((w - lw) * 0.5 - 16., y, lw + 32., CHIP_H),
+        CHIP_H * 0.5,
+        alpha,
+    );
+    look::draw(
+        label,
         (w - lw) * 0.5,
-        baseline(y - 3., size),
-        size,
-        with_alpha(CREAM, alpha),
+        s.centered_baseline(y + CHIP_H * 0.5),
+        s,
     );
 }
 
+/// Key-cap onboarding that follows remaps; drops prompts that do not fit.
+fn tips(w: f32, h: f32, player: &PlayerInput, tip: Tip) {
+    let theme = look::theme();
+    let (roll, arrows) = roll_keys(player);
+    let brake = hint_line(player, "brake");
+    let overview = hint_line(player, "overview");
+    let recover = hint_line(player, "recover");
+    let roll_keys: [&str; 2] = [roll.as_str(), "←↑↓→"];
+    let rolls: &[&str] = if arrows { &roll_keys } else { &roll_keys[..1] };
+    let (alpha, prompts): (f32, [(&[&str], &str); 3]) = match tip {
+        Tip::Controls(alpha) => (
+            alpha,
+            [
+                (rolls, "Roll"),
+                (&[brake.as_str()], "Brake"),
+                (&[overview.as_str()], "Overview"),
+            ],
+        ),
+        Tip::Brake => (
+            1.,
+            [
+                (&[brake.as_str()], "Brake into turns"),
+                (&[recover.as_str()], "Back to checkpoint"),
+                (&[], ""),
+            ],
+        ),
+    };
+    if alpha <= 0. {
+        return;
+    }
+    let theme = theme.faded(alpha);
+    let gap = 24.;
+    let mut count = 0;
+    let mut total = 0.;
+    for (keys, action) in prompts.iter().filter(|(k, _)| !k.is_empty()) {
+        let width = look::prompt_width(keys, action, &theme);
+        if total + width + if count > 0 { gap } else { 0. } > w - 48. {
+            break;
+        }
+        total += width + if count > 0 { gap } else { 0. };
+        count += 1;
+    }
+    if count == 0 {
+        return;
+    }
+    let y = h - 22. - 30.;
+    let back = Rect::new((w - total) * 0.5 - 14., y - 7., total + 28., 40.);
+    look::glass(back, 20., alpha * 0.85);
+    let mut x = (w - total) * 0.5;
+    for (keys, action) in prompts.iter().filter(|(k, _)| !k.is_empty()).take(count) {
+        x += kit::key_prompt(x, y, keys, action, &theme) + gap;
+    }
+}
+
 /// A calm pause card with the actions that matter; Controls draws above it.
-pub(crate) fn draw_pause(player: &PlayerInput, quip: &str) {
+pub(crate) fn draw_pause(
+    player: &PlayerInput,
+    quip: &str,
+    look_in: ferravex_engine::play::tween::Appearance,
+) {
     let (w, h) = (screen_width(), screen_height());
-    draw_rectangle(0., 0., w, h, Color::new(0.04, 0.08, 0.09, 0.55));
-    let width = (w - 24.).min(420.);
-    let x = (w - width) * 0.5;
-    let y = h * 0.5 - 62.;
-    draw_rectangle(
-        x,
-        y,
-        width,
-        124.,
-        Color::new(HUD_INK.r, HUD_INK.g, HUD_INK.b, 0.94),
+    shapes::fill_rounded_rect(
+        Rect::new(0., 0., w, h),
+        0.,
+        Color::new(0.03, 0.06, 0.07, 0.45 * look_in.alpha),
     );
-    draw_rectangle(x, y, width, 4., GOLD);
-    centered_in("PAUSED", y + 40., 30, CREAM, width - 24.);
-    centered_in(quip, y + 66., 13, GOLD, width - 24.);
-    let actions = format!(
-        "{} RESUME / {} RESTART / {} COURSES / F2 CONTROLS",
-        hint(player, "pause"),
-        hint(player, "restart"),
-        hint(player, "courses"),
+    let theme: KitTheme = look::theme().faded(look_in.alpha);
+    let width = (w - 24.).min(440.);
+    let rect = kit::appear(
+        Rect::new((w - width) * 0.5, h * 0.5 - 92., width, 184.),
+        look_in,
     );
-    centered_in(&actions.to_uppercase(), y + 100., 12, CREAM, width - 24.);
+    let inner = kit::card(rect, Some("Paused"), &theme);
+    let q = look::fit(
+        quip,
+        inner.w,
+        look::centered(look::body(16., look::fade(GOLD, look_in.alpha))),
+    );
+    look::draw(
+        quip,
+        rect.x + rect.w * 0.5,
+        q.centered_baseline(inner.y + 10.),
+        q,
+    );
+    let rows = [
+        [
+            (hint_line(player, "pause"), "Resume"),
+            (hint_line(player, "restart"), "Restart"),
+        ],
+        [
+            (hint_line(player, "courses"), "Courses"),
+            (line!("F2"), "Controls"),
+        ],
+    ];
+    for (r, row) in rows.iter().enumerate() {
+        let widths = row.map(|(k, a)| look::prompt_width(&[k.as_str()], a, &theme));
+        let gap = 24.;
+        let total = widths[0] + widths[1] + gap;
+        let scale_ok = total <= inner.w;
+        let y = inner.y + 34. + r as f32 * 38.;
+        if scale_ok {
+            let mut x = rect.x + (rect.w - total) * 0.5;
+            for ((k, a), width) in row.iter().zip(widths) {
+                kit::key_prompt(x, y, &[k.as_str()], a, &theme);
+                x += width + gap;
+            }
+        } else {
+            for (i, (k, a)) in row.iter().enumerate() {
+                let x = rect.x + 12. + i as f32 * (rect.w * 0.5);
+                kit::key_prompt(x, y, &[k.as_str()], a, &theme);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::look::line;
     use ferravex_render::input::{Binding, InputCode, Preset};
 
     #[test]
@@ -555,22 +727,20 @@ mod tests {
             (844., 390.),
             (320., 480.),
         ] {
-            let wide = w >= 560.;
-            let (gem, time) = if wide { (20., 26.) } else { (16., 20.) };
             // Widest realistic contents: double-digit crystals and a long clock.
-            let card_w = 18. + 6. + width_of("12/12", gem) + 20. + width_of("59:59.9", time) + 28.;
-            let (x, y) = status_origin(w, card_w);
-            clear(w, x, y, card_w, if wide { 44. } else { 40. }, "status card");
-            assert!(x >= 0. && x + card_w <= w);
-            let (_, _, measured) = fitted("SILVER PACE · 52 SEC LEFT", w - 60., 13);
-            let chip_w = measured + 34.;
+            let size = status_size(w, "♦ 12/12", "59:59.9");
+            let (x, y) = status_origin(w, size.x);
+            clear(w, x, y, size.x, size.y, "status card");
+            assert!(x >= 0. && x + size.x <= w);
+            let chip_w = chip_width("Silver pace · 4.9s left");
             for touch in [false, true] {
-                let (px, py) = if wide {
+                let (px, py) = if wide(w) {
                     (pace_right(w, touch) - chip_w, 58.)
                 } else {
-                    (12., y + 46.)
+                    (12., y + size.y + 6.)
                 };
-                clear(w, px, py, chip_w, 26., "pace chip");
+                clear(w, px, py, chip_w, CHIP_H, "pace chip");
+                assert!(px + chip_w <= w, "pace chip fits at {w}");
             }
             let course = crate::course_ui::course_rect(w);
             clear(
@@ -595,38 +765,47 @@ mod tests {
     }
 
     #[test]
-    fn displayed_times_never_end_in_an_ambiguous_s_after_digits() {
+    fn record_labels_read_as_friendly_mixed_case() {
         assert_eq!(stopwatch(31.095), "0:31.10");
         assert_eq!(stopwatch(75.004), "1:15.00");
-        assert_eq!(spell_seconds("NEW BEST / -1.00s"), "NEW BEST / -1.00 SEC");
         assert_eq!(
-            spell_seconds("CP 1 SPLIT 9.00s / -1.00s SESSION"),
-            "CP 1 SPLIT 9.00 SEC / -1.00 SEC SESSION"
+            pretty_split("CP 1 SPLIT 9.00s / -1.00s SESSION"),
+            "Split 9.00s · -1.00s vs session best"
         );
-        assert_eq!(spell_seconds("SESSION"), "SESSION");
+        assert_eq!(pretty_split("CP 2 SPLIT 20.00s"), "Split 20.00s");
+        assert_eq!(
+            pretty_finish("NEW BEST / -1.00s"),
+            (line!("New personal best! -1.00s"), true)
+        );
+        assert_eq!(pretty_finish("VS BEST / +2.00s").0, "+2.00s vs your best");
+        assert_eq!(
+            pretty_finish("FIRST RECORDED TIME").0,
+            "First recorded time"
+        );
     }
 
     #[test]
-    fn roll_hint_follows_remaps() {
+    fn roll_keys_follow_remaps() {
         let mut player = PlayerInput::preset("marble-run-roll", Preset::Racer);
-        assert_eq!(roll_hint(&player), "WASD / ARROWS");
+        let (keys, arrows) = roll_keys(&player);
+        assert_eq!((keys.as_str(), arrows), ("WASD", true));
         player
             .rebind(
                 "move_forward",
                 vec![Binding::digital(InputCode::Key(KeyCode::I as u16))],
             )
             .unwrap();
-        assert_eq!(roll_hint(&player), "IASD");
+        assert_eq!(roll_keys(&player), (line!("IASD"), false));
     }
 
     #[test]
     fn guidance_names_checkpoint_then_missing_crystals_then_finish() {
         let mut run = Run::new();
-        assert!(goal(&run).starts_with("NEXT CHECKPOINT 1"));
+        assert!(goal(&run).as_str().starts_with("Next: checkpoint 1"));
         run.checkpoint = run.level.checkpoints.len();
-        assert!(goal(&run).starts_with("NEXT CRYSTAL 1"));
+        assert!(goal(&run).as_str().starts_with("Next: crystal 1"));
         run.collected.fill(true);
-        assert!(goal(&run).starts_with("NEXT FINISH ARCH"));
+        assert!(goal(&run).as_str().starts_with("Next: the finish arch"));
     }
 
     #[test]
@@ -656,8 +835,8 @@ mod tests {
             trial.step(&mut run, crate::sim::Controls::default());
         }
         let recovered = notice(&run, &trial, &player, &juice).unwrap();
-        assert_eq!(recovered.0, "BACK ON TRACK");
-        assert!(recovered.1.contains("CRYSTALS KEPT / FALL 1"));
+        assert_eq!(recovered.0, "Back on track");
+        assert!(recovered.1.as_str().contains("crystals kept · fall 1"));
         let frozen = (
             run.elapsed,
             run.notice,

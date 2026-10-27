@@ -19,6 +19,7 @@ const PUFFS: usize = 72;
 const POPS: usize = 8;
 const RINGS: usize = 6;
 const TRAIL: usize = 14;
+const SPARKS: usize = 96;
 const SEED: u64 = 0x5349_4547_4521;
 pub(super) const BUBBLE_LIFE: f32 = 2.8;
 pub(super) const BANNER_LIFE: f32 = 1.9;
@@ -80,6 +81,22 @@ impl Puff {
 
     pub fn current_radius(&self) -> f32 {
         self.radius + self.grow * self.age
+    }
+}
+
+/// A white-hot fleck thrown by an impact; drawn as an additive streak.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Spark {
+    pub position: Vec3,
+    pub velocity: Vec3,
+    pub age: f32,
+    pub life: f32,
+}
+
+impl Spark {
+    /// 1 → 0 heat: white-yellow when fresh, cooling to dull orange.
+    pub fn heat(&self) -> f32 {
+        (1.0 - self.age / self.life).clamp(0.0, 1.0)
     }
 }
 
@@ -161,6 +178,7 @@ fn mood_priority(mood: Mood) -> u8 {
 pub(super) struct Juice {
     pub chunks: [Option<Chunk>; CHUNKS],
     pub puffs: [Option<Puff>; PUFFS],
+    pub sparks: [Option<Spark>; SPARKS],
     pub pops: [Option<Pop>; POPS],
     pub rings: [Option<Ring>; RINGS],
     pub banner: Option<Banner>,
@@ -192,6 +210,7 @@ impl Juice {
         Self {
             chunks: [None; CHUNKS],
             puffs: [None; PUFFS],
+            sparks: [None; SPARKS],
             pops: [None; POPS],
             rings: [None; RINGS],
             banner: None,
@@ -229,6 +248,7 @@ impl Juice {
         self.flash_scale = if reduced_flash { 0.0 } else { intensity };
         if self.motion == 0.0 {
             self.chunks = [None; CHUNKS];
+            self.sparks = [None; SPARKS];
             self.rings = [None; RINGS];
             self.trauma = 0.0;
             self.kick = 0.0;
@@ -307,6 +327,30 @@ impl Juice {
             };
             let slot = free_slot(&mut self.chunks, |c| c.age / c.life);
             self.chunks[slot] = Some(chunk);
+        }
+    }
+
+    fn sparks(&mut self, at: Vec3, count: usize, speed: f32, bias: Vec3) {
+        if self.motion == 0.0 {
+            return;
+        }
+        let count = ((count as f32) * self.motion).ceil() as usize;
+        for _ in 0..count {
+            let velocity = vec3(
+                self.spread(1.0),
+                0.3 + self.random() * 1.1,
+                self.spread(1.0),
+            ) * speed
+                * (0.45 + self.random() * 0.75)
+                + bias;
+            let spark = Spark {
+                position: at + vec3(self.spread(0.2), self.spread(0.2), self.spread(0.2)),
+                velocity,
+                age: 0.0,
+                life: 0.35 + self.random() * 0.45,
+            };
+            let slot = free_slot(&mut self.sparks, |s| s.age / s.life);
+            self.sparks[slot] = Some(spark);
         }
     }
 
@@ -420,6 +464,7 @@ impl Juice {
                 self.trail_len = 0;
                 self.puffs(muzzle + direction * 0.4, 3, PuffKind::Flash, 0.5, 0.0);
                 self.puffs(muzzle + direction * 0.6, 9, PuffKind::Smoke, 0.24, 0.9);
+                self.sparks(muzzle + direction * 0.3, 10, 4.0, direction * 9.0);
                 self.shake(0.18);
                 if last {
                     self.say(banter, Mood::LastShell);
@@ -430,6 +475,12 @@ impl Juice {
                 self.puffs(at, (4.0 + 6.0 * power) as usize, PuffKind::Dust, 0.4, 0.6);
                 self.puffs(at, 1, PuffKind::Flash, 0.6 * power, 0.0);
                 self.chunks(at, 3, Material::Soot, 0.6 + power * 0.4);
+                self.sparks(
+                    at,
+                    (8.0 + 16.0 * power) as usize,
+                    5.0 + 5.0 * power,
+                    Vec3::ZERO,
+                );
                 self.shake(0.3 * power);
             }
             RangeEvent::Knocked {
@@ -453,6 +504,7 @@ impl Juice {
                             *pop = None;
                         }
                     }
+                    self.sparks(at, 14, 6.5, Vec3::Y * 2.0);
                     // Support points join the total quietly; only targets pop.
                     self.pop(at + Vec3::Y * 0.8, PopText::Points { points, chain }, 1.3);
                     self.ring(at, 1.4);
@@ -585,6 +637,25 @@ impl Juice {
                 }
             }
         }
+        for slot in &mut self.sparks {
+            if let Some(spark) = slot {
+                spark.age += dt;
+                spark.velocity.y -= 14.0 * dt;
+                spark.position += spark.velocity * dt;
+                if spark.position.y < 0.03 {
+                    // Skitter along the floor and lose energy.
+                    spark.position.y = 0.03;
+                    spark.velocity = vec3(
+                        spark.velocity.x * 0.6,
+                        -spark.velocity.y * 0.35,
+                        spark.velocity.z * 0.6,
+                    );
+                }
+                if spark.age >= spark.life {
+                    *slot = None;
+                }
+            }
+        }
         for slot in &mut self.puffs {
             if let Some(puff) = slot {
                 puff.age += dt;
@@ -699,9 +770,11 @@ mod tests {
         juice.event(knocked(true), &mut banter);
         juice.step(1.0 / 120.0, 100);
         assert!(live(&juice.chunks) > 0 && live(&juice.puffs) > 0);
+        assert!(live(&juice.sparks) > 0, "impacts throw sparks");
         assert!(juice.camera_offset().length() > 0.0);
         juice.apply_policy(true, false, 1.0);
         assert_eq!(live(&juice.chunks), 0);
+        assert_eq!(live(&juice.sparks), 0);
         assert_eq!(live(&juice.rings), 0);
         assert_eq!(juice.camera_offset(), Vec2::ZERO);
         assert_eq!(juice.hop_height(), 0.0);
@@ -775,7 +848,10 @@ mod tests {
         for _ in 0..400 {
             a.step(1.0 / 120.0, 0);
         }
-        assert_eq!(live(&a.chunks) + live(&a.puffs) + live(&a.pops), 0);
+        assert_eq!(
+            live(&a.chunks) + live(&a.puffs) + live(&a.pops) + live(&a.sparks),
+            0
+        );
         assert!(a.banner.is_none() && a.bubble.is_none());
         a.reset();
         a.event(knocked(true), &mut banter);

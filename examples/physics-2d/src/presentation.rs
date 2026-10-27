@@ -168,6 +168,7 @@ impl LabLayout {
 
 // The existing bitmap font is monospaced. Borrow slices instead of allocating
 // a string per wrapped line; even an overlong binding token makes progress.
+#[cfg(test)]
 pub(super) fn label_lines(text: &str, width: f32) -> impl Iterator<Item = &str> {
     let advance = get_default_font()
         .try_metrics(16, 1.)

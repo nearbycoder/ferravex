@@ -97,8 +97,12 @@ pub struct Lab {
     recording: bool,
     export: Vec<u8>,
     particles: ParticlePool,
-    /// Gold, coral, teal and cream particle meshes.
-    confetti: [MeshId; 4],
+    /// Emissive ember (sparks), coral, teal, cream and gold particle meshes.
+    confetti: [MeshId; 5],
+    /// Emissive muzzle-flash and tracer mesh (vertex alpha below one).
+    flash: MeshId,
+    /// Muzzle position and flash strength for the browser's point light.
+    muzzle_light: [f32; 4],
     qualifier: qualifier::Qualifier,
     bests: qualifier::Bests,
     juice: juice::Juice,
@@ -139,9 +143,23 @@ impl Lab {
             .insert(Mesh::sphere(1., 5, 8, Color::from_hex(0xd3b56b)))
             .unwrap();
         meshes.push(round);
-        // Confetti for eliminations: gold reuses the spark mesh.
+        // Emissive meshes carry vertex alpha 0.5: the browser shader treats
+        // alpha below one as self-lit and feeds it to bloom. The software
+        // renderer draws any positive alpha opaquely, so headless output keeps
+        // the same silhouettes.
+        let emissive = |c: u32| {
+            let c = Color::from_hex(c);
+            Color::new(c.r, c.g, c.b, 0.5)
+        };
+        let ember = cache
+            .insert(Mesh::cuboid(Vec3::ONE, emissive(0xffc768)))
+            .unwrap();
+        let flash = cache
+            .insert(Mesh::cuboid(Vec3::ONE, emissive(0xfff1c9)))
+            .unwrap();
+        // Confetti for eliminations; gold reuses the scene's brass mesh.
         let confetti = [
-            meshes[9],
+            ember,
             cache
                 .insert(Mesh::cuboid(Vec3::ONE, Color::from_hex(0xe0604a)))
                 .unwrap(),
@@ -151,8 +169,11 @@ impl Lab {
             cache
                 .insert(Mesh::cuboid(Vec3::ONE, Color::from_hex(0xf4ead6)))
                 .unwrap(),
+            meshes[9],
         ];
-        meshes.extend_from_slice(&confetti[1..]);
+        // Mesh indices: 12 coral, 13 teal, 14 cream, 15 ember, 16 flash.
+        meshes.extend_from_slice(&confetti[1..4]);
+        meshes.extend_from_slice(&[ember, flash]);
         let mut objects = Vec::new();
         let mut scene = Scene::new();
         let root = scene
@@ -330,6 +351,8 @@ impl Lab {
             export: Vec::new(),
             particles: ParticlePool::new(192),
             confetti,
+            flash,
+            muzzle_light: [0.; 4],
             qualifier: qualifier::Qualifier::default(),
             bests: qualifier::Bests::default(),
             juice: juice::Juice::default(),
@@ -542,6 +565,7 @@ impl Lab {
                         }
                         if player == 0 {
                             self.juice.fire(policy);
+                            self.juice.tracer(end);
                         }
                         let particles = self.accept_feedback(FeedbackKind::Fire, origin);
                         for i in 0..particles.saturating_mul(3).min(6) {
@@ -872,16 +896,64 @@ impl Lab {
                 Mat4::from_scale_rotation_translation(scale, rotation, p.position.into()),
             ));
         }
+        let aim = ferravex_graphics::Quat::from_rotation_y(-player.yaw)
+            * ferravex_graphics::Quat::from_rotation_x(player.pitch);
+        let bob = if policy.reduced_motion() {
+            0.
+        } else {
+            (self.time * 10.).sin() * player.velocity.length().min(7.) * 0.0008
+        };
+        let kick = self.juice.recoil(intensity);
+        let eye = player.eye_position();
+        let muzzle = if view == 1 {
+            eye + aim * vec3(0.22, -0.18 + bob, -0.86 + kick)
+        } else {
+            eye
+        };
+        self.muzzle_light = [muzzle.x, muzzle.y, muzzle.z, self.juice.muzzle()];
+        // A short glowing streak races from the muzzle to where the shot stopped.
+        if let Some((end, left)) = self.juice.tracer_end() {
+            let path = end - muzzle;
+            let length = path.length();
+            if length > 0.5 {
+                let direction = path / length;
+                let head = muzzle + path * (1. - left).clamp(0.15, 1.);
+                let tail = (head - muzzle).length().min(3.5);
+                let yaw = direction.x.atan2(-direction.z);
+                let pitch = direction.y.atan2(direction.x.hypot(direction.z));
+                let rotation = ferravex_graphics::Quat::from_rotation_y(-yaw)
+                    * ferravex_graphics::Quat::from_rotation_x(pitch);
+                self.items.push(RenderItem::new(
+                    self.flash,
+                    Mat4::from_scale_rotation_translation(
+                        vec3(0.018, 0.018, tail),
+                        rotation,
+                        head - direction * (tail * 0.5),
+                    ),
+                ));
+            }
+        }
         if view == 1 {
-            let rot = ferravex_graphics::Quat::from_rotation_y(-player.yaw)
-                * ferravex_graphics::Quat::from_rotation_x(player.pitch);
-            let bob = if policy.reduced_motion() {
-                0.
-            } else {
-                (self.time * 10.).sin() * player.velocity.length().min(7.) * 0.0008
-            };
-            let kick = self.juice.recoil(intensity);
-            let eye = player.eye_position();
+            let rot = aim;
+            let flash = self.juice.muzzle();
+            if flash > 0. {
+                // A four-point star rolled differently on every shot.
+                let roll = self.juice.shots as f32 * 0.9;
+                for (size, spin) in [
+                    (vec3(0.07, 0.07, 0.07), 0.),
+                    (vec3(0.26, 0.045, 0.02), roll),
+                    (vec3(0.26, 0.045, 0.02), roll + std::f32::consts::FRAC_PI_2),
+                ] {
+                    self.items.push(RenderItem::new(
+                        self.flash,
+                        Mat4::from_scale_rotation_translation(
+                            size * (0.6 + 0.4 * flash),
+                            rot * ferravex_graphics::Quat::from_rotation_z(spin),
+                            muzzle,
+                        ),
+                    ));
+                }
+            }
             for (offset, size, material) in [
                 (
                     vec3(0.22, -0.22 + bob, -0.43 + kick),
@@ -989,14 +1061,14 @@ fn operator_parts(
         .chain(bullseye.into_iter().take(if target { 2 } else { 0 }))
 }
 
-/// Particle tint to mesh: white sparks stay gold; confetti keeps its color.
+/// Particle tint to mesh: white sparks become glowing embers; confetti keeps its color.
 fn confetti_index(color: [f32; 4]) -> usize {
     match color {
         [r, g, b, _] if r > 0.99 && g > 0.99 && b > 0.99 => 0,
         [r, g, _, _] if r > 0.86 && g < 0.5 => 1,
         [r, g, _, _] if r < 0.5 && g > 0.6 => 2,
         [r, _, _, _] if r > 0.9 => 3,
-        _ => 0,
+        _ => 4,
     }
 }
 
@@ -1077,6 +1149,22 @@ pub extern "C" fn ferravex_training_state() -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn ferravex_training_progress() -> u32 {
     LAB.with(|cell| cell.borrow().as_ref().map_or(0, Lab::training_mask))
+}
+/// Muzzle light for the browser's point light: 0..2 world position, 3 strength (0..=1).
+/// Presentation only; zero when reduced flashes is on.
+///
+/// ```
+/// owned_lab::ferravex_training_init();
+/// assert_eq!(owned_lab::ferravex_muzzle_light(3), 0.);
+/// ```
+#[unsafe(no_mangle)]
+pub extern "C" fn ferravex_muzzle_light(component: u32) -> f32 {
+    LAB.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .and_then(|lab| lab.muzzle_light.get(component as usize).copied())
+            .unwrap_or(0.)
+    })
 }
 /// Qualifier phase for hosts: 0 locked, 1 countdown, 2 running, 3 results/free practice.
 /// Additive query; it never consumes input or changes the simulation.

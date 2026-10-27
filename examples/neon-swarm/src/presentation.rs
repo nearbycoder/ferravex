@@ -1,5 +1,6 @@
 //! Presentation-only effects. Neither preferences nor render cadence own combat.
 use crate::game::{Enemy, Foe, Game, Note, Style, Supply};
+use crate::hud::{Line, line};
 use crate::juice::{self, GOLD, Juice, MAGENTA, Priority, VIOLET};
 use crate::quips;
 use crate::{AMBER, CORAL, CYAN, PAPER};
@@ -266,26 +267,26 @@ impl Presentation {
                 j.ring(at, 8., ring, 0.32, color);
                 j.ring(at, 4., ring * 0.55, 0.22, PAPER);
                 j.trauma(trauma);
-                j.pop(at, format!("+{points}"), tier, size);
+                j.pop(at, line!("+{points}"), tier, size);
                 if foe == Foe::Overseer {
                     j.ring(at, 20., 260., 0.7, VIOLET);
                     j.callout(
-                        "OVERSEER DOWN!".into(),
-                        "+250 STYLE · THE HIVE IS LEADERLESS".into(),
+                        Line::from("OVERSEER DOWN!"),
+                        Line::from("+250 style · the hive is leaderless"),
                         GOLD,
                         Priority::Epic,
                     );
                 } else if let Some(line) = quips::multi_kill(multi) {
                     j.callout(
-                        line.into(),
-                        format!("{multi} IN A BLINK · +{} STYLE", 25 * (multi - 1)),
+                        Line::from(line),
+                        line!("{multi} in a blink · +{} style", 25 * (multi - 1)),
                         tier,
                         Priority::Combo,
                     );
                 } else if drive_by {
                     j.callout(
-                        quips::drive_by(style.drive_bys).into(),
-                        "+50 STYLE".into(),
+                        Line::from(quips::drive_by(style.drive_bys)),
+                        Line::from("+50 style"),
                         CYAN,
                         Priority::Minor,
                     );
@@ -307,8 +308,8 @@ impl Presentation {
             }
             Note::MultiplierUp(tier) => {
                 j.callout(
-                    format!("x{tier} {}", quips::multiplier(tier)),
-                    "KEEP THE CHAIN ALIVE".into(),
+                    line!("×{tier} {}", quips::multiplier(tier)),
+                    Line::from("Keep the chain alive"),
                     juice::tier_color(tier),
                     Priority::Combo,
                 );
@@ -316,8 +317,8 @@ impl Presentation {
             }
             Note::ChainBroken(chain) => {
                 j.callout(
-                    quips::chain_broken(style.hits_taken).into(),
-                    format!("{chain}-KILL CHAIN LOST"),
+                    Line::from(quips::chain_broken(style.hits_taken)),
+                    line!("{chain}-kill chain lost"),
                     CORAL,
                     Priority::Minor,
                 );
@@ -326,8 +327,8 @@ impl Presentation {
             Note::CloseShave(at) => {
                 j.ring(at, 12., 40., 0.25, AMBER);
                 j.callout(
-                    quips::close_shave(style.close_shaves).into(),
-                    "+20 STYLE".into(),
+                    Line::from(quips::close_shave(style.close_shaves)),
+                    Line::from("+20 style"),
                     AMBER,
                     Priority::Minor,
                 );
@@ -335,8 +336,8 @@ impl Presentation {
             }
             Note::LevelUp { level, damage } => {
                 j.callout(
-                    format!("WEAPON LV {level}"),
-                    format!("SHOTS NOW HIT FOR {damage:.0}"),
+                    line!("WEAPON LV {level}"),
+                    line!("Shots now hit for {damage:.0}"),
                     CYAN,
                     Priority::Major,
                 );
@@ -346,8 +347,8 @@ impl Presentation {
                 j.ring(at, 10., 120., 0.6, GOLD);
                 j.trauma(0.3);
                 j.callout(
-                    "OVERSEER INBOUND".into(),
-                    "BIG, ARMORED, GRUMPY · FOCUS FIRE TO STAGGER".into(),
+                    Line::from("OVERSEER INBOUND"),
+                    Line::from("Big, armored, grumpy · focus fire to stagger"),
                     GOLD,
                     Priority::Epic,
                 );
@@ -355,8 +356,8 @@ impl Presentation {
             }
             Note::LastDrone => {
                 j.callout(
-                    "ONE LEFT!".into(),
-                    "MAKE IT COUNT".into(),
+                    Line::from("ONE LEFT!"),
+                    Line::from("Make it count"),
                     PAPER,
                     Priority::Major,
                 );
@@ -367,15 +368,15 @@ impl Presentation {
             } => {
                 if health <= crate::game::CLUTCH_HEALTH {
                     j.callout(
-                        format!("SURVIVED ON {health} HP"),
-                        "+150 STYLE · BREATHE".into(),
+                        line!("SURVIVED ON {health} HP"),
+                        Line::from("+150 style · breathe"),
                         CORAL,
                         Priority::Epic,
                     );
                 } else if untouched {
                     j.callout(
-                        "UNTOUCHED!".into(),
-                        "NOT A SCRATCH · +200 STYLE".into(),
+                        Line::from("UNTOUCHED!"),
+                        Line::from("Not a scratch · +200 style"),
                         GOLD,
                         Priority::Epic,
                     );
@@ -387,8 +388,8 @@ impl Presentation {
                 j.ring(at, 6., 60., 0.5, CYAN);
                 if lit == 4 {
                     j.callout(
-                        "DISCO MODE UNLOCKED".into(),
-                        "ALL FOUR LAMPS LIT · THE SECTOR IS NOW A PARTY".into(),
+                        Line::from("DISCO MODE UNLOCKED"),
+                        Line::from("All four lamps lit · the sector is now a party"),
                         MAGENTA,
                         Priority::Epic,
                     );
@@ -398,8 +399,8 @@ impl Presentation {
                     Some((Cue::Success, 0.6))
                 } else {
                     j.callout(
-                        format!("LAMP {lit}/4 LIT"),
-                        "SOMETHING IS WARMING UP...".into(),
+                        line!("LAMP {lit}/4 LIT"),
+                        Line::from("Something is warming up…"),
                         CYAN,
                         Priority::Major,
                     );
@@ -409,10 +410,10 @@ impl Presentation {
             Note::Supply { at, kind } => {
                 let (text, color) = match kind {
                     Supply::Repair => ("+22 HP", Color::from_rgba(130, 246, 160, 255)),
-                    Supply::Battery => ("SHIELD FULL", Color::from_rgba(140, 200, 255, 255)),
+                    Supply::Battery => ("Shield full", Color::from_rgba(140, 200, 255, 255)),
                 };
                 j.ring(at, 10., 44., 0.3, color);
-                j.pop(at - vec2(0., 18.), text.into(), color, 16.);
+                j.pop(at - vec2(0., 18.), Line::from(text), color, 16.);
                 None
             }
         }

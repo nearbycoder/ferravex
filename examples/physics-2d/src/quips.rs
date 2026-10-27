@@ -6,71 +6,71 @@
 use super::toys::Goal;
 
 const PULSE: [&str; 7] = [
-    "BOOP.",
-    "PERSONAL SPACE: ENFORCED",
-    "SCIENCE!",
-    "NEWTON NODS SOLEMNLY",
-    "SHOVE OF APPROVAL",
-    "EVERYBODY OUT OF THE POOL",
-    "A GENTLE NUDGE. ISH.",
+    "Boop.",
+    "Personal space: enforced",
+    "Science!",
+    "Newton nods solemnly",
+    "Shove of approval",
+    "Everybody out of the pool",
+    "A gentle nudge. Ish.",
 ];
 
 const COLLAPSE: [&str; 8] = [
-    "TIMBER!",
-    "STRUCTURAL INTEGRITY: ZERO",
-    "THAT WAS LOAD-BEARING",
-    "THE INSURANCE WON'T COVER THIS",
-    "GRAVITY WINS. AGAIN.",
-    "PEER REVIEW: NEGATIVE",
-    "BEAUTIFUL. DO IT AGAIN.",
-    "WHO PUT THAT THERE?",
+    "Timber!",
+    "Structural integrity: zero",
+    "That was load-bearing",
+    "The insurance won't cover this",
+    "Gravity wins. Again.",
+    "Peer review: negative",
+    "Beautiful. Do it again.",
+    "Who put that there?",
 ];
 
 const CHAOS: [&str; 6] = [
-    "IT'S RAINING STUFF",
-    "CHAOS DELIVERED. SIGN HERE.",
-    "THE LAB REGRETS NOTHING",
-    "HAZARD PAY APPROVED",
-    "YOU ORDERED FOURTEEN THINGS",
-    "SAFETY GOGGLES ON",
+    "It's raining stuff",
+    "Chaos delivered. Sign here.",
+    "The lab regrets nothing",
+    "Hazard pay approved",
+    "You ordered fourteen things",
+    "Safety goggles on",
 ];
 
 const RESET: [&str; 5] = [
-    "FRESH LAB. NO ONE SAW ANYTHING.",
-    "AS IF IT NEVER HAPPENED",
-    "CLEANUP CREW: HEROES",
-    "THE CRATES FORGIVE YOU",
-    "BACK TO SQUARE ONE. AND TRIANGLE.",
+    "Fresh lab. No one saw anything.",
+    "As if it never happened",
+    "Cleanup crew: heroes",
+    "The crates forgive you",
+    "Back to square one. And triangle.",
 ];
 
 const PAUSE: [&str; 5] = [
-    "TIME: STOPPED. PHYSICS: CONFUSED.",
-    "THE CRATES HOLD THEIR BREATH",
-    "FREEZE FRAME. VERY DRAMATIC.",
-    "STEP CAREFULLY. ONE TICK AT A TIME.",
-    "INSPECTION MODE. NO TOUCHING. KIDDING.",
+    "Time: stopped. Physics: confused.",
+    "The crates hold their breath",
+    "Freeze frame. Very dramatic.",
+    "Step carefully. One tick at a time.",
+    "Inspection mode. No touching. Kidding.",
 ];
 
 const RETURNED: [&str; 4] = [
-    "RETURNED TO SENDER",
-    "LOST & FOUND DELIVERY",
-    "IT CAME BACK. THEY ALWAYS DO.",
-    "NOTHING LEAVES THE LAB",
+    "Returned to sender",
+    "Lost & found delivery",
+    "It came back. They always do.",
+    "Nothing leaves the lab",
 ];
 
 const TOWER: [&str; 5] = [
-    "NEW HEIGHT!",
-    "TALLER!",
-    "HOLD STILL...",
-    "VERTIGO!",
-    "LOOK MA, NO GLUE",
+    "New height!",
+    "Taller!",
+    "Hold still...",
+    "Vertigo!",
+    "Look ma, no glue",
 ];
 
 const DOMINO: [&str; 4] = [
-    "CLACK CLACK CLACK",
-    "THE PLANKS HAVE SPOKEN",
-    "EVERYBODY DOWN!",
-    "A FLAWLESS TUMBLE",
+    "Clack clack clack",
+    "The planks have spoken",
+    "Everybody down!",
+    "A flawless tumble",
 ];
 
 /// Advances by a stride coprime with the table length.
@@ -114,19 +114,19 @@ pub(super) fn domino(count: u32) -> &'static str {
 /// Celebration copy for a completed goal: (headline, punchline).
 pub(super) fn goal(goal: Goal) -> (&'static str, &'static str) {
     match goal {
-        Goal::Liftoff => ("GOAL: LIFTOFF!", "HOUSTON, WE HAVE A CRATE PROBLEM"),
+        Goal::Liftoff => ("Goal: Liftoff!", "Houston, we have a crate problem"),
         Goal::Skyscraper => (
-            "GOAL: SKYSCRAPER!",
-            "ARCHITECTURALLY QUESTIONABLE. LOVE IT.",
+            "Goal: Skyscraper!",
+            "Architecturally questionable. Love it.",
         ),
-        Goal::Demolition => ("GOAL: DEMOLITION!", "THE NEIGHBORS HAVE QUESTIONS"),
-        Goal::DominoRun => ("GOAL: DOMINO RUN!", "CLACK CLACK CLACK CLACK. PERFECT."),
+        Goal::Demolition => ("Goal: Demolition!", "The neighbors have questions"),
+        Goal::DominoRun => ("Goal: Domino run!", "Clack clack clack clack. Perfect."),
     }
 }
 
 pub(super) const SECRET: (&str, &str) = (
-    "SECRET: MOON SHOT!",
-    "SOMETHING LEFT THE BUILDING. SAY HI TO THE ASTRONAUTS.",
+    "Secret: Moon shot!",
+    "Something left the building. Say hi to the astronauts.",
 );
 
 /// A rank title for the session, from goals completed and the secret.
@@ -139,28 +139,28 @@ pub(super) struct Rank {
 pub(super) fn rank(goals: usize, secret: bool) -> Rank {
     let (title, quip) = match (goals, secret) {
         (4, true) => (
-            "PROFESSOR OF CHAOS, ASTRONAUT",
-            "EVERY GOAL AND A MOON SHOT. THE LAB SALUTES YOU.",
+            "Professor of Chaos, Astronaut",
+            "Every goal and a moon shot. The lab salutes you.",
         ),
         (4, false) => (
-            "PROFESSOR OF CHAOS",
-            "EVERY GOAL DONE. RUMOR SAYS SOMETHING CAN FLY HIGHER.",
+            "Professor of Chaos",
+            "Every goal done. Rumor says something can fly higher.",
         ),
         (3, _) => (
-            "HEAD OF DEMOLITION",
-            "ONE GOAL LEFT. THE PLANKS ARE WAITING.",
+            "Head of Demolition",
+            "One goal left. The planks are waiting.",
         ),
         (2, _) => (
-            "SENIOR STACK WHISPERER",
-            "HALFWAY CERTIFIED. FULLY UNSUPERVISED.",
+            "Senior Stack Whisperer",
+            "Halfway certified. Fully unsupervised.",
         ),
         (1, _) => (
-            "JUNIOR GRAVITY TESTER",
-            "GRAVITY: TESTED. RESULTS: STILL WORKS.",
+            "Junior Gravity Tester",
+            "Gravity: tested. Results: still works.",
         ),
         _ => (
-            "LAB INTERN",
-            "PLEASE DON'T TOUCH ANYTHING. KIDDING. TOUCH EVERYTHING.",
+            "Lab Intern",
+            "Please don't touch anything. Kidding. Touch everything.",
         ),
     };
     Rank { title, quip }

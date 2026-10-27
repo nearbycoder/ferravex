@@ -892,6 +892,12 @@ fn mix(a: Color, b: Color, t: f32) -> Color {
 ferravex_render::game!(window_conf, game);
 async fn game() {
     let mut demo = ferravex_render::demo::Demo::new();
+    set_post_fx(
+        PostFx::subtle()
+            .bloom(0.65, 0.92, 1.1)
+            .contrast(1.04)
+            .vignette(0.26, 0.6),
+    );
     let mut lab = Lab::new();
     let mut presentation = Presentation::default();
     let mut inspector = Inspector::new();
@@ -1231,7 +1237,8 @@ async fn game() {
                 Color::new(0., 0., 0., 0.85),
             );
         }
-        ui::panel(panel);
+        ferravex_render::shapes::fill_rounded_rect(panel, 12., Color::new(0.06, 0.10, 0.15, 0.95));
+        ferravex_render::shapes::stroke_rounded_rect(panel, 12., 1., ui::LINE);
         let paused = lab.session.is_paused();
         let mut hovered = None;
         for (i, rect) in buttons.iter().enumerate() {
@@ -1239,10 +1246,10 @@ async fn game() {
                 hovered = Some(i);
             }
         }
-        pending.crate_drop = ui::button(buttons[0], "CRATE", lab.shape == DropShape::Crate);
-        pending.ball_drop = ui::button(buttons[1], "BALL", lab.shape == DropShape::Ball);
-        pending.drop = ui::button(buttons[2], "DROP", false);
-        pending.pulse = ui::button_with_options(
+        pending.crate_drop = hud::tool(buttons[0], "CRATE", lab.shape == DropShape::Crate);
+        pending.ball_drop = hud::tool(buttons[1], "BALL", lab.shape == DropShape::Ball);
+        pending.drop = hud::tool(buttons[2], "DROP", false);
+        pending.pulse = hud::tool_button(
             buttons[3],
             "PULSE",
             ui::ButtonOptions {
@@ -1250,8 +1257,8 @@ async fn game() {
                 selected: false,
             },
         );
-        pending.pause = ui::button(buttons[4], if paused { "RESUME" } else { "PAUSE" }, paused);
-        pending.step = ui::button_with_options(
+        pending.pause = hud::tool(buttons[4], if paused { "RESUME" } else { "PAUSE" }, paused);
+        pending.step = hud::tool_button(
             buttons[5],
             "STEP",
             ui::ButtonOptions {
@@ -1259,10 +1266,10 @@ async fn game() {
                 selected: false,
             },
         );
-        pending.view = ui::button(buttons[6], "VIEW", false);
-        pending.reset = ui::button(buttons[7], "RESET", false);
+        pending.view = hud::tool(buttons[6], "VIEW", false);
+        pending.reset = hud::tool(buttons[7], "RESET", false);
         let room = sandbox.bodies.len() < MAX_BODIES;
-        pending.bowl = ui::button_with_options(
+        pending.bowl = hud::tool_button(
             buttons[8],
             "BOWL",
             ui::ButtonOptions {
@@ -1270,7 +1277,7 @@ async fn game() {
                 selected: false,
             },
         );
-        pending.chaos = ui::button_with_options(
+        pending.chaos = hud::tool_button(
             buttons[9],
             "CHAOS",
             ui::ButtonOptions {

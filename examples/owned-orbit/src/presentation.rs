@@ -3,7 +3,10 @@ use ferravex_engine::{
     math::Vec3,
     play::{
         audio::{Cue, Surface},
-        feedback::{FeedbackConfig, FeedbackController, FeedbackEvent, FeedbackKind},
+        feedback::{
+            FeedbackConfig, FeedbackController, FeedbackEvent, FeedbackKind, FeedbackPolicy,
+        },
+        tween::{Entrance, Motion, RollCounter, ScreenTransition, TransitionEvent, TransitionKind},
     },
     render::preferences,
 };
@@ -64,6 +67,81 @@ pub(crate) enum Spark {
     Fizzle,
 }
 
+/// Presentation-time UI state: how long the current screen has been up, an
+/// eased score counter and the wipe between sectors and runs. Aged by host
+/// frame time (so the pause card can ease in while play is frozen); it never
+/// feeds back into simulation.
+pub(crate) struct Screen {
+    key: u8,
+    /// Seconds since the current screen (phase + pause) appeared.
+    pub age: f32,
+    /// Seconds of UI time, used for gentle prompt pulses.
+    pub clock: f32,
+    pub transition: ScreenTransition,
+    pub score: RollCounter,
+    pub motion: Motion,
+}
+impl Default for Screen {
+    fn default() -> Self {
+        Self {
+            key: u8::MAX,
+            age: 0.,
+            clock: 0.,
+            transition: ScreenTransition::new(
+                TransitionKind::Wipe {
+                    direction: std::f32::consts::FRAC_PI_2,
+                },
+                0.2,
+            ),
+            score: RollCounter::new(0),
+            motion: Motion::Full,
+        }
+    }
+}
+impl Screen {
+    /// `key` identifies the visible screen; a change restarts entrances and,
+    /// for a new sector, sweeps a short wipe across the playfield.
+    pub fn update(&mut self, dt: f32, key: u8, score: u32, policy: FeedbackPolicy) {
+        let dt = if dt.is_finite() {
+            dt.clamp(0., 0.25)
+        } else {
+            0.
+        };
+        self.motion = Motion::from(policy);
+        if key != self.key {
+            // Ready after a countdown means a fresh sector: sweep it in.
+            if self.key == 2 && key == 0 {
+                self.transition.cover();
+            }
+            self.key = key;
+            self.age = 0.;
+        }
+        self.age = (self.age + dt).min(60.);
+        self.clock = (self.clock + dt) % 3600.;
+        if self.transition.advance(dt, self.motion) == Some(TransitionEvent::Covered) {
+            self.transition.reveal();
+        }
+        self.score.set_target(i64::from(score));
+        self.score.advance(dt, self.motion);
+    }
+
+    /// A new run: sweep in from the top and roll the score back instantly.
+    pub fn restarted(&mut self) {
+        self.score.snap(0);
+        self.transition = Screen::default().transition;
+        self.transition.cover();
+    }
+
+    /// Staggered fade-up for the `index`th element of the current screen.
+    pub fn appear(&self, index: usize) -> (f32, i32) {
+        let look = Entrance::fade_up(14.)
+            .with_stagger(0.045)
+            .with_duration(0.3)
+            .sample(self.age, index, self.motion);
+        (look.alpha, look.offset[1].round() as i32)
+    }
+}
+
 /// The results card for a finished run, built once from accepted state.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Results {
@@ -83,6 +161,7 @@ pub(crate) struct Presentation {
     notice_time: f32,
     pub hints: ControlHints,
     pub juice: crate::juice::Juice,
+    pub screen: Screen,
     pub results: Option<Results>,
     /// Personal best score supplied by the host; survives restarts.
     pub best: Option<u32>,
@@ -110,6 +189,7 @@ impl Default for Presentation {
             notice_time: 0.,
             hints: ControlHints::default(),
             juice: crate::juice::Juice::default(),
+            screen: Screen::default(),
             results: None,
             best: None,
             runs: 0,

@@ -5,62 +5,62 @@
 use super::toys::Goal;
 
 const BOWL: [&str; 6] = [
-    "ROLL OUT!",
-    "FORE! WRONG SPORT.",
-    "HERE COMES THE BIG ONE",
-    "BOWLING, BUT LOUDER",
-    "LANE ONE IS OPEN",
-    "SPECIAL DELIVERY",
+    "Roll out!",
+    "Fore! Wrong sport.",
+    "Here comes the big one",
+    "Bowling, but louder",
+    "Lane one is open",
+    "Special delivery",
 ];
 
 const PULSE: [&str; 5] = [
-    "SHOCKWAVE!",
-    "STAND BACK",
-    "YARD-WIDE BOOP",
-    "NEWTON APPROVES",
-    "EVERYBODY JUMP",
+    "Shockwave!",
+    "Stand back",
+    "Yard-wide boop",
+    "Newton approves",
+    "Everybody jump",
 ];
 
 const COLLAPSE: [&str; 8] = [
-    "TIMBER!",
-    "PALLET PARTY",
-    "INVENTORY: REDISTRIBUTED",
-    "THAT'S A LOT OF PAPERWORK",
-    "SHIPPING: EXPEDITED",
-    "FORKLIFT CERTIFICATION: REVOKED",
-    "THE STACK HAS LEFT THE CHAT",
-    "GRAVITY CLOCKED IN",
+    "Timber!",
+    "Pallet party",
+    "Inventory: redistributed",
+    "That's a lot of paperwork",
+    "Shipping: expedited",
+    "Forklift certification: revoked",
+    "The stack has left the chat",
+    "Gravity clocked in",
 ];
 
 const CHAOS: [&str; 5] = [
-    "DELIVERY FOR: EVERYONE",
-    "SIXTEEN PACKAGES. NO SIGNATURE.",
-    "THE YARD REGRETS NOTHING",
-    "SAME-DAY SHIPPING",
-    "RETURNS DEPARTMENT: OVERWHELMED",
+    "Delivery for: everyone",
+    "Sixteen packages. No signature.",
+    "The yard regrets nothing",
+    "Same-day shipping",
+    "Returns department: overwhelmed",
 ];
 
 const RESET: [&str; 5] = [
-    "FRESH STACK. SAME DREAMS.",
-    "RESTOCKED",
-    "THE FORKLIFTS WORKED OVERTIME",
-    "SHELVES: SUSPICIOUSLY TIDY",
-    "CLEAN YARD. FOR NOW.",
+    "Fresh stack. Same dreams.",
+    "Restocked",
+    "The forklifts worked overtime",
+    "Shelves: suspiciously tidy",
+    "Clean yard. For now.",
 ];
 
 const PAUSE: [&str; 5] = [
-    "THE YARD HOLDS ITS BREATH",
-    "INVENTORY CHECK",
-    "COFFEE BREAK. PHYSICS PAUSED.",
-    "FREEZE! NOBODY MOVE.",
-    "ONE TICK AT A TIME",
+    "The yard holds its breath",
+    "Inventory check",
+    "Coffee break. Physics paused.",
+    "Freeze! Nobody move.",
+    "One tick at a time",
 ];
 
 const RETURNED: [&str; 4] = [
-    "RETURNED TO SENDER",
-    "LOST & FOUND DELIVERY",
-    "IT CAME BACK",
-    "NOTHING LEAVES THE YARD",
+    "Returned to sender",
+    "Lost & found delivery",
+    "It came back",
+    "Nothing leaves the yard",
 ];
 
 /// Advances by a stride coprime with the table length.
@@ -100,26 +100,26 @@ pub(super) fn returned(count: u32) -> &'static str {
 /// A bowling-style call for one bowl: (headline, color class 0..=3).
 pub(super) fn bowl_call(knocked: usize) -> (&'static str, u8) {
     match knocked {
-        0 => ("GUTTER BALL", 0),
-        1..=3 => ("A LITTLE NUDGE", 1),
-        4..=7 => ("SPARE-ISH", 2),
-        8..=19 => ("STRIKE!", 3),
-        _ => ("TURKEY! MEGA STRIKE!", 3),
+        0 => ("Gutter ball", 0),
+        1..=3 => ("A little nudge", 1),
+        4..=7 => ("Spare-ish", 2),
+        8..=19 => ("Strike!", 3),
+        _ => ("Turkey! Mega strike!", 3),
     }
 }
 
 pub(super) fn goal(goal: Goal) -> (&'static str, &'static str) {
     match goal {
-        Goal::Strike => ("GOAL: STRIKE!", "THE CRATES NEVER SAW IT COMING"),
-        Goal::Airtime => ("GOAL: AIRTIME!", "CLEARED FOR TAKEOFF. NOT FOR LANDING."),
-        Goal::Avalanche => ("GOAL: AVALANCHE!", "THE YARD WILL NEED A MINUTE"),
-        Goal::CleanSweep => ("GOAL: CLEAN SWEEP!", "NOT ONE CRATE LEFT STANDING. ART."),
+        Goal::Strike => ("Goal: Strike!", "The crates never saw it coming"),
+        Goal::Airtime => ("Goal: Airtime!", "Cleared for takeoff. Not for landing."),
+        Goal::Avalanche => ("Goal: Avalanche!", "The yard will need a minute"),
+        Goal::CleanSweep => ("Goal: Clean sweep!", "Not one crate left standing. Art."),
     }
 }
 
 pub(super) const SECRET: (&str, &str) = (
-    "SECRET: ON A PEDESTAL!",
-    "AS IT SHOULD BE. THE YARD BOWS TO YOU.",
+    "Secret: On a pedestal!",
+    "As it should be. The yard bows to you.",
 );
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,20 +131,20 @@ pub(super) struct Rank {
 pub(super) fn rank(goals: usize, secret: bool) -> Rank {
     let (title, quip) = match (goals, secret) {
         (4, true) => (
-            "YARDMASTER GENERAL, PEDESTAL ARTIST",
-            "EVERY GOAL AND THE PEDESTAL. FRAME THIS.",
+            "Yardmaster General, Pedestal Artist",
+            "Every goal and the pedestal. Frame this.",
         ),
         (4, false) => (
-            "YARDMASTER GENERAL",
-            "EVERY GOAL DONE. RUMOR SAYS A CORNER PEDESTAL IS LONELY.",
+            "Yardmaster General",
+            "Every goal done. Rumor says a corner pedestal is lonely.",
         ),
-        (3, _) => ("STACK BREAKER", "ONE GOAL LEFT. THE CRATES ARE NERVOUS."),
-        (2, _) => ("PALLET WRANGLER", "HALF THE CHECKLIST. ALL OF THE MESS."),
+        (3, _) => ("Stack Breaker", "One goal left. The crates are nervous."),
+        (2, _) => ("Pallet Wrangler", "Half the checklist. All of the mess."),
         (1, _) => (
-            "FORKLIFT ENTHUSIAST",
-            "YOU'VE GOT THE KNACK. AND THE KNOCK.",
+            "Forklift Enthusiast",
+            "You've got the knack. And the knock.",
         ),
-        _ => ("YARD TRAINEE", "HARD HAT ON. LET'S BREAK SOMETHING."),
+        _ => ("Yard Trainee", "Hard hat on. Let's break something."),
     };
     Rank { title, quip }
 }
@@ -177,7 +177,7 @@ mod tests {
     fn bowl_calls_climb_with_crates_and_ranks_with_goals() {
         let calls: Vec<_> = [0, 2, 5, 10, 25].map(|n| bowl_call(n).1).into();
         assert!(calls.windows(2).all(|w| w[0] <= w[1]));
-        assert_eq!(bowl_call(12).0, "STRIKE!");
+        assert_eq!(bowl_call(12).0, "Strike!");
         let titles: std::collections::BTreeSet<_> =
             (0..=4).map(|goals| rank(goals, false).title).collect();
         assert_eq!(titles.len(), 5);

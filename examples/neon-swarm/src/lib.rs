@@ -43,7 +43,6 @@ use screen::ScreenLayout;
 
 const INK: Color = Color::from_rgba(9, 16, 22, 255);
 const FLOOR: Color = Color::from_rgba(17, 29, 35, 255);
-const LINE: Color = Color::from_rgba(40, 62, 68, 255);
 const MUTED: Color = Color::from_rgba(125, 150, 154, 255);
 const PAPER: Color = Color::from_rgba(221, 237, 227, 255);
 const CYAN: Color = Color::from_rgba(98, 236, 207, 255);
@@ -70,6 +69,8 @@ async fn game() {
     let mut records = ferravex_render::storage::Records::new("neon-swarm").unwrap();
     let mut player_input = PlayerInput::preset("neon-swarm", Preset::TopDown);
     let mut hud_ui = Ui::new();
+    let mut hud_motion = hud::Hud::new();
+    let mut post_state = None;
     let mut notes = Vec::with_capacity(64);
     let mut results: Option<hud::Results> = None;
     let mut learned = hud::Learned::default();
@@ -242,8 +243,20 @@ async fn game() {
             Surface::Metal,
             80.,
         );
+        let post_screen = (!started, paused, game.phase != Phase::Playing);
+        if post_state != Some(post_screen) {
+            set_post_fx(
+                ferravex_render::post::PostFx::neon()
+                    .bloom(1.2, 0.72, 1.3)
+                    .vignette(if paused { 0.42 } else { 0.28 }, 0.65)
+                    .grain(0.)
+                    .aberration(0.),
+            );
+            post_state = Some(post_screen);
+        }
         clear_background(INK);
         set_camera(&view.camera);
+        draw::backdrop(&presentation);
         draw::arena(game, &presentation);
         draw::spawn_preview(game);
         draw::entities(game, &presentation, impact.emphasis);
@@ -299,96 +312,47 @@ async fn game() {
             results = Some(hud::Results::new(game, previous, attempts));
             attempts += 1;
         }
-        let playing_hud = started && !paused && game.phase == Phase::Playing;
-        if playing_hud {
-            if screen.compact {
+        let motion =
+            ferravex_play::tween::Motion::from(ferravex_render::preferences::feedback_policy());
+        let hud_screen = if !started {
+            hud::Screen::Ready
+        } else if paused {
+            hud::Screen::Paused
+        } else if game.phase == Phase::Playing {
+            hud::Screen::Playing
+        } else {
+            hud::Screen::Results
+        };
+        hud_motion.update(hud_screen, game, results.as_ref(), presentation_dt, motion);
+        if !screen.compact && hud_screen != hud::Screen::Playing {
+            let card = match hud_screen {
+                hud::Screen::Ready => hud::READY_CARD,
+                hud::Screen::Paused => hud::PAUSE_CARD,
+                _ => hud::RESULTS_CARD,
+            };
+            hud::menu_input(&mut hud_ui, card, hud::ACTION);
+        }
+        if screen.compact {
+            if hud_screen == hud::Screen::Playing {
                 screen.hud(&mut hud_ui, game, &presentation.juice);
             } else {
-                hud::play(&mut hud_ui, game, &player_input, learned, onboarding);
-                hud::announcements(&mut hud_ui, game, &presentation.juice);
-            }
-        }
-        if touch_mode
-            && !player_input.touch_customized()
-            && run.session.is_playing()
-            && !screen.draw_touch(movement)
-        {
-            draw_circle_lines(202.0, 600.0, 66.0, 1.4, Color::new(0.4, 0.8, 0.75, 0.22));
-            draw_circle(
-                202.0 + movement.x * 34.0,
-                600.0 + movement.y * 34.0,
-                18.0,
-                Color::new(0.4, 0.8, 0.75, 0.25),
-            );
-            draw_circle_lines(1100.0, 610.0, 40.0, 1.4, Color::new(0.4, 0.8, 0.75, 0.4));
-            label("DASH", 1069.0, 616.0, 14, CYAN);
-        }
-        let best = records
-            .get("sector-07", RECORD_RULES)
-            .map(|r| (r.score, r.runs));
-        if !started {
-            if screen.compact {
-                let detail = match best {
-                    Some((score, _)) => format!(
-                        "Clear three waves. Dash through amber rings. Best {}.",
-                        hud::thousands(score)
-                    ),
-                    None => "Clear three waves. Amber rings warn of attacks; dash through them."
-                        .to_owned(),
+                let title = match hud_screen {
+                    hud::Screen::Ready => "NEON SWARM",
+                    hud::Screen::Paused => "PAUSED",
+                    _ if game.phase == Phase::Won => "SECTOR SECURED",
+                    _ => "SIGNAL LOST",
                 };
-                overlay(
+                screen.overlay(
                     &mut hud_ui,
-                    &screen,
-                    &player_input,
-                    "NEON SWARM",
-                    &detail,
-                    "START",
-                );
-            } else {
-                hud::ready(&mut hud_ui, &player_input, best);
-            }
-        } else if paused {
-            if screen.compact {
-                overlay(
-                    &mut hud_ui,
-                    &screen,
-                    &player_input,
-                    "PAUSED",
-                    quips::pause(pauses),
-                    "RESUME",
-                );
-            } else {
-                hud::paused(&mut hud_ui, game, &player_input, pauses);
-            }
-        } else if game.phase != Phase::Playing {
-            let fallback;
-            let results = match &results {
-                Some(results) => results,
-                None => {
-                    fallback = hud::Results::new(game, None, attempts);
-                    &fallback
-                }
-            };
-            if screen.compact {
-                let (record, _) = results.record_line();
-                overlay(
-                    &mut hud_ui,
-                    &screen,
-                    &player_input,
-                    if game.phase == Phase::Won {
-                        "SECTOR SECURED"
+                    title,
+                    if paused {
+                        quips::pause(pauses)
                     } else {
-                        "SIGNAL LOST"
+                        "Clear three waves. Dash through amber rings."
                     },
-                    &format!(
-                        "{}! {} pts. {record}",
-                        results.rank.title,
-                        hud::thousands(results.summary.score)
-                    ),
-                    "PLAY AGAIN",
+                    if paused { "RESUME" } else { "START" },
+                    &player_input,
                 );
-            } else {
-                hud::results(&mut hud_ui, results, &player_input);
             }
         }
         hud_ui.finish_player(
@@ -396,10 +360,58 @@ async fn game() {
             !run.session.is_playing() && !finished && !lifecycle_changed,
         );
         hud_ui.paint();
+        if !screen.compact {
+            set_default_camera();
+            let painter = hud::Painter::new(screen.viewport);
+            hud_motion.button.update(
+                ferravex_render::ui::kit::ui_button_state(&hud_ui, 1, true),
+                presentation_dt,
+                motion,
+            );
+            match hud_screen {
+                hud::Screen::Playing => {
+                    hud::bands(&painter, [screen_width(), screen_height()]);
+                    hud::play(
+                        &painter,
+                        game,
+                        &player_input,
+                        learned,
+                        onboarding,
+                        &hud_motion,
+                        &presentation.juice,
+                    );
+                    hud::announcements(&painter, game, &presentation.juice, &hud_motion, motion);
+                }
+                hud::Screen::Ready => {
+                    let best = records
+                        .get("sector-07", RECORD_RULES)
+                        .map(|r| (r.score, r.runs));
+                    hud::ready(&painter, &player_input, best, &hud_motion, motion);
+                }
+                hud::Screen::Paused => {
+                    hud::paused(&painter, game, &player_input, pauses, &hud_motion, motion)
+                }
+                hud::Screen::Results => {
+                    let fallback;
+                    let result = match results.as_ref() {
+                        Some(r) => r,
+                        None => {
+                            fallback = hud::Results::new(game, None, attempts);
+                            &fallback
+                        }
+                    };
+                    hud::results(&painter, result, &player_input, &hud_motion, motion);
+                }
+            }
+        }
+        if touch_mode && !player_input.touch_customized() && run.session.is_playing() {
+            screen.draw_touch(movement);
+        }
         if hud_ui.activated(1) {
             let resuming = run.session.is_paused();
             if run.activate() {
                 if !resuming {
+                    hud_motion.restart();
                     presentation.reset();
                     sound.reset();
                     results = None;
@@ -408,6 +420,7 @@ async fn game() {
             }
         }
         set_default_camera();
+        hud_motion.draw_transition(motion, view.project(run.game.player));
         player_input.draw_controls();
         #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
         capture.end_frame();
@@ -431,34 +444,10 @@ fn label(text: &str, x: f32, y: f32, size: u16, color: Color) {
     );
 }
 
-fn text_width(text: &str, size: u16) -> f32 {
-    get_default_font()
-        .try_metrics(size, 1.)
-        .expect("authored font size")
-        .measure_line(text)
-        .expect("bounded game label")
-        .width
-}
-
 fn hint<'a>(input: &PlayerInput, action: &str, buffer: &'a mut [u8]) -> &'a str {
     // A long valid mapping stays available in Controls rather than overflowing
     // the HUD or silently reverting to a default key. Unbound is kept verbatim.
     input.format_hint(action, buffer).unwrap_or("See Controls")
-}
-
-fn overlay(
-    ui: &mut Ui,
-    screen: &ScreenLayout,
-    input: &PlayerInput,
-    title: &str,
-    detail: &str,
-    action: &str,
-) {
-    if screen.compact {
-        screen.overlay(ui, title, detail, action, input);
-    } else {
-        hud::simple(ui, title, detail, action);
-    }
 }
 
 #[cfg(test)]

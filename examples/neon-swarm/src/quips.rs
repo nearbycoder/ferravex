@@ -5,36 +5,36 @@
 use crate::game::{CLUTCH_HEALTH, Style};
 
 /// Silly names for the three waves, shown on intro banners and results.
-pub(crate) const WAVES: [&str; 3] = ["WELCOME COMMITTEE", "MIDDLE MANAGEMENT", "THE WHOLE HIVE"];
+pub(crate) const WAVES: [&str; 3] = ["Welcome Committee", "Middle Management", "The Whole Hive"];
 
 pub(crate) fn wave_name(wave: u32) -> &'static str {
     WAVES[(wave.clamp(1, 3) - 1) as usize]
 }
 
 const LOSS: [&str; 7] = [
-    "THE SWARM SAYS THANKS FOR VISITING",
-    "HEXAGONS ARE NOT, IN FACT, INVINCIBLE",
-    "SIGNAL LOST. DIGNITY: ALSO LOST.",
-    "THE DRONES WILL BE INSUFFERABLE ABOUT THIS",
-    "YOU WERE DOING SO WELL. ISH.",
-    "RESPAWNING CONFIDENCE...",
-    "THAT'S ONE WAY TO MEET THE SWARM",
+    "The swarm says thanks for visiting",
+    "Hexagons are not, in fact, invincible",
+    "Signal lost. Dignity: also lost.",
+    "The drones will be insufferable about this",
+    "You were doing so well. Ish.",
+    "Respawning confidence…",
+    "That's one way to meet the swarm",
 ];
 
 const WIN: [&str; 5] = [
-    "SECTOR 07 IS SPOTLESS. MOSTLY.",
-    "THE DRONES HAVE FILED A COMPLAINT",
-    "CONTAINMENT: CONTAINED",
-    "YOUR HEXAGON HAS NEVER LOOKED BETTER",
-    "PEST CONTROL WOULD LIKE YOUR NUMBER",
+    "Sector 07 is spotless. Mostly.",
+    "The drones have filed a complaint",
+    "Containment: contained",
+    "Your hexagon has never looked better",
+    "Pest control would like your number",
 ];
 
 const PAUSE: [&str; 5] = [
-    "THE SWARM IS ALSO ON BREAK",
-    "DRONES FROZEN MID-BUZZ",
-    "STRETCH. BLINK. HYDRATE.",
-    "THE HEXAGON APPRECIATES THE REST",
-    "TIME STOPPED. VERY SCI-FI.",
+    "The swarm is also on break",
+    "Drones frozen mid-buzz",
+    "Stretch. Blink. Hydrate.",
+    "The hexagon appreciates the rest",
+    "Time stopped. Very sci-fi.",
 ];
 
 const CLOSE: [&str; 6] = [
@@ -129,40 +129,40 @@ pub(crate) fn rank(run: RunSummary) -> Rank {
     let s = run.style;
     let (title, quip) = if run.won {
         if s.hits_taken == 0 {
-            ("UNTOUCHABLE HEXAGON", "THEY NEVER LAID A PIXEL ON YOU")
+            ("Untouchable Hexagon", "They never laid a pixel on you")
         } else if s.disco() {
             (
-                "DISCO INFERNO",
-                "YOU FOUND THE PARTY. THE DRONES WERE NOT INVITED.",
+                "Disco Inferno",
+                "You found the party. The drones were not invited.",
             )
         } else if run.health <= CLUTCH_HEALTH {
-            ("HANGING BY A PIXEL", "CARDIOLOGISTS HATE THIS ONE TRICK")
+            ("Hanging by a Pixel", "Cardiologists hate this one trick")
         } else if s.drive_bys >= 6 {
-            ("DRIVE-BY DIPLOMAT", "NEGOTIATIONS CONDUCTED AT 700 PX/S")
+            ("Drive-by Diplomat", "Negotiations conducted at 700 px/s")
         } else if s.close_shaves >= 6 {
-            ("THE MATADOR", "OLE! THE SWARM KEEPS MISSING")
+            ("The Matador", "Olé! The swarm keeps missing")
         } else if run.best_chain >= 20 {
-            ("CHAIN REACTION", "ONE KILL LED TO ANOTHER. AND ANOTHER.")
+            ("Chain Reaction", "One kill led to another. And another.")
         } else if run.score >= 15_000 {
             (
-                "CERTIFIED EXTERMINATOR",
-                "THE SWARM HAS YOUR PHOTO ON A DARTBOARD",
+                "Certified Exterminator",
+                "The swarm has your photo on a dartboard",
             )
         } else if run.score >= 9_000 {
-            ("PEST CONTROL PRO", "CLEAN WORK. TIDY HEXAGON.")
+            ("Pest Control Pro", "Clean work. Tidy hexagon.")
         } else {
-            ("SWARM SURVIVOR", "SCRAPPY, BUT THE SECTOR IS YOURS")
+            ("Swarm Survivor", "Scrappy, but the sector is yours")
         }
     } else {
         match run.wave {
-            0 | 1 if run.score == 0 => ("DRONE SNACK", "TIP: THE MOUSE BUTTON SHOOTS THINGS"),
+            0 | 1 if run.score == 0 => ("Drone Snack", "Tip: the mouse button shoots things"),
             0 | 1 => (
-                "WELCOME MAT",
-                "THE COMMITTEE WELCOMED YOU A LITTLE TOO HARD",
+                "Welcome Mat",
+                "The committee welcomed you a little too hard",
             ),
-            2 => ("MIDDLE MANAGED", "YOUR PERFORMANCE REVIEW WAS... BRIEF"),
-            _ if s.overseer_down => ("SO, SO CLOSE", "THE OVERSEER FELL. SO DID YOU."),
-            _ => ("HIVE-FIVE", "YOU MET THE WHOLE HIVE. THEY HUGGED HARD."),
+            2 => ("Middle Managed", "Your performance review was… brief"),
+            _ if s.overseer_down => ("So, So Close", "The Overseer fell. So did you."),
+            _ => ("Hive-Five", "You met the Whole Hive. They hugged hard."),
         }
     };
     Rank { title, quip }
@@ -173,23 +173,23 @@ pub(crate) fn next_goal(run: RunSummary) -> &'static str {
     let s = run.style;
     if !run.won {
         return match run.wave {
-            0 | 1 => "NEXT: SURVIVE THE WELCOME COMMITTEE",
-            2 => "NEXT: REACH THE WHOLE HIVE",
-            _ => "NEXT: TAKE DOWN THE OVERSEER",
+            0 | 1 => "Next: survive the Welcome Committee",
+            2 => "Next: reach the Whole Hive",
+            _ => "Next: take down the Overseer",
         };
     }
     if s.untouched_waves == 0 {
-        "NEXT: CLEAR A WAVE WITHOUT GETTING HIT"
+        "Next: clear a wave without getting hit"
     } else if s.drive_bys < 3 {
-        "NEXT: DASH THROUGH A DRONE AND SHOOT IT MID-DASH"
+        "Next: dash through a drone and shoot it mid-dash"
     } else if s.beacons_lit() == 0 {
-        "PSST: THE FOUR WALL LAMPS LOOK... SHOOTABLE"
+        "Psst: the four wall lamps look… shootable"
     } else if !s.disco() {
-        "NEXT: LIGHT ALL FOUR WALL LAMPS"
+        "Next: light all four wall lamps"
     } else if s.hits_taken > 0 {
-        "NEXT: A FLAWLESS RUN. YOU KNOW YOU WANT TO."
+        "Next: a flawless run. You know you want to."
     } else {
-        "NOTHING LEFT TO PROVE. BEAT YOUR SCORE?"
+        "Nothing left to prove. Beat your score?"
     }
 }
 
@@ -238,12 +238,12 @@ mod tests {
                 ..Style::default()
             },
         };
-        assert_eq!(rank(base).title, "SWARM SURVIVOR");
+        assert_eq!(rank(base).title, "Swarm Survivor");
         let flawless = RunSummary {
             style: Style::default(),
             ..base
         };
-        assert_eq!(rank(flawless).title, "UNTOUCHABLE HEXAGON");
+        assert_eq!(rank(flawless).title, "Untouchable Hexagon");
         let disco = RunSummary {
             style: Style {
                 beacons: 0b1111,
@@ -252,10 +252,10 @@ mod tests {
             },
             ..base
         };
-        assert_eq!(rank(disco).title, "DISCO INFERNO");
+        assert_eq!(rank(disco).title, "Disco Inferno");
         assert_eq!(
             rank(RunSummary { health: 3, ..base }).title,
-            "HANGING BY A PIXEL"
+            "Hanging by a Pixel"
         );
         let lost = RunSummary {
             won: false,
@@ -263,8 +263,8 @@ mod tests {
             score: 0,
             ..base
         };
-        assert_eq!(rank(lost).title, "DRONE SNACK");
-        assert_eq!(rank(RunSummary { wave: 2, ..lost }).title, "MIDDLE MANAGED");
+        assert_eq!(rank(lost).title, "Drone Snack");
+        assert_eq!(rank(RunSummary { wave: 2, ..lost }).title, "Middle Managed");
         for wave in 1..=3 {
             for won in [false, true] {
                 let run = RunSummary { won, wave, ..base };
@@ -272,7 +272,7 @@ mod tests {
                 assert!(!next_goal(run).is_empty());
             }
         }
-        assert_eq!(next_goal(base), "NEXT: CLEAR A WAVE WITHOUT GETTING HIT");
+        assert_eq!(next_goal(base), "Next: clear a wave without getting hit");
         let veteran = RunSummary {
             style: Style {
                 untouched_waves: 1,
@@ -282,6 +282,6 @@ mod tests {
             },
             ..base
         };
-        assert!(next_goal(veteran).contains("LAMPS"));
+        assert!(next_goal(veteran).contains("lamps"));
     }
 }

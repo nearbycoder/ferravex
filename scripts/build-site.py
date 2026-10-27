@@ -53,6 +53,8 @@ DOCS = [
  ('journey-200-templates','Verify generated projects','Recipes','docs/JOURNEY_200_TEMPLATES.md'),
  ('api-migration','API migration cookbook','Recipes','docs/MIGRATION_50.md'),
  ('api-migration-200','Adopt the newer APIs','Recipes','docs/MIGRATION_200.md'),
+ ('modern-games','Modern game presentation and Glowtide','Examples','docs/MODERNIZATION_2026.md'),
+ ('glowtide','Glowtide: survive until dawn','Examples','examples/glowtide/README.md'),
  ('mini-golf','Copper Greens: twelve-hole golf','Examples','examples/shared/mini-golf/README.md'),
  ('networking','FPS simulation and netcode','Multiplayer','crates/ferravex-fps/README.md'),
  ('protocol','Protocol and replication','Multiplayer','crates/ferravex-net/README.md'),
@@ -90,7 +92,8 @@ SOURCE_LINKS[str((ROOT/'README.md').resolve())]='/docs/getting-started/'
 # Guides link the catalog for GitHub readers; on the site that means the playable gallery.
 SOURCE_LINKS[str((ROOT/'examples/catalog.json').resolve())]='/examples/'
 GAMES = [dict(g,play='/play/'+g['host']+'/') for g in json.loads((ROOT/'examples/catalog.json').read_text())]
-GAME_GUIDES = {'owned-lab': ('Clear the four training drills, then run the 30-second qualifier: chain hits for a multiplier, land headshots and chase an S grade while Sgt. Gravel critiques your aim. Ring the bell to go again. Peer sessions keep running while local menus are open.',
+GAME_GUIDES = {'glowtide': ('Steer a lantern spirit through the glowing horde. Weapons fire automatically; collect motes, choose upgrades and evolve a level-seven weapon with its paired passive at a chest. Survive the tide and defeat the final boss. Choose Quick Tide for a five-minute run.', 'glowtide', 'Builds, controls and the tide'),
+ 'owned-lab': ('Clear the four training drills, then run the 30-second qualifier: chain hits for a multiplier, land headshots and chase an S grade while Sgt. Gravel critiques your aim. Ring the bell to go again. Peer sessions keep running while local menus are open.',
                'networking',
                'FPS simulation and authority'),
  'owned-orbit': ('Clear two sectors of panels without losing every ball. Grab Wide, Multi-ball and Sticky capsules, keep volleys going for bigger callouts, and spare a shot for the drifting satellite.',
@@ -229,7 +232,7 @@ ICON_THEME=('<svg class="icon icon-moon" viewBox="0 0 20 20" width="18" height="
  '<svg class="icon icon-sun" viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><circle cx="10" cy="10" r="3.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 1.8v2.4M10 15.8v2.4M1.8 10h2.4M15.8 10h2.4M4.2 4.2l1.7 1.7M14.1 14.1l1.7 1.7M4.2 15.8l1.7-1.7M14.1 5.9l1.7-1.7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>')
 # Gallery genres: a small, reader-facing grouping of the catalog's specific genres.
 GENRES={'action':'Action','racing':'Racing & flight','arcade':'Arcade','platform':'Platforming','puzzle':'Puzzle & strategy','golf':'Mini golf','lab':'Physics labs'}
-GAME_GENRE={'owned-lab':'action','strike':'action','neon-swarm':'action','pocket-rally':'racing','dune-skimmer':'racing','sky-courier':'racing','owned-orbit':'arcade','salvage-pinball':'arcade','emberline':'platform','marble-run':'platform','orchard-guard':'puzzle','siege-foundry':'puzzle','crystal-cavern':'puzzle','mini-golf-2d':'golf','mini-golf-3d':'golf','physics-2d':'lab','physics-3d':'lab'}
+GAME_GENRE={'glowtide':'action','owned-lab':'action','strike':'action','neon-swarm':'action','pocket-rally':'racing','dune-skimmer':'racing','sky-courier':'racing','owned-orbit':'arcade','salvage-pinball':'arcade','emberline':'platform','marble-run':'platform','orchard-guard':'puzzle','siege-foundry':'puzzle','crystal-cavern':'puzzle','mini-golf-2d':'golf','mini-golf-3d':'golf','physics-2d':'lab','physics-3d':'lab'}
 KINDS={'game':'Game','lab':'Lab','prototype':'Prototype'}
 CODE_LANGS={'sh':'Shell','bash':'Shell','shell':'Shell','console':'Shell','rust':'Rust','toml':'TOML','json':'JSON','js':'JavaScript','javascript':'JavaScript','mjs':'JavaScript','python':'Python','py':'Python','html':'HTML','css':'CSS','text':'Text','txt':'Text','wgsl':'WGSL','glsl':'GLSL'}
 def genre(game):return GAME_GENRE.get(game['id'],'arcade')
@@ -297,7 +300,7 @@ def tile(game,heading='h2',eager=False,describe=True):
   f'<span class="tile-kicker">{kicker}</span><{heading}>{esc(game["title"])}</{heading}></a>{text}</article>')
 def by_id(key):return next(g for g in GAMES if g['id']==key)
 def home():
- shelf=[g for g in ['mini-golf-3d','pocket-rally','emberline','neon-swarm','sky-courier','salvage-pinball','crystal-cavern','orchard-guard'] if any(x['id']==g for x in GAMES)]
+ shelf=[g for g in ['glowtide','mini-golf-3d','pocket-rally','emberline','neon-swarm','sky-courier','salvage-pinball','crystal-cavern'] if any(x['id']==g for x in GAMES)]
  cards=''.join(tile(by_id(key),'h3',eager=i<4,describe=False) for i,key in enumerate(shelf))
  counts={k:sum(genre(g)==k for g in GAMES) for k in GENRES}
  genre_links=''.join(f'<a href="/examples/?genre={k}">{esc(label)} <span>{counts[k]}</span></a>' for k,label in GENRES.items() if counts[k])
@@ -306,7 +309,7 @@ def home():
  n=len(GAMES)
  body=f'''<main id="main" class="release-home">
  <div class="container">
- <section class="hero"><div class="hero-copy"><div class="eyebrow">A first-party Rust game engine</div><h1>Make something <span>worth playing.</span></h1><p class="hero-lead">{n} small games, one engine you can read end to end, and nothing to install. Press play, then open the source and see exactly how it works.</p><div class="button-row"><a class="button" href="/examples/">{ICON_PLAY}Play a game</a><a class="button secondary" href="/docs/getting-started/">Start building <span aria-hidden="true">↗</span></a></div><div class="hero-tags"><span>Rust + std only</span><span>2D &amp; 3D</span><span>Runs in your browser</span><span>MIT licensed</span></div></div><div class="showcase"><div class="showcase-bar"><span><i aria-hidden="true"></i> Now playing</span><span>Marble Run · 3D</span></div><a class="showcase-image" href="/examples/marble-run/" aria-label="Play Marble Run"><img src="/assets/marble-run.png" alt="Marble Run: a rolling course built from ramps, rails and checkpoints" width="960" height="600" fetchpriority="high"><span class="showcase-play" aria-hidden="true">{ICON_PLAY}</span></a><div class="showcase-caption"><div><span class="eyebrow">Physics / camera / checkpoints</span><h2>Find your line.</h2><p>Four suspended courses. One more try.</p></div><a href="/examples/marble-run/" class="button small">{ICON_PLAY}Play</a></div><div class="showcase-code"><span>The whole loop, one tick at a time</span><code>for tick in session.advance_batch(dt).ticks() {{<br>&nbsp; update_world(tick.dt);<br>}}</code></div></div></section>
+ <section class="hero"><div class="hero-copy"><div class="eyebrow">A first-party Rust game engine</div><h1>Make something <span>worth playing.</span></h1><p class="hero-lead">{n} small games, one engine you can read end to end, and nothing to install. Press play, then open the source and see exactly how it works.</p><div class="button-row"><a class="button" href="/examples/">{ICON_PLAY}Play a game</a><a class="button secondary" href="/docs/getting-started/">Start building <span aria-hidden="true">↗</span></a></div><div class="hero-tags"><span>Rust + std only</span><span>2D &amp; 3D</span><span>Runs in your browser</span><span>MIT licensed</span></div></div><div class="showcase"><div class="showcase-bar"><span><i aria-hidden="true"></i> Now playing</span><span>Glowtide · 2D</span></div><a class="showcase-image" href="/examples/glowtide/" aria-label="Play Glowtide"><img src="/assets/glowtide.png" alt="Glowtide: a golden lantern spirit surrounded by glowing sea creatures and orbiting weapons" width="960" height="600" fetchpriority="high"><span class="showcase-play" aria-hidden="true">{ICON_PLAY}</span></a><div class="showcase-caption"><div><span class="eyebrow">Survive / evolve / shine</span><h2>A little light. A whole ocean.</h2><p>Build your glow. Make it to dawn.</p></div><a href="/examples/glowtide/" class="button small">{ICON_PLAY}Play</a></div><div class="showcase-code"><span>The whole loop, one tick at a time</span><code>for tick in session.advance_batch(dt).ticks() {{<br>&nbsp; update_world(tick.dt);<br>}}</code></div></div></section>
  </div>
  <section class="arcade" aria-labelledby="arcade-title"><div class="container"><div class="section-heading"><div><div class="eyebrow">The arcade is open</div><h2 id="arcade-title">No install. No account. <span>Just press play.</span></h2></div><p>Racing, golf, pinball, platforming and a pair of physics sandboxes, all built on the same engine.</p></div><div class="example-grid shelf">{cards}</div><div class="genre-row"><span class="mono">Browse by genre</span>{genre_links}<a class="button small" href="/examples/">All {n} games ↗</a></div></div></section>
  <div class="container">

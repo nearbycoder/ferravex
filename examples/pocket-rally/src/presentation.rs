@@ -68,10 +68,12 @@ pub(crate) fn hint_for(input: &PlayerInput, name: &str, device: HintDevice) -> S
     label.split(" / ").next().unwrap_or(label).to_owned()
 }
 
+#[cfg(test)]
 pub(crate) fn retry_hint(input: &PlayerInput) -> String {
     retry_hint_for(input, input.current_device())
 }
 
+#[cfg(test)]
 fn retry_hint_for(input: &PlayerInput, device: HintDevice) -> String {
     if device == HintDevice::Touch {
         // The result accepts a canvas tap. The driving layout does not contain
@@ -84,13 +86,6 @@ fn retry_hint_for(input: &PlayerInput, device: HintDevice) -> String {
             hint_for(input, "confirm", device)
         )
     }
-}
-
-pub(crate) fn text_width(label: &str, size: f32) -> f32 {
-    get_default_font()
-        .try_metrics(8, size / 8.)
-        .and_then(|metrics| metrics.measure_line(label))
-        .map_or(0., |measure| measure.width)
 }
 
 pub(crate) fn lap_comparison(comparison: Option<RecordDelta>, best: bool) -> String {

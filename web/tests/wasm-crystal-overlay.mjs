@@ -49,7 +49,11 @@ function runtime(width,height,autoplay=false,config=null) {
       const q=Array.from({length:6},(_,j)=>[(v[i+j*8]+1)*width/2,(1-v[i+j*8+1])*height/2]);
       const xs=q.map(p=>p[0]),ys=q.map(p=>p[1]);
       const left=Math.min(...xs),right=Math.max(...xs),y=Math.min(...ys),bottom=Math.max(...ys);
-      if(y>=top+116&&bottom<=top+160&&right-left>0&&right-left<4&&bottom-y>0&&bottom-y<4){
+      // Styled text merges adjacent font pixels into rectangles. Filter the
+      // action ink and keycap ink, excluding rounded button/AA decoration.
+      const inks=[[29/255,18/255,6/255,1],[232/255,242/255,238/255,1]];
+      const textQuad=inks.some(ink=>Array.from({length:6},(_,j)=>i+j*8).every(at=>ink.every((c,n)=>near(v[at+4+n],c))));
+      if(textQuad&&y>=top+116&&bottom<=top+160&&right-left>0&&bottom-y>0){
         assert.ok(left>=15.99&&right<=width-15.99,'the action glyph stays inside its button');action+=6;
       }
     }

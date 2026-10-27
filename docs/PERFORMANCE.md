@@ -1487,3 +1487,52 @@ reduction claim. No profile or manifest settings were changed.
 | siege_foundry.wasm | 569047 → 573351 | 219286 → 220862 |
 | sky_courier.wasm | 498744 → 502690 | 188813 → 190210 |
 | strike.wasm | 889783 → 893990 | 344668 → 346120 |
+
+## Modernized catalog observation (2026-10-27)
+
+After integrating post-processing, the UI kit and the game passes,
+`python3 -B scripts/perf-games.py --frames 120 --warmup 60 --runs 2 --output target/polish/release-perf`
+recorded 240 measured frames per game on the same Linux/Radeon host described
+above. These are short catalog-autoplay samples, not whole-run or device
+performance guarantees. Concurrent workspace work can affect timing. Each row
+reports separate p95 counters; adding their percentiles does not produce a
+frame-time percentile.
+
+| Game | Game CPU ms | GPU ms | Allocation calls/frame |
+| --- | ---: | ---: | ---: |
+| emberline | 0.273 | 0.530 | 2 |
+| neon-swarm | 0.873 | 0.767 | 3 |
+| pocket-rally | 1.904 | 0.840 | 4 |
+| salvage-pinball | 1.453 | 0.849 | 8 |
+| orchard-guard | 0.714 | 0.650 | 17 |
+| marble-run | 0.393 | 0.583 | 1 |
+| dune-skimmer | 0.659 | 0.786 | 0 |
+| crystal-cavern | 0.362 | 0.703 | 9 |
+| siege-foundry | 1.214 | 0.815 | 2 |
+| sky-courier | 0.514 | 0.696 | 2 |
+| strike | 0.450 | 0.787 | 0 |
+| physics-2d | 1.964 | 0.833 | 0 |
+| physics-3d | 1.593 | 0.577 | 15 |
+| mini-golf-2d | 1.099 | 0.784 | 0 |
+| mini-golf-3d | 0.485 | 0.675 | 0 |
+| glowtide | 0.750 | 0.985 | 0 |
+
+The native reference hosts use different resolutions and counters: Courtyard
+960×540 measured 0.089 ms game CPU plus 32.347 ms software rendering at p95;
+Orbit Breaker 640×720 measured 0.004 ms game CPU plus 1.284 ms software rendering.
+Courtyard's browser WebGL2 path is not measured by its native reference renderer.
+
+For the shared GPU hosts, game CPU p95 stayed under 2 ms, submission under
+0.8 ms and GPU queries under 1 ms in these samples. Post-processing adds passes
+and uploads, and some games still allocate while formatting their HUDs. Zero
+allocation regressions apply to the documented warmed renderer paths and
+Glowtide's bounded simulation workload; they are not a blanket catalog claim.
+
+A separate late-game Glowtide observation starts with 420 foes at 420 seconds,
+using `GLOWTIDE_STRESS=420` and 300 measured frames after 120 warm-up frames in
+each of two processes. It measured 1.162 ms game CPU and 0.575 ms GPU at p95,
+with 226,992 vertices at p95. Render allocations had median 0, p95 0, p99 1 and
+maximum 23 calls, so even this warmed presentation workload is not entirely
+allocation-free. The simulation-only 600-tick regression remains a separate
+zero-allocation guarantee for its tested workload. Raw observation:
+`target/polish/glowtide/stress-perf/report.json`.

@@ -45,8 +45,8 @@ pub(super) enum Scenario {
 impl Scenario {
     pub fn name(self) -> &'static str {
         match self {
-            Self::Workshop => "WORKSHOP",
-            Self::Dominoes => "DOMINO RUN",
+            Self::Workshop => "Workshop",
+            Self::Dominoes => "Domino run",
         }
     }
 }
@@ -73,10 +73,10 @@ impl Goal {
 
     pub fn title(self) -> &'static str {
         match self {
-            Self::Liftoff => "LIFTOFF",
-            Self::Skyscraper => "SKYSCRAPER",
-            Self::Demolition => "DEMOLITION",
-            Self::DominoRun => "DOMINO RUN",
+            Self::Liftoff => "Liftoff",
+            Self::Skyscraper => "Skyscraper",
+            Self::Demolition => "Demolition",
+            Self::DominoRun => "Domino run",
         }
     }
 

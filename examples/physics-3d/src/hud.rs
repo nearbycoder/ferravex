@@ -86,21 +86,17 @@ fn rank_width(w: f32, used: f32) -> f32 {
 }
 
 fn width_of(text: &str, size: f32) -> f32 {
-    measure_text(text, None, size as u16, 1.).width
+    ferravex_render::text::text_width(text, ferravex_render::text::TextStyle::modern(size, WHITE))
 }
 
 pub(super) fn fitted(text: &str, x: f32, y: f32, max_width: f32, size: f32, color: Color) -> f32 {
     let measured = width_of(text, size).max(1.);
     let scale = (max_width.max(1.) / measured).min(1.);
-    draw_text_ex(
+    ferravex_render::text::draw_text_styled(
         text,
         x,
         y,
-        TextParams {
-            font_size: size as u16,
-            font_scale: scale,
-            color,
-        },
+        ferravex_render::text::TextStyle::modern(size * scale, color),
     );
     measured * scale
 }
@@ -688,6 +684,62 @@ impl Hud {
             faded(PINK, alpha),
         );
     }
+}
+
+/// Rounded tool keys retain the lab's click-on-press input and live selection.
+pub(super) fn tool_button(rect: Rect, text: &str, options: ui::ButtonOptions) -> bool {
+    use ferravex_render::{
+        shapes,
+        text::{TextAlign, TextStyle, draw_text_styled, text_width},
+    };
+    let hovered = options.enabled && rect.contains(Vec2::from(mouse_position()));
+    let fill = if !options.enabled {
+        Color::new(0.10, 0.14, 0.19, 1.)
+    } else if options.selected {
+        ui::AMBER
+    } else if hovered {
+        Color::new(0.20, 0.27, 0.34, 1.)
+    } else {
+        Color::new(0.12, 0.17, 0.23, 1.)
+    };
+    shapes::fill_rounded_rect(rect, 7., fill);
+    shapes::stroke_rounded_rect(
+        rect,
+        7.,
+        1.,
+        if hovered || options.selected {
+            ui::AMBER
+        } else {
+            ui::LINE
+        },
+    );
+    let ink = if !options.enabled {
+        ui::MUTED
+    } else if options.selected {
+        ui::BACKGROUND
+    } else {
+        ui::INK
+    };
+    let style = TextStyle::modern(16., ink);
+    let size = 16. * ((rect.w - 10.) / text_width(text, style).max(1.)).min(1.);
+    let style = style.with_size(size).with_align(TextAlign::Center);
+    draw_text_styled(
+        text,
+        rect.x + rect.w * 0.5,
+        style.centered_baseline(rect.y + rect.h * 0.5),
+        style,
+    );
+    hovered && is_mouse_button_pressed(MouseButton::Left)
+}
+pub(super) fn tool(rect: Rect, text: &str, selected: bool) -> bool {
+    tool_button(
+        rect,
+        text,
+        ui::ButtonOptions {
+            selected,
+            enabled: true,
+        },
+    )
 }
 
 #[cfg(test)]

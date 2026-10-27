@@ -179,6 +179,16 @@ pub(super) fn grouped(value: u32) -> String {
     out
 }
 
+pub(super) fn grouped_into(out: &mut String, value: u32) {
+    use std::fmt::Write;
+    if value >= 1000 {
+        grouped_into(out, value / 1000);
+        let _ = write!(out, ",{value:03}", value = value % 1000);
+    } else {
+        let _ = write!(out, "{value}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -8,11 +8,13 @@
 //! flare. Text pops and toasts are informational, so they remain, but they no
 //! longer rise or bounce under reduced motion.
 use super::quips::{self, DeathCause};
-use super::{Game, PLAYER, motion_scale};
+use super::style::{Line, line};
+use super::{Game, PLAYER, SPEED, motion_scale};
 use ferravex_play::feedback::FeedbackPolicy;
 use ferravex_play::particles::{
     Emitter, EmitterDesc, EmitterTransform, ParticleDesc, ParticleMotion, ParticlePool,
 };
+use ferravex_play::tween::{Motion, Spring};
 use ferravex_render::prelude::{Color, Vec2, vec2};
 
 const SEED: u64 = 0x454d_4a55;
@@ -20,10 +22,10 @@ const POPS: usize = 6;
 const RINGS: usize = 6;
 pub(super) const TOAST_FADE: f32 = 0.25;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub(super) struct Pop {
     pub at: Vec2,
-    pub text: String,
+    pub text: Line,
     pub color: Color,
     pub age: f32,
     pub life: f32,
@@ -46,10 +48,12 @@ pub(super) enum Priority {
     Alert,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub(super) struct Toast {
-    pub head: String,
-    pub sub: String,
+    pub head: Line,
+    pub sub: Line,
+    /// A Modern-face glyph drawn in `color` before the headline.
+    pub icon: char,
     pub color: Color,
     pub age: f32,
     pub life: f32,
@@ -84,15 +88,20 @@ pub(super) struct Juice {
     pub flare: [f32; 2],
     /// Presentation seconds since reaching the lift (render time, Won only).
     pub celebrate: f32,
+    /// Vertical camera kick in world units (positive pushes the view down).
+    kick: Spring,
+    /// Cape tip offset from the shoulder, trailing motion with follow-through.
+    cape: [Spring; 2],
+    facing: f32,
     motion: f32,
     flash_scale: f32,
 }
 
 pub(super) const ORANGE: Color = super::ORANGE;
 pub(super) const CREAM: Color = super::CREAM;
-pub(super) const GREEN: Color = super::GREEN;
-pub(super) const GOLD: Color = Color::new(1.0, 0.80, 0.36, 1.0);
-pub(super) const RED: Color = Color::new(0.95, 0.38, 0.28, 1.0);
+pub(super) const GREEN: Color = super::style::LEAF;
+pub(super) const GOLD: Color = super::style::GOLD;
+pub(super) const RED: Color = super::style::DANGER;
 pub(super) const MOTH: Color = Color::new(0.86, 0.80, 1.0, 1.0);
 
 fn burst_desc(
@@ -148,9 +157,29 @@ impl Juice {
             flash: 0.,
             flare: [0.; 2],
             celebrate: 0.,
+            kick: Spring::underdamped(0., 9., 0.45),
+            cape: [
+                Spring::underdamped(-14., 6., 0.35),
+                Spring::underdamped(4., 6., 0.35),
+            ],
+            facing: 1.,
             motion: 1.,
             flash_scale: 1.,
         }
+    }
+
+    fn springs(&self) -> Motion {
+        Motion::from_reduced(self.motion == 0.)
+    }
+
+    /// Camera offset in world units: deterministic shake plus the landing kick.
+    pub fn camera_offset(&self) -> Vec2 {
+        self.shake() + vec2(0., -self.kick.value * self.motion)
+    }
+
+    /// Cape tip relative to the shoulder, in unscaled player units.
+    pub fn cape(&self) -> Vec2 {
+        vec2(self.cape[0].value, self.cape[1].value)
     }
 
     /// Restart discards every effect and reseeds bursts, so retries look identical.
@@ -175,6 +204,7 @@ impl Juice {
             self.trauma = 0.;
             self.squash = 0.;
             self.spawn_in = 0.;
+            self.kick.snap(0.);
         }
         if self.flash_scale == 0. {
             self.flash = 0.;
@@ -247,7 +277,7 @@ impl Juice {
         });
     }
 
-    pub fn pop(&mut self, at: Vec2, text: String, color: Color, size: f32) {
+    pub fn pop(&mut self, at: Vec2, text: Line, color: Color, size: f32) {
         let slot = self
             .pops
             .iter()
@@ -265,8 +295,9 @@ impl Juice {
 
     pub fn toast(
         &mut self,
-        head: String,
-        sub: String,
+        icon: char,
+        head: Line,
+        sub: Line,
         color: Color,
         life: f32,
         priority: Priority,
@@ -281,6 +312,7 @@ impl Juice {
         self.toast = Some(Toast {
             head,
             sub,
+            icon,
             color,
             age: 0.,
             life,
@@ -294,20 +326,25 @@ impl Juice {
         }
     }
 
+    /// A springy vertical camera nudge (landings, falls, the finish).
+    fn nudge(&mut self, velocity: f32) {
+        if self.motion > 0. {
+            self.kick.impulse(velocity);
+        }
+    }
+
     /// Route this accepted tick's events. Call once per accepted tick, after
     /// the simulation update and before [`Self::advance`].
     pub fn on_tick(&mut self, game: &Game) {
         let fb = game.feedback;
         let feet = game.position() + vec2(PLAYER.x * 0.5, PLAYER.y);
         if fb.respawned {
-            let (head, color, desc) = match game.death_cause {
+            let (color, desc) = match game.death_cause {
                 DeathCause::Spikes => (
-                    "OUCH!",
                     RED,
                     burst_desc(RED, ORANGE, [0., -190.], [300., 220.], 760., 0.7, 11.),
                 ),
                 DeathCause::Fissure => (
-                    "WHOOPS!",
                     ORANGE,
                     burst_desc(ORANGE, CREAM, [0., -280.], [170., 100.], 260., 0.8, 10.),
                 ),
@@ -315,25 +352,36 @@ impl Juice {
             let at = game.death_at + vec2(PLAYER.x * 0.5, PLAYER.y * 0.5);
             self.burst(desc, at.min(vec2(f32::MAX, 690.)), 34);
             self.kick(0.75);
+            self.nudge(-260.);
             if self.flash_scale > 0. {
                 self.flash = 0.55 * self.flash_scale;
             }
             self.spawn_in = if self.motion > 0. { 0.28 } else { 0. };
             self.squash = 0.;
             let back = if game.checkpoints.index() == 0 {
-                "BACK TO THE TRAILHEAD".to_owned()
+                Line::from_str("Back to the trailhead")
             } else {
-                format!("BACK TO LANTERN {}", game.checkpoints.index())
+                line!("Back to lantern {}", game.checkpoints.index())
             };
             self.toast(
-                quips::fall(game.death_cause, game.deaths, game.deaths_here).to_owned(),
-                format!("{head} {back}"),
+                '×',
+                Line::from_str(quips::fall(game.death_cause, game.deaths, game.deaths_here)),
+                back,
                 color,
                 1.9,
                 Priority::Alert,
             );
             return;
         }
+        let velocity = game.velocity();
+        if velocity.x.abs() > 1. {
+            self.facing = velocity.x.signum();
+        }
+        // The cape trails behind the run and lifts while falling, then
+        // overshoots and settles (follow-through), all on simulation time.
+        let speed = (velocity.x.abs() / SPEED).min(1.4);
+        self.cape[0].set_target(-self.facing * (12. + 14. * speed));
+        self.cape[1].set_target((4. + 4. * speed - velocity.y * 0.016).clamp(-10., 12.));
         if fb.jumped {
             self.squash = -1.;
             if fb.air_jumped {
@@ -347,6 +395,8 @@ impl Juice {
         }
         if fb.landed {
             self.squash = 0.4 + 0.6 * game.landing_strength;
+            self.nudge(-90. - 220. * game.landing_strength);
+            self.cape[1].impulse(160. * game.landing_strength);
             if game.landing_strength > 0.85 {
                 self.kick(0.32);
             }
@@ -361,23 +411,24 @@ impl Juice {
             self.ring(at, 30., 0.32, GOLD);
             self.pop(
                 at - vec2(0., 14.),
-                format!("+{}", fb.pickup_points),
+                line!("+{}", fb.pickup_points),
                 GOLD,
-                19.,
+                24.,
             );
             if let Some(multiplier) = fb.chain_up {
                 self.pop(
                     feet - vec2(0., 70.),
-                    format!("CHAIN ×{multiplier}!"),
+                    line!("CHAIN ×{multiplier}!"),
                     GREEN,
-                    23.,
+                    24.,
                 );
             }
         }
         if fb.air_jump_unlocked {
             self.toast(
-                "AIR JUMP UNLOCKED!".to_owned(),
-                "PRESS JUMP AGAIN IN MID-AIR · ONCE PER LANDING".to_owned(),
+                '▲',
+                Line::from_str("Air jump unlocked!"),
+                Line::from_str("Press jump again in mid-air · once per landing"),
                 GREEN,
                 2.8,
                 Priority::Info,
@@ -386,9 +437,9 @@ impl Juice {
         if fb.close_call {
             self.pop(
                 feet - vec2(0., 64.),
-                quips::close_call(game.close_calls).to_owned(),
+                Line::from_str(quips::close_call(game.close_calls)),
                 CREAM,
-                19.,
+                16.,
             );
             self.burst(
                 burst_desc(CREAM, ORANGE, [0., -60.], [140., 70.], 200., 0.4, 6.),
@@ -409,8 +460,9 @@ impl Juice {
                 self.flare[index - 1] = self.flash_scale;
             }
             self.toast(
-                format!("LANTERN {index} LIT"),
-                quips::lantern(index).to_owned(),
+                '♦',
+                line!("Lantern {index} lit"),
+                Line::from_str(quips::lantern(index)),
                 GOLD,
                 2.4,
                 Priority::Info,
@@ -424,8 +476,9 @@ impl Juice {
             );
             self.ring(super::MOTH_AT, 90., 0.8, MOTH);
             self.toast(
-                "SECRET: THE MOTH OF FORTUNE!".to_owned(),
-                "+500 AND ETERNAL BRAGGING RIGHTS".to_owned(),
+                '★',
+                Line::from_str("Secret: the Moth of Fortune!"),
+                Line::from_str("+500 and eternal bragging rights"),
                 MOTH,
                 3.2,
                 Priority::Alert,
@@ -433,8 +486,9 @@ impl Juice {
         }
         if let Some(split) = fb.split {
             self.toast(
-                super::ZONES[split + 1].to_owned(),
-                format!("SPLIT {:.2}S", game.trial.elapsed()),
+                '→',
+                Line::from_str(super::ZONES[split + 1]),
+                line!("Split {:.2}s", game.trial.elapsed()),
                 CREAM,
                 1.6,
                 Priority::Zone,
@@ -449,12 +503,18 @@ impl Juice {
                 );
             }
             self.kick(0.35);
+            self.nudge(-180.);
         }
     }
 
     /// Age effects by accepted simulation time only.
     pub fn advance(&mut self, dt: f32) {
         self.time += dt;
+        let motion = self.springs();
+        self.kick.advance(dt, motion);
+        for spring in &mut self.cape {
+            spring.advance(dt, motion);
+        }
         self.particles.update(dt).expect("fixed simulation step");
         for slot in &mut self.pops {
             if let Some(pop) = slot {
@@ -565,7 +625,7 @@ mod tests {
                 juice.particles.len(),
                 juice.time,
                 juice.pops.iter().flatten().count(),
-                juice.toast.as_ref().map(|t| t.head.clone()),
+                juice.toast.as_ref().map(|t| t.head),
             )
         };
         let first = run();
@@ -576,7 +636,14 @@ mod tests {
         let frozen = (juice.time, juice.particles.len());
         juice.advance(0.);
         assert_eq!((juice.time, juice.particles.len()), frozen);
-        juice.toast("A".into(), "B".into(), CREAM, 1., Priority::Info);
+        juice.toast(
+            '★',
+            Line::from_str("A"),
+            Line::from_str("B"),
+            CREAM,
+            1.,
+            Priority::Info,
+        );
         juice.reset();
         assert!(juice.toast.is_none() && juice.particles.is_empty());
     }
@@ -584,11 +651,32 @@ mod tests {
     #[test]
     fn higher_priority_toasts_are_not_stomped_by_zone_banners() {
         let mut juice = Juice::new();
-        juice.toast("FALL".into(), String::new(), RED, 2., Priority::Alert);
-        juice.toast("ZONE".into(), String::new(), CREAM, 2., Priority::Zone);
+        juice.toast(
+            '×',
+            Line::from_str("FALL"),
+            Line::new(),
+            RED,
+            2.,
+            Priority::Alert,
+        );
+        juice.toast(
+            '→',
+            Line::from_str("ZONE"),
+            Line::new(),
+            CREAM,
+            2.,
+            Priority::Zone,
+        );
         assert_eq!(juice.toast.as_ref().unwrap().head, "FALL");
         juice.advance(1.9);
-        juice.toast("ZONE".into(), String::new(), CREAM, 2., Priority::Zone);
+        juice.toast(
+            '→',
+            Line::from_str("ZONE"),
+            Line::new(),
+            CREAM,
+            2.,
+            Priority::Zone,
+        );
         assert_eq!(juice.toast.as_ref().unwrap().head, "ZONE");
     }
 }

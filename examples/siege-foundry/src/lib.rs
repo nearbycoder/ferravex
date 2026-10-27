@@ -15,6 +15,7 @@
 //! session.restart(); // The host also rebuilds bodies, ammunition and feedback.
 //! assert_eq!(session.tick(), 0);
 //! ```
+mod atmosphere;
 #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
 mod capture;
 mod hud;
@@ -37,7 +38,6 @@ use ferravex_render::{
     preferences,
     prelude::*,
     shaders::{LitMaterial, LitSettings},
-    ui,
 };
 use juice::{Juice, Material};
 use quips::{Banter, Mood};
@@ -51,7 +51,6 @@ const SPEED: f32 = 28.0;
 const RELOAD: f32 = 0.8;
 const SETTLE: f32 = 6.0;
 const PIVOT: Vec3 = Vec3::new(0.0, 1.3, 15.0);
-const SKY: Color = Color::from_rgba(173, 177, 161, 255);
 const INK: Color = Color::from_rgba(34, 40, 39, 255);
 const PAPER: Color = Color::from_rgba(246, 235, 211, 255);
 const RUST: Color = Color::from_rgba(176, 86, 48, 255);
@@ -691,15 +690,27 @@ struct Art {
     gus_tash: Mesh3d,
     gus_eye: Mesh3d,
     gus_board: Mesh3d,
+    ground: Mesh3d,
+    shed: Mesh3d,
+    stack: Mesh3d,
+    furnace: Mesh3d,
+    furnace_arch: Mesh3d,
+    channel: Mesh3d,
+    channel_rail: Mesh3d,
 }
+
+/// Warm, sooty foundry palette for the world (targets keep their rust red).
+const FLOOR: Color = Color::from_rgba(92, 78, 66, 255);
+const BRICK: Color = Color::from_rgba(122, 82, 62, 255);
+const CHARRED: Color = Color::from_rgba(70, 60, 54, 255);
 
 impl Art {
     fn new() -> Self {
         Self {
-            floor: Mesh3d::cuboid(vec3(28.0, 0.8, 40.0), Color::from_rgba(132, 130, 111, 255)),
+            floor: Mesh3d::cuboid(vec3(28.0, 0.8, 40.0), FLOOR),
             stone: Mesh3d::cuboid(Vec3::splat(1.17), SAND),
             target: Mesh3d::cuboid(Vec3::splat(1.17), RUST),
-            fallen: Mesh3d::cuboid(Vec3::splat(1.2), Color::from_rgba(103, 111, 91, 255)),
+            fallen: Mesh3d::cuboid(Vec3::splat(1.2), CHARRED),
             ball: Mesh3d::sphere(0.36, INK, 10, 6),
             barrel: Mesh3d::frustum(0.34, 0.27, 2.4, STEEL, 12),
             muzzle: Mesh3d::cylinder(0.2, 0.035, INK, 12),
@@ -707,13 +718,13 @@ impl Art {
             chassis: Mesh3d::cuboid(vec3(1.5, 0.45, 1.6), RUST),
             line: Mesh3d::cuboid(
                 vec3(0.075, 0.008, 26.0),
-                Color::from_rgba(190, 181, 139, 255),
+                Color::from_rgba(168, 128, 84, 255),
             ),
             column: Mesh3d::cuboid(vec3(0.32, 7.0, 0.32), STEEL),
             girder: Mesh3d::cuboid(vec3(18.0, 0.3, 0.34), RUST),
-            chimney: Mesh3d::frustum(1.0, 0.7, 12.0, Color::from_rgba(139, 118, 91, 255), 8),
+            chimney: Mesh3d::frustum(1.0, 0.7, 12.0, Color::from_rgba(112, 76, 60, 255), 8),
             roof: Mesh3d::cuboid(vec3(8.5, 0.3, 6.5), STEEL),
-            building: Mesh3d::cuboid(vec3(8.0, 4.0, 6.0), Color::from_rgba(158, 145, 114, 255)),
+            building: Mesh3d::cuboid(vec3(8.0, 4.0, 6.0), BRICK),
             rivet: Mesh3d::cylinder(0.16, 0.015, PAPER, 8),
             chunk_rust: Mesh3d::cuboid(Vec3::ONE, RUST),
             chunk_sand: Mesh3d::cuboid(Vec3::ONE, SAND),
@@ -731,9 +742,17 @@ impl Art {
             gus_tash: Mesh3d::cuboid(vec3(0.22, 0.05, 0.05), Color::from_rgba(92, 62, 44, 255)),
             gus_eye: Mesh3d::cuboid(Vec3::splat(0.045), INK),
             gus_board: Mesh3d::cuboid(vec3(0.3, 0.38, 0.04), Color::from_rgba(150, 112, 70, 255)),
+            ground: Mesh3d::cuboid(vec3(260.0, 1.0, 220.0), Color::from_rgba(52, 38, 34, 255)),
+            shed: Mesh3d::cuboid(vec3(10.0, 6.0, 8.0), Color::from_rgba(70, 50, 44, 255)),
+            stack: Mesh3d::frustum(1.6, 1.0, 22.0, Color::from_rgba(66, 46, 40, 255), 8),
+            furnace: Mesh3d::cuboid(vec3(2.4, 1.6, 0.12), atmosphere::MOLTEN),
+            furnace_arch: Mesh3d::cuboid(vec3(3.2, 2.3, 0.3), Color::from_rgba(58, 44, 40, 255)),
+            channel: Mesh3d::cuboid(vec3(0.7, 0.06, 28.0), Color::from_rgba(196, 74, 26, 255)),
+            channel_rail: Mesh3d::cuboid(vec3(0.22, 0.2, 28.0), Color::from_rgba(54, 44, 40, 255)),
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn draw(
         &self,
         game: &Range,
@@ -742,17 +761,48 @@ impl Art {
         juice: &Juice,
         camera: &RangeCamera,
         material: &LitMaterial,
+        ambient_time: f32,
     ) {
         set_camera(camera);
         material.begin(LitSettings {
+            // Low evening sun from the furnace side for long warm shading.
+            light_direction: vec3(-0.55, 0.7, 0.45),
             camera_position: camera.eye,
-            fog_color: SKY,
-            fog_start: 40.0,
-            fog_end: 100.0,
-            ambient: 0.55,
-            ..Default::default()
+            fog_color: atmosphere::HAZE,
+            fog_start: 42.0,
+            fog_end: 120.0,
+            ambient: 0.5,
         });
+        // The yard below the raised range, and the foundry town in the haze.
+        self.ground.draw(vec3(0.0, -4.5, -20.0), Quat::IDENTITY);
+        for (x, z, turn) in [
+            (-46.0, -48.0, 0.2),
+            (-28.0, -62.0, -0.1),
+            (-6.0, -58.0, 0.05),
+            (18.0, -64.0, 0.3),
+            (40.0, -50.0, -0.25),
+            (-60.0, -20.0, 0.4),
+        ] {
+            self.shed
+                .draw(vec3(x, -1.0, z), Quat::from_rotation_y(turn));
+        }
+        for (x, z) in [(-36.0, -58.0), (-14.0, -66.0), (8.0, -70.0), (30.0, -60.0)] {
+            self.stack.draw(vec3(x, 7.0, z), Quat::IDENTITY);
+        }
         self.floor.draw(vec3(0.0, -0.4, 4.0), Quat::IDENTITY);
+        // The furnace mouth and the molten channel it feeds.
+        self.furnace_arch
+            .draw(atmosphere::FURNACE - Vec3::Z * 0.1, Quat::IDENTITY);
+        self.furnace.draw(atmosphere::FURNACE, Quat::IDENTITY);
+        let channel_z = (atmosphere::CHANNEL_Z.0 + atmosphere::CHANNEL_Z.1) * 0.5;
+        self.channel
+            .draw(vec3(atmosphere::CHANNEL_X, 0.02, channel_z), Quat::IDENTITY);
+        for side in [-0.5, 0.5] {
+            self.channel_rail.draw(
+                vec3(atmosphere::CHANNEL_X + side, 0.1, channel_z),
+                Quat::IDENTITY,
+            );
+        }
         for x in [-8.0, -6.0, 6.0, 8.0] {
             self.line.draw(vec3(x, 0.012, 4.0), Quat::IDENTITY);
         }
@@ -813,7 +863,7 @@ impl Art {
                 chunk.position,
             ));
         }
-        self.draw_gus(juice);
+        self.draw_gus(juice, ambient_time);
         let direction = game.direction();
         let q = Quat::from_rotation_arc(Vec3::Y, direction);
         self.chassis
@@ -831,13 +881,14 @@ impl Art {
         self.barrel.draw(PIVOT + direction * (0.3 - recoil), q);
         self.muzzle.draw(PIVOT + direction * (1.515 - recoil), q);
         material.end();
+        // Screen-space atmosphere follows; the HUD boundary is explicit.
         set_default_camera();
     }
 
     /// Foreman Gus: idles, frets while a tower wobbles, and hops at a collapse.
-    fn draw_gus(&self, juice: &Juice) {
+    fn draw_gus(&self, juice: &Juice, ambient_time: f32) {
         let motion = juice.motion().min(1.0);
-        let bob = (juice.time * 3.1).sin() * 0.025 * motion;
+        let bob = (ambient_time * 3.1).sin() * 0.025 * motion;
         let root = Mat4::from_scale_rotation_translation(
             Vec3::splat(GUS_SCALE),
             Quat::from_rotation_y(GUS_FACING) * Quat::from_rotation_z(juice.fret()),
@@ -984,17 +1035,6 @@ impl Camera for RangeCamera {
     }
 }
 
-fn label(text: &str, x: f32, y: f32, size: f32, color: Color) {
-    draw_text(
-        text,
-        x + 1.0,
-        y + 1.0,
-        size,
-        Color::new(0.0, 0.0, 0.0, 0.22 * color.a),
-    );
-    draw_text(text, x, y, size, color);
-}
-
 fn clicked(rect: Rect) -> bool {
     rect.contains(Vec2::from(mouse_position())) && is_mouse_button_pressed(MouseButton::Left)
 }
@@ -1098,8 +1138,15 @@ async fn game() {
     let mut results = hud::Results::default();
     let mut coach = hud::Coach::default();
     let mut hints = hud::Hints::default();
+    let mut hud_anim = hud::HudAnim::default();
     #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
     let mut capture = capture::Capture::from_env();
+    let mut look_state = None;
+    let mut air = atmosphere::Air {
+        time: 0.0,
+        motion: 1.0,
+        flicker: 1.0,
+    };
     #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
     let fake_best = capture.fake_best();
     #[cfg(not(all(debug_assertions, not(target_arch = "wasm32"))))]
@@ -1154,6 +1201,7 @@ async fn game() {
         let started = state == SessionState::Ready && (confirm || menu_fire || pointer_fire);
         if restarted {
             foundry.rebuild();
+            hud_anim.open_doors();
             player_input.set_paused(false);
             sound.reset();
             results = hud::Results::default();
@@ -1247,7 +1295,23 @@ async fn game() {
         ) {
             foundry.juice.result_time(dt);
         }
-        clear_background(SKY);
+        let state = foundry.session.state();
+        if look_state != Some(state) {
+            // Sticky post settings change only when the screen changes.
+            set_post_fx(atmosphere::look(state));
+            look_state = Some(state);
+        }
+        let policy = preferences::feedback_policy();
+        let air_motion = if policy.reduced_motion() {
+            0.0
+        } else {
+            policy.intensity().min(1.0)
+        };
+        air.time += dt * air_motion;
+        air.motion = air_motion;
+        air.flicker = if policy.reduced_flash() { 0.0 } else { 1.0 };
+        clear_background(atmosphere::SKY_TOP);
+        atmosphere::sky(w, h);
         let camera = RangeCamera::new(w, h).shifted(w, h, foundry.juice.camera_offset());
         art.draw(
             &foundry.range,
@@ -1256,8 +1320,17 @@ async fn game() {
             &foundry.juice,
             &camera,
             &material,
+            air.time,
         );
+        atmosphere::world(&foundry, &camera, w, h, air);
+        post_fx_hud_begin();
         let best = stored_best(records.as_ref());
+        hud_anim.update(
+            dt.clamp(0., 0.1),
+            state,
+            &layout,
+            hud::enabled_buttons(&foundry, state, controls_open),
+        );
         hud::draw(&hud::View {
             foundry: &foundry,
             layout: &layout,
@@ -1269,6 +1342,7 @@ async fn game() {
             results: &results,
             best,
             coach: &coach,
+            anim: &hud_anim,
         });
         // The range supplies its own pause panel; retain the shared editor.
         if !player_input.paused() || controls_open {
@@ -1301,6 +1375,7 @@ mod journey200_194;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ferravex_render::ui;
 
     #[test]
     fn tick_input_is_not_read_while_ready_paused_or_on_zero_tick_frames() {

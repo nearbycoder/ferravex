@@ -53,21 +53,6 @@ pub(super) fn tight(rect: UiRect, align: Align, chars: usize, size: f32) -> UiRe
     }
 }
 
-// Baseline-compatible labels queued in the bounded shared draw list.
-fn aligned(ui: &mut Ui, text: &str, x: f32, y: f32, size: f32, color: Color, align: Align) {
-    let (rect, style) = formatted_layout(screen_width(), x, y, size, color, align);
-    let _ = ui.text(tight(rect, align, text.chars().count(), size), text, style);
-}
-fn label(ui: &mut Ui, text: &str, x: f32, y: f32, size: f32, color: Color) {
-    aligned(ui, text, x, y, size, color, Align::Left);
-}
-fn right(ui: &mut Ui, text: &str, x: f32, y: f32, size: f32, color: Color) {
-    aligned(ui, text, x, y, size, color, Align::Right);
-}
-fn center(ui: &mut Ui, text: &str, x: f32, y: f32, size: f32, color: Color) {
-    aligned(ui, text, x, y, size, color, Align::Center);
-}
-
 fn formatted(
     ui: &mut Ui,
     x: f32,
@@ -80,21 +65,6 @@ fn formatted(
     let (rect, style) = formatted_layout(screen_width(), x, y, size, color, align);
     let rect = tight(rect, align, char_count(args), size);
     let _ = ui.text_fmt(rect, style, args);
-}
-
-/// Centered formatted text, shrunk (never below 11px) to fit `max_width`.
-fn fitted_center(
-    ui: &mut Ui,
-    x: f32,
-    y: f32,
-    size: f32,
-    max_width: f32,
-    color: Color,
-    args: std::fmt::Arguments<'_>,
-) {
-    let chars = char_count(args).max(1) as f32;
-    let size = size.min(max_width / (chars * 0.75)).max(11.);
-    formatted(ui, x, y, size, color, Align::Center, args);
 }
 
 pub(super) fn formatted_layout(
@@ -148,94 +118,99 @@ pub struct HudState<'a> {
     pub error: &'a str,
     pub marker: crate::juice::Marker,
     pub death: Option<crate::juice::Death>,
+    /// Equipped weapon name in the modern face, or empty when not shown.
+    pub weapon: &'static str,
 }
 
 pub fn overlay(ui: &mut Ui, player: &Player, state: HudState<'_>) {
+    use crate::style::{self, BODY, SMALL, TITLE, fade};
+    use ferravex_render::shapes::{self, Fill, Stroke};
+    use ferravex_render::text::TextAlign;
     let w = screen_width();
     let h = screen_height();
-    let accent = rgb(0xd7b56d);
+    let amber = style::AMBER;
+    let signal = style::SIGNAL;
     if !state.error.is_empty() {
         // Centered and kept clear of the fullscreen menu corner on both sides.
-        let size = 16.0_f32.min(
-            16. * (w - 2. * MENU_CORNER[0] - 16.)
-                / measure_text(state.error, None, 16, 1.).width.max(1.),
+        let max = w - 2. * MENU_CORNER[0] - 32.;
+        let text = style::fit(
+            state.error,
+            style::modern(BODY, Color::from_hex(0xffc39a)),
+            max,
+            10.,
         );
-        center(ui, state.error, w * 0.5, 28., size, rgb(0xe4ac83));
+        let tw = style::width(state.error, text);
+        let rect = ferravex_render::Rect::new((w - tw) * 0.5 - 12., 10., tw + 24., 26.);
+        style::plate(rect, 6., style::PLATE_SOLID, 1.);
+        style::line(state.error, w * 0.5, 28., text, TextAlign::Center);
     }
     if state.active {
         let x = w * 0.5;
         let y = h * 0.5;
+        let c = vec2(x, y);
         if player.health > 0 {
-            let spread = 4. + state.shot_timer * 45.;
-            draw_circle(x, y, 2.5, Color::new(0.02, 0.04, 0.03, 0.85));
-            draw_circle(x, y, 1., INK);
-            for d in [-1., 1.] {
-                draw_line(
-                    x + d * spread,
-                    y,
-                    x + d * (spread + 5.),
-                    y,
-                    3.,
-                    Color::new(0.02, 0.04, 0.03, 0.6),
-                );
-                draw_line(
-                    x,
-                    y + d * spread,
-                    x,
-                    y + d * (spread + 5.),
-                    3.,
-                    Color::new(0.02, 0.04, 0.03, 0.6),
-                );
-                draw_line(x + d * spread, y, x + d * (spread + 5.), y, 1., INK);
-                draw_line(x, y + d * spread, x, y + d * (spread + 5.), 1., INK);
+            // Anti-aliased crosshair: a dot and four ticks with a dark keyline,
+            // opening briefly with each accepted shot.
+            let spread = 5. + state.shot_timer * 45.;
+            let keyline = Color::new(0.01, 0.02, 0.02, 0.7);
+            for (dx, dy) in [(1., 0.), (-1., 0.), (0., 1.), (0., -1.)] {
+                let d = vec2(dx, dy);
+                let a = c + d * spread;
+                let b = c + d * (spread + 7.);
+                shapes::polyline(&[a, b], Stroke::new(3.5, keyline));
+                shapes::polyline(&[a, b], Stroke::new(1.5, INK));
             }
+            shapes::fill_circle(c, 2.2, keyline);
+            shapes::fill_circle(c, 1.2, INK);
             if state.hit_timer > 0. {
                 // Accepted hits only: a crisp X, bigger and redder for heads
                 // and eliminations, with a short label that names which.
                 use crate::juice::Marker;
+                let t = (state.hit_timer / 0.25).clamp(0., 1.);
                 let (outer, width, color, text) = match state.marker {
-                    Marker::Hit => (13., 2., accent, "HIT"),
-                    Marker::Headshot => (16., 2.5, rgb(0xf4735c), "HEADSHOT"),
-                    Marker::Kill => (18., 3., rgb(0xf4735c), "FRAG"),
+                    Marker::Hit => (13., 2., INK, "Hit"),
+                    Marker::Headshot => (17., 2.5, signal, "Headshot"),
+                    Marker::Kill => (19., 3., signal, "Frag"),
                 };
+                let outer = outer + 4. * t * t;
                 for (dx, dy) in [(1., 1.), (-1., 1.), (1., -1.), (-1., -1.)] {
-                    draw_line(
-                        x + dx * 8.,
-                        y + dy * 8.,
-                        x + dx * outer,
-                        y + dy * outer,
-                        width + 2.,
-                        Color::new(0.02, 0.04, 0.03, 0.85),
-                    );
-                    draw_line(
-                        x + dx * 8.,
-                        y + dy * 8.,
-                        x + dx * outer,
-                        y + dy * outer,
-                        width,
-                        color,
-                    );
+                    let d = vec2(dx, dy);
+                    let (a, b) = (c + d * 8., c + d * outer);
+                    shapes::polyline(&[a, b], Stroke::new(width + 2.5, keyline));
+                    shapes::polyline(&[a, b], Stroke::new(width, fade(color, 0.4 + 0.6 * t)));
                 }
-                center(
-                    ui,
+                if state.marker != Marker::Hit {
+                    ferravex_render::post::with_glow(|| {
+                        shapes::glow_disc(c, 26., fade(color, 0.22 * t));
+                    });
+                }
+                style::line(
                     text,
                     x,
-                    y + 36.,
-                    13.,
-                    if text == "HIT" { INK } else { color },
+                    y + 38.,
+                    style::modern(SMALL, fade(color, 0.5 + 0.5 * t)),
+                    TextAlign::Center,
                 );
             }
         }
 
         // Touch controls occupy the lower corners; vitals move above them.
         let baseline = vitals_baseline(h, state.touch_mode, state.round_phase.is_some());
-        let health_color = if player.health <= 25 {
-            rgb(0xe69278)
-        } else {
-            INK
-        };
-        draw_line(27., baseline - 10., 39., baseline - 10., 2., health_color);
-        draw_line(33., baseline - 16., 33., baseline - 4., 2., health_color);
+        let low = player.health <= 25;
+        let health_color = if low { rgb(0xe69278) } else { INK };
+        // Health: AA cross, the classic number (kept for its punch and for the
+        // browser vitals tests) and a modern bar under it.
+        let cross = if low { signal } else { amber };
+        shapes::fill_rounded_rect(
+            ferravex_render::Rect::new(27., baseline - 11., 12., 3.),
+            1.,
+            cross,
+        );
+        shapes::fill_rounded_rect(
+            ferravex_render::Rect::new(31.5, baseline - 15.5, 3., 12.),
+            1.,
+            cross,
+        );
         formatted(
             ui,
             50.,
@@ -245,8 +220,29 @@ pub fn overlay(ui: &mut Ui, player: &Player, state: HudState<'_>) {
             Align::Left,
             format_args!("{}", player.health),
         );
+        let bar = ferravex_render::Rect::new(27., baseline + 8., 118., 5.);
+        if bar.y + bar.h < h - 2. {
+            shapes::fill_rounded_rect(bar, 2.5, Color::new(0., 0., 0., 0.45));
+            let fill = ferravex_render::Rect::new(
+                bar.x,
+                bar.y,
+                bar.w * f32::from(player.health.min(100)) / 100.,
+                bar.h,
+            );
+            if fill.w > 0. {
+                shapes::fill_rounded_rect(
+                    fill,
+                    2.5,
+                    Fill::horizontal(
+                        fill,
+                        if low { signal } else { amber },
+                        if low { signal } else { style::LIME },
+                    ),
+                );
+            }
+        }
 
-        // The equipped weapon is already visible. Only ammunition needs a label.
+        // Ammunition: classic number, magazine pips and the weapon name.
         // Touch vitals near the top move left of the fullscreen menu corner.
         let inset = if baseline - VITALS_SIZE < MENU_CORNER[1] {
             MENU_CORNER[0]
@@ -263,87 +259,132 @@ pub fn overlay(ui: &mut Ui, player: &Player, state: HudState<'_>) {
             Align::Right,
             format_args!("{}", player.ammo),
         );
-        draw_rectangle(w - 34., baseline - 14., 4., 12., MUTED);
-        draw_triangle(
-            vec2(w - 34., baseline - 15.),
-            vec2(w - 30., baseline - 15.),
-            vec2(w - 32., baseline - 19.),
+        shapes::fill_capsule(
+            vec2(w - 32., baseline - 13.),
+            vec2(w - 32., baseline - 4.),
+            2.,
             MUTED,
         );
+        let pips = ferravex_fps::MAGAZINE_SIZE as usize;
+        let pip_w = 3.;
+        let span = pips as f32 * (pip_w + 1.);
+        let pip_y = baseline + 8.;
+        if pip_y + 5. < h - 2. {
+            for i in 0..pips {
+                let filled = i < usize::from(player.ammo);
+                let px = w - 28. - span + i as f32 * (pip_w + 1.);
+                shapes::fill_rounded_rect(
+                    ferravex_render::Rect::new(px, pip_y, pip_w, 5.),
+                    1.,
+                    if filled {
+                        if player.ammo <= 5 { signal } else { INK }
+                    } else {
+                        Color::new(0., 0., 0., 0.4)
+                    },
+                );
+            }
+        }
         let status_y = if state.touch_mode {
-            baseline + 22.
+            baseline + 24.
         } else {
-            baseline - 34.
+            baseline - 36.
         };
         if player.reload_ticks > 0 {
-            right(ui, "RELOADING", w - 28., status_y, 13., accent);
             let progress = 1. - player.reload_ticks as f32 / RELOAD_TICKS as f32;
-            draw_rectangle(
-                w - 108.,
-                status_y + 6.,
-                80.,
-                2.,
-                Color::new(0.1, 0.15, 0.12, 0.6),
+            style::line(
+                "Reloading",
+                w - 28.,
+                status_y,
+                style::modern(SMALL, amber),
+                TextAlign::Right,
             );
-            draw_rectangle(
-                w - 108.,
-                status_y + 6.,
-                80. * progress.clamp(0., 1.),
-                2.,
-                accent,
+            let track = ferravex_render::Rect::new(w - 110., status_y + 5., 82., 3.);
+            shapes::fill_rounded_rect(track, 1.5, Color::new(0., 0., 0., 0.45));
+            shapes::fill_rounded_rect(
+                ferravex_render::Rect::new(
+                    track.x,
+                    track.y,
+                    track.w * progress.clamp(0., 1.),
+                    track.h,
+                ),
+                1.5,
+                amber,
             );
         } else if player.ammo == 0 && player.health > 0 {
             let mut key = [0; 64];
             let key = hint(state.input, "reload", &mut key);
-            formatted(
-                ui,
+            style::line_fmt(
                 w - 28.,
                 status_y,
-                13.,
-                accent,
-                Align::Right,
-                format_args!("EMPTY - RELOAD {key}"),
+                style::modern(SMALL, signal),
+                TextAlign::Right,
+                format_args!("Empty · press {key} to reload"),
+            );
+        } else if !state.weapon.is_empty() {
+            style::line(
+                state.weapon,
+                w - 28.,
+                status_y,
+                style::modern(SMALL, MUTED),
+                TextAlign::Right,
             );
         }
         if player.health == 0 {
             let seconds = player.respawn_ticks as f32 / TICK_RATE as f32;
-            let extra = if state.death.is_some() { 50. } else { 0. };
-            let width = (w - 32.).clamp(0., if extra > 0. { 460. } else { 256. });
-            draw_rectangle(
-                x - width * 0.5,
-                y - 37.,
-                width,
-                72. + extra,
-                Color::new(0.055, 0.085, 0.075, 0.82),
+            let tall = state.death.is_some();
+            let width = (w - 32.).clamp(0., if tall { 440. } else { 280. });
+            let height = if tall { 132. } else { 84. };
+            let card = ferravex_render::Rect::new(x - width * 0.5, y - 44., width, height);
+            style::plate(card, 10., style::PLATE_SOLID, 1.);
+            shapes::fill_rounded_rect(
+                ferravex_render::Rect::new(card.x, card.y, card.w, 3.),
+                1.5,
+                signal,
             );
-            center(ui, "ELIMINATED", x, y - 7., 24., INK);
+            let title = style::fit("ELIMINATED", style::classic(TITLE, INK), width - 32., 14.);
+            style::line("ELIMINATED", x, y - 10., title, TextAlign::Center);
             // Who did it and what they said, then when you are back.
-            let status_y = if let Some(death) = state.death {
-                let fit = |text: &str, size: f32| crate::juice::fit_size(text, size, width - 24.);
-                let by = format!("BY {}", death.killer);
-                center(ui, &by, x, y + 17., fit(&by, 15.), rgb(0xf4735c));
+            let mut status_y = y + 16.;
+            if let Some(death) = state.death {
+                let by = crate::style::Buf::<48>::fmt(format_args!("by {}", death.killer));
+                let by_style =
+                    style::fit(by.as_str(), style::modern(BODY, signal), width - 32., 10.);
+                style::line(by.as_str(), x, y + 14., by_style, TextAlign::Center);
                 let line = death.gloat.unwrap_or(death.retry);
                 let quoted = if death.gloat.is_some() {
-                    format!("\"{line}\"")
+                    crate::style::Buf::<96>::fmt(format_args!("“{line}”"))
                 } else {
-                    line.to_owned()
+                    crate::style::Buf::<96>::fmt(format_args!("{line}"))
                 };
-                center(ui, &quoted, x, y + 39., fit(&quoted, 14.), INK);
-                y + 67.
-            } else {
-                y + 17.
-            };
+                let q = style::fit(quoted.as_str(), style::modern(BODY, INK), width - 32., 10.);
+                style::line(quoted.as_str(), x, y + 38., q, TextAlign::Center);
+                status_y = y + 70.;
+            }
             if let Some(hint) = death_hint(state.round_phase) {
-                center(ui, hint, x, status_y, 16., MUTED);
-            } else {
-                formatted(
-                    ui,
+                style::line(
+                    hint,
                     x,
                     status_y,
-                    16.,
-                    MUTED,
-                    Align::Center,
-                    format_args!("Respawning in {seconds:.1}s"),
+                    style::modern(SMALL, MUTED),
+                    TextAlign::Center,
+                );
+            } else {
+                let total = ferravex_fps::RESPAWN_TICKS as f32 / TICK_RATE as f32;
+                let ring = vec2(x - 52., status_y - 4.);
+                shapes::stroke_circle(ring, 7., 2., Color::new(1., 1., 1., 0.12));
+                shapes::stroke_arc(
+                    ring,
+                    7.,
+                    -std::f32::consts::FRAC_PI_2,
+                    std::f32::consts::TAU * (1. - seconds / total).clamp(0., 1.),
+                    Stroke::new(2., amber),
+                );
+                style::line_fmt(
+                    x - 38.,
+                    status_y,
+                    style::modern(SMALL, MUTED),
+                    TextAlign::Left,
+                    format_args!("Back in {seconds:.1}s"),
                 );
             }
         }
@@ -474,9 +515,9 @@ fn menu_items(
         format_args!(
             "{}",
             match mode {
-                Mode::Network => "DOCKYARD / MULTIPLAYER",
-                Mode::Replay => "DOCKYARD / REPLAY",
-                Mode::Practice => "DOCKYARD / PRACTICE",
+                Mode::Network => "Dockyard · Multiplayer",
+                Mode::Replay => "Dockyard · Replay",
+                Mode::Practice => "Dockyard · Practice",
             }
         ),
         16. * scale,
@@ -578,45 +619,35 @@ pub fn menu(
 ) {
     let w = screen_width();
     let h = screen_height();
-    let shade = Color::new(0.04, 0.065, 0.055, 0.78);
+    let shade = Color::new(0.03, 0.05, 0.055, 0.8);
     ui.gradient(
         UiRect {
             min: [0.; 2],
             size: [(w * 0.58).max(350.).min(w), h],
         },
         shade,
-        Color::new(shade.r, shade.g, shade.b, if w < 640. { 0.35 } else { 0. }),
+        Color::new(shade.r, shade.g, shade.b, if w < 640. { 0.4 } else { 0. }),
     )
     .unwrap();
-    menu_items(w, h, mode, has_played, touch, input, |item| match item {
-        MenuItem::Text(rect, text, size, color) => {
-            ui.text_fmt(
-                rect,
-                TextStyle {
-                    size,
-                    color,
-                    shadow: true,
-                    wrap: true,
-                    ..Default::default()
-                },
-                text,
-            )
-            .unwrap();
-        }
-        MenuItem::Button(id, rect, text, size, primary) => {
+    // `Ui` keeps input, focus and the flat button fills (the primary fill is
+    // the browser tests' button contract); `menu_overlay` paints the copy and
+    // the modern button faces on top after `Ui::paint`.
+    menu_items(w, h, mode, has_played, touch, input, |item| {
+        if let MenuItem::Button(id, rect, text, size, primary) = item {
+            let fill = if primary {
+                rgb(0xd7b56d)
+            } else {
+                rgb(0x263b35)
+            };
             ui.button(
                 id,
                 rect,
                 text,
                 true,
                 ButtonStyle {
-                    fill: if primary {
-                        rgb(0xd7b56d)
-                    } else {
-                        rgb(0x263b35)
-                    },
-                    ink: if primary { rgb(0x17251f) } else { INK },
-                    focus: INK,
+                    fill,
+                    ink: fill,
+                    focus: Color::new(0., 0., 0., 0.),
                     size,
                     ..Default::default()
                 },
@@ -626,28 +657,248 @@ pub fn menu(
     });
 }
 
+/// Eased menu state: time since the menu (or results) appeared and one
+/// hover/press/focus spring per button id.
+pub struct MenuFx {
+    pub opened: f32,
+    visible: bool,
+    buttons: [ferravex_render::ui::kit::ButtonMotion; 4],
+}
+
+impl MenuFx {
+    pub fn new() -> Self {
+        Self {
+            opened: 0.,
+            visible: false,
+            buttons: Default::default(),
+        }
+    }
+    /// Call once per frame after `Ui::finish`, with whether a menu shows.
+    pub fn update(
+        &mut self,
+        ui: &Ui,
+        visible: bool,
+        dt: f32,
+        motion: ferravex_play::tween::Motion,
+    ) {
+        use ferravex_render::ui::kit;
+        if visible && !self.visible {
+            self.opened = 0.;
+            for (id, b) in self.buttons.iter_mut().enumerate() {
+                b.snap(kit::ui_button_state(ui, id as u64, true));
+            }
+        }
+        self.visible = visible;
+        if visible {
+            self.opened += dt.clamp(0., 0.1);
+            for (id, b) in self.buttons.iter_mut().enumerate() {
+                b.update(kit::ui_button_state(ui, id as u64, true), dt, motion);
+            }
+        }
+    }
+    /// Paint a `Ui` button `id`'s modern face over its flat fill.
+    pub fn button(&self, id: u64, rect: UiRect, label: &str, primary: bool, alpha: f32) {
+        use ferravex_render::ui::kit::{self, ButtonKind};
+        let Some(motion) = self.buttons.get(id as usize) else {
+            return;
+        };
+        let r = ferravex_render::Rect::new(rect.min[0], rect.min[1], rect.size[0], rect.size[1]);
+        kit::button(
+            r,
+            label,
+            if primary {
+                ButtonKind::Primary
+            } else {
+                ButtonKind::Secondary
+            },
+            motion,
+            &kit_theme().faded(alpha),
+        );
+    }
+}
+
+/// Strike's kit palette: flat fills match the `Ui` button bases underneath.
+pub fn kit_theme() -> ferravex_render::ui::kit::KitTheme {
+    use crate::style;
+    ferravex_render::ui::kit::KitTheme {
+        surface: Color::from_hex(0x131c1d),
+        raised: rgb(0x263b35),
+        header: Color::from_hex(0x2f4741),
+        ink: style::INK,
+        muted: style::MUTED,
+        accent: rgb(0xd7b56d),
+        accent_ink: rgb(0x17251f),
+        focus: style::INK,
+        radius: 6.,
+        ..Default::default()
+    }
+}
+
+/// Copy, logo and modern button faces for the briefing, pause and replay
+/// menus, drawn after `Ui::paint` with a staggered entrance.
+pub fn menu_overlay(
+    fx: &MenuFx,
+    mode: crate::host::Mode,
+    has_played: bool,
+    touch: bool,
+    input: &PlayerInput,
+) {
+    use crate::style::{self, fade};
+    use ferravex_play::tween::{Ease, Entrance};
+    use ferravex_render::shapes;
+    use ferravex_render::text::TextAlign;
+    let w = screen_width();
+    let h = screen_height();
+    let motion = style::motion();
+    let entrance = Entrance::fade_up(10.).with_stagger(0.06);
+    let t = fx.opened;
+    let mut index = 0;
+    let mut primary_rect = None;
+    menu_items(w, h, mode, has_played, touch, input, |item| {
+        let look = entrance.sample(t, index, motion);
+        index += 1;
+        let dy = look.offset[1];
+        match item {
+            MenuItem::Text(rect, text, size, authored_color) => {
+                let text = style::Buf::<96>::fmt(text);
+                let x = rect.min[0];
+                let top = rect.min[1] + dy;
+                if text.as_str() == "STRIKE" {
+                    // Logo: classic letters stamp in one by one, an amber
+                    // rule sweeps under them and a warm glow breathes.
+                    let base = style::classic(size, style::INK);
+                    let mut cursor = x;
+                    for (i, ch) in text.as_str().char_indices() {
+                        let glyph = &text.as_str()[i..i + ch.len_utf8()];
+                        let pop = Entrance::pop(1.6).with_stagger(0.05).sample(t, i, motion);
+                        let s = base
+                            .with_size(size * pop.scale)
+                            .with_color(fade(style::INK, pop.alpha));
+                        let gw = style::width(glyph, base);
+                        style::line(
+                            glyph,
+                            cursor + gw * 0.5,
+                            top + size * 0.875 + (size * pop.scale - size) * 0.4,
+                            s,
+                            TextAlign::Center,
+                        );
+                        cursor += gw + size / 8.;
+                    }
+                    let sweep = if motion.is_reduced() {
+                        1.
+                    } else {
+                        Ease::CubicOut.apply(((t - 0.25) / 0.5).clamp(0., 1.))
+                    };
+                    let logo_w = cursor - x;
+                    let rule = ferravex_render::Rect::new(
+                        x,
+                        top + size + 2.,
+                        (logo_w * sweep).max(0.),
+                        3.,
+                    );
+                    shapes::fill_rounded_rect(rule, 1.5, style::AMBER);
+                    let breathe = if motion.is_reduced() {
+                        0.5
+                    } else {
+                        0.5 + 0.5 * (t * 1.6).sin()
+                    };
+                    ferravex_render::post::with_glow(|| {
+                        shapes::glow_disc(
+                            vec2(x + logo_w * 0.5, top + size * 0.5),
+                            logo_w * 0.55,
+                            fade(style::AMBER, 0.05 + 0.04 * breathe),
+                        )
+                    });
+                } else {
+                    let face = style::modern(16., style::INK);
+                    let color = if text.as_str().contains('·') {
+                        style::MUTED
+                    } else {
+                        authored_color
+                    };
+                    let s = style::fit(
+                        text.as_str(),
+                        face.with_color(fade(color, look.alpha)),
+                        rect.size[0],
+                        10.,
+                    );
+                    if !text.as_str().is_empty() {
+                        let lines = text.as_str().lines().count().max(1) as f32;
+                        let line_h = rect.size[1] / lines;
+                        for (n, part) in text.as_str().lines().enumerate() {
+                            style::line(
+                                part,
+                                x,
+                                top + line_h * n as f32 + line_h * 0.8,
+                                s,
+                                TextAlign::Left,
+                            );
+                        }
+                    }
+                }
+            }
+            MenuItem::Button(id, rect, label, _, primary) => {
+                let r = UiRect {
+                    min: [rect.min[0], rect.min[1] + dy],
+                    size: rect.size,
+                };
+                fx.button(id, r, label, primary, look.alpha);
+                if primary {
+                    primary_rect = Some(rect);
+                }
+            }
+        }
+    });
+    // Attract prompt beside the primary action on roomy keyboard layouts.
+    if let Some(rect) = primary_rect
+        && !touch
+        && mode == crate::host::Mode::Practice
+        && !has_played
+    {
+        let x = rect.min[0] + rect.size[0] + 18.;
+        let room = w - x - 16.;
+        if room > 150. {
+            let pulse = if motion.is_reduced() {
+                1.
+            } else {
+                0.55 + 0.45 * (t * 2.6).sin().abs()
+            };
+            let theme = kit_theme().faded(pulse * entrance.sample(t, index, motion).alpha);
+            ferravex_render::ui::kit::key_prompt(
+                x,
+                rect.min[1] + 10.,
+                &["Enter"],
+                "to start",
+                &theme,
+            );
+        }
+    }
+}
+
 /// Hold-to-view scoreboard: call signs (practice) or operators, frags,
 /// deaths and health, sorted by frags. Counts start when this view began.
 pub fn roster(
-    ui: &mut Ui,
+    _ui: &mut Ui,
     players: &[Player],
     local_id: u8,
     board: &crate::scoreboard::Tracker,
     bots: bool,
 ) {
+    use crate::style::{self, BODY, SMALL, TITLE};
+    use ferravex_render::Rect;
+    use ferravex_render::shapes;
+    use ferravex_render::text::TextAlign;
     let w = screen_width();
     let h = screen_height();
-    let width = 440_f32.min(w - 32.);
+    let width = 460_f32.min(w - 32.);
     let x = (w - width) / 2.;
     let rows = players.len().min(ferravex_fps::MAX_PLAYERS);
-    let y = ((h - 54. - rows as f32 * 30.) / 2.).max(16.);
-    draw_rectangle(
-        x,
-        y,
-        width,
-        58. + rows as f32 * 30.,
-        Color::new(0.055, 0.085, 0.075, 0.92),
-    );
+    let row_h = 32.;
+    let height = 70. + rows as f32 * row_h;
+    let y = ((h - height) / 2.).max(MENU_CORNER[1] + 8.);
+    let card = Rect::new(x, y, width, height);
+    style::plate(card, 12., style::PLATE_SOLID, 1.);
+    shapes::fill_rounded_rect(Rect::new(x, y, width, 3.), 1.5, style::AMBER);
     let mut order = [0usize; ferravex_fps::MAX_PLAYERS];
     for (i, slot) in order.iter_mut().enumerate().take(rows) {
         *slot = i;
@@ -667,74 +918,65 @@ pub fn roster(
     let (k, d, hp) = if narrow {
         (x + width - 104., x + width - 62., x + width - 16.)
     } else {
-        (x + width - 150., x + width - 88., x + width - 20.)
+        (x + width - 150., x + width - 92., x + width - 22.)
     };
-    label(
-        ui,
-        if bots { "THE GAUNTLET" } else { "PLAYERS" },
+    let title = if bots { "THE GAUNTLET" } else { "PLAYERS" };
+    style::line(
+        title,
         x + 20.,
-        y + 30.,
-        16.,
-        MUTED,
+        y + 34.,
+        style::classic(if narrow { BODY } else { TITLE }, style::INK),
+        TextAlign::Left,
     );
-    right(ui, "K", k, y + 30., 14., MUTED);
-    right(ui, "D", d, y + 30., 14., MUTED);
-    right(ui, "HP", hp, y + 30., 14., MUTED);
+    let head = style::modern(SMALL, style::MUTED);
+    style::line("K", k, y + 33., head, TextAlign::Right);
+    style::line("D", d, y + 33., head, TextAlign::Right);
+    style::line("HP", hp, y + 33., head, TextAlign::Right);
     for (row, &i) in order[..rows].iter().enumerate() {
         let p = &players[i];
-        let ry = y + 62. + row as f32 * 30.;
+        let ry = y + 50. + row as f32 * row_h;
         let you = p.id == local_id;
-        let color = if you { rgb(0xf7cc6b) } else { INK };
+        let color = if you { style::AMBER } else { style::INK };
         if you {
-            draw_rectangle(
-                x + 8.,
-                ry - 20.,
-                width - 16.,
-                26.,
-                Color::new(0.25, 0.2, 0.08, 0.6),
+            let band = Rect::new(x + 8., ry, width - 16., row_h - 4.);
+            shapes::fill_rounded_rect(band, 6., Color::new(0.3, 0.22, 0.06, 0.5));
+            style::accent(band, style::AMBER, 1.);
+        } else if row % 2 == 1 {
+            shapes::fill_rounded_rect(
+                Rect::new(x + 8., ry, width - 16., row_h - 4.),
+                6.,
+                Color::new(1., 1., 1., 0.03),
             );
         }
+        let base = ry + 20.;
         let name = crate::crew::Who {
             id: p.id,
             local: local_id,
             bots,
         };
-        let size = if narrow { 15. } else { 19. };
-        formatted(
-            ui,
+        let size = if narrow { SMALL } else { BODY };
+        style::line_fmt(
             x + 20.,
-            ry,
-            size,
-            color,
-            Align::Left,
+            base,
+            style::modern(size, color),
+            TextAlign::Left,
             format_args!("{name}"),
         );
         let l = line(p.id);
-        formatted(
-            ui,
-            k,
-            ry,
-            size,
-            color,
-            Align::Right,
-            format_args!("{}", l.kills),
-        );
-        formatted(
-            ui,
+        let nums = style::modern(size, color);
+        style::line_fmt(k, base, nums, TextAlign::Right, format_args!("{}", l.kills));
+        style::line_fmt(
             d,
-            ry,
-            size,
-            MUTED,
-            Align::Right,
+            base,
+            nums.with_color(style::MUTED),
+            TextAlign::Right,
             format_args!("{}", l.deaths),
         );
-        formatted(
-            ui,
+        style::line_fmt(
             hp,
-            ry,
-            size,
-            if p.health == 0 { rgb(0xe69278) } else { color },
-            Align::Right,
+            base,
+            nums.with_color(if p.health == 0 { style::SIGNAL } else { color }),
+            TextAlign::Right,
             format_args!("{}", p.health),
         );
     }
@@ -776,114 +1018,110 @@ pub(super) fn tactical_strip(w: f32) -> (f32, f32) {
 
 /// One compact objective strip; connection/tools stay in optional browser chrome.
 pub fn tactical(
-    ui: &mut Ui,
+    _ui: &mut Ui,
     view: Option<&ferravex_fps::tactical::View>,
     lobby: Option<(u8, u8)>,
     id: u8,
     active: bool,
     input: &PlayerInput,
 ) {
+    use crate::style::{self, BODY, SMALL, TITLE, fade};
     use ferravex_play::rounds::{Phase, Team, Weapon};
+    use ferravex_render::Rect;
+    use ferravex_render::shapes;
+    use ferravex_render::text::TextAlign;
     let w = screen_width();
+    let h = screen_height();
     let Some(view) = view else {
         if let Some((players, required)) = lobby {
-            formatted(
-                ui,
+            let text = style::Buf::<64>::fmt(format_args!(
+                "Lobby {players} / {required} · waiting for players"
+            ));
+            let s = style::fit(text.as_str(), style::modern(BODY, style::INK), w - 48., 10.);
+            let tw = style::width(text.as_str(), s);
+            style::plate(
+                Rect::new((w - tw) * 0.5 - 14., MENU_CORNER[1] + 4., tw + 28., 28.),
+                8.,
+                style::PLATE,
+                1.,
+            );
+            style::line(
+                text.as_str(),
                 w * 0.5,
                 MENU_CORNER[1] + 16.,
-                16.0_f32.min((w - 24.) / 34. / 0.75),
-                INK,
-                Align::Center,
-                format_args!("LOBBY  {players} / {required}  - WAITING FOR PLAYERS"),
+                s,
+                TextAlign::Center,
             );
         }
         return;
     };
     let phase = match view.phase {
-        Phase::Buy => "BUY",
-        Phase::Live => "LIVE",
-        Phase::Planted => "BOMB PLANTED",
-        Phase::PostRound => "ROUND OVER",
-        Phase::Finished => "MATCH OVER",
+        Phase::Buy => "Buy",
+        Phase::Live => "Live",
+        Phase::Planted => "Bomb planted",
+        Phase::PostRound => "Round over",
+        Phase::Finished => "Match over",
     };
     let (left, width) = tactical_strip(w);
     let cx = left + width * 0.5;
-    ui.panel(
-        UiRect {
-            min: [left, 30.],
-            size: [width, 57.],
-        },
-        Color::new(0.04, 0.065, 0.055, 0.88),
-    )
-    .unwrap();
-    if w < 640. {
-        fitted_center(
-            ui,
-            cx,
-            52.,
-            15.,
-            width - 16.,
-            INK,
-            format_args!("A {} / {} D  {phase}", view.score[0], view.score[1]),
-        );
-        if let Some(player) = view.player(id) {
-            let role = if player.team == Team::Attack {
-                "ATTACK"
-            } else {
-                "DEFEND"
-            };
-            fitted_center(
-                ui,
-                cx,
-                75.,
-                13.,
-                width - 16.,
-                MUTED,
-                format_args!(
-                    "R{}  {}s  {role}  ${}",
-                    view.round,
-                    view.remaining_ticks.div_ceil(TICK_RATE),
-                    player.money
-                ),
-            );
-        }
-    } else {
-        fitted_center(
-            ui,
-            cx,
-            52.,
-            16.,
-            width - 16.,
-            INK,
-            format_args!(
-                "ATTACK {}  /  {} DEFEND    {phase}  {}s",
-                view.score[0],
-                view.score[1],
-                view.remaining_ticks.div_ceil(TICK_RATE)
-            ),
-        );
-        if let Some(player) = view.player(id) {
-            let role = if player.team == Team::Attack {
-                "ATTACK"
-            } else {
-                "DEFEND"
-            };
-            let weapon = match player.weapon {
-                Weapon::Pistol => "PISTOL",
-                Weapon::Rifle => "RIFLE",
-                Weapon::Sniper => "SNIPER",
-            };
-            fitted_center(
-                ui,
-                cx,
-                75.,
-                14.,
-                width - 16.,
-                MUTED,
-                format_args!("ROUND {}  {role}  ${}  {weapon}", view.round, player.money),
-            );
-        }
+    let strip = Rect::new(left, 30., width, 57.);
+    style::plate(strip, 10., style::PLATE, 1.);
+    let seconds = view.remaining_ticks.div_ceil(TICK_RATE);
+    let urgent =
+        matches!(view.phase, Phase::Planted) || (view.phase == Phase::Live && seconds <= 10);
+    // Attack amber on the left, defend teal on the right, the clock between.
+    let score = style::classic(TITLE, style::INK);
+    style::line_fmt(
+        left + 16.,
+        62.,
+        score.with_color(style::AMBER),
+        TextAlign::Left,
+        format_args!("{}", view.score[0]),
+    );
+    style::line_fmt(
+        left + width - 16.,
+        62.,
+        score.with_color(style::TEAL),
+        TextAlign::Right,
+        format_args!("{}", view.score[1]),
+    );
+    style::line_fmt(
+        cx,
+        60.,
+        style::classic(TITLE, if urgent { style::SIGNAL } else { style::INK }),
+        TextAlign::Center,
+        format_args!("{}:{:02}", seconds / 60, seconds % 60),
+    );
+    let compact = width < 420.;
+    if !compact {
+        let label = style::modern(SMALL, style::MUTED);
+        style::line("Attack", left + 46., 59., label, TextAlign::Left);
+        style::line("Defend", left + width - 46., 59., label, TextAlign::Right);
     }
+    if let Some(player) = view.player(id) {
+        let role = if player.team == Team::Attack {
+            "Attack"
+        } else {
+            "Defend"
+        };
+        let weapon = match player.weapon {
+            Weapon::Pistol => "Pistol",
+            Weapon::Rifle => "Rifle",
+            Weapon::Sniper => "Sniper",
+        };
+        let info = style::Buf::<80>::fmt(format_args!(
+            "Round {} · {phase} · {role} · ${} · {weapon}",
+            view.round, player.money
+        ));
+        let s = style::fit(
+            info.as_str(),
+            style::modern(SMALL, style::MUTED),
+            width - 24.,
+            8.,
+        );
+        style::line(info.as_str(), cx, 80., s, TextAlign::Center);
+    }
+    let prompt_y = h - 92.;
     if active && view.phase == Phase::Buy {
         let mut keys = [[0; 64]; 4];
         let [rifle, sniper, armor, kit] = &mut keys;
@@ -891,51 +1129,47 @@ pub fn tactical(
         let sniper = hint(input, "buy_sniper", sniper);
         let armor = hint(input, "buy_armor", armor);
         let kit = hint(input, "buy_kit", kit);
-        formatted(
-            ui,
-            w * 0.5,
-            screen_height() - 78.,
-            14.,
-            MUTED,
-            Align::Center,
-            format_args!("RIFLE {rifle} / SNIPER {sniper} / ARMOR {armor} / KIT {kit}"),
+        let text = style::Buf::<128>::fmt(format_args!(
+            "Rifle {rifle} · Sniper {sniper} · Armor {armor} · Kit {kit}"
+        ));
+        let s = style::fit(text.as_str(), style::modern(SMALL, style::INK), w - 48., 8.);
+        let tw = style::width(text.as_str(), s);
+        style::plate(
+            Rect::new((w - tw) * 0.5 - 12., prompt_y - 17., tw + 24., 24.),
+            8.,
+            style::PLATE,
+            1.,
         );
+        style::line(text.as_str(), w * 0.5, prompt_y, s, TextAlign::Center);
     }
     if active && let Some(title) = round_banner(view.phase, view.score) {
         let width = (w - 32.).clamp(0., 420.);
-        let y = (screen_height() * 0.29).max(145.);
-        ui.panel(
-            UiRect {
-                min: [(w - width) * 0.5, y - 30.],
-                size: [width, 70.],
-            },
-            Color::new(0.04, 0.065, 0.055, 0.94),
-        )
-        .unwrap();
-        center(ui, title, w * 0.5, y, 24., rgb(0xd7b56d));
+        let y = (h * 0.29).max(145.);
+        let card = Rect::new((w - width) * 0.5, y - 34., width, 74.);
+        style::plate(card, 12., style::PLATE_SOLID, 1.);
+        shapes::fill_rounded_rect(Rect::new(card.x, card.y, card.w, 3.), 1.5, style::AMBER);
+        let t = style::fit(title, style::classic(TITLE, style::AMBER), width - 32., 12.);
+        style::line(title, w * 0.5, y, t, TextAlign::Center);
+        let sub = style::modern(BODY, style::INK);
         if view.phase == Phase::PostRound {
-            formatted(
-                ui,
+            style::line_fmt(
                 w * 0.5,
-                y + 24.,
-                15.,
-                INK,
-                Align::Center,
+                y + 26.,
+                sub,
+                TextAlign::Center,
                 format_args!(
-                    "Intermission: {}s",
+                    "Next round in {}s",
                     view.remaining_ticks.div_ceil(TICK_RATE)
                 ),
             );
         } else {
             let mut key = [0; 64];
             let key = hint(input, "pause", &mut key);
-            formatted(
-                ui,
+            style::line_fmt(
                 w * 0.5,
-                y + 24.,
-                15.,
-                INK,
-                Align::Center,
+                y + 26.,
+                sub,
+                TextAlign::Center,
                 format_args!("Menu {key}"),
             );
         }
@@ -945,38 +1179,30 @@ pub fn tactical(
         let mut drop_key = [0; 64];
         let use_key = hint(input, "interact", &mut use_key);
         let drop_key = hint(input, "drop_bomb", &mut drop_key);
-        formatted(
-            ui,
-            w * 0.5,
-            screen_height() - 78.,
-            14.,
-            MUTED,
-            Align::Center,
-            format_args!("HOLD {use_key} INTERACT / {drop_key} DROP"),
+        let text =
+            style::Buf::<96>::fmt(format_args!("Hold {use_key} to interact · {drop_key} drop"));
+        let s = style::fit(
+            text.as_str(),
+            style::modern(SMALL, style::MUTED),
+            w - 48.,
+            8.,
         );
+        style::line(text.as_str(), w * 0.5, prompt_y, s, TextAlign::Center);
     }
     if let Some((owner, progress)) = view.interaction
         && owner == id
     {
         let width = (w - 64.).min(240.);
         let x = (w - width) * 0.5;
-        let y = screen_height() * 0.6;
-        ui.panel(
-            UiRect {
-                min: [x, y],
-                size: [width, 6.],
-            },
-            Color::new(0.12, 0.17, 0.16, 0.95),
-        )
-        .unwrap();
-        ui.panel(
-            UiRect {
-                min: [x, y],
-                size: [width * f32::from(progress) / 65535., 6.],
-            },
-            rgb(0xd7b56d),
-        )
-        .unwrap();
+        let y = h * 0.6;
+        let track = Rect::new(x, y, width, 8.);
+        shapes::fill_rounded_rect(track, 4., Color::new(0., 0., 0., 0.5));
+        let fill = Rect::new(x, y, width * f32::from(progress) / 65535., 8.);
+        if fill.w > 0. {
+            ferravex_render::post::with_glow(|| {
+                shapes::fill_rounded_rect(fill, 4., fade(style::AMBER, 0.9));
+            });
+        }
     }
 }
 pub fn rule_feedback(error: ferravex_play::rounds::RuleError) -> &'static str {

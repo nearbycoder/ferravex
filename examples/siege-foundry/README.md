@@ -12,7 +12,7 @@ A low-poly 3D demolition range built with Ferravex's `GameSession`, original rot
 - **Foreman Gus.** A big lad in a hi-vis vest and hard hat beside the right tower. He greets each run, frets during wobbles, throws his arms up at collapses, heckles misses (gently), nudges you toward the supports after repeated misses, counts down the last shell and remarks on bonuses. Lines rotate per category and never repeat back to back, including across retries.
 - **Juice.** Chunky rust/sand/soot debris, impact dust, muzzle flash and smoke, a smoke trail behind the newest ball, expanding impact rings, rising score pops, a camera kick on each shot plus decaying shake on impacts, a squash of the cannon carriage, and Gus's hops.
 - **A secret.** Something hangs above the towers. Ring it for a bonus and a confused foreman.
-- **Results card.** Stars, the final score, NEW PERSONAL BEST / your best, shots, best chain and misses, a silly rank title with a quip (from CONSCIENTIOUS OBJECTOR to WRECKING BALL WIZARD), and a next-goal hook (the next star's shot target, the secret, or the score to beat). The card appears after a short beat so the final collapse and spare-shell bonus land first.
+- **Results card.** Stars, the final score, NEW PERSONAL BEST / your best, shots, best chain and misses, a silly rank title with a quip (from PEACEFUL FOREMAN to WRECKING BALL WIZARD), and a next-goal hook (the next star's shot target, the secret, or the score to beat). The card appears after a short beat so the final collapse and spare-shell bonus land first.
 
 ```sh
 cargo run --release -p siege-foundry

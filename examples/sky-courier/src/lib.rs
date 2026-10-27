@@ -34,6 +34,7 @@ use ferravex_render::{
 mod capture;
 mod courier;
 mod flight_ui;
+mod look;
 mod overlay;
 mod presentation;
 mod quips;
@@ -41,7 +42,6 @@ use courier::{BONUS_RADIUS, BONUS_RINGS, Impact, Ledger, line_miss};
 use flight_ui::{Coach, HudView, Progress, Results, hud};
 use presentation::FlightPresentation;
 
-const SKY: Color = Color::new(0.64, 0.76, 0.77, 1.0);
 const INK: Color = Color::new(0.10, 0.20, 0.22, 1.0);
 const CREAM: Color = Color::new(0.95, 0.91, 0.78, 1.0);
 const CORAL: Color = Color::new(0.82, 0.36, 0.23, 1.0);
@@ -447,25 +447,44 @@ struct Scene {
     pad: Mesh3d,
     stripe: Mesh3d,
     cloud: Mesh3d,
+    puff: Mesh3d,
     parcel: Mesh3d,
+    gull_body: Mesh3d,
+    gull_wing: Mesh3d,
+}
+/// Presentation clocks for one scene draw; simulation never reads them.
+#[derive(Clone, Copy, Default)]
+struct SceneTime {
+    /// Propeller angle source.
+    propeller: f32,
+    /// Ring pulse/spin clock; zero under reduced motion.
+    clock: f32,
+    /// Cosmetic victory-roll angle.
+    roll: f32,
+    /// False during a recovery blink phase.
+    aircraft: bool,
+    /// Gulls and idle motion; frozen in pause and under reduced motion.
+    ambient: f32,
+    /// Cosmetic vertical bob on the briefing screen.
+    bob: f32,
 }
 impl Scene {
     fn new() -> Self {
         Self {
-            ocean: Mesh3d::plane(vec2(1200., 1400.), Color::from_rgba(60, 121, 130, 255), 28),
+            ocean: Mesh3d::plane(vec2(1200., 1400.), Color::from_rgba(50, 108, 128, 255), 28),
             islands: ISLANDS
                 .iter()
                 .map(|(_, r)| {
                     (
-                        Mesh3d::frustum(r * 0.35, *r, 24., Color::from_rgba(100, 110, 104, 255), 7),
-                        Mesh3d::frustum(*r, r * 0.85, 3., Color::from_rgba(142, 158, 112, 255), 7),
+                        Mesh3d::frustum(r * 0.35, *r, 24., Color::from_rgba(122, 106, 98, 255), 7),
+                        Mesh3d::frustum(*r, r * 0.85, 3., Color::from_rgba(160, 168, 102, 255), 7),
                     )
                 })
                 .collect(),
-            house: Mesh3d::cuboid(vec3(6., 5., 5.), CREAM),
+            house: Mesh3d::cuboid(vec3(6., 5., 5.), Color::from_rgba(242, 228, 200, 255)),
             roof: Mesh3d::cone(5., 3.4, CORAL, 4),
             trunk: Mesh3d::cylinder(0.55, 4., Color::from_rgba(104, 89, 65, 255), 5),
-            leaves: Mesh3d::cone(3.6, 8., Color::from_rgba(57, 95, 75, 255), 6),
+            leaves: Mesh3d::cone(3.6, 8., Color::from_rgba(50, 92, 76, 255), 6),
             body: Mesh3d::cuboid(vec3(1.9, 1.6, 5.5), CREAM),
             nose: Mesh3d::cylinder(1., 1.8, CORAL, 7),
             wing: Mesh3d::cuboid(vec3(11.5, 0.23, 1.9), CORAL),
@@ -481,13 +500,22 @@ impl Scene {
             bonus_ring: Mesh3d::cuboid(vec3(2.5, 0.5, 0.5), Color::from_rgba(255, 226, 120, 255)),
             pad: Mesh3d::cylinder(11., 0.25, Color::from_rgba(228, 206, 146, 255), 16),
             stripe: Mesh3d::cuboid(vec3(1.2, 0.12, 9.), CORAL),
-            cloud: Mesh3d::sphere(10., Color::from_rgba(217, 226, 214, 255), 7, 4),
+            cloud: Mesh3d::sphere(10., Color::from_rgba(255, 238, 224, 255), 12, 7),
+            puff: Mesh3d::sphere(6.5, Color::from_rgba(255, 244, 232, 255), 10, 6),
             parcel: Mesh3d::cuboid(vec3(1.4, 1.2, 1.1), Color::from_rgba(165, 121, 71, 255)),
+            gull_body: Mesh3d::cuboid(vec3(0.35, 0.3, 1.1), Color::from_rgba(246, 242, 234, 255)),
+            gull_wing: Mesh3d::cuboid(vec3(1.5, 0.08, 0.5), Color::from_rgba(236, 232, 224, 255)),
         }
     }
-    /// `clock` animates rings and is frozen (zero) under reduced motion.
-    /// `roll` is a cosmetic victory-roll angle; `aircraft` hides a shield blink.
-    fn draw(&self, game: &Flight, time: f32, clock: f32, roll: f32, aircraft: bool) {
+    fn draw(&self, game: &Flight, t: SceneTime) {
+        let SceneTime {
+            propeller: time,
+            clock,
+            roll,
+            aircraft,
+            ambient,
+            bob,
+        } = t;
         self.ocean.draw(vec3(0., -20., 350.), Quat::IDENTITY);
         for (i, (center, radius)) in ISLANDS.iter().enumerate() {
             let (rock, grass) = &self.islands[i];
@@ -553,24 +581,38 @@ impl Scene {
             vec3(0., 9.9, 680.),
             Quat::from_rotation_y(std::f32::consts::FRAC_PI_2),
         );
+        // Soft cumulus: one body and two puffs per cluster, drifting gently.
         for i in 0..13 {
-            let x = ((i * 79) % 330) as f32 - 165.;
+            let drift = (ambient * 0.06 + i as f32).sin() * 3.;
+            let x = ((i * 79) % 330) as f32 - 165. + drift;
             let z = i as f32 * 67. - 50.;
             let y = 79. + (i % 3) as f32 * 10.;
             self.cloud.draw(vec3(x, y, z), Quat::IDENTITY);
-            self.cloud
-                .draw(vec3(x + 10., y - 2., z + 3.), Quat::IDENTITY);
+            self.puff
+                .draw(vec3(x + 11., y - 3., z + 3.), Quat::IDENTITY);
+            self.puff.draw(vec3(x - 9., y - 4., z - 2.), Quat::IDENTITY);
+        }
+        for index in 0..6 {
+            let (pos, heading, flap) = look::gull(index, ambient);
+            let body = Quat::from_rotation_y(heading);
+            self.gull_body.draw(pos, body);
+            for side in [-1., 1.] {
+                let wing = body * Quat::from_rotation_z(side * flap);
+                self.gull_wing
+                    .draw(pos + wing * vec3(side * 0.8, 0.05, 0.), wing);
+            }
         }
         if !aircraft {
             return;
         }
+        let game_pos = game.pos + Vec3::Y * bob;
         let rotation = Quat::from_rotation_y(game.motor.yaw)
             * Quat::from_rotation_x(-game.motor.pitch)
             * Quat::from_rotation_z(game.motor.bank + roll);
-        let draw = |mesh: &Mesh3d, offset: Vec3| mesh.draw(game.pos + rotation * offset, rotation);
+        let draw = |mesh: &Mesh3d, offset: Vec3| mesh.draw(game_pos + rotation * offset, rotation);
         draw(&self.body, Vec3::ZERO);
         self.nose.draw(
-            game.pos + rotation * vec3(0., 0., 3.2),
+            game_pos + rotation * vec3(0., 0., 3.2),
             rotation * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
         );
         draw(&self.wing, vec3(0., 0.2, 0.6));
@@ -584,7 +626,7 @@ impl Scene {
             draw(&self.strut, vec3(x, -1.1, -1.3));
         }
         self.propeller.draw(
-            game.pos + rotation * vec3(0., 0., 4.2),
+            game_pos + rotation * vec3(0., 0., 4.2),
             rotation * Quat::from_rotation_z(time * 42.),
         );
     }
@@ -674,6 +716,7 @@ async fn game() {
     let mut activate = false;
     let mut menu_ready = true;
     let scene = Scene::new();
+    let mut grade = look::Grade::default();
     let material = LitMaterial::new().expect("portable flight material");
     let mut player_input = PlayerInput::preset("sky-courier", Preset::Flight);
     let mut reported = false;
@@ -798,7 +841,8 @@ async fn game() {
         });
         sound.motor(flight.motor.speed, 38., run.session.is_playing());
         let camera_pos = view.position;
-        clear_background(SKY);
+        grade.apply(run.session.state());
+        clear_background(look::ZENITH);
         let camera = Camera3D {
             position: camera_pos,
             target: view.target,
@@ -808,10 +852,12 @@ async fn game() {
             z_far: 650.,
             ..Default::default()
         };
+        let projector = overlay::Projector::new(&camera, w, h);
+        look::sky(&projector, camera_pos, view.target, w, h);
         set_camera(&camera);
         material.begin(LitSettings {
             camera_position: camera_pos,
-            fog_color: SKY,
+            fog_color: look::HORIZON,
             fog_start: 160.,
             fog_end: 500.,
             ambient: 0.65,
@@ -819,10 +865,14 @@ async fn game() {
         });
         scene.draw(
             flight,
-            presentation.propeller_time,
-            presentation.clock,
-            presentation.roll_angle(),
-            presentation.aircraft_visible(flight),
+            SceneTime {
+                propeller: presentation.propeller_time,
+                clock: presentation.clock,
+                roll: presentation.roll_angle(),
+                aircraft: presentation.aircraft_visible(flight),
+                ambient: presentation.ambient,
+                bob: presentation.bob(run.session.state()),
+            },
         );
         material.end();
         for trail in &presentation.wing_trails {
@@ -850,7 +900,15 @@ async fn game() {
             .draw_3d(&presentation.sparks, billboard, ParticleStyle::default())
             .unwrap();
         set_default_camera();
-        let projector = overlay::Projector::new(&camera, w, h);
+        look::glows(
+            &projector,
+            flight,
+            camera_pos,
+            view.target,
+            presentation.clock,
+            !preferences::feedback_policy().reduced_flash(),
+        );
+        post_fx_hud_begin();
         if run.session.is_playing() {
             overlay::speed_lines(&presentation, w, h);
         }

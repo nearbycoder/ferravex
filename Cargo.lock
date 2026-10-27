@@ -130,6 +130,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "glowtide"
+version = "0.1.0"
+dependencies = [
+ "ferravex-core",
+ "ferravex-play",
+ "ferravex-render",
+]
+
+[[package]]
 name = "marble-run"
 version = "0.1.0"
 dependencies = [
