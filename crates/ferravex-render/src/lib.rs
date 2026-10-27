@@ -23,6 +23,7 @@ pub mod material;
 pub mod mesh;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native;
+pub mod post;
 pub mod preferences;
 pub mod retained;
 pub mod shaders;
@@ -35,6 +36,7 @@ pub use ferravex_core::telemetry;
 pub use ferravex_graphics::Look;
 
 pub mod prelude {
+    pub use crate::post::{PostFx, post_fx_hud_begin, set_post_fx};
     pub use crate::{
         BLACK, BLUE, Camera, Camera2D, Camera3D, Color, Conf, DARKGRAY, Font, GRAY, GREEN, KeyCode,
         LIGHTGRAY, Mat4, Mesh, MouseButton, ORANGE, Quat, RED, Rect, TextDimensions, TextParams,
@@ -302,6 +304,10 @@ struct State {
     look: Look,
     look_override: Option<Look>,
     world_colors: bool,
+    post: post::PostFx,
+    post_override: Option<post::PostFx>,
+    post_hud: bool,
+    glow: bool,
     quality: lighting::Quality,
     authored_quality: lighting::Quality,
     preferred_quality: Option<lighting::Quality>,
@@ -366,6 +372,10 @@ impl Default for State {
             look: Look::Authored,
             look_override: None,
             world_colors: false,
+            post: post::PostFx::off(),
+            post_override: None,
+            post_hud: false,
+            glow: false,
             quality: Default::default(),
             authored_quality: Default::default(),
             preferred_quality: None,
@@ -507,7 +517,61 @@ impl State {
         }
         self.record_immediate(start, count, self.depth);
     }
+    /// Effective post tier and accessibility-capped settings for this state.
+    fn post_effective(&self) -> (post::PostTier, post::PostFx) {
+        let fx = self.post_override.unwrap_or(self.post);
+        let adaptive = self
+            .presentation
+            .adaptive
+            .then(|| self.performance.budget.level());
+        let tier = post::tier(
+            &fx,
+            self.quality_override.or(self.preferred_quality),
+            self.authored_quality,
+            adaptive,
+        );
+        let policy = preferences::feedback_policy();
+        (tier, post::accessible(fx, policy.reduced_flash()))
+    }
+    /// Record the frame's single world/HUD post boundary when post is active.
+    fn post_boundary(&mut self) -> bool {
+        if self.post_hud || self.post_effective().0 == post::PostTier::Off {
+            return false;
+        }
+        self.post_hud = true;
+        self.retained
+            .commands
+            .push(retained::Command { kind: 4, index: 0 });
+        true
+    }
+    /// Automatic boundary when world colors end (`set_default_camera` or
+    /// `set_world_colors(false)`), unless the game disabled `auto_hud`.
+    fn post_auto_boundary(&mut self) {
+        if self.world_colors && self.post_override.unwrap_or(self.post).auto_hud {
+            self.post_boundary();
+        }
+    }
     fn record_immediate(&mut self, start: u32, count: u32, depth: bool) {
+        if self.glow {
+            // Additive, non-depth-writing effect batch; see `post::with_glow`.
+            let flags = depth as u32 | 2 | 4;
+            if let Some(last) = self.retained.effects.last_mut().filter(|b| {
+                b.flags == flags && self.retained.commands.last().is_some_and(|c| c.kind == 2)
+            }) {
+                last.count += count;
+            } else {
+                self.retained.commands.push(retained::Command {
+                    kind: 2,
+                    index: self.retained.effects.len() as u32,
+                });
+                self.retained.effects.push(effects::EffectBatch {
+                    start,
+                    count,
+                    flags,
+                });
+            }
+            return;
+        }
         if let Some(last) = self.batches.last_mut().filter(|b| {
             b.depth == depth && self.retained.commands.last().is_some_and(|c| c.kind == 0)
         }) {
@@ -559,11 +623,22 @@ pub fn look() -> Look {
     read(|s| s.look_override.unwrap_or(s.look))
 }
 /// Explicit world/HUD boundary for games drawing in screen coordinates.
+/// Turning world colors off is also the post-processing HUD boundary; see [`post`].
 pub fn set_world_colors(enabled: bool) {
-    edit(|s| s.world_colors = enabled);
+    edit(|s| {
+        if !enabled {
+            s.post_auto_boundary();
+        }
+        s.world_colors = enabled
+    });
 }
+/// Restore the screen-space HUD camera. After a world camera this is also the
+/// post-processing HUD boundary; see [`post`].
 pub fn set_default_camera() {
-    edit(State::default_camera)
+    edit(|s| {
+        s.post_auto_boundary();
+        s.default_camera();
+    })
 }
 pub fn set_lighting(settings: Option<shaders::LitSettings>) {
     edit(|s| s.lighting = settings)
@@ -574,6 +649,7 @@ pub fn clear_background(c: Color) {
         s.vertices.clear();
         s.batches.clear();
         s.retained.clear();
+        s.post_hud = false;
         s.effect_stats = effects::EffectStats::default();
         s.points.clear();
         s.sun = None;
@@ -1118,6 +1194,8 @@ fn begin_host_frame(dt: f32, w: u32, h: u32) {
         s.vertices.clear();
         s.batches.clear();
         s.retained.clear();
+        s.post_hud = false;
+        s.glow = false;
         s.effect_stats = effects::EffectStats::default();
         s.points.clear();
         s.sun = None;
@@ -1145,6 +1223,9 @@ fn end_host_frame() {
     audio::end_frame(dt);
     edit(|s| {
         s.retained.finalize();
+        let (tier, fx) = s.post_effective();
+        let motion = preferences::feedback_policy().reduced_motion();
+        s.retained.post = post::pack(tier, &fx, s.frame, motion, s.dpi);
         s.frame += 1;
         s.in_frame = false;
         s.pressed.clear();
@@ -1499,6 +1580,25 @@ mod wasm {
     #[unsafe(no_mangle)]
     pub extern "C" fn ferravex_visible_count() -> u32 {
         visibility_stats().visible
+    }
+    /// Resolved post-processing block (28 f32, see `post`); index 0 is the tier.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_post_frame() -> *const f32 {
+        read(|s| s.retained.post.as_ptr())
+    }
+    /// Session preset override: 0 off, 1 subtle, 2 neon, 3 warm-film, 4 crt;
+    /// 255 clears it. Returns 1 on success.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ferravex_post_override(index: u32) -> u32 {
+        let value = if index == 255 {
+            None
+        } else if let Some(fx) = post::PostFx::from_index(index) {
+            Some(fx)
+        } else {
+            return 0;
+        };
+        edit(|s| s.post_override = value);
+        1
     }
     #[unsafe(no_mangle)]
     pub extern "C" fn ferravex_commands() -> *const retained::Command {

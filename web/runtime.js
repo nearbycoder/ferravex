@@ -2,6 +2,7 @@ import {loadWasm,showLoadError} from './loader.js';
 // Original Ferravex browser platform: WebGL2, DOM input, direct Rust/Wasm ABI.
 import {RetainedRenderer,GpuTimer} from './retained.js';
 import {SpriteRenderer} from './effects.js';
+import {PostPipeline,configurePost} from './post.js';
 import {bindDetails,framebufferSize} from './details.js';
 import {configureVisuals,bindVisualPreferences} from './visuals.js';
 import {bindInput} from './input.js';
@@ -17,6 +18,9 @@ if(document.head&&typeof document.createElement==='function'&&status.dataset){co
 const loadingSettled=()=>{if(status.dataset)delete status.dataset.ferravexLoading;};
 const shader = (type,source) => {const s=gl.createShader(type);gl.shaderSource(s,source);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(s));return s;};
 let program,buffer,retained,spriteEffects,gpuTimer,maxFramebufferDimension,lastGpuFrame=0;
+// Optional post pipeline: created on the first frame whose Wasm block asks for
+// it, rebuilt after context restoration, and never touched while post is off.
+let post=null,postFailed=false,postView=null;
 function initializeGraphics(){
  maxFramebufferDimension=gl.getParameter(gl.MAX_RENDERBUFFER_SIZE);
  recoveryExtension=gl.getExtension('WEBGL_lose_context');
@@ -42,7 +46,7 @@ gl.enable(gl.BLEND);gl.blendFuncSeparate(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA,gl.
 retained=new RetainedRenderer(gl);
 spriteEffects=new SpriteRenderer(gl);
 gpuTimer=new GpuTimer(gl,canvas,new URLSearchParams(location.search).has('profile'));
- allocated=0;
+ allocated=0;post=null;postFailed=false;
 }
 let exports,playing=false,allocated=0,frames=0,last=0,restores=0;
 initializeGraphics();
@@ -132,6 +136,7 @@ try {
  exports.ferravex_init();
  if(disposed)return;
  configureVisuals(exports,location.search);
+ if(new URLSearchParams(location.search).has('post'))configurePost(exports,location.search);
  if(disposed)return;
  refreshVisuals();
  if(disposed)return;
@@ -186,13 +191,26 @@ try {
   retained.begin(exports);spriteEffects.begin(exports);
   if(exports.ferravex_details_get(6)&&!gpuTimer.enabled)gpuTimer=new GpuTimer(gl,canvas,true);
   gpuTimer.begin(frames+1);
+  // Optional ABI: a nonzero tier routes world commands to the offscreen target
+  // until the first kind-4 boundary (or the stream end) composites them.
+  const postPointer=exports.ferravex_post_frame?.()||0;
+  if(postPointer&&(!postView||postView.buffer!==exports.memory.buffer||postView.byteOffset!==postPointer))postView=new Float32Array(exports.memory.buffer,postPointer,28);
+  let postActive=false,postDraws=0;
+  if(postPointer&&postView[0]>0&&!postFailed){
+   if(!post){const created=PostPipeline.tryCreate(gl);post=created.pipeline;postFailed=!post;canvas.dataset.postError=created.error?.message??'';}
+   postActive=!!post&&post.prepare(w,h);
+   if(post&&!postActive)canvas.dataset.postError=post.error;
+  }
+  if(postActive)post.bindScene();
   gl.clearColor(...[0,1,2,3].map(c=>exports.ferravex_clear(c)));gl.depthMask(true);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
   retained.renderShadow(w,h);
+  if(postActive)post.bindScene();
   const view=new DataView(exports.memory.buffer);
   const commands=exports.ferravex_command_count(),cp=exports.ferravex_commands();
   let immediateDraws=0;
   for(let i=0;i<commands;i++){
    const kind=view.getUint32(cp+i*8,true),index=view.getUint32(cp+i*8+4,true);
+   if(kind===4){if(postActive){postDraws=post.finish(postView);postActive=false;}continue;}
    if(kind===1){retained.draw(index);continue;}
    if(kind===3){spriteEffects.draw(index);continue;}
    let at,flags;
@@ -202,13 +220,15 @@ try {
    gl.useProgram(program);gl.bindVertexArray(null);gl.enable(gl.BLEND);gl.blendFuncSeparate(gl.SRC_ALPHA,(flags&4)?gl.ONE:gl.ONE_MINUS_SRC_ALPHA,gl.ONE,gl.ONE_MINUS_SRC_ALPHA);
    (flags&1)?gl.enable(gl.DEPTH_TEST):gl.disable(gl.DEPTH_TEST);gl.depthMask((flags&1)!==0&&(flags&2)===0);gl.drawArrays(gl.TRIANGLES,view.getUint32(at,true),view.getUint32(at+4,true));immediateDraws++;
   }
+  if(postActive)postDraws=post.finish(postView);
   gpuTimer.end();
   const measured=gpuTimer.latest,gpuMs=measured&&measured.frame>lastGpuFrame&&frames+1-measured.frame<8?measured.us/1000:-1;
   if(measured)lastGpuFrame=measured.frame;
   exports.ferravex_performance_sample?.(dt*1000,performance.now()-cpuStarted,gpuMs);
   canvas.dataset.frames=String(++frames);canvas.dataset.vertices=String(count+retained.vertices+retained.shadowVertices+spriteEffects.vertices);
   canvas.dataset.culled=String(exports.ferravex_culled_count());canvas.dataset.visible=String(exports.ferravex_visible_count());
-  canvas.dataset.drawCalls=String(immediateDraws+retained.drawCalls+retained.shadowDrawCalls+spriteEffects.drawCalls);canvas.dataset.shadowDrawCalls=String(retained.shadowDrawCalls);canvas.dataset.quality=String(retained.environment.quality);canvas.dataset.look=String(exports.ferravex_visual_look());canvas.dataset.renderScale=String(dpr);canvas.dataset.lightingError=retained.lightingError;canvas.dataset.residentMeshes=String(retained.meshes.size);canvas.dataset.uploadBytes=String(count*32+retained.uploadBytes+spriteEffects.uploadBytes);
+  canvas.dataset.drawCalls=String(immediateDraws+retained.drawCalls+retained.shadowDrawCalls+spriteEffects.drawCalls+postDraws);
+  canvas.dataset.post=postDraws?(postView[0]>1?'high':'medium'):'off';canvas.dataset.shadowDrawCalls=String(retained.shadowDrawCalls);canvas.dataset.quality=String(retained.environment.quality);canvas.dataset.look=String(exports.ferravex_visual_look());canvas.dataset.renderScale=String(dpr);canvas.dataset.lightingError=retained.lightingError;canvas.dataset.residentMeshes=String(retained.meshes.size);canvas.dataset.uploadBytes=String(count*32+retained.uploadBytes+spriteEffects.uploadBytes);
   canvas.dataset.effectVertices=String(exports.ferravex_effect_vertex_count?.()||0);
   canvas.dataset.skinnedDrawCalls=String(retained.skinnedDrawCalls);canvas.dataset.skinJoints=String(exports.ferravex_skin_joint_count?.()||0);
   canvas.dataset.materialError=retained.lastError;materialTools?.update();contentTools?.update();replayTools?.update();multiplayerTools?.update();

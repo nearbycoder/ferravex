@@ -165,6 +165,19 @@ functions! {
     glRenderbufferStorage(target:c_uint,format:c_uint,width:c_int,height:c_int);
     glGetRenderbufferParameteriv(target:c_uint,name:c_uint,value:*mut c_int);
     glFramebufferRenderbuffer(target:c_uint,attachment:c_uint,renderbuffer_target:c_uint,renderbuffer:c_uint);
+    glRenderbufferStorageMultisample(target:c_uint,samples:c_int,format:c_uint,width:c_int,height:c_int);
+    glBlitFramebuffer(
+        src_x0: c_int,
+        src_y0: c_int,
+        src_x1: c_int,
+        src_y1: c_int,
+        dst_x0: c_int,
+        dst_y0: c_int,
+        dst_x1: c_int,
+        dst_y1: c_int,
+        mask: c_uint,
+        filter: c_uint);
+    glGetIntegerv(name: c_uint, value: *mut c_int);
     glGenVertexArrays(n: c_int, arrays: *mut c_uint);
     glBindVertexArray(array: c_uint);
     glDeleteVertexArrays(n: c_int, arrays: *const c_uint);

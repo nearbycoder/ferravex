@@ -25,6 +25,7 @@ const GL_COMPILE_STATUS: c_uint = 0x8b81;
 const GL_LINK_STATUS: c_uint = 0x8b82;
 const GL_INFO_LOG_LENGTH: c_uint = 0x8b84;
 const MAX_READBACK_PIXELS: usize = 16_777_216;
+mod post;
 
 /// The display, window and GL context must stay on their creating thread.
 /// Raw-pointer ownership prevents automatic Send/Sync implementations.
@@ -286,6 +287,11 @@ pub struct NativeWindow {
     sprites: Option<SpriteGpu>,
     sprite_uploaded_bytes: u64,
     presented: bool,
+    post: Option<post::PostGpu>,
+    post_failed: bool,
+    post_settings: [f32; crate::post::POST_FRAME_FLOATS],
+    post_ready: bool,
+    post_passes: std::cell::Cell<u32>,
 }
 impl NativeWindow {
     pub fn new(conf: &Conf) -> Result<Self, String> {
@@ -313,6 +319,11 @@ impl NativeWindow {
             sprites: None,
             sprite_uploaded_bytes: 0,
             presented: false,
+            post: None,
+            post_failed: false,
+            post_settings: [0.; crate::post::POST_FRAME_FLOATS],
+            post_ready: false,
+            post_passes: std::cell::Cell::new(0),
         };
         unsafe {
             glGenVertexArrays(1, &mut owner.vertex_array);
@@ -521,6 +532,10 @@ impl NativeWindow {
                 }
             }
         }
+        // Full-screen post passes draw one triangle each.
+        let passes = self.post_passes.get() as u64;
+        calls += passes;
+        vertices += passes * 3;
         if let Some(gpu) = &self.retained {
             for b in &gpu.batches {
                 if let Some((_, count)) = gpu.meshes.get(&b.mesh) {
@@ -557,6 +572,7 @@ impl NativeWindow {
         if let Some(frame) = frame {
             self.last_commands.extend_from_slice(&frame.commands);
         }
+        self.prepare_post(frame.map(|f| &f.post));
         self.mesh_upload_bytes = 0;
         self.sprite_uploaded_bytes = 0;
         if let Some(sprites) = &mut self.sprites {
@@ -643,6 +659,45 @@ impl NativeWindow {
         }
         self.host.swap();
         self.presented = true;
+    }
+    /// Resolve this frame's post block into prepared GPU targets. Creation or
+    /// allocation failure falls back to direct rendering (reported once).
+    fn prepare_post(&mut self, block: Option<&[f32; crate::post::POST_FRAME_FLOATS]>) {
+        self.post_settings = block
+            .copied()
+            .unwrap_or([0.; crate::post::POST_FRAME_FLOATS]);
+        self.post_ready = false;
+        if self.post_settings[0] < 0.5 || self.post_failed {
+            return;
+        }
+        if self.post.is_none() {
+            // SAFETY: The owning context is current (checked by present_scene).
+            unsafe {
+                glBindFramebuffer(0x8d40, super::host::default_framebuffer());
+            }
+            match post::PostGpu::new() {
+                Ok(gpu) => self.post = Some(gpu),
+                Err(error) => {
+                    eprintln!("Post-processing disabled: {error}");
+                    self.post_failed = true;
+                    return;
+                }
+            }
+        }
+        let (width, height) = (self.width, self.height);
+        if let Some(gpu) = &mut self.post {
+            match gpu.prepare(width, height) {
+                Ok(()) => self.post_ready = true,
+                Err(error) => {
+                    eprintln!("Post-processing disabled: {error}");
+                    self.post_failed = true;
+                }
+            }
+        }
+    }
+    /// Sample count and half-float use of the post target, when created.
+    pub fn post_target(&self) -> Option<(i32, bool)> {
+        self.post.as_ref().map(post::PostGpu::describe)
     }
     fn upload_sprites(&mut self, frame: &crate::retained::Frame) {
         if frame.sprites.is_empty() {
@@ -806,14 +861,22 @@ impl NativeWindow {
             if let Some(gpu) = &self.retained {
                 gpu.render_shadow();
             }
-            glBindFramebuffer(0x8d40, super::host::default_framebuffer());
-            glDrawBuffer(screen_buffer());
-            glViewport(
-                0,
-                0,
-                self.width.min(i32::MAX as u32) as i32,
-                self.height.min(i32::MAX as u32) as i32,
-            );
+            // World draws target the offscreen post target until the first
+            // kind-4 boundary (or the end of the stream) composites it.
+            let mut post = self.post.as_ref().filter(|_| self.post_ready);
+            self.post_passes.set(0);
+            if let Some(post) = post {
+                post.bind_scene();
+            } else {
+                glBindFramebuffer(0x8d40, super::host::default_framebuffer());
+                glDrawBuffer(screen_buffer());
+                glViewport(
+                    0,
+                    0,
+                    self.width.min(i32::MAX as u32) as i32,
+                    self.height.min(i32::MAX as u32) as i32,
+                );
+            }
             glDepthMask(1);
             glClearColor(
                 self.last_clear.r,
@@ -823,6 +886,17 @@ impl NativeWindow {
             );
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             for command in &self.last_commands {
+                if command.kind == 4 {
+                    if let Some(post) = post.take() {
+                        self.post_passes.set(post.finish(
+                            &self.post_settings,
+                            super::host::default_framebuffer(),
+                            screen_buffer(),
+                            self.vertex_array,
+                        ));
+                    }
+                    continue;
+                }
                 if command.kind == 1 {
                     if let Some(gpu) = &self.retained {
                         gpu.draw(command.index as usize, false);
@@ -868,6 +942,14 @@ impl NativeWindow {
                         glDisableVertexAttribArray(1);
                     }
                 }
+            }
+            if let Some(post) = post {
+                self.post_passes.set(post.finish(
+                    &self.post_settings,
+                    super::host::default_framebuffer(),
+                    screen_buffer(),
+                    self.vertex_array,
+                ));
             }
             glBindBuffer(GL_ARRAY_BUFFER, 0);
             glUseProgram(0);
@@ -937,6 +1019,9 @@ impl Drop for NativeWindow {
                 }
                 if let Some(sprites) = &self.sprites {
                     sprites.delete();
+                }
+                if let Some(post) = self.post.take() {
+                    post.delete();
                 }
                 if let Some(gpu) = &self.retained {
                     for (buffer, _) in gpu.meshes.values() {
@@ -2445,6 +2530,89 @@ mod tests {
             }
             frame.save_png(path).unwrap();
         }
+    }
+    #[test]
+    #[ignore = "requires a live X11 display and OpenGL context"]
+    fn post_bloom_vignette_and_crisp_hud_match_gpu_pixels() {
+        use crate::post::{self, PostFx};
+        let mut window = NativeWindow::new(&Conf {
+            window_width: 128,
+            window_height: 96,
+            high_dpi: false,
+            ..Default::default()
+        })
+        .unwrap();
+        window.set_swap_interval(0);
+        let grey = crate::Color::new(0.25, 0.25, 0.25, 1.);
+        let hud_color = crate::Color::new(0.2, 0.6, 0.9, 1.);
+        let render = |window: &mut NativeWindow, fx: PostFx, boundary: bool| {
+            post::set_post_fx(fx);
+            crate::input::host_frame(1. / 60., 128, 96, || {
+                crate::clear_background(grey);
+                crate::set_camera(&crate::Camera2D::from_display_rect(crate::Rect::new(
+                    0., 0., 128., 96.,
+                )));
+                crate::draw_rectangle(60., 44., 8., 8., crate::WHITE);
+                if boundary {
+                    crate::set_default_camera();
+                } else {
+                    crate::edit(|s| s.default_camera());
+                }
+                crate::draw_rectangle(0., 0., 12., 12., hud_color);
+            });
+            crate::read(|s| {
+                window.present_scene(&s.vertices, &s.batches, s.clear, Some(&s.retained))
+            });
+            let pixels = window.pixels();
+            let (w, _) = window.size();
+            move |x: usize, y: usize| {
+                let at = (y * w as usize + x) * 4;
+                [pixels[at], pixels[at + 1], pixels[at + 2]]
+            }
+        };
+        let off = render(&mut window, PostFx::off(), true);
+        assert_eq!(window.post_target(), None, "off never allocates targets");
+        let neon = render(&mut window, PostFx::neon(), true);
+        assert!(window.post_target().is_some());
+        let (calls, _) = window.render_counts();
+        assert!(
+            calls >= 8,
+            "bloom chain and composite passes counted: {calls}"
+        );
+        // The emissive square stays white; its halo is brighter than the background.
+        assert_eq!(off(64, 48), [255; 3]);
+        assert!(neon(64, 48).iter().all(|&c| c >= 250), "{:?}", neon(64, 48));
+        assert_eq!(off(56, 48), [64; 3]);
+        assert!(neon(56, 48)[0] > 64 + 6, "bloom halo {:?}", neon(56, 48));
+        // Vignette darkens the world corner; the HUD drawn after the boundary
+        // keeps its exact authored color.
+        assert!(
+            neon(124, 92)[0] + 4 < off(124, 92)[0],
+            "{:?}",
+            neon(124, 92)
+        );
+        assert_eq!(neon(4, 4), off(4, 4));
+        assert!(
+            off(4, 4)
+                .iter()
+                .zip([51, 153, 230])
+                .all(|(&a, b)| a.abs_diff(b) <= 1)
+        );
+        // Without a boundary the HUD is part of the post-processed world.
+        let merged = render(&mut window, PostFx::neon(), false);
+        assert_ne!(merged(4, 4), off(4, 4));
+        // Reduced flash caps the glow.
+        let policy = ferravex_play::feedback::FeedbackPolicy::new(false, true, 1.).unwrap();
+        crate::preferences::set_feedback_policy(policy);
+        let calm = render(&mut window, PostFx::neon(), true);
+        crate::preferences::set_feedback_policy(Default::default());
+        assert!(calm(56, 48)[0] < neon(56, 48)[0], "{:?}", calm(56, 48));
+        // Returning to off restores the exact direct image.
+        let again = render(&mut window, PostFx::off(), true);
+        for (x, y) in [(64, 48), (56, 48), (124, 92), (4, 4), (30, 70)] {
+            assert_eq!(again(x, y), off(x, y));
+        }
+        post::set_post_fx(PostFx::off());
     }
     #[test]
     #[ignore = "requires a live X11 display and OpenGL context"]

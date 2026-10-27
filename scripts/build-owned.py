@@ -36,7 +36,7 @@ SHARED_ASSETS = (
     "runtime.js", "lifecycle.js", "visuals.js", "status.js", "details.js", "player.js",
     "loader.js", "fullscreen.js", "audio.js", "audio-worklet.js", "audio-ring.js",
     "input.js", "storage.js", "input-overlay.js", "retained.js", "effects.js",
-    "material-tools.js", "content-tools.js", "replay-tools.js",
+    "post.js", "material-tools.js", "content-tools.js", "replay-tools.js",
     "multiplayer-tools.js", "index.html", "catalog.js",
 )
 SHADERS = {
@@ -49,6 +49,12 @@ SHADERS = {
     "effects-shader.js": (
         ("effects.rs", "SPRITE_VERTEX_BODY", "spriteVertexBody"),
         ("effects.rs", "SPRITE_FRAGMENT_BODY", "spriteFragmentBody"),
+    ),
+    "post-shader.js": (
+        ("post.rs", "POST_VERTEX_BODY", "postVertexBody"),
+        ("post.rs", "POST_DOWN_FRAGMENT_BODY", "postDownFragmentBody"),
+        ("post.rs", "POST_UP_FRAGMENT_BODY", "postUpFragmentBody"),
+        ("post.rs", "POST_COMPOSITE_FRAGMENT_BODY", "postCompositeFragmentBody"),
     ),
 }
 CONTENT_EXPORTS = frozenset("ferravex_content_" + name for name in (
