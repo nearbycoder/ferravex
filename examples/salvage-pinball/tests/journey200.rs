@@ -83,7 +83,10 @@ struct Totals {
 
 impl Totals {
     fn record(&mut self, events: PinballFeedback, table: &Table) {
-        assert_eq!(events.points, 100 * events.hits);
+        // Multipliers, chains, skill shots, jackpots and the overtime secret
+        // add to each contact's 100-point base; nothing scores without a cause.
+        assert!(events.points >= 100 * events.hits);
+        assert!(events.points == 0 || events.hits + events.jackpots + events.secrets > 0);
         assert!(events.saves <= events.drains);
         self.points += events.points;
         self.hits += events.hits;

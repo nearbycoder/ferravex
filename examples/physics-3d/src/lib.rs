@@ -37,6 +37,15 @@ use ferravex_render::{
     ui,
 };
 
+#[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+mod capture;
+mod hud;
+mod juice;
+mod quips;
+mod toys;
+
+use toys::Fun;
+
 const MAX_BODIES: usize = 180;
 const CONCRETE: Color = Color::from_rgba(106, 116, 116, 255);
 const CRATE: Color = Color::from_rgba(173, 125, 68, 255);
@@ -46,6 +55,8 @@ struct Body {
     handle: RigidBodyHandle,
     ball: bool,
     compound: bool,
+    /// A dense bowling ball launched by BOWL.
+    heavy: bool,
     previous_position: Vec3,
     previous_rotation: Quat,
 }
@@ -73,6 +84,7 @@ impl Sandbox {
             pulse_time: 0.,
             pulse_center: Vec3::ZERO,
         };
+        sandbox.record_impacts();
         sandbox
             .physics
             .add_box([0.0, -0.4, 0.0], [10.0, 0.4, 8.0], false);
@@ -139,6 +151,9 @@ impl Sandbox {
     }
 
     fn spawn(&mut self, position: Vec3, ball: bool) {
+        if !position.is_finite() {
+            return;
+        }
         if self.bodies.len() >= MAX_BODIES {
             return;
         }
@@ -154,6 +169,7 @@ impl Sandbox {
             handle,
             ball,
             compound: false,
+            heavy: false,
             previous_position: position,
             previous_rotation: Quat::IDENTITY,
         });
@@ -177,6 +193,7 @@ impl Sandbox {
             handle,
             ball: false,
             compound: true,
+            heavy: false,
             previous_position: position,
             previous_rotation: Quat::IDENTITY,
         });
@@ -408,10 +425,16 @@ struct Commands {
     step: bool,
     view: bool,
     reset: bool,
+    /// Roll a heavy ball at the stack from the camera's side (immediate edit).
+    bowl: bool,
+    /// Throw in a ring of mixed shapes (immediate edit).
+    chaos: bool,
 }
 
 struct LabFrame {
     alpha: f32,
+    /// Physics ticks executed this frame, including a manual step.
+    ticks: u32,
     pulse: bool,
     impact: Option<(f32, Surface)>,
     reset: bool,
@@ -419,6 +442,7 @@ struct LabFrame {
 
 struct Lab {
     sandbox: Sandbox,
+    fun: Fun,
     session: GameSession,
     orbit: Orbit,
     shape: DropShape,
@@ -431,8 +455,12 @@ struct Lab {
 
 impl Lab {
     fn new() -> Self {
+        let sandbox = Sandbox::new();
+        let mut fun = Fun::default();
+        fun.on_rebuild(&sandbox);
         Self {
-            sandbox: Sandbox::new(),
+            sandbox,
+            fun,
             session: GameSession::try_new(120., 8, true).expect("valid laboratory clock"),
             orbit: Orbit::default(),
             shape: DropShape::Crate,
@@ -451,6 +479,7 @@ impl Lab {
 
     fn reset(&mut self) {
         self.sandbox = Sandbox::new();
+        self.fun.on_rebuild(&self.sandbox);
         self.session.restart();
         self.orbit.reset();
         self.shape = DropShape::Crate;
@@ -462,6 +491,7 @@ impl Lab {
 
     fn drop(&mut self) {
         let dropped = self.sandbox.drop_body(self.shape == DropShape::Ball);
+        self.fun.stats.drops += u32::from(dropped);
         self.notice(if !dropped {
             "Body limit reached. RESET yard."
         } else if self.shape == DropShape::Ball {
@@ -471,8 +501,37 @@ impl Lab {
         });
     }
 
+    fn bowl(&mut self) {
+        match self.sandbox.bowl(self.orbit.yaw) {
+            Some(at) => {
+                self.fun.bowled(at);
+                self.notice(if self.session.is_paused() {
+                    "Bowl placed. STEP or RESUME to roll."
+                } else {
+                    "Bowled. Watch the stack."
+                });
+            }
+            None => self.notice("Body limit reached. RESET yard."),
+        }
+    }
+
+    fn chaos(&mut self) {
+        let count = self.sandbox.chaos(self.fun.chaos_serial);
+        if count == 0 {
+            self.notice("Body limit reached. RESET yard.");
+            return;
+        }
+        self.fun.chaos_serial = self.fun.chaos_serial.wrapping_add(1);
+        self.fun.stats.chaos += 1;
+        self.fun.events.chaos += count;
+        self.fun.touch();
+        self.notice("CHAOS delivered.");
+    }
+
     fn step(&mut self, dt: f32, frame: &mut LabFrame) {
+        frame.ticks += 1;
         self.sandbox.step(dt);
+        self.fun.after_tick(&mut self.sandbox, dt);
         self.impact_cooldown = (self.impact_cooldown - dt).max(0.);
         if self.impact_cooldown == 0. && self.sandbox.impact.is_some() {
             frame.impact = self.sandbox.impact;
@@ -493,10 +552,12 @@ impl Lab {
     ) -> LabFrame {
         let mut result = LabFrame {
             alpha: 1.,
+            ticks: 0,
             pulse: false,
             impact: None,
             reset: false,
         };
+        self.fun.begin_frame();
         if elapsed.is_finite() && elapsed > 0. {
             self.feedback_time = (self.feedback_time - elapsed as f32).max(0.);
         }
@@ -529,6 +590,12 @@ impl Lab {
             }
             self.drop();
         }
+        if commands.bowl {
+            self.bowl();
+        }
+        if commands.chaos {
+            self.chaos();
+        }
         if self.session.is_paused() {
             self.pending_pulse = false;
             if pulse_input() | commands.pulse {
@@ -543,6 +610,7 @@ impl Lab {
             let requested = pulse_input() | std::mem::take(&mut self.pending_pulse);
             if requested && self.sandbox.pulse(vec3(0., 0.5, 0.)) {
                 result.pulse = true;
+                self.fun.stats.pulses += 1;
                 self.notice("Pulse applied. Recharge 0.65s.");
             } else if requested {
                 self.notice("Pulse recharging.");
@@ -645,15 +713,27 @@ fn binding_hint<'a>(input: &PlayerInput, name: &str, buffer: &'a mut [u8]) -> &'
     input.format_hint(name, buffer).unwrap_or("Controls")
 }
 
-fn footer_layout(width: f32, height: f32) -> (Rect, [Rect; 8]) {
-    let columns: usize = if width >= 880. {
-        8
-    } else if width < 360. {
-        3
-    } else {
+/// CRATE, BALL, DROP, PULSE, PAUSE, STEP, VIEW, RESET, BOWL, CHAOS.
+const BUTTONS: usize = 10;
+/// Visual groups: CRATE BALL DROP | PULSE BOWL CHAOS | PAUSE STEP VIEW RESET.
+/// Indexed by the stable button index above.
+const SLOT: [usize; BUTTONS] = [0, 1, 2, 3, 6, 7, 8, 9, 4, 5];
+
+fn footer_columns(width: f32) -> usize {
+    if width >= 900. {
+        BUTTONS
+    } else if width >= 540. {
+        5
+    } else if width >= 370. {
         4
-    };
-    let rows = 8_usize.div_ceil(columns);
+    } else {
+        3
+    }
+}
+
+fn footer_layout(width: f32, height: f32) -> (Rect, [Rect; BUTTONS]) {
+    let columns = footer_columns(width);
+    let rows = BUTTONS.div_ceil(columns);
     let text_height = 48.;
     let panel = Rect::new(
         12.,
@@ -661,11 +741,25 @@ fn footer_layout(width: f32, height: f32) -> (Rect, [Rect; 8]) {
         width - 24.,
         text_height + rows as f32 * 44.,
     );
-    let button_width = (panel.w - 24. - (columns - 1) as f32 * 6.) / columns as f32;
+    let gaps = if columns == BUTTONS { 20. } else { 0. };
+    let button_width = (panel.w - 24. - (columns - 1) as f32 * 6. - gaps) / columns as f32;
     let buttons = std::array::from_fn(|i| {
+        let slot = SLOT[i];
+        let column = slot % columns;
+        let group = if columns == BUTTONS {
+            if column >= 6 {
+                20.
+            } else if column >= 3 {
+                10.
+            } else {
+                0.
+            }
+        } else {
+            0.
+        };
         Rect::new(
-            panel.x + 12. + (i % columns) as f32 * (button_width + 6.),
-            panel.y + text_height - 4. + (i / columns) as f32 * 44.,
+            panel.x + 12. + column as f32 * (button_width + 6.) + group,
+            panel.y + text_height - 4. + (slot / columns) as f32 * 44.,
             button_width,
             36.,
         )
@@ -710,36 +804,6 @@ fn inspector_hint(text: &str, width: f32, narrow: bool) -> &str {
     }
 }
 
-fn hud_text(text: &str, x: f32, y: f32, width: f32, color: Color) {
-    if screen_width() < 540. {
-        for (row, line) in hud_lines(text, width, 14).enumerate() {
-            draw_text_ex(
-                line,
-                x,
-                y + row as f32 * 20.,
-                TextParams {
-                    font_size: 14,
-                    font_scale: 1.,
-                    color,
-                },
-            );
-        }
-    } else {
-        let metrics = get_default_font().try_metrics(16, 1.).expect("HUD font");
-        let text_width = metrics.measure_line(text).expect("bounded HUD label").width;
-        draw_text_ex(
-            text,
-            x,
-            y,
-            TextParams {
-                font_size: 16,
-                font_scale: (width / text_width.max(1.)).clamp(0.1, 1.),
-                color,
-            },
-        );
-    }
-}
-
 // Fit only narrow views into the same scene band used by pointer/touch input.
 // Pose, clipping depth, fog and relative orbit/zoom input remain authored.
 struct SceneCamera {
@@ -778,7 +842,51 @@ fn scene_rect(width: f32, panel: Rect) -> Rect {
 }
 
 fn window_conf() -> Conf {
-    ferravex_render::window_conf("Ferravex / low-poly physics laboratory")
+    #[allow(unused_mut)]
+    let mut conf = ferravex_render::window_conf("Ferravex / low-poly physics laboratory");
+    #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+    capture::window(&mut conf);
+    conf
+}
+
+fn register_lab_actions(player_input: &mut PlayerInput) {
+    for (name, label, key, pad) in [
+        ("drop", "Drop selected shape", KeyCode::Enter, 2),
+        ("step", "Step once while paused", KeyCode::N, 5),
+        ("reset_view", "Reset orbit view", KeyCode::C, 3),
+        ("bowl", "Bowl a heavy ball at the stack", KeyCode::B, 10),
+        ("chaos", "CHAOS: throw in sixteen shapes", KeyCode::Key3, 11),
+    ] {
+        player_input
+            .action(
+                name,
+                label,
+                ActionKind::Button,
+                vec![
+                    Binding::digital(InputCode::Key(key as u16)),
+                    Binding::digital(InputCode::PadButton(pad)),
+                ],
+            )
+            .unwrap();
+    }
+    player_input
+        .action(
+            "stats",
+            "Show engine stats",
+            ActionKind::Button,
+            vec![Binding::digital(InputCode::Key(KeyCode::G as u16))],
+        )
+        .unwrap();
+}
+
+fn mix(a: Color, b: Color, t: f32) -> Color {
+    let t = t.clamp(0., 1.);
+    Color::new(
+        a.r + (b.r - a.r) * t,
+        a.g + (b.g - a.g) * t,
+        a.b + (b.b - a.b) * t,
+        a.a,
+    )
 }
 
 ferravex_render::game!(window_conf, game);
@@ -788,10 +896,20 @@ async fn game() {
     let mut presentation = Presentation::default();
     let mut inspector = Inspector::new();
     let mut sound = GameAudio::new();
+    let mut juice = juice::Juice::new();
+    juice.rebuild(lab.sandbox.bodies.len());
+    let mut hud = hud::Hud::default();
+    // Personal bests are optional; autoplay demos never claim one.
+    let mut bests = hud::Bests::load(!demo.autoplay);
+    let mut particles = ferravex_render::effects::ParticleRenderer::new(480)
+        .expect("bounded presentation particles");
+    #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+    let mut capture = capture::Capture::from_env();
     let material = LitMaterial::new()
         .expect("The built-in Ferravex material must compile on the selected GPU backend");
     let crate_mesh = Mesh3d::cuboid(vec3(1.16, 1.16, 1.16), CRATE);
     let ball_mesh = Mesh3d::sphere(0.58, PAINT, 10, 6);
+    let bowling_mesh = Mesh3d::sphere(0.58, Color::from_rgba(150, 64, 112, 255), 12, 8);
     let compound_bar = Mesh3d::cuboid(vec3(1.6, 0.26, 0.26), CONCRETE);
     let compound_end = Mesh3d::sphere(0.36, ui::AMBER, 10, 6);
     let floor_mesh = Mesh3d::cuboid(vec3(20.0, 0.8, 16.0), Color::from_rgba(71, 81, 86, 255));
@@ -809,30 +927,14 @@ async fn game() {
     let marker = Mesh3d::cuboid(vec3(0.58, 0.13, 0.58), Color::from_rgba(208, 163, 74, 255));
     let mut player_input = PlayerInput::preset("physics-3d", Preset::Lab3);
     player_input.set_mouse_look_button(Some(1)).unwrap();
-    for (name, label, key, pad) in [
-        ("drop", "Drop selected shape", KeyCode::Enter, 2),
-        ("step", "Step once while paused", KeyCode::N, 5),
-        ("reset_view", "Reset orbit view", KeyCode::C, 3),
-    ] {
-        player_input
-            .action(
-                name,
-                label,
-                ActionKind::Button,
-                vec![
-                    Binding::digital(InputCode::Key(key as u16)),
-                    Binding::digital(InputCode::PadButton(pad)),
-                ],
-            )
-            .unwrap();
-    }
+    register_lab_actions(&mut player_input);
     let mut pending = Commands::default();
     loop {
         let dt = demo.dt();
         // Always consume the shared policy before accepted feedback and camera
-        // sampling, even when input or simulation is inactive. This lab owns no
-        // FeedbackController, flash overlay, camera shake or particle emitter.
+        // sampling, even when input or simulation is inactive.
         presentation.begin_frame(dt);
+        juice.apply_policy(presentation.policy);
         ui::warm_up_font();
         let (panel, buttons) = footer_layout(screen_width(), screen_height());
         let scene = scene_rect(screen_width(), panel);
@@ -843,13 +945,22 @@ async fn game() {
             }])
             .unwrap();
         player_input.sample(true);
+        // Debug captures may keep an unfocused review window running.
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        let forced = capture.forced();
+        #[cfg(not(all(debug_assertions, not(target_arch = "wasm32"))))]
+        let forced = false;
+        let active = player_input.gameplay_active() || forced;
         let pointer = Vec2::from(mouse_position());
         let in_scene = scene.contains(pointer);
+        let clicked = is_mouse_button_pressed(MouseButton::Left);
+        let card_closed = active && clicked && hud.dismiss_card();
         let mut look = player_input.look(presentation_dt(dt));
         if !(in_scene
             || player_input.touch_active()
             || player_input.value("look_rate_x").abs() > 0.001
             || player_input.value("look_rate_y").abs() > 0.001)
+            || hud.card.is_some()
         {
             look = Vec2::ZERO;
         }
@@ -869,25 +980,78 @@ async fn game() {
         pending.drop |= player_input.pressed("drop");
         pending.step |= player_input.pressed("step");
         pending.view |= player_input.pressed("reset_view");
-        if !player_input.gameplay_active() {
+        pending.bowl |= player_input.pressed("bowl");
+        pending.chaos |= player_input.pressed("chaos");
+        if player_input.pressed("stats") {
+            hud.stats = !hud.stats;
+        }
+        if !active || card_closed {
             pending = Commands::default();
             lab.pending_pulse = false;
         }
-        let frame = lab.advance_with_input(
-            player_input.simulation_dt(dt) as f64,
-            std::mem::take(&mut pending),
-            || player_input.take_tick(["pulse"])[0].pressed,
-        );
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        capture.inject(&mut lab, &mut pending, &mut hud);
+        let simulation_dt = if forced {
+            presentation_dt(dt)
+        } else {
+            player_input.simulation_dt(dt)
+        };
+        let frame =
+            lab.advance_with_input(simulation_dt as f64, std::mem::take(&mut pending), || {
+                player_input.take_tick(["pulse"])[0].pressed
+            });
         if frame.reset {
             // Discard a pulse sampled in the same frame as RESET.
             player_input.take("pulse");
         }
         presentation.accept(&frame, lab.sandbox.pulse_center);
+        // Feedback follows accepted lab events only.
+        let added = lab.sandbox.bodies.len() > juice.known() && !frame.reset;
+        juice.on_frame(&lab, &frame);
+        juice.advance_sim(frame.ticks as f32 / 120.);
+        juice.advance_render(dt);
+        hud.advance(&lab, active, dt);
+        let events = &lab.fun.events;
         if frame.pulse {
             sound.cue(Cue::Impact(Surface::Metal), 0.5);
         }
         if let Some((strength, surface)) = frame.impact {
             sound.cue(Cue::Impact(surface), (strength * 0.09).clamp(0.15, 0.7));
+        }
+        if added {
+            sound.cue(Cue::Click, if events.chaos > 0 { 0.45 } else { 0.25 });
+        }
+        if events.bowled.is_some() {
+            sound.cue(Cue::Jump, 0.5);
+        }
+        if let Some(knocked) = events.bowl_result {
+            sound.cue(
+                if knocked >= 8 {
+                    Cue::Success
+                } else {
+                    Cue::Failure
+                },
+                0.5,
+            );
+        }
+        if events.collapse.is_some() {
+            sound.cue(Cue::Impact(Surface::Stone), 0.8);
+        }
+        if !events.goals.is_empty() || events.secret {
+            sound.cue(Cue::Success, 0.7);
+        }
+        if events.returned > 0 {
+            sound.cue(Cue::Pickup, 0.4);
+        }
+        if let Some(headline) = bests.update(&lab.fun) {
+            juice.toast(
+                "NEW PERSONAL BEST!",
+                headline,
+                juice::GOLD,
+                2.6,
+                juice::Priority::Alert,
+            );
+            sound.cue(Cue::Success, 0.6);
         }
         let alpha = frame.alpha;
         let sandbox = &lab.sandbox;
@@ -896,10 +1060,10 @@ async fn game() {
             lab.orbit.rig.cut();
         }
         let view = lab.orbit.view(dt);
-        let eye = view.position;
-        let target = view.target;
-        inspector.sample(&sandbox.physics, eye, target);
-        set_camera(&SceneCamera {
+        // The probe uses the steady orbit; shake and the beat are cosmetic.
+        inspector.sample(&sandbox.physics, view.position, view.target);
+        let (eye, target) = juice.camera(view.position, view.target);
+        let camera = SceneCamera {
             camera: Camera3D {
                 position: eye,
                 target,
@@ -910,7 +1074,9 @@ async fn game() {
                 ..Default::default()
             },
             scene,
-        });
+        };
+        let view_proj = camera.matrix(screen_width(), screen_height());
+        set_camera(&camera);
         material.begin(LitSettings {
             camera_position: eye,
             fog_start: 22.0,
@@ -952,9 +1118,13 @@ async fn game() {
             let (p, r) = interpolated(body);
             crate_mesh.draw(p, r);
         }
-        for body in sandbox.bodies.iter().filter(|b| b.ball) {
+        for body in sandbox.bodies.iter().filter(|b| b.ball && !b.heavy) {
             let (p, r) = interpolated(body);
             ball_mesh.draw(p, r);
+        }
+        for body in sandbox.bodies.iter().filter(|b| b.heavy) {
+            let (p, r) = interpolated(body);
+            bowling_mesh.draw(p, r);
         }
         for body in sandbox.bodies.iter().filter(|b| b.compound) {
             let (p, r) = interpolated(body);
@@ -973,18 +1143,13 @@ async fn game() {
         }
         material.end();
         // Wire detail belongs only to crates: it reads as a shipping frame and
-        // keeps geometry simple rather than requiring a texture atlas.
-        for body in &sandbox.bodies {
+        // keeps geometry simple rather than requiring a texture atlas. Strong
+        // hits flash the frame (reduced flash disables this).
+        for (index, body) in sandbox.bodies.iter().enumerate() {
             if body.ball || body.compound {
                 continue;
             }
-            let rigid_body = &sandbox.physics.bodies[body.handle];
-            let position = body
-                .previous_position
-                .lerp(Vec3::from_array(rigid_body.translation().to_array()), alpha);
-            let rotation = body
-                .previous_rotation
-                .slerp(Quat::from_array(rigid_body.rotation().to_array()), alpha);
+            let (position, rotation) = interpolated(body);
             let points = [
                 vec3(-0.582, -0.582, -0.582),
                 vec3(0.582, -0.582, -0.582),
@@ -996,6 +1161,11 @@ async fn game() {
                 vec3(-0.582, 0.582, 0.582),
             ]
             .map(|v| position + rotation * v);
+            let color = mix(
+                Color::from_rgba(84, 64, 43, 255),
+                Color::from_rgba(255, 236, 190, 255),
+                juice.body_flash(index),
+            );
             for (a, b) in [
                 (0, 1),
                 (1, 2),
@@ -1010,7 +1180,7 @@ async fn game() {
                 (2, 6),
                 (3, 7),
             ] {
-                draw_line_3d(points[a], points[b], Color::from_rgba(84, 64, 43, 255));
+                draw_line_3d(points[a], points[b], color);
             }
         }
         for id in &sandbox.links {
@@ -1033,33 +1203,41 @@ async fn game() {
                 );
             }
         }
+        if !juice.particles.is_empty()
+            && let Ok(billboard) = ferravex_render::effects::BillboardView::new(
+                eye,
+                (target - eye).cross(view.up),
+                view.up,
+            )
+        {
+            let _ = particles.draw_3d(
+                &juice.particles,
+                billboard,
+                ferravex_render::effects::ParticleStyle::default(),
+            );
+        }
         set_default_camera();
-        draw_text("PHYSICS 3D", 16., 29., 18., ui::INK);
+        if let Some((_, beat)) = juice.beat()
+            && beat > 0.
+        {
+            // Cinematic letterbox for the collapse beat (motion only).
+            let bar = 30. * beat;
+            draw_rectangle(0., 44., screen_width(), bar, Color::new(0., 0., 0., 0.85));
+            draw_rectangle(
+                0.,
+                panel.y - bar,
+                screen_width(),
+                bar,
+                Color::new(0., 0., 0., 0.85),
+            );
+        }
         ui::panel(panel);
         let paused = lab.session.is_paused();
-        let state = if paused { "PAUSED" } else { "PLAYING" };
-        hud_text(
-            &format!("{state} / {} BODIES", sandbox.bodies.len()),
-            panel.x + 12.,
-            panel.y + 21.,
-            panel.w - 24.,
-            if paused { ui::AMBER } else { ui::INK },
-        );
-        let feedback = match lab.feedback {
-            "Resume to pulse. DROP/STEP work." => "RESUME TO PULSE",
-            "Pulse recharging." => "PULSE RECHARGING",
-            "PAUSE before stepping." => "PAUSE TO STEP",
-            "Body limit reached. RESET yard." => "BODY LIMIT REACHED",
-            _ => "",
-        };
-        if lab.feedback_time > 0. {
-            hud_text(
-                feedback,
-                panel.x + 12.,
-                panel.y + 42.,
-                panel.w - 24.,
-                ui::CYAN,
-            );
+        let mut hovered = None;
+        for (i, rect) in buttons.iter().enumerate() {
+            if active && rect.contains(pointer) {
+                hovered = Some(i);
+            }
         }
         pending.crate_drop = ui::button(buttons[0], "CRATE", lab.shape == DropShape::Crate);
         pending.ball_drop = ui::button(buttons[1], "BALL", lab.shape == DropShape::Ball);
@@ -1083,10 +1261,40 @@ async fn game() {
         );
         pending.view = ui::button(buttons[6], "VIEW", false);
         pending.reset = ui::button(buttons[7], "RESET", false);
-        if !player_input.gameplay_active() {
+        let room = sandbox.bodies.len() < MAX_BODIES;
+        pending.bowl = ui::button_with_options(
+            buttons[8],
+            "BOWL",
+            ui::ButtonOptions {
+                enabled: room,
+                selected: false,
+            },
+        );
+        pending.chaos = ui::button_with_options(
+            buttons[9],
+            "CHAOS",
+            ui::ButtonOptions {
+                enabled: room,
+                selected: false,
+            },
+        );
+        if !active || card_closed || (hud.card.is_some() && clicked) {
             pending = Commands::default();
         }
+        hud.draw(&hud::Frame {
+            lab: &lab,
+            juice: &juice,
+            bests: &bests,
+            input: &player_input,
+            hovered,
+            panel,
+            view_proj,
+            inspector: &inspector,
+            active,
+        });
         player_input.draw_settings();
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        capture.end_frame();
         if demo.finish_frame() {
             break;
         }
@@ -1701,6 +1909,51 @@ mod tests {
                 assert!(button.w >= 50. && button.h >= 36.);
                 assert!(button.x >= panel.x && button.x + button.w <= panel.x + panel.w);
                 assert!(button.y >= panel.y && button.y + button.h <= panel.y + panel.h);
+                for other in &buttons[i + 1..] {
+                    assert!(
+                        button.x + button.w <= other.x
+                            || other.x + other.w <= button.x
+                            || button.y + button.h <= other.y
+                            || other.y + other.h <= button.y
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ten_grouped_buttons_stay_readable_and_leave_scene_room() {
+        let labels = [
+            "CRATE", "BALL", "DROP", "PULSE", "RESUME", "STEP", "VIEW", "RESET", "BOWL", "CHAOS",
+        ];
+        for (width, height) in [
+            (296., 640.),
+            (369., 640.),
+            (370., 640.),
+            (539., 700.),
+            (540., 400.),
+            (899., 600.),
+            (900., 600.),
+            (1280., 800.),
+            (1600., 1000.),
+        ] {
+            let (panel, buttons) = footer_layout(width, height);
+            assert!(scene_rect(width, panel).h >= 190., "{width}x{height}");
+            for (i, button) in buttons.iter().enumerate() {
+                assert!(button.x >= panel.x + 12. - 0.01);
+                assert!(
+                    button.x + button.w <= panel.x + panel.w - 12. + 0.01,
+                    "{width}: {i}"
+                );
+                assert!(button.y >= panel.y + 44. && button.y + button.h <= panel.y + panel.h);
+                let measured = get_default_font()
+                    .try_metrics(17, 1.)
+                    .unwrap()
+                    .measure_line(labels[i])
+                    .unwrap()
+                    .width;
+                let size = 17. * ((button.w - 12.) / measured).min(1.);
+                assert!(size >= 14., "{width}: {} at {size}", labels[i]);
                 for other in &buttons[i + 1..] {
                     assert!(
                         button.x + button.w <= other.x

@@ -1,6 +1,7 @@
 //! Interactive host adapter; the headless/software simulation keeps its API.
 use super::*;
-use ferravex_engine::render::audio::GameAudio;
+use ferravex_engine::render::audio::{Bus, Cue, GameAudio, VoiceParams};
+use ferravex_engine::render::storage::{Records, run_micros};
 use ferravex_engine::render::{
     self,
     input::{
@@ -10,7 +11,38 @@ use ferravex_engine::render::{
     prelude::{KeyCode, Rect, vec2},
 };
 use std::cell::RefCell;
-thread_local! {static SOUND:RefCell<Option<GameAudio>>=const {RefCell::new(None)};static CONTROLS:RefCell<Option<PlayerInput>>=const {RefCell::new(None)};}
+thread_local! {static SOUND:RefCell<Option<GameAudio>>=const {RefCell::new(None)};static CONTROLS:RefCell<Option<PlayerInput>>=const {RefCell::new(None)};
+// Personal bests are optional: `Some(None)` means storage was unavailable.
+static RECORDS:RefCell<Option<Option<Records>>>=const {RefCell::new(None)};}
+/// Records context for the two-sector campaign scored by these rules.
+const RECORD_RULES: u64 = 0x4f52_4249_0002;
+const RECORD_ID: &str = "campaign";
+
+/// Open records once (on the first host frame) and record each finished run.
+fn sync_records(app: &mut Orbit) {
+    RECORDS.with(|cell| {
+        let mut cell = cell.borrow_mut();
+        let records = cell.get_or_insert_with(|| {
+            let records = Records::new("owned-orbit").ok();
+            let best = records
+                .as_ref()
+                .and_then(|r| r.get(RECORD_ID, RECORD_RULES))
+                .map(|record| record.score.min(u64::from(u32::MAX)) as u32);
+            app.set_personal_best(best);
+            records
+        });
+        if let Some(run) = app.take_finished_run()
+            && let Some(records) = records.as_mut()
+        {
+            let time = if run.won {
+                run_micros(run.seconds)
+            } else {
+                None
+            };
+            let _ = records.attempt(RECORD_ID, RECORD_RULES, u64::from(run.score), time);
+        }
+    });
+}
 fn profile() -> PlayerInput {
     let mut p = PlayerInput::new("owned-orbit");
     for (name, label, codes, global) in [
@@ -131,11 +163,28 @@ pub extern "C" fn orbit_controls_frame(dt: f32, width: u32, height: u32) {
                         restart,
                     },
                 );
+                sync_records(app);
+                let chime = app.presentation.juice.chime;
                 SOUND.with(|cell| {
                     let mut cell = cell.borrow_mut();
                     let sound = cell.get_or_insert_with(GameAudio::new);
                     for (cue, gain) in app.presentation.take_cues() {
-                        sound.cue(cue, gain);
+                        match (cue, chime) {
+                            // Panel chimes climb in pitch as a volley grows.
+                            (Cue::Pickup, Some(pitch)) if pitch > 1. => {
+                                let _ = ferravex_engine::render::audio::play(
+                                    cue,
+                                    VoiceParams {
+                                        gain,
+                                        pitch,
+                                        priority: 2,
+                                        bus: Bus::Effects,
+                                        ..Default::default()
+                                    },
+                                );
+                            }
+                            _ => sound.cue(cue, gain),
+                        }
                     }
                 });
                 app.render();

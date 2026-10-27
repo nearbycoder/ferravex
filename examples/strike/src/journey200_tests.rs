@@ -29,6 +29,7 @@ struct Practice {
     bots: PracticeBots,
     replays: replay::Session,
     commands: Vec<(u8, InputFrame)>,
+    tuning: crate::bots::Tuning,
 }
 
 impl Practice {
@@ -40,15 +41,18 @@ impl Practice {
             game,
             replays: replay::Session::default(),
             commands: Vec::with_capacity(ferravex_fps::MAX_PLAYERS),
+            tuning: crate::bots::Tuning::new(),
         }
     }
 
     // Same command/authority/capture/bot-event order as the practice branch in game().
     fn tick(&mut self, input: InputFrame) -> Tick {
         self.bots.commands(&self.game, input, &mut self.commands);
+        self.tuning.adjust(&self.game, &mut self.commands);
         let events = self.game.step(&self.commands);
         self.replays.capture(&self.game, &self.commands, &events);
         self.bots.events(&events);
+        self.tuning.events(self.game.tick, &events);
         Tick {
             number: self.game.tick,
             hash: self.game.state_hash().unwrap(),

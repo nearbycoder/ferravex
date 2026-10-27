@@ -1,4 +1,4 @@
-use crate::presentation::AcceptedEvent;
+use crate::presentation::{AcceptedEvent, Spark};
 use ferravex_engine::{
     dynamics::{BodyDesc, BodyHandle, PhysicsWorld, QueryFilter, Shape},
     events::{EventQueue, Overflow},
@@ -15,6 +15,29 @@ pub const PADDLE_Y: f32 = 636.0;
 pub const BALL_RADIUS: f32 = 6.0;
 const PADDLE_HALF: f32 = 43.0;
 const MAX_IMPACTS: usize = 8;
+/// Extra balls released by a multi-ball capsule; never more than this at once.
+pub const MAX_EXTRA_BALLS: usize = 4;
+/// Paddle catches granted by a sticky capsule.
+pub const STICKY_CATCHES: u32 = 3;
+/// Seconds a caught ball waits before releasing itself.
+pub const HOLD_SECONDS: f32 = 0.9;
+/// Points for bonking the drifting satellite above the panels.
+pub const SATELLITE_POINTS: u32 = 1000;
+/// Points for clearing a sector without losing a ball.
+pub const FLAWLESS_POINTS: u32 = 1000;
+const SATELLITE_FIRST: f32 = 12.;
+const SATELLITE_PERIOD: f32 = 24.;
+const SATELLITE_PASS: f32 = 7.;
+const SATELLITE_Y: f32 = 121.;
+/// Capsule kinds rotate in this deterministic order, so runs replay exactly.
+const PICKUP_ORDER: [Pickup; 6] = [
+    Pickup::Wide,
+    Pickup::Split,
+    Pickup::Sticky,
+    Pickup::Split,
+    Pickup::Wide,
+    Pickup::Sticky,
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u32)]
@@ -50,8 +73,33 @@ pub struct Block {
     pub flash: f32,
     pub row: usize,
 }
+/// What a falling capsule does when the paddle catches it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Pickup {
+    /// A wider paddle for nine seconds.
+    #[default]
+    Wide,
+    /// Two extra balls burst from the paddle; losing them costs nothing.
+    Split,
+    /// The next three paddle returns catch the ball; launch (or wait) to fire.
+    Sticky,
+}
 pub struct Drop {
     pub position: [f32; 2],
+    pub kind: Pickup,
+}
+/// A bonus ball from a multi-ball capsule.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ball {
+    pub position: [f32; 2],
+    pub velocity: [f32; 2],
+}
+/// A ball caught by the sticky paddle, riding at `offset` from its center.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Held {
+    pub offset: f32,
+    pub velocity: [f32; 2],
+    pub remaining: f32,
 }
 
 pub struct Game {
@@ -64,6 +112,9 @@ pub struct Game {
     pub blocks: Vec<Block>,
     pub particles: ParticlePool,
     pub drops: Vec<Drop>,
+    pub extra_balls: Vec<Ball>,
+    pub held: Option<Held>,
+    pub sticky: u32,
     pub trail: Vec<[f32; 2]>,
     pub phase: Phase,
     pub lives: u32,
@@ -81,6 +132,15 @@ pub struct Game {
     pub precision: ferravex_engine::gameplay::skill::PrecisionReturns,
     pub clears: u32,
     pub ccd_impacts: u64,
+    /// Panel hits since any ball last touched the paddle.
+    pub volley: u32,
+    pub best_volley: u32,
+    pub satellites: u32,
+    pub lives_lost: u32,
+    pub flawless_sectors: u32,
+    satellite_bonked: Option<u32>,
+    pub(crate) sector_lives_lost: u32,
+    drops_spawned: u32,
     transition: f32,
     launch_count: u32,
     reward_rng: ferravex_engine::gameplay::loot::RewardRng,
@@ -125,6 +185,9 @@ impl Game {
             blocks: Vec::with_capacity(35),
             particles: ParticlePool::new(512),
             drops: Vec::with_capacity(8),
+            extra_balls: Vec::with_capacity(MAX_EXTRA_BALLS),
+            held: None,
+            sticky: 0,
             trail: Vec::with_capacity(18),
             phase: Phase::Ready,
             lives: 3,
@@ -144,6 +207,14 @@ impl Game {
                 .unwrap(),
             clears: 0,
             ccd_impacts: 0,
+            volley: 0,
+            best_volley: 0,
+            satellites: 0,
+            lives_lost: 0,
+            flawless_sectors: 0,
+            satellite_bonked: None,
+            sector_lives_lost: 0,
+            drops_spawned: 0,
             transition: 0.0,
             launch_count: 0,
             reward_rng: ferravex_engine::gameplay::loot::RewardRng::new(0x4f52424954),
@@ -259,7 +330,7 @@ impl Game {
         };
         Input {
             axis: ((desired - self.paddle_x) / 10.0).clamp(-1.0, 1.0),
-            launch: self.phase == Phase::Ready,
+            launch: self.phase == Phase::Ready || self.held.is_some(),
             restart: false,
         }
     }
@@ -338,8 +409,38 @@ impl Game {
             } else {
                 return;
             }
+        } else if let Some(mut held) = self.held {
+            // A sticky catch rides the paddle until launch or its short timer.
+            held.remaining -= dt;
+            let reach = self.paddle_half - BALL_RADIUS;
+            self.ball = [
+                self.paddle_x + held.offset.clamp(-reach, reach),
+                PADDLE_Y - 8. - BALL_RADIUS - 1.,
+            ];
+            if input.launch || held.remaining <= 0. {
+                self.held = None;
+                self.velocity = held.velocity;
+                self.record(AcceptedEvent::Spark(Spark::Release { at: self.ball }));
+                self.emit(self.ball, [0.62, 0.92, 0.55, 1.], 8);
+            } else {
+                self.held = Some(held);
+            }
         }
-        self.move_ball(dt);
+        self.move_ball(dt, true);
+        for index in 0..self.extra_balls.len() {
+            // Bonus balls reuse the primary's exact collision and reward rules.
+            std::mem::swap(&mut self.ball, &mut self.extra_balls[index].position);
+            std::mem::swap(&mut self.velocity, &mut self.extra_balls[index].velocity);
+            self.move_ball(dt, false);
+            std::mem::swap(&mut self.ball, &mut self.extra_balls[index].position);
+            std::mem::swap(&mut self.velocity, &mut self.extra_balls[index].velocity);
+        }
+        let before = self.extra_balls.len();
+        self.extra_balls.retain(|ball| ball.position[1] <= 677.);
+        for _ in self.extra_balls.len()..before {
+            self.record(AcceptedEvent::Spark(Spark::Fizzle));
+        }
+        self.check_satellite();
         self.update_drops(dt);
         self.trail_clock += dt;
         if self.trail_clock >= 1.0 / 90.0
@@ -352,7 +453,14 @@ impl Game {
             }
             self.trail.push(self.ball);
         }
-        if self.ball[1] > 677.0 && self.ball_save > 0. {
+        if self.ball[1] > 677.0 && !self.extra_balls.is_empty() {
+            // A bonus ball takes over; nobody loses a life to multi-ball.
+            let next = self.extra_balls.remove(0);
+            self.ball = next.position;
+            self.velocity = next.velocity;
+            self.trail.clear();
+            self.record(AcceptedEvent::Spark(Spark::Backup { at: self.ball }));
+        } else if self.ball[1] > 677.0 && self.ball_save > 0. {
             self.ball_save = 0.;
             self.saves += 1;
             self.precision.reset();
@@ -361,26 +469,34 @@ impl Game {
             let speed = self.speed();
             self.velocity = [speed * 0.24, -speed * (1. - 0.24_f32.powi(2)).sqrt()];
             self.chain.break_chain();
+            self.volley = 0;
             self.trail.clear();
             self.emit(self.ball, [0.35, 0.85, 0.79, 1.], 18);
             self.show_feedback(Feedback::BallSaved, 1.8);
             self.record(AcceptedEvent::Save);
         } else if self.ball[1] > 677.0 {
             self.lives -= 1;
+            self.lives_lost += 1;
+            self.sector_lives_lost += 1;
             self.precision.reset();
             self.chain.break_chain();
+            self.volley = 0;
             self.trail.clear();
             self.velocity = [0.0; 2];
             self.drops.clear();
+            self.held = None;
+            self.sticky = 0;
             self.wide_time = 0.0;
             self.resize_paddle(PADDLE_HALF);
-            self.emit([self.ball[0], 653.], [0.88, 0.68, 0.40, 1.], 16);
+            let drain = [self.ball[0].clamp(LEFT, RIGHT), 653.];
+            self.emit(drain, [0.88, 0.68, 0.40, 1.], 16);
             self.ball = [self.paddle_x, PADDLE_Y - 8. - BALL_RADIUS - 1.];
             self.serve_charge.cancel();
             self.serve_power = 0.;
             self.charged_volley = false;
             self.show_feedback(Feedback::LifeLost, 2.5);
             self.record(AcceptedEvent::LifeLost);
+            self.record(AcceptedEvent::Spark(Spark::Drain { at: drain }));
             self.phase = if self.lives == 0 {
                 Phase::Lost
             } else {
@@ -396,8 +512,67 @@ impl Game {
             self.velocity = [0.0; 2];
             self.trail.clear();
             self.drops.clear();
+            self.extra_balls.clear();
+            self.held = None;
+            self.volley = 0;
+            if self.sector_lives_lost == 0 {
+                self.flawless_sectors += 1;
+                self.score = self.score.saturating_add(FLAWLESS_POINTS);
+                self.record(AcceptedEvent::Spark(Spark::Flawless(FLAWLESS_POINTS)));
+            }
             self.show_feedback(Feedback::SectorCleared, 1.4);
             self.record(AcceptedEvent::SectorCleared);
+        }
+    }
+
+    /// Where the bonus satellite drifts above the panels, if it is passing now.
+    ///
+    /// It crosses the gap between the top wall and the first row every 24
+    /// seconds of play, starting 12 seconds in. Each pass can be bonked once;
+    /// the ball flies straight through it, so collisions are unchanged.
+    ///
+    /// ```
+    /// let mut game = owned_orbit::game::Game::new();
+    /// assert_eq!(game.satellite(), None);
+    /// game.phase = owned_orbit::game::Phase::Playing;
+    /// game.time = 15.;
+    /// assert!(game.satellite().is_some());
+    /// ```
+    pub fn satellite(&self) -> Option<[f32; 2]> {
+        if self.phase != Phase::Playing || self.time < SATELLITE_FIRST {
+            return None;
+        }
+        let elapsed = self.time - SATELLITE_FIRST;
+        let pass = (elapsed / SATELLITE_PERIOD) as u32;
+        let t = elapsed - pass as f32 * SATELLITE_PERIOD;
+        if t >= SATELLITE_PASS || self.satellite_bonked == Some(pass) {
+            return None;
+        }
+        let progress = t / SATELLITE_PASS;
+        let span = RIGHT - LEFT - 36.;
+        let x = if pass.is_multiple_of(2) {
+            LEFT + 18. + span * progress
+        } else {
+            RIGHT - 18. - span * progress
+        };
+        Some([x, SATELLITE_Y + (t * 2.6).sin() * 3.])
+    }
+
+    fn check_satellite(&mut self) {
+        let Some(at) = self.satellite() else {
+            return;
+        };
+        let near = |p: [f32; 2]| (p[0] - at[0]).hypot(p[1] - at[1]) < BALL_RADIUS + 9.;
+        if near(self.ball) || self.extra_balls.iter().any(|b| near(b.position)) {
+            let pass = ((self.time - SATELLITE_FIRST) / SATELLITE_PERIOD) as u32;
+            self.satellite_bonked = Some(pass);
+            self.satellites += 1;
+            self.score = self.score.saturating_add(SATELLITE_POINTS);
+            self.emit(at, [0.85, 0.80, 1.0, 1.], 24);
+            self.record(AcceptedEvent::Spark(Spark::Satellite {
+                at,
+                points: SATELLITE_POINTS,
+            }));
         }
     }
     fn speed(&self) -> f32 {
@@ -422,6 +597,10 @@ impl Game {
         self.blocks.clear();
         self.trail.clear();
         self.drops.clear();
+        self.extra_balls.clear();
+        self.held = None;
+        self.sticky = 0;
+        self.sector_lives_lost = 0;
         self.wide_time = 0.0;
         self.resize_paddle(PADDLE_HALF);
         self.paddle_x = 320.0;
@@ -451,7 +630,9 @@ impl Game {
         }
         self.ball = [self.paddle_x, PADDLE_Y - 15.0];
     }
-    fn move_ball(&mut self, dt: f32) {
+    /// Move the ball currently in `ball`/`velocity`. Only the primary ball can
+    /// be caught by the sticky paddle; bonus balls always bounce.
+    fn move_ball(&mut self, dt: f32, primary: bool) {
         let mut remaining = dt;
         // Game-specific reflection is driven by the engine's exact continuous
         // circle casts against every wall, paddle, and destructible block.
@@ -506,11 +687,28 @@ impl Game {
                 if bonus > 0 {
                     self.record(AcceptedEvent::Precision(bonus));
                 }
+                self.volley = 0;
                 self.emit(
                     self.ball,
                     [0.35, 0.85, 0.79, 1.0],
                     if bonus > 0 { 15 } else { 5 },
                 );
+                self.record(AcceptedEvent::Spark(Spark::Paddle {
+                    at: self.ball,
+                    bonus,
+                }));
+                if primary && self.sticky > 0 {
+                    self.sticky -= 1;
+                    self.held = Some(Held {
+                        offset: self.ball[0] - self.paddle_x,
+                        velocity: self.velocity,
+                        remaining: HOLD_SECONDS,
+                    });
+                    self.velocity = [0.; 2];
+                    self.ball[1] = PADDLE_Y - 8. - BALL_RADIUS - 1.;
+                    self.record(AcceptedEvent::Spark(Spark::Caught));
+                    break;
+                }
             } else {
                 let dot = self.velocity[0] * hit.normal[0] + self.velocity[1] * hit.normal[1];
                 if dot < 0.0 {
@@ -546,7 +744,11 @@ impl Game {
         };
         let position = block.center;
         let destroyed = block.health == 0;
+        let row = block.row;
+        let reinforced = block.original_health == 2;
         self.hits += 1;
+        self.volley += 1;
+        self.best_volley = self.best_volley.max(self.volley);
         self.precision.progress();
         let award = self.chain.award(if destroyed { 100 } else { 25 });
         self.score = self.score.saturating_add(award as u32);
@@ -558,19 +760,68 @@ impl Game {
                 .roll(&mut self.reward_rng)
                 == 1;
             if self.drops.len() < 8 && self.drop_pity.attempt(natural) {
-                self.drops.push(Drop { position });
+                let kind = PICKUP_ORDER[self.drops_spawned as usize % PICKUP_ORDER.len()];
+                self.drops_spawned += 1;
+                self.drops.push(Drop { position, kind });
             }
         }
         self.record(AcceptedEvent::Panel(award as u32));
-        self.emit(
-            position,
-            if destroyed {
-                [0.88, 0.68, 0.40, 1.0]
-            } else {
-                [0.82, 0.93, 0.92, 1.0]
-            },
-            if destroyed { 16 } else { 6 },
-        );
+        self.record(AcceptedEvent::Spark(Spark::Panel {
+            at: position,
+            points: award as u32,
+            destroyed,
+            row,
+            volley: self.volley,
+        }));
+        if crate::quips::is_volley_milestone(self.volley) {
+            self.record(AcceptedEvent::Spark(Spark::Volley(self.volley)));
+        }
+        if destroyed && self.remaining() == 1 {
+            let last = self.blocks.iter().find(|b| b.health > 0).map(|b| b.center);
+            if let Some(at) = last {
+                self.record(AcceptedEvent::Spark(Spark::LastPanel { at }));
+            }
+        }
+        if destroyed {
+            self.shatter(index, row, reinforced);
+        } else {
+            self.emit(position, [0.82, 0.93, 0.92, 1.0], 6);
+        }
+    }
+
+    /// Panel-colored shards that tumble out and fall; purely cosmetic.
+    fn shatter(&mut self, index: usize, row: usize, reinforced: bool) {
+        if self.policy.reduced_motion() {
+            return;
+        }
+        let block = &self.blocks[index];
+        let (center, half) = (block.center, block.half);
+        let color = panel_color(row);
+        let color = [color[0], color[1], color[2], 1.];
+        let count = ((if reinforced { 22. } else { 16. }) * self.policy.intensity()) as usize;
+        let seed = self.hits.wrapping_mul(2_654_435_761);
+        for i in 0..count {
+            let hash = seed
+                .wrapping_add((i as u32).wrapping_mul(0x9e37_79b9))
+                .rotate_left(i as u32 % 13);
+            let fx = (hash % 1000) as f32 / 1000. * 2. - 1.;
+            let fy = (hash / 1000 % 1000) as f32 / 1000. * 2. - 1.;
+            let _ = self.particles.spawn(ParticleDesc {
+                position: [center[0] + fx * half[0], center[1] + fy * half[1], 0.],
+                velocity: [
+                    fx * 120. + self.velocity[0] * 0.12,
+                    -40. - fy.abs() * 90.,
+                    0.,
+                ],
+                acceleration: [0., 420., 0.],
+                lifetime: 0.45 + (i % 5) as f32 * 0.06,
+                start_color: color,
+                end_color: [color[0] * 0.6, color[1] * 0.6, color[2] * 0.6, 0.],
+                start_size: 2. + (i % 3) as f32,
+                end_size: 1.,
+            });
+        }
+        self.emit(center, [1., 0.95, 0.80, 1.], 8);
     }
     fn emit(&mut self, position: [f32; 2], color: [f32; 4], count: usize) {
         if self.policy.reduced_motion() {
@@ -593,7 +844,8 @@ impl Game {
         }
     }
     fn update_drops(&mut self, dt: f32) {
-        let mut caught = false;
+        let mut caught = [None; 8];
+        let mut count = 0;
         self.drops.retain_mut(|drop| {
             drop.position[1] += 130.0 * dt;
             if drop.position[1] <= PADDLE_Y + 12. {
@@ -613,18 +865,54 @@ impl Game {
             if (drop.position[1] - PADDLE_Y).abs() < 12.0
                 && (drop.position[0] - self.paddle_x).abs() < self.paddle_half + 8.0
             {
-                caught = true;
+                if count < caught.len() {
+                    caught[count] = Some((drop.kind, drop.position));
+                    count += 1;
+                }
                 return false;
             }
             drop.position[1] < 680.0
         });
-        if caught {
-            self.resize_paddle(67.0);
-            self.wide_time = 9.0;
+        for (kind, at) in caught.into_iter().flatten() {
             self.score += 50;
-            self.record(AcceptedEvent::Wide);
+            match kind {
+                Pickup::Wide => {
+                    self.resize_paddle(67.0);
+                    self.wide_time = 9.0;
+                    self.record(AcceptedEvent::Wide);
+                }
+                Pickup::Split => {
+                    let speed = self.speed();
+                    for angle in [-0.42_f32, 0.42] {
+                        if self.extra_balls.len() < MAX_EXTRA_BALLS {
+                            self.extra_balls.push(Ball {
+                                position: [self.paddle_x, PADDLE_Y - 8. - BALL_RADIUS - 2.],
+                                velocity: [angle.sin() * speed, -angle.cos() * speed],
+                            });
+                        }
+                    }
+                    self.record(AcceptedEvent::Split);
+                }
+                Pickup::Sticky => {
+                    self.sticky = STICKY_CATCHES;
+                    self.record(AcceptedEvent::Sticky);
+                }
+            }
+            self.record(AcceptedEvent::Spark(Spark::Pickup { kind, at }));
+            self.emit(at, [0.35, 0.85, 0.79, 1.], 12);
         }
     }
+}
+/// The authored panel color for a row, shared by the raster and shard bursts.
+pub(crate) fn panel_color(row: usize) -> [f32; 3] {
+    let [r, g, b] = match row {
+        0 => [211, 173, 117],
+        1 => [183, 153, 111],
+        2 => [139, 156, 141],
+        3 => [100, 157, 152],
+        _ => [80, 133, 140],
+    };
+    [r as f32 / 255., g as f32 / 255., b as f32 / 255.]
 }
 fn reflect_x(x: f32) -> f32 {
     let min = LEFT + BALL_RADIUS;
@@ -843,6 +1131,7 @@ mod tests {
         g.velocity = [0.0, -325.0];
         g.drops.push(Drop {
             position: [g.paddle_x, PADDLE_Y - 2.0],
+            kind: Pickup::Wide,
         });
         g.tick(Input::default(), 1.0 / 120.0);
         assert_eq!(g.paddle_half, 67.0);
@@ -908,6 +1197,7 @@ mod drop_magnet_tests {
         let mut g = Game::new();
         g.drops.push(Drop {
             position: [g.paddle_x + 65., PADDLE_Y - 60.],
+            kind: Pickup::Wide,
         });
         let mut caught = false;
         for _ in 0..120 {
@@ -918,6 +1208,7 @@ mod drop_magnet_tests {
         assert_eq!(g.paddle_half, 67.);
         g.drops.push(Drop {
             position: [LEFT + 10., 400.],
+            kind: Pickup::Wide,
         });
         let x = g.drops[0].position[0];
         g.update_drops(0.1);
@@ -1026,5 +1317,213 @@ mod precision_loop_tests {
         assert_eq!(g.score, score);
         assert_eq!(g.precision.streak(), 0);
         assert_eq!(g.precision.best(), 2);
+    }
+}
+
+#[cfg(test)]
+mod polish_tests {
+    use super::*;
+    const DT: f32 = 1. / 120.;
+
+    fn catch(g: &mut Game, kind: Pickup) {
+        g.phase = Phase::Playing;
+        g.drops.push(Drop {
+            position: [g.paddle_x, PADDLE_Y - 2.],
+            kind,
+        });
+        g.update_drops(DT);
+    }
+
+    fn sparks(g: &mut Game) -> Vec<Spark> {
+        g.events
+            .drain()
+            .filter_map(|e| match e {
+                AcceptedEvent::Spark(s) => Some(s),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn capsule_kinds_rotate_deterministically_and_replay_identically() {
+        let kinds = |g: &mut Game| {
+            let mut kinds = Vec::new();
+            for index in 0..35 {
+                g.hit_block(index);
+                kinds.extend(g.drops.drain(..).map(|d| d.kind));
+            }
+            kinds
+        };
+        let first = kinds(&mut Game::new());
+        assert_eq!(first, kinds(&mut Game::new()));
+        assert!(first.len() >= 5);
+        assert_eq!(first[..3], [Pickup::Wide, Pickup::Split, Pickup::Sticky]);
+    }
+
+    #[test]
+    fn multi_ball_adds_free_balls_and_a_drained_primary_hands_over_without_a_life() {
+        let mut g = Game::new();
+        g.ball = [320., 400.];
+        g.velocity = [0., -325.];
+        catch(&mut g, Pickup::Split);
+        assert_eq!(g.extra_balls.len(), 2);
+        assert_eq!(g.score, 50);
+        assert!(g.extra_balls.iter().all(|b| b.velocity[1] < 0.));
+        // A bonus ball leaving the field costs nothing.
+        g.extra_balls[0].position = [100., 676.];
+        g.extra_balls[0].velocity = [0., 325.];
+        g.tick(Input::default(), DT);
+        assert_eq!((g.extra_balls.len(), g.lives), (1, 3));
+        // The primary drains with no ball save: the survivor takes over.
+        let survivor = g.extra_balls[0].position;
+        g.ball_save = 0.;
+        g.ball = [500., 676.];
+        g.velocity = [0., 325.];
+        g.tick(Input::default(), DT);
+        assert_eq!((g.lives, g.phase), (3, Phase::Playing));
+        assert!(g.extra_balls.is_empty());
+        assert!((g.ball[1] - survivor[1]).abs() < 10.);
+        assert!(sparks(&mut g).contains(&Spark::Fizzle));
+        // Capped, and cleared by a lost life.
+        for _ in 0..4 {
+            catch(&mut g, Pickup::Split);
+        }
+        assert_eq!(g.extra_balls.len(), MAX_EXTRA_BALLS);
+        g.extra_balls.clear();
+        g.ball = [500., 676.];
+        g.velocity = [0., 325.];
+        g.tick(Input::default(), DT);
+        assert_eq!(g.lives, 2);
+    }
+
+    #[test]
+    fn sticky_paddle_catches_rides_and_releases_on_launch_or_timer() {
+        let mut g = Game::new();
+        catch(&mut g, Pickup::Sticky);
+        assert_eq!(g.sticky, STICKY_CATCHES);
+        let paddle_return = |g: &mut Game| {
+            g.ball = [g.paddle_x + 12., PADDLE_Y - 8. - BALL_RADIUS - 1.];
+            g.velocity = [0., 325.];
+            g.tick(Input::default(), DT);
+        };
+        paddle_return(&mut g);
+        let held = g.held.expect("caught");
+        assert_eq!(g.velocity, [0.; 2]);
+        assert!(held.velocity[1] < 0. && held.velocity[0] > 0.);
+        // The ball rides the moving paddle at its catch offset.
+        g.tick(
+            Input {
+                axis: 1.,
+                ..Input::default()
+            },
+            DT,
+        );
+        assert!((g.ball[0] - g.paddle_x - held.offset).abs() < 0.01);
+        assert!(g.held.is_some());
+        g.tick(
+            Input {
+                launch: true,
+                ..Input::default()
+            },
+            DT,
+        );
+        assert!(g.held.is_none() && g.velocity == held.velocity);
+        assert_eq!(g.phase, Phase::Playing);
+        // Waiting also releases; after three catches the paddle bounces again.
+        paddle_return(&mut g);
+        for _ in 0..(HOLD_SECONDS / DT) as usize + 2 {
+            g.tick(Input::default(), DT);
+        }
+        assert!(g.held.is_none() && g.velocity[1] < 0.);
+        paddle_return(&mut g);
+        g.held = None;
+        paddle_return(&mut g);
+        assert!(g.held.is_none() && g.velocity[1] < 0.);
+        assert_eq!(g.sticky, 0);
+    }
+
+    #[test]
+    fn satellite_bonks_once_per_pass_without_deflecting_the_ball() {
+        let mut g = Game::new();
+        g.phase = Phase::Playing;
+        assert_eq!(g.satellite(), None);
+        g.time = SATELLITE_FIRST + 3.;
+        let at = g.satellite().expect("passing");
+        assert!(at[0] > LEFT && at[0] < RIGHT);
+        g.ball = [at[0], at[1] + 4.];
+        g.velocity = [0., -300.];
+        g.check_satellite();
+        assert_eq!((g.satellites, g.score), (1, SATELLITE_POINTS));
+        assert_eq!(g.velocity, [0., -300.]);
+        assert_eq!(g.satellite(), None);
+        g.check_satellite();
+        assert_eq!(g.satellites, 1);
+        // The next pass is fresh, and it flies the other way.
+        g.time += SATELLITE_PERIOD;
+        let next = g.satellite().expect("next pass");
+        assert!(next[0] > at[0]);
+    }
+
+    #[test]
+    fn flawless_sectors_pay_a_bonus_but_a_lost_ball_forfeits_it() {
+        for lose_first in [false, true] {
+            let mut g = Game::new();
+            if lose_first {
+                g.phase = Phase::Playing;
+                g.ball = [100., 676.];
+                g.velocity = [0., 325.];
+                g.tick(Input::default(), DT);
+            }
+            for index in 0..35 {
+                g.hit_block(index);
+            }
+            g.phase = Phase::Playing;
+            let score = g.score;
+            g.tick(Input::default(), DT);
+            assert_eq!(g.phase, Phase::Transition);
+            let bonus = if lose_first { 0 } else { FLAWLESS_POINTS };
+            assert_eq!(g.score - score, bonus);
+            assert_eq!(g.flawless_sectors, u32::from(!lose_first));
+        }
+    }
+
+    #[test]
+    fn volleys_count_panel_hits_until_any_paddle_touch_and_announce_milestones() {
+        let mut g = Game::new();
+        for index in 0..5 {
+            g.hit_block(index);
+        }
+        assert_eq!((g.volley, g.best_volley), (5, 5));
+        let milestones: Vec<_> = sparks(&mut g)
+            .into_iter()
+            .filter_map(|s| match s {
+                Spark::Volley(n) => Some(n),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(milestones, [3, 5]);
+        g.phase = Phase::Playing;
+        g.ball = [g.paddle_x, PADDLE_Y - 8. - BALL_RADIUS - 1.];
+        g.velocity = [0., 325.];
+        g.tick(Input::default(), DT);
+        assert_eq!((g.volley, g.best_volley), (0, 5));
+    }
+
+    #[test]
+    fn the_last_panel_is_announced_exactly_once() {
+        let mut g = Game::new();
+        for index in 0..34 {
+            g.hit_block(index);
+        }
+        let last: Vec<_> = sparks(&mut g)
+            .into_iter()
+            .filter(|s| matches!(s, Spark::LastPanel { .. }))
+            .collect();
+        assert_eq!(
+            last,
+            [Spark::LastPanel {
+                at: g.blocks[34].center
+            }]
+        );
     }
 }

@@ -19,16 +19,24 @@
 //! ```
 mod animation;
 mod bots;
+#[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+mod capture;
+mod cards;
 mod controls;
+#[cfg(test)]
+mod corner_tests;
+mod crew;
 mod effects;
 mod geometry;
 mod host;
 mod hud;
 #[cfg(test)]
 mod journey200_tests;
+mod juice;
 #[cfg(target_arch = "wasm32")]
 mod multiplayer;
 mod replay;
+mod scoreboard;
 
 use controls::Controls;
 use effects::CombatEffects;
@@ -44,9 +52,12 @@ use geometry::{build_operator, build_yard, rgb};
 use host::{Host, Mode};
 
 fn window_conf() -> Conf {
+    #[allow(unused_mut)]
     let mut conf = ferravex_render::window_conf("Ferravex / Strike — Dockyard");
     conf.window_width = 1440;
     conf.window_height = 900;
+    #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+    capture::window(&mut conf);
     conf
 }
 
@@ -158,6 +169,49 @@ fn apply_game_events(
     }
 }
 
+/// Accepted events also drive match bookkeeping and presentation-only juice.
+/// `tick` is the authority/replay/server tick after these events.
+#[allow(clippy::too_many_arguments)]
+fn present_events(
+    events: &[ferravex_fps::GameEvent],
+    tick: u32,
+    local_id: u8,
+    bots: bool,
+    board: &mut scoreboard::Tracker,
+    juice: &mut juice::Juice,
+    effects: &mut CombatEffects,
+    sound: &mut GameAudio,
+) {
+    apply_game_events(events.iter().copied(), local_id, effects, sound);
+    for event in events {
+        if let ferravex_fps::GameEvent::Hit {
+            attacker,
+            victim,
+            damage,
+            headshot,
+        } = *event
+        {
+            if attacker == local_id && victim != local_id {
+                juice.hit(headshot, sound);
+            } else if victim == local_id {
+                juice.hurt(damage);
+            }
+        }
+    }
+    board.observe(tick, events, |moment| {
+        juice.moment(moment, local_id, bots, sound);
+    });
+}
+
+/// The live practice match has ended and its results own the view.
+fn practice_over(host: &Host, replays: &replay::Session) -> bool {
+    host.finished() && !replays.playing()
+}
+
+fn practice_board() -> scoreboard::Tracker {
+    scoreboard::Tracker::new(0, true)
+}
+
 // Optional browser chrome follows actual gameplay state, including touch input.
 #[cfg(target_arch = "wasm32")]
 #[link(wasm_import_module = "env")]
@@ -212,6 +266,29 @@ async fn game() {
         .collect();
     let mut weapon_motion = animation::WeaponMotion::new();
     let mut effects = CombatEffects::new();
+    let duck = geometry::build_duck();
+    let mut juice = juice::Juice::new();
+    #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+    let mut capture = capture::Capture::from_env();
+    #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+    let new_board =
+        |capture: &capture::Capture| practice_board().with_seconds(capture.match_seconds);
+    #[cfg(not(all(debug_assertions, not(target_arch = "wasm32"))))]
+    let new_board = |_: &()| practice_board();
+    #[cfg(not(all(debug_assertions, not(target_arch = "wasm32"))))]
+    let capture = ();
+    // The live practice match and a clockless view for network/replay events.
+    let mut board = new_board(&capture);
+    let mut tuning = bots::Tuning::new();
+    let mut view_board = scoreboard::Tracker::new(0, false);
+    let mut onboarding = juice::Onboarding::default();
+    let mut hint_line = String::with_capacity(96);
+    let mut info_rows: [String; 3] = Default::default();
+    // Personal bests are optional: storage failure still leaves a playable game.
+    let mut records = ferravex_render::storage::Records::new("strike").ok();
+    let mut results: Option<cards::Results> = None;
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut net_events = Vec::with_capacity(64);
 
     let shader = LitMaterial::new();
     #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
@@ -299,25 +376,49 @@ async fn game() {
             controls.show_interact = webnet.round().is_some();
         }
         controls.prepare(host.active());
+        // Debug captures may ignore window focus so parallel desktop activity
+        // cannot pause a scripted screenshot run. Release/Wasm: always false.
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        let keep_focus = capture.keep_focus;
+        #[cfg(not(all(debug_assertions, not(target_arch = "wasm32"))))]
+        let keep_focus = false;
+        macro_rules! gameplay {
+            () => {
+                keep_focus || controls.input.gameplay_active()
+            };
+        }
         effects.begin_frame();
         let policy = ferravex_render::preferences::feedback_policy();
         weapon_motion.set_reduced_motion(policy.reduced_motion() || policy.intensity() == 0.);
+        juice.apply_policy(policy);
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        if capture.pause_now() && host.active() {
+            host.open_menu();
+        }
         if controls.input.pressed("pause") {
             if host.active() {
                 host.open_menu();
-            } else {
+            } else if !practice_over(&host, &replays) {
                 host.resume();
                 controls.input.sample(true);
                 view_rig.cut();
             }
         }
-        if host.active() && !controls.input.gameplay_active() {
+        if host.active() && !gameplay!() {
             // Focus loss and settings must not silently resume firing when the
             // browser/native window becomes active again.
             host.open_menu();
         }
+        #[cfg(target_arch = "wasm32")]
+        let finished_practice = practice_over(&host, &replays) && !webnet.active();
+        #[cfg(not(target_arch = "wasm32"))]
+        let finished_practice = practice_over(&host, &replays) && !network;
+        if host.active() && finished_practice {
+            // Leaving a replay returns to the results, not a frozen world.
+            host.open_menu();
+        }
         let active = host.active();
-        if active && controls.input.gameplay_active() {
+        if active && gameplay!() {
             sound.resume();
         } else {
             sound.pause();
@@ -341,7 +442,18 @@ async fn game() {
                 remote = webnet.players();
                 server_tick = webnet.tick_number();
                 let local_id = local.id;
-                apply_game_events(webnet.drain_events(), local_id, &mut effects, &mut sound);
+                view_board.set_local(local_id);
+                let events = webnet.drain_events();
+                present_events(
+                    &events,
+                    server_tick,
+                    local_id,
+                    false,
+                    &mut view_board,
+                    &mut juice,
+                    &mut effects,
+                    &mut sound,
+                );
             }
             changed
         };
@@ -381,6 +493,8 @@ async fn game() {
             was_reload = local.reload_ticks;
             effects = CombatEffects::new();
             effects.begin_frame();
+            juice.reset();
+            view_board = scoreboard::Tracker::new(local.id, false);
             sound.reset();
             host.cut_replay();
             view_rig.cut();
@@ -396,6 +510,20 @@ async fn game() {
             controls.yaw = local.yaw;
             controls.pitch = local.pitch;
         }
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        if active
+            && mode == Mode::Practice
+            && let Some((yaw, pitch, fire)) = capture.aim(&game, board.duck_found())
+        {
+            controls.yaw = yaw;
+            controls.pitch = pitch;
+            input.yaw = yaw;
+            input.pitch = pitch;
+            input.buttons = if fire { ferravex_fps::BUTTON_FIRE } else { 0 };
+            if capture.walk() {
+                input.move_z = 1.;
+            }
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if opts.capture_dir.is_some() && active {
             let t = frames as f32 / 60.0;
@@ -409,21 +537,23 @@ async fn game() {
                 ferravex_fps::BUTTON_FIRE
             };
         }
-        let frame = host.advance(
-            mode,
-            dt as f64,
-            controls.input.gameplay_active(),
-            !cut_replay && !replays.paused,
-        );
+        let frame = host.advance(mode, dt as f64, gameplay!(), !cut_replay && !replays.paused);
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(c) = client.as_mut() {
             if let Err(e) = c.poll() {
                 error = e.to_string();
             }
             let local_id = c.player_id().unwrap_or(local.id);
-            apply_game_events(
-                c.drain_events().into_iter().map(|message| message.event),
+            view_board.set_local(local_id);
+            net_events.clear();
+            net_events.extend(c.drain_events().into_iter().map(|message| message.event));
+            present_events(
+                &net_events,
+                c.server_tick(),
                 local_id,
+                false,
+                &mut view_board,
+                &mut juice,
                 &mut effects,
                 &mut sound,
             );
@@ -441,7 +571,7 @@ async fn game() {
             _ => {}
         }
         for _ in 0..frame.steps {
-            let input = host.command(controls.tick(input), controls.input.gameplay_active());
+            let input = host.command(controls.tick(input), gameplay!());
             #[cfg(not(target_arch = "wasm32"))]
             let actions = controls.tactical_actions(
                 client.as_ref().and_then(|c| c.tactical_view()),
@@ -482,13 +612,31 @@ async fn game() {
                 }
                 remote = webnet.players();
                 server_tick = webnet.tick_number();
-                apply_game_events(events, local.id, &mut effects, &mut sound);
+                present_events(
+                    &events,
+                    server_tick,
+                    local.id,
+                    false,
+                    &mut view_board,
+                    &mut juice,
+                    &mut effects,
+                    &mut sound,
+                );
                 continue;
             }
             if replays.playing() {
                 if !cut_replay && replays.advance() {
                     let w = replays.world.as_ref().unwrap();
-                    apply_game_events(w.events.iter().copied(), 0, &mut effects, &mut sound);
+                    present_events(
+                        &w.events,
+                        w.game.tick,
+                        0,
+                        true,
+                        &mut view_board,
+                        &mut juice,
+                        &mut effects,
+                        &mut sound,
+                    );
                     local = w
                         .game
                         .player(0)
@@ -501,15 +649,61 @@ async fn game() {
                 }
                 continue;
             }
-            if !network && active && controls.input.gameplay_active() {
+            if !network && active && gameplay!() {
                 bots.commands(&game, input, &mut commands);
+                tuning.adjust(&game, &mut commands);
                 let events = game.step(&commands);
                 replays.capture(&game, &commands, &events);
                 bots.events(&events);
-                apply_game_events(events, 0, &mut effects, &mut sound);
+                tuning.events(game.tick, &events);
+                present_events(
+                    &events,
+                    game.tick,
+                    0,
+                    true,
+                    &mut board,
+                    &mut juice,
+                    &mut effects,
+                    &mut sound,
+                );
                 local = game.players[0].clone();
                 remote.clone_from(&game.players);
                 server_tick = game.tick;
+                if board.finished() && !host.finished() {
+                    // Automation never claims or overwrites a personal best.
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let recorded = opts.smoke_frames.is_none() && opts.capture_dir.is_none();
+                    #[cfg(target_arch = "wasm32")]
+                    let recorded = true;
+                    let stored = records
+                        .as_ref()
+                        .and_then(|r| r.get(cards::RECORD_ID, cards::RECORD_RULES))
+                        .map(|r| (r.score, r.runs));
+                    #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+                    let stored = capture.fake_best.map(|b| (b, 3)).or(stored);
+                    if recorded && let Some(records) = records.as_mut() {
+                        let _ = records.attempt(
+                            cards::RECORD_ID,
+                            cards::RECORD_RULES,
+                            u64::from(board.summary.frags),
+                            None,
+                        );
+                    }
+                    #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+                    let recorded = recorded || capture.fake_best.is_some();
+                    let r = cards::Results::new(&board, stored.map(|(best, _)| best), recorded);
+                    sound.cue(
+                        if r.new_best {
+                            Cue::Success
+                        } else {
+                            Cue::Pickup
+                        },
+                        0.7,
+                    );
+                    host.finish_match(board.summary.frags > board.summary.deaths);
+                    results = Some(r);
+                    break;
+                }
             }
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -522,6 +716,15 @@ async fn game() {
             }
         }
         let fired = effects.fired;
+        onboarding.fired |= fired && mode == Mode::Practice;
+        onboarding.roster |= active && controls.input.held("roster");
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        if capture.learned {
+            onboarding = juice::Onboarding {
+                fired: true,
+                roster: true,
+            };
+        }
         if !cut_replay && local.reload_ticks > 0 && was_reload == 0 {
             sound.cue(Cue::Reload, 0.6);
         }
@@ -533,7 +736,7 @@ async fn game() {
         sound.walk(
             Vec3::from_array(local.position.to_array()),
             local.grounded,
-            active && controls.input.gameplay_active() && local.health > 0,
+            active && gameplay!() && local.health > 0,
             Surface::Stone,
             1.65,
         );
@@ -546,7 +749,7 @@ async fn game() {
             ferravex_render::performance::context(None, None);
         }
         let animation_dt = if cut_replay
-            || (mode == Mode::Practice && (!active || !controls.input.gameplay_active()))
+            || (mode == Mode::Practice && (!active || !gameplay!()))
             || (replays.playing() && replays.paused)
         {
             0.
@@ -579,6 +782,8 @@ async fn game() {
         let round = client.as_ref().and_then(|c| c.tactical_view());
         #[cfg(target_arch = "wasm32")]
         let round = webnet.round();
+        juice.update(animation_dt);
+        juice.tactical(round, local.id, &mut sound);
         let magazine_events =
             weapon_motion.update(&local, if active { animation_dt } else { 0. }, fired);
         if active {
@@ -605,12 +810,14 @@ async fn game() {
         };
         let direction = Vec3::from_array(forward(controls.yaw, controls.pitch).to_array());
         let camera_input = if active {
+            // The damage kick moves only the camera; commands keep their aim.
+            let (kick_yaw, kick_pitch) = juice.kick();
             Input3 {
                 target: Target3::at(eye),
                 mode: Mode3::FirstPerson {
                     eye_offset: Vec3::ZERO,
-                    yaw: controls.yaw,
-                    pitch: controls.pitch,
+                    yaw: controls.yaw + kick_yaw,
+                    pitch: controls.pitch + kick_pitch,
                 },
                 fov_y: 68_f32.to_radians(),
             }
@@ -685,6 +892,19 @@ async fn game() {
             );
         }
         arena.draw();
+        if !network
+            && let Some((position, yaw, scale)) =
+                juice.duck(mode == Mode::Practice && board.duck_found())
+        {
+            ferravex_render::draw_resident(
+                duck.resident(),
+                Mat4::from_scale_rotation_translation(
+                    Vec3::splat(scale),
+                    Quat::from_rotation_y(yaw),
+                    position,
+                ),
+            );
+        }
         if let Some(round) = round {
             objectives.draw(round);
         }
@@ -747,6 +967,9 @@ async fn game() {
                 Color::new(0.6, 0.12, 0.05, effects.damage_flash),
             );
         }
+        if active {
+            juice.draw_glow();
+        }
         let triangles = effect_triangles
             + arena.triangles()
             + remote
@@ -786,6 +1009,8 @@ async fn game() {
                 } else {
                     &error
                 },
+                marker: juice.marker,
+                death: juice.death,
             },
         );
         #[cfg(not(target_arch = "wasm32"))]
@@ -803,11 +1028,44 @@ async fn game() {
             active,
             &controls.input,
         );
+        let footer = (!network || diagnostics) && replays.footer_visible(diagnostics);
+        let bots_named = !network;
+        let shown_board = if mode == Mode::Practice {
+            &board
+        } else {
+            &view_board
+        };
         if active {
+            #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+            let roster = controls.input.held("roster") || capture.roster();
+            #[cfg(not(all(debug_assertions, not(target_arch = "wasm32"))))]
+            let roster = controls.input.held("roster");
+            let hint = mode == Mode::Practice
+                && !roster
+                && local.health > 0
+                && onboarding.line(&controls.input, board.summary.frags, &mut hint_line);
+            juice.draw_play(
+                &mut hud_ui,
+                &board,
+                juice::PlayLayout {
+                    practice: mode == Mode::Practice,
+                    round: round.is_some(),
+                    touch: controls.touch_mode,
+                    notice: !(error.is_empty() && command_notice.is_none()),
+                    footer,
+                    roster,
+                    alive: local.health > 0,
+                    hint: hint.then_some(hint_line.as_str()),
+                    local: local.id,
+                    bots: bots_named,
+                },
+            );
             controls.draw_touch();
-            if controls.input.held("roster") {
-                hud::roster(&mut hud_ui, &remote, local.id);
+            if roster {
+                hud::roster(&mut hud_ui, &remote, local.id, shown_board, bots_named);
             }
+        } else if let Some(r) = results.as_ref().filter(|_| finished_practice) {
+            cards::results(&mut hud_ui, r);
         } else {
             hud::menu(
                 &mut hud_ui,
@@ -816,8 +1074,30 @@ async fn game() {
                 controls.touch_mode,
                 &controls.input,
             );
+            if mode == Mode::Practice {
+                let (left, bottom) = hud::menu_extent(
+                    screen_width(),
+                    screen_height(),
+                    mode,
+                    host.has_played(),
+                    controls.touch_mode,
+                    &controls.input,
+                );
+                let best = records
+                    .as_ref()
+                    .and_then(|r| r.get(cards::RECORD_ID, cards::RECORD_RULES))
+                    .map(|r| (r.score, r.runs));
+                let colors = if host.has_played() {
+                    cards::pause_rows(&board, best.map(|b| b.0), game.tick / 640, &mut info_rows);
+                    cards::PAUSE_COLORS
+                } else {
+                    cards::briefing_rows(best, &controls.input, &mut info_rows);
+                    cards::BRIEFING_COLORS
+                };
+                cards::info(&mut hud_ui, left, bottom, &info_rows, colors);
+            }
         }
-        if !network || diagnostics {
+        if footer && !finished_practice {
             replays.overlay(&mut hud_ui, diagnostics, &controls.input);
         }
         hud_ui.finish_player(&mut controls.input, !active);
@@ -829,6 +1109,9 @@ async fn game() {
         }
         if !active && hud_ui.activated(2) && host.restart_practice(mode) {
             reset_practice(&mut game, &mut bots, &mut replays);
+            board = new_board(&capture);
+            tuning = bots::Tuning::new();
+            results = None;
             replay_initial_cut = true;
         }
         if !active && hud_ui.activated(3) && mode != Mode::Network {
@@ -837,6 +1120,9 @@ async fn game() {
             } else {
                 replays.stop_record();
                 reset_practice(&mut game, &mut bots, &mut replays);
+                board = new_board(&capture);
+                tuning = bots::Tuning::new();
+                results = None;
                 host.return_to_briefing();
             }
             replay_initial_cut = true;
@@ -861,6 +1147,8 @@ async fn game() {
             get_screen_data().export_png(&format!("{directory}/{frames:06}.png"));
         }
         frames += 1;
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        capture.end_frame();
         if opts.smoke_frames.is_some_and(|limit| frames >= limit) {
             #[cfg(not(target_arch = "wasm32"))]
             println!(

@@ -21,6 +21,28 @@ pub const BALL_RADIUS: f32 = 0.19;
 pub const FLIPPER_LENGTH: f32 = 1.65;
 pub const PIVOTS: [[f32; 2]; 2] = [[3.0, 13.2], [6.9, 13.2]];
 pub const BUMPERS: [[f32; 2]; 3] = [[2.6, 4.1], [6.2, 4.1], [4.4, 6.6]];
+/// Where the armed magnet crane catches the ball: the open top-centre lane.
+pub const CRANE: [f32; 2] = [4.4, 2.05];
+/// Catch radius around [`CRANE`] for the ball's centre.
+pub const CRANE_RADIUS: f32 = 0.5;
+/// Seconds the crane holds a caught ball before dropping it.
+pub const CRANE_HOLD: f32 = 1.2;
+/// Base points for a bumper contact before the yard multiplier.
+pub const BUMPER_POINTS: u32 = 100;
+/// Points for a launch whose first bumper contact is the lit skill-shot bumper.
+pub const SKILL_SHOT_POINTS: u32 = 1000;
+/// Jackpot points per multiplier step; a jackpot at x2 is worth 5,000.
+pub const JACKPOT_POINTS: u32 = 2500;
+/// One-time hidden award for keeping a single ball alive this long.
+pub const OVERTIME_SECONDS: f32 = 45.;
+pub const OVERTIME_POINTS: u32 = 5000;
+/// A bumper hit within this many seconds of the previous one extends a chain.
+pub const CHAIN_WINDOW: f32 = 1.2;
+pub const MAX_MULTIPLIER: u32 = 5;
+/// While a ball waits, the skill-shot lamp visits centre, right, then left.
+const SKILL_ORDER: [usize; 3] = [2, 1, 0];
+/// Seconds the skill-shot lamp rests on each bumper while a ball waits.
+pub const SKILL_STEP: f32 = 0.4;
 /// Capsule rails, also used by the renderer so collisions match the visible table.
 pub const RAILS: [([f32; 2], [f32; 2]); 13] = [
     ([0.6, 2.0], [0.6, 11.6]),
@@ -83,6 +105,38 @@ pub struct Table {
     pub time: f32,
     pub trail: [[f32; 2]; 12],
     trail_tick: u32,
+    /// Yard multiplier for bumper points, `1..=MAX_MULTIPLIER`. Each crane
+    /// jackpot raises it; an unsaved drain resets it (a ball save keeps it).
+    pub multiplier: u32,
+    /// Bumper lamps lit toward the next crane. All three arm the crane.
+    pub lamps: [bool; 3],
+    /// An armed crane catches the ball near [`CRANE`] for a jackpot.
+    pub crane_armed: bool,
+    /// Seconds left holding a caught ball. The ball is pinned while positive.
+    pub crane_hold: f32,
+    /// Bumper hits in the current chain; zero once the chain window lapses.
+    pub chain: u32,
+    chain_timer: f32,
+    /// Longest chain this game.
+    pub best_chain: u32,
+    /// Bumper lit for the skill shot. Cycles while waiting, frozen in flight.
+    pub skill_target: usize,
+    /// True from a launch until the first bumper contact or the ball drops
+    /// into the lower playfield. The crane ignores a ball on its launch arc.
+    pub launch_flight: bool,
+    /// Seconds the current life has had a ball in play.
+    pub ball_time: f32,
+    /// The hidden overtime award has been collected this game.
+    pub overtime: bool,
+    pub jackpots: u32,
+    pub skill_shots: u32,
+    pub crane_arms: u32,
+    pub secrets: u32,
+    /// Points awarded by each bumper's latest accepted contact, including the
+    /// multiplier, chain bonus and skill shot. Presentation pops read this.
+    pub bumper_points: [u32; 3],
+    /// Points from the most recent jackpot.
+    pub last_jackpot: u32,
 }
 
 impl Default for Table {
@@ -188,6 +242,104 @@ impl Table {
             time: 0.0,
             trail: [[9.25, 14.4]; 12],
             trail_tick: 0,
+            multiplier: 1,
+            lamps: [false; 3],
+            crane_armed: false,
+            crane_hold: 0.,
+            chain: 0,
+            chain_timer: 0.,
+            best_chain: 0,
+            skill_target: SKILL_ORDER[0],
+            launch_flight: false,
+            ball_time: 0.,
+            overtime: false,
+            jackpots: 0,
+            skill_shots: 0,
+            crane_arms: 0,
+            secrets: 0,
+            bumper_points: [0; 3],
+            last_jackpot: 0,
+        }
+    }
+
+    /// Points the next plain bumper contact is worth at the current multiplier.
+    pub fn bumper_value(&self) -> u32 {
+        BUMPER_POINTS * self.multiplier
+    }
+
+    /// Extra points a hit would add as the `chain`-th consecutive contact.
+    /// Chains of three or more pay an escalating bonus, capped at 500.
+    ///
+    /// ```
+    /// use salvage_pinball::Table;
+    /// assert_eq!(Table::chain_bonus(2), 0);
+    /// assert_eq!(Table::chain_bonus(3), 50);
+    /// assert_eq!(Table::chain_bonus(40), 500);
+    /// ```
+    pub fn chain_bonus(chain: u32) -> u32 {
+        (chain.saturating_sub(2) * 50).min(500)
+    }
+
+    /// Accepted bumper contact: scoring, lamps, chain and the skill shot.
+    fn bumper_hit(&mut self, i: usize) {
+        self.chain = if self.chain_timer > 0. {
+            self.chain + 1
+        } else {
+            1
+        };
+        self.chain_timer = CHAIN_WINDOW;
+        self.best_chain = self.best_chain.max(self.chain);
+        let mut points = self.bumper_value() + Self::chain_bonus(self.chain);
+        if self.launch_flight {
+            self.launch_flight = false;
+            if i == self.skill_target {
+                self.skill_shots += 1;
+                points += SKILL_SHOT_POINTS;
+            }
+        }
+        self.score += points;
+        self.bumper_points[i] = points;
+        if !self.crane_armed {
+            self.lamps[i] = true;
+            if self.lamps == [true; 3] {
+                self.crane_armed = true;
+                self.crane_arms += 1;
+            }
+        }
+    }
+
+    /// Pin a caught ball to the magnet, or drop it once the hold expires.
+    fn crane(&mut self, dt: f32) {
+        let ball = &mut self.world.bodies[self.ball];
+        if self.crane_hold > 0. {
+            self.crane_hold = (self.crane_hold - dt).max(0.);
+            if self.crane_hold > 0. {
+                ball.set_translation(Vector::from_array(CRANE), true);
+                ball.set_linvel(Vector::ZERO, true);
+            } else {
+                // Alternate the drop so repeated jackpots do not replay one path.
+                let side = if self.jackpots.is_multiple_of(2) {
+                    1.
+                } else {
+                    -1.
+                };
+                ball.set_gravity_scale(1.0, true);
+                ball.set_linvel(Vector::new(side * 1.1, 1.5), true);
+            }
+            return;
+        }
+        let near = (ball.translation() - Vector::from_array(CRANE)).length() < CRANE_RADIUS;
+        if self.crane_armed && !self.launch_flight && !self.waiting && near {
+            self.crane_armed = false;
+            self.crane_hold = CRANE_HOLD;
+            self.jackpots += 1;
+            self.last_jackpot = JACKPOT_POINTS * self.multiplier;
+            self.score += self.last_jackpot;
+            self.multiplier = (self.multiplier + 1).min(MAX_MULTIPLIER);
+            self.lamps = [false; 3];
+            ball.set_gravity_scale(0., true);
+            ball.set_translation(Vector::from_array(CRANE), true);
+            ball.set_linvel(Vector::ZERO, true);
         }
     }
 
@@ -267,6 +419,14 @@ impl Table {
         self.ball_save = (self.ball_save - dt).max(0.);
         self.save_notice = (self.save_notice - dt).max(0.);
         self.drain_notice = (self.drain_notice - dt).max(0.);
+        self.chain_timer = (self.chain_timer - dt).max(0.);
+        if self.chain_timer == 0. {
+            self.chain = 0;
+        }
+        if self.waiting {
+            let step = (self.time / SKILL_STEP) as usize;
+            self.skill_target = SKILL_ORDER[step % SKILL_ORDER.len()];
+        }
         for (i, pressed) in [controls.left, controls.right].into_iter().enumerate() {
             self.flipper_pressed[i] = pressed;
             let target = if pressed {
@@ -286,6 +446,7 @@ impl Table {
         if controls.launch && self.waiting {
             self.waiting = false;
             self.launches += 1;
+            self.launch_flight = true;
             if self.save_available {
                 self.ball_save = 5.;
                 self.save_available = false;
@@ -294,20 +455,21 @@ impl Table {
             ball.set_gravity_scale(1.0, true);
             ball.apply_impulse(Vector::new(0.0, -25.0) * ball.mass(), true);
         }
+        self.crane(dt);
         self.world.step(dt);
         for i in 0..2 {
             self.angles[i] = self.world.bodies[self.flippers[i]].rotation().angle();
         }
-        for (i, bumper) in self.bumpers.iter().enumerate() {
+        for (i, bumper) in self.bumpers.into_iter().enumerate() {
             self.bumper_flash[i] = (self.bumper_flash[i] - dt).max(0.0);
             self.bumper_notice[i] = (self.bumper_notice[i] - dt).max(0.0);
             let touching = self
                 .world
                 .raw
-                .contact_pair(self.ball_collider, *bumper)
+                .contact_pair(self.ball_collider, bumper)
                 .is_some_and(|pair| pair.has_any_active_contact());
             if touching && !self.contacts[i] && self.bumper_flash[i] <= 0.0 {
-                self.score += 100;
+                self.bumper_hit(i);
                 self.hits += 1;
                 self.bumper_hits[i] = self.bumper_hits[i].wrapping_add(1);
                 self.bumper_flash[i] = 0.18;
@@ -334,6 +496,18 @@ impl Table {
             self.trail[0] = self.position();
         }
         let p = self.position();
+        if self.launch_flight && p[1] > 4.8 && p[0] < 8.7 {
+            // The launch arc missed every bumper and fell into the playfield.
+            self.launch_flight = false;
+        }
+        if !self.waiting {
+            self.ball_time += dt;
+            if !self.overtime && self.ball_time >= OVERTIME_SECONDS {
+                self.overtime = true;
+                self.secrets += 1;
+                self.score += OVERTIME_POINTS;
+            }
+        }
         if !self.waiting
             && p[0] > 8.95
             && p[1] > 14.2
@@ -341,6 +515,7 @@ impl Table {
         {
             // A ball that falls back into the real launch lane can be served again.
             self.waiting = true;
+            self.launch_flight = false;
         }
         if p[1] > 16.0 || p[0] < -1.0 || p[0] > 11.0 {
             let saved = self.ball_save > 0.;
@@ -354,7 +529,15 @@ impl Table {
                 self.save_available = true;
                 self.drain_notice = 2.5;
                 self.save_notice = 0.;
+                self.multiplier = 1;
+                self.lamps = [false; 3];
+                self.crane_armed = false;
+                self.ball_time = 0.;
             }
+            self.chain = 0;
+            self.chain_timer = 0.;
+            self.crane_hold = 0.;
+            self.launch_flight = false;
             self.ball_save = 0.;
             self.drains += 1;
             if self.lives > 0 {
@@ -500,6 +683,203 @@ mod tests {
         assert!((table.angles[0] - 0.4).abs() < 0.03);
         assert!((table.angles[1] - (std::f32::consts::PI - 0.4)).abs() < 0.03);
         assert_eq!(table.flipper_pressed, [false; 2]);
+    }
+
+    /// Teleport onto a bumper's top and run one tick, as the presentation tests do.
+    fn touch_bumper(table: &mut Table, bumper: usize) -> u32 {
+        let before = table.score;
+        table.bumper_flash = [0.; 3];
+        let [x, y] = BUMPERS[bumper];
+        table.world.bodies[table.ball].set_translation(Vector::new(x, y - 0.78), true);
+        table.world.bodies[table.ball].set_linvel(Vector::new(0., 2.), true);
+        table.step(DT, Controls::default());
+        table.score - before
+    }
+
+    fn park(table: &mut Table) {
+        // Away from every bumper and outside the crane's catch zone.
+        table.world.bodies[table.ball].set_translation(Vector::new(7.4, 6.6), true);
+        table.world.bodies[table.ball].set_linvel(Vector::ZERO, true);
+        table.step(DT, Controls::default());
+    }
+
+    fn drain(table: &mut Table) {
+        table.world.bodies[table.ball].set_translation(Vector::new(4.9, 16.2), true);
+        table.world.bodies[table.ball].set_linvel(Vector::new(0., 8.), true);
+        table.step(DT, Controls::default());
+    }
+
+    #[test]
+    fn three_lamps_arm_the_crane_which_pays_a_jackpot_and_raises_the_multiplier() {
+        let mut table = Table::new();
+        table.waiting = false;
+        for bumper in [0, 0, 1] {
+            touch_bumper(&mut table, bumper);
+            park(&mut table);
+            for _ in 0..(CHAIN_WINDOW / DT) as usize {
+                table.step(DT, Controls::default());
+                table.world.bodies[table.ball].set_translation(Vector::new(7.4, 6.6), true);
+            }
+        }
+        assert_eq!(table.lamps, [true, true, false]);
+        assert!(!table.crane_armed);
+        assert_eq!(touch_bumper(&mut table, 2), 100, "chain lapsed: plain hit");
+        assert!(table.crane_armed);
+        assert_eq!(table.crane_arms, 1);
+        // While armed, further hits keep the lamps lit without re-arming.
+        park(&mut table);
+        touch_bumper(&mut table, 0);
+        assert_eq!(table.crane_arms, 1);
+
+        let before = table.score;
+        table.world.bodies[table.ball].set_translation(Vector::from_array(CRANE), true);
+        table.world.bodies[table.ball].set_linvel(Vector::new(3., -4.), true);
+        table.step(DT, Controls::default());
+        assert_eq!(table.jackpots, 1);
+        assert_eq!(table.score - before, JACKPOT_POINTS);
+        assert_eq!(table.last_jackpot, JACKPOT_POINTS);
+        assert_eq!(table.multiplier, 2);
+        assert_eq!(table.lamps, [false; 3]);
+        assert!(!table.crane_armed && table.crane_hold > 0.);
+        // The magnet holds the ball still, then drops it back into play.
+        for _ in 0..(CRANE_HOLD / DT) as usize - 2 {
+            table.step(DT, Controls::default());
+            assert_eq!(table.position(), CRANE);
+        }
+        for _ in 0..60 {
+            table.step(DT, Controls::default());
+        }
+        assert_eq!(table.crane_hold, 0.);
+        assert!(table.position()[1] > CRANE[1] + 0.5, "dropped ball falls");
+        assert_eq!(table.jackpots, 1, "no re-catch without re-arming");
+        assert_eq!(table.bumper_value(), 200);
+    }
+
+    #[test]
+    fn launch_arc_ignores_the_crane_and_the_skill_shot_needs_the_lit_bumper() {
+        // Launch while the centre lamp is lit: the arc always reaches the left
+        // bumper first, so there is no skill shot, and an armed crane on the
+        // arc's path does not catch the ball.
+        let mut table = Table::new();
+        table.crane_armed = true;
+        table.step(
+            DT,
+            Controls {
+                launch: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(table.skill_target, 2);
+        assert!(table.launch_flight);
+        let mut first = None;
+        for _ in 0..400 {
+            table.step(DT, Controls::default());
+            if table.hits > 0 {
+                first = Some(table.score);
+                break;
+            }
+        }
+        assert_eq!(first, Some(100));
+        assert_eq!((table.skill_shots, table.jackpots), (0, 0));
+        assert!(!table.launch_flight);
+
+        // Wait for the hopping lamp to reach the left bumper, then launch.
+        let mut table = Table::new();
+        while table.skill_target != 0 {
+            table.step(DT, Controls::default());
+        }
+        table.step(
+            DT,
+            Controls {
+                launch: true,
+                ..Default::default()
+            },
+        );
+        for _ in 0..400 {
+            table.step(DT, Controls::default());
+            if table.hits > 0 {
+                break;
+            }
+        }
+        assert_eq!(table.skill_shots, 1);
+        assert_eq!(table.score, 100 + SKILL_SHOT_POINTS);
+        assert_eq!(table.bumper_points[0], 100 + SKILL_SHOT_POINTS);
+    }
+
+    #[test]
+    fn quick_hits_build_a_capped_chain_bonus_that_lapses() {
+        let mut table = Table::new();
+        table.waiting = false;
+        let mut paid = Vec::new();
+        for bumper in [0, 1, 0, 1, 0] {
+            paid.push(touch_bumper(&mut table, bumper));
+            park(&mut table);
+        }
+        assert_eq!(paid, [100, 100, 150, 200, 250]);
+        assert_eq!((table.chain, table.best_chain), (5, 5));
+        for _ in 0..(CHAIN_WINDOW / DT) as usize + 1 {
+            table.step(DT, Controls::default());
+            table.world.bodies[table.ball].set_translation(Vector::new(7.4, 6.6), true);
+        }
+        assert_eq!(table.chain, 0);
+        assert_eq!(touch_bumper(&mut table, 1), 100);
+        assert_eq!(table.best_chain, 5);
+    }
+
+    #[test]
+    fn a_save_keeps_the_multiplier_but_an_unsaved_drain_resets_the_ball_rules() {
+        let mut table = Table::new();
+        table.step(
+            DT,
+            Controls {
+                launch: true,
+                ..Default::default()
+            },
+        );
+        table.multiplier = 3;
+        table.lamps = [true, false, true];
+        drain(&mut table);
+        assert_eq!((table.saves, table.lives), (1, 3));
+        assert_eq!(table.multiplier, 3);
+        assert_eq!(table.lamps, [true, false, true]);
+        table.step(
+            DT,
+            Controls {
+                launch: true,
+                ..Default::default()
+            },
+        );
+        table.crane_armed = true;
+        drain(&mut table);
+        assert_eq!(table.lives, 2);
+        assert_eq!(table.multiplier, 1);
+        assert_eq!(table.lamps, [false; 3]);
+        assert!(!table.crane_armed);
+        assert_eq!((table.chain, table.ball_time), (0, 0.));
+    }
+
+    #[test]
+    fn overtime_secret_pays_once_per_game_on_a_long_ball() {
+        let mut table = Table::new();
+        table.waiting = false;
+        let mut paid = 0;
+        for _ in 0..((OVERTIME_SECONDS + 20.) / DT) as usize {
+            // Hold the ball still away from everything; only time passes.
+            table.world.bodies[table.ball].set_translation(Vector::new(7.4, 6.6), true);
+            table.world.bodies[table.ball].set_linvel(Vector::ZERO, true);
+            let before = table.score;
+            table.step(DT, Controls::default());
+            paid += table.score - before;
+        }
+        assert!(table.overtime);
+        assert_eq!((table.secrets, paid), (1, OVERTIME_POINTS));
+        drain(&mut table);
+        for _ in 0..((OVERTIME_SECONDS + 1.) / DT) as usize {
+            table.waiting = false;
+            table.world.bodies[table.ball].set_translation(Vector::new(7.4, 6.6), true);
+            table.step(DT, Controls::default());
+        }
+        assert_eq!(table.secrets, 1, "one secret per game");
     }
 
     #[test]

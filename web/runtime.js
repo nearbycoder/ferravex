@@ -12,6 +12,9 @@ const status = document.querySelector('[role=status]');
 const gl = canvas.getContext('webgl2', {alpha:false, antialias:true, depth:true});
 if (!gl) {showLoadError(new Error('WebGL2 is required. Try a browser with hardware graphics enabled.'),status);throw new Error('WebGL2 is required');}
 let recoveryExtension=gl.getExtension('WEBGL_lose_context');
+// A shared, motion-aware indicator replaces a static loading line until boot settles.
+if(document.head&&typeof document.createElement==='function'&&status.dataset){const loadingStyle=document.createElement('style');loadingStyle.textContent='[data-ferravex-loading]::after{content:"";display:block;width:min(12rem,60%);height:3px;margin:.65rem auto 0;border-radius:2px;background:linear-gradient(90deg,#ffb36b,#ffdf9a) 0 0/35% 100% no-repeat,#ffffff24;animation:ferravex-loading 1s ease-in-out infinite alternate}@keyframes ferravex-loading{from{background-position:0 0,0 0}to{background-position:100% 0,0 0}}@media (prefers-reduced-motion:reduce){[data-ferravex-loading]::after{animation:none;background:#ffb36b99}}@media (forced-colors:active){[data-ferravex-loading]::after{background:CanvasText}}';document.head.append(loadingStyle);status.dataset.ferravexLoading='';}
+const loadingSettled=()=>{if(status.dataset)delete status.dataset.ferravexLoading;};
 const shader = (type,source) => {const s=gl.createShader(type);gl.shaderSource(s,source);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(s));return s;};
 let program,buffer,retained,spriteEffects,gpuTimer,maxFramebufferDimension,lastGpuFrame=0;
 function initializeGraphics(){
@@ -156,7 +159,7 @@ try {
  if(disposed)return;
  let materialTools=null;if(new URLSearchParams(location.search).has('material-tools')){const m=await import('./material-tools.js');if(disposed)return;materialTools=m.createMaterialTools(exports);}
  if(disposed)return;
- bootReady=true;if(graphics.active())status.textContent='';if(controlsButton)controlsButton.disabled=false;if(multiplayerButton)multiplayerButton.disabled=false;focusAfterBoot();
+ bootReady=true;if(graphics.active())status.textContent='';loadingSettled();if(controlsButton)controlsButton.disabled=false;if(multiplayerButton)multiplayerButton.disabled=false;focusAfterBoot();
  const loop=time=>{
   if(!graphics.active())return;
   if(details.player?.shouldRender(time)===false){graphics.schedule(loop);return;}
@@ -217,7 +220,7 @@ try {
 } catch(error) {
  // A late rejection must not replace an earlier recovery failure or departed page.
  if(disposed)return;
- teardown();showLoadError(error,status);console.error(error);
+ loadingSettled();teardown();showLoadError(error,status);console.error(error);
 }
 }
 await boot();

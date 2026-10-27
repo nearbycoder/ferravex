@@ -36,8 +36,8 @@ test('all catalog game links and displayed metadata match real local hosts', () 
 test('search combines words across name, genre, description, and dimension', () => {
   assert.deepEqual(titles(filterGames(cards, {query: '  PHYSICS    lab  ', dimension: '3D'})), ['3D Physics Lab']);
   assert.deepEqual(titles(filterGames(cards, {query: 'tower defense orchard'})), ['Orchard Guard']);
-  assert.deepEqual(titles(filterGames(cards, {query: '3d low-poly boost'})), ['Dune Skimmer']);
-  assert.deepEqual(titles(filterGames(cards, {query: 'crýstal   gate'})), ['Crystal Cavern']);
+  assert.deepEqual(titles(filterGames(cards, {query: '3d hover boost'})), ['Dune Skimmer']);
+  assert.deepEqual(titles(filterGames(cards, {query: 'crýstal   altars'})), ['Crystal Cavern']);
   assert.deepEqual(titles(filterGames(cards, {query: 'FPS'})), ['Courtyard', 'Strike']);
   assert.deepEqual(filterGames(cards, {query: 'physics orchard'}), []);
   assert.deepEqual(filterGames(cards, {query: '<script>alert(1)</script>'}), []);

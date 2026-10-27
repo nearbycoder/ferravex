@@ -36,6 +36,23 @@ impl Host {
         self.has_played
     }
 
+    /// The practice match ended on its final authority tick. Only restart or
+    /// the briefing leave this state; resuming cannot produce practice ticks.
+    pub(super) fn finish_match(&mut self, won: bool) {
+        self.active = false;
+        self.has_played = true;
+        self.practice.finish(won);
+    }
+
+    pub(super) fn finished(&self) -> bool {
+        matches!(
+            self.practice.state(),
+            ferravex_core::session::SessionState::Won | ferravex_core::session::SessionState::Lost
+        )
+    }
+
+    /// A finished practice session stays finished (it produces no ticks);
+    /// callers keep its results on screen instead of resuming into it.
     pub(super) fn resume(&mut self) {
         self.active = true;
         self.has_played = true;
@@ -210,6 +227,39 @@ mod tests {
         assert_eq!(host.practice.tick(), 0);
         host.return_to_briefing();
         assert!(!host.has_played());
+        assert_eq!(host.practice.state(), SessionState::Ready);
+    }
+
+    #[test]
+    fn finished_matches_stop_practice_ticks_until_restart_or_briefing() {
+        let mut host = Host::new(true);
+        assert_eq!(host.advance(Mode::Practice, DT, true, true).steps, 1);
+        host.finish_match(true);
+        assert!(host.finished() && !host.active());
+        // Replays and menus may still be shown; the practice clock never resumes.
+        host.resume();
+        assert!(host.finished());
+        assert_eq!(host.advance(Mode::Practice, 30., true, true).steps, 0);
+        host.open_menu();
+        assert_eq!(
+            host.command(
+                InputFrame {
+                    buttons: BUTTON_FIRE,
+                    ..Default::default()
+                },
+                true
+            )
+            .buttons,
+            0
+        );
+        // Network/replay clocks are independent of the practice result.
+        assert_eq!(host.advance(Mode::Network, DT, false, false).steps, 1);
+        assert!(host.restart_practice(Mode::Practice));
+        assert!(!host.finished() && host.active());
+        assert_eq!(host.advance(Mode::Practice, DT, true, true).steps, 1);
+        host.finish_match(false);
+        host.return_to_briefing();
+        assert!(!host.finished() && !host.has_played());
         assert_eq!(host.practice.state(), SessionState::Ready);
     }
 }

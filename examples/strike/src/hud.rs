@@ -11,56 +11,61 @@ const MUTED: Color = Color::new(0.70, 0.74, 0.69, 1.0);
 #[path = "journey200_196_tests.rs"]
 mod polish_tests;
 
+/// The browser fullscreen host pins a 44px menu button 8px from the top-right
+/// corner. HUD text, counters and panels keep this corner (width, height) clear.
+pub(super) const MENU_CORNER: [f32; 2] = [72., 60.];
+
+/// Whether `rect` reaches into the reserved top-right corner of a `width` view.
+#[cfg(test)]
+pub(super) fn in_menu_corner(width: f32, rect: UiRect) -> bool {
+    rect.min[0] + rect.size[0] > width - MENU_CORNER[0] + 0.01
+        && rect.min[1] < MENU_CORNER[1] - 0.01
+        && rect.size[0] > 0.
+        && rect.size[1] > 0.
+}
+
+/// Characters a formatted value paints, without allocating.
+pub(super) fn char_count(args: std::fmt::Arguments<'_>) -> usize {
+    struct Count(usize);
+    impl std::fmt::Write for Count {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            self.0 += s.chars().count();
+            Ok(())
+        }
+    }
+    let mut count = Count(0);
+    let _ = std::fmt::write(&mut count, args);
+    count.0
+}
+
+/// Shrink an aligned label rectangle to its painted glyph box. Glyphs land at
+/// exactly the same place; the tight box keeps inspection/layout bounds honest.
+pub(super) fn tight(rect: UiRect, align: Align, chars: usize, size: f32) -> UiRect {
+    let glyphs = chars as f32 * 6. * size / 8. + 1.;
+    let left = match align {
+        Align::Left => rect.min[0],
+        Align::Right => rect.min[0] + rect.size[0] - glyphs,
+        Align::Center => rect.min[0] + (rect.size[0] - glyphs) * 0.5,
+    };
+    UiRect {
+        min: [left, rect.min[1]],
+        size: [glyphs, rect.size[1]],
+    }
+}
+
 // Baseline-compatible labels queued in the bounded shared draw list.
+fn aligned(ui: &mut Ui, text: &str, x: f32, y: f32, size: f32, color: Color, align: Align) {
+    let (rect, style) = formatted_layout(screen_width(), x, y, size, color, align);
+    let _ = ui.text(tight(rect, align, text.chars().count(), size), text, style);
+}
 fn label(ui: &mut Ui, text: &str, x: f32, y: f32, size: f32, color: Color) {
-    ui.text(
-        UiRect {
-            min: [x, y - size * 0.875],
-            size: [(screen_width() - x).max(0.), size],
-        },
-        text,
-        TextStyle {
-            size,
-            color,
-            shadow: true,
-            ..Default::default()
-        },
-    )
-    .unwrap();
+    aligned(ui, text, x, y, size, color, Align::Left);
 }
 fn right(ui: &mut Ui, text: &str, x: f32, y: f32, size: f32, color: Color) {
-    ui.text(
-        UiRect {
-            min: [0., y - size * 0.875],
-            size: [x.max(0.), size],
-        },
-        text,
-        TextStyle {
-            size,
-            color,
-            align: Align::Right,
-            shadow: true,
-            ..Default::default()
-        },
-    )
-    .unwrap();
+    aligned(ui, text, x, y, size, color, Align::Right);
 }
 fn center(ui: &mut Ui, text: &str, x: f32, y: f32, size: f32, color: Color) {
-    ui.text(
-        UiRect {
-            min: [0., y - size * 0.875],
-            size: [(x * 2.).max(0.), size],
-        },
-        text,
-        TextStyle {
-            size,
-            color,
-            align: Align::Center,
-            shadow: true,
-            ..Default::default()
-        },
-    )
-    .unwrap();
+    aligned(ui, text, x, y, size, color, Align::Center);
 }
 
 fn formatted(
@@ -73,7 +78,23 @@ fn formatted(
     args: std::fmt::Arguments<'_>,
 ) {
     let (rect, style) = formatted_layout(screen_width(), x, y, size, color, align);
-    ui.text_fmt(rect, style, args).unwrap();
+    let rect = tight(rect, align, char_count(args), size);
+    let _ = ui.text_fmt(rect, style, args);
+}
+
+/// Centered formatted text, shrunk (never below 11px) to fit `max_width`.
+fn fitted_center(
+    ui: &mut Ui,
+    x: f32,
+    y: f32,
+    size: f32,
+    max_width: f32,
+    color: Color,
+    args: std::fmt::Arguments<'_>,
+) {
+    let chars = char_count(args).max(1) as f32;
+    let size = size.min(max_width / (chars * 0.75)).max(11.);
+    formatted(ui, x, y, size, color, Align::Center, args);
 }
 
 pub(super) fn formatted_layout(
@@ -125,6 +146,8 @@ pub struct HudState<'a> {
     pub shot_timer: f32,
     pub round_phase: Option<ferravex_play::rounds::Phase>,
     pub error: &'a str,
+    pub marker: crate::juice::Marker,
+    pub death: Option<crate::juice::Death>,
 }
 
 pub fn overlay(ui: &mut Ui, player: &Player, state: HudState<'_>) {
@@ -132,8 +155,11 @@ pub fn overlay(ui: &mut Ui, player: &Player, state: HudState<'_>) {
     let h = screen_height();
     let accent = rgb(0xd7b56d);
     if !state.error.is_empty() {
-        let size =
-            16.0_f32.min(16. * (w - 40.) / measure_text(state.error, None, 16, 1.).width.max(1.));
+        // Centered and kept clear of the fullscreen menu corner on both sides.
+        let size = 16.0_f32.min(
+            16. * (w - 2. * MENU_CORNER[0] - 16.)
+                / measure_text(state.error, None, 16, 1.).width.max(1.),
+        );
         center(ui, state.error, w * 0.5, 28., size, rgb(0xe4ac83));
     }
     if state.active {
@@ -164,25 +190,40 @@ pub fn overlay(ui: &mut Ui, player: &Player, state: HudState<'_>) {
                 draw_line(x, y + d * spread, x, y + d * (spread + 5.), 1., INK);
             }
             if state.hit_timer > 0. {
+                // Accepted hits only: a crisp X, bigger and redder for heads
+                // and eliminations, with a short label that names which.
+                use crate::juice::Marker;
+                let (outer, width, color, text) = match state.marker {
+                    Marker::Hit => (13., 2., accent, "HIT"),
+                    Marker::Headshot => (16., 2.5, rgb(0xf4735c), "HEADSHOT"),
+                    Marker::Kill => (18., 3., rgb(0xf4735c), "FRAG"),
+                };
                 for (dx, dy) in [(1., 1.), (-1., 1.), (1., -1.), (-1., -1.)] {
                     draw_line(
                         x + dx * 8.,
                         y + dy * 8.,
-                        x + dx * 13.,
-                        y + dy * 13.,
-                        4.,
+                        x + dx * outer,
+                        y + dy * outer,
+                        width + 2.,
                         Color::new(0.02, 0.04, 0.03, 0.85),
                     );
                     draw_line(
                         x + dx * 8.,
                         y + dy * 8.,
-                        x + dx * 13.,
-                        y + dy * 13.,
-                        2.,
-                        accent,
+                        x + dx * outer,
+                        y + dy * outer,
+                        width,
+                        color,
                     );
                 }
-                center(ui, "HIT", x, y + 36., 13., INK);
+                center(
+                    ui,
+                    text,
+                    x,
+                    y + 36.,
+                    13.,
+                    if text == "HIT" { INK } else { color },
+                );
             }
         }
 
@@ -206,6 +247,13 @@ pub fn overlay(ui: &mut Ui, player: &Player, state: HudState<'_>) {
         );
 
         // The equipped weapon is already visible. Only ammunition needs a label.
+        // Touch vitals near the top move left of the fullscreen menu corner.
+        let inset = if baseline - VITALS_SIZE < MENU_CORNER[1] {
+            MENU_CORNER[0]
+        } else {
+            0.
+        };
+        let w = w - inset;
         formatted(
             ui,
             w - 45.,
@@ -259,21 +307,39 @@ pub fn overlay(ui: &mut Ui, player: &Player, state: HudState<'_>) {
         }
         if player.health == 0 {
             let seconds = player.respawn_ticks as f32 / TICK_RATE as f32;
+            let extra = if state.death.is_some() { 50. } else { 0. };
+            let width = (w - 32.).clamp(0., if extra > 0. { 460. } else { 256. });
             draw_rectangle(
-                x - 128.,
+                x - width * 0.5,
                 y - 37.,
-                256.,
-                72.,
-                Color::new(0.055, 0.085, 0.075, 0.75),
+                width,
+                72. + extra,
+                Color::new(0.055, 0.085, 0.075, 0.82),
             );
             center(ui, "ELIMINATED", x, y - 7., 24., INK);
+            // Who did it and what they said, then when you are back.
+            let status_y = if let Some(death) = state.death {
+                let fit = |text: &str, size: f32| crate::juice::fit_size(text, size, width - 24.);
+                let by = format!("BY {}", death.killer);
+                center(ui, &by, x, y + 17., fit(&by, 15.), rgb(0xf4735c));
+                let line = death.gloat.unwrap_or(death.retry);
+                let quoted = if death.gloat.is_some() {
+                    format!("\"{line}\"")
+                } else {
+                    line.to_owned()
+                };
+                center(ui, &quoted, x, y + 39., fit(&quoted, 14.), INK);
+                y + 67.
+            } else {
+                y + 17.
+            };
             if let Some(hint) = death_hint(state.round_phase) {
-                center(ui, hint, x, y + 17., 16., MUTED);
+                center(ui, hint, x, status_y, 16., MUTED);
             } else {
                 formatted(
                     ui,
                     x,
-                    y + 17.,
+                    status_y,
                     16.,
                     MUTED,
                     Align::Center,
@@ -332,7 +398,7 @@ fn menu_explanation(mode: crate::host::Mode, has_played: bool) -> &'static str {
         Mode::Network => "Match continues in menus.\nYou remain vulnerable.",
         Mode::Replay => "Replay continues in menus.\nUse Pause replay to pause.",
         Mode::Practice if has_played => "",
-        Mode::Practice => "5 BOTS",
+        Mode::Practice => "5 bots. 2 minutes. Go.",
     }
 }
 
@@ -483,6 +549,26 @@ fn menu_items(
     }
 }
 
+/// Left edge and lowest row of the menu blocks, for cards placed below it.
+pub fn menu_extent(
+    width: f32,
+    height: f32,
+    mode: crate::host::Mode,
+    has_played: bool,
+    touch: bool,
+    input: &PlayerInput,
+) -> (f32, f32) {
+    let (mut left, mut bottom) = (f32::MAX, 0_f32);
+    menu_items(width, height, mode, has_played, touch, input, |item| {
+        let rect = match item {
+            MenuItem::Text(rect, ..) | MenuItem::Button(_, rect, ..) => rect,
+        };
+        left = left.min(rect.min[0]);
+        bottom = bottom.max(rect.min[1] + rect.size[1]);
+    });
+    (left, bottom)
+}
+
 pub fn menu(
     ui: &mut Ui,
     mode: crate::host::Mode,
@@ -540,42 +626,114 @@ pub fn menu(
     });
 }
 
-pub fn roster(ui: &mut Ui, players: &[Player], local_id: u8) {
+/// Hold-to-view scoreboard: call signs (practice) or operators, frags,
+/// deaths and health, sorted by frags. Counts start when this view began.
+pub fn roster(
+    ui: &mut Ui,
+    players: &[Player],
+    local_id: u8,
+    board: &crate::scoreboard::Tracker,
+    bots: bool,
+) {
     let w = screen_width();
     let h = screen_height();
-    let width = 400_f32.min(w - 32.);
+    let width = 440_f32.min(w - 32.);
     let x = (w - width) / 2.;
-    let y = ((h - 54. - players.len() as f32 * 30.) / 2.).max(16.);
+    let rows = players.len().min(ferravex_fps::MAX_PLAYERS);
+    let y = ((h - 54. - rows as f32 * 30.) / 2.).max(16.);
     draw_rectangle(
         x,
         y,
         width,
-        54. + players.len() as f32 * 30.,
+        58. + rows as f32 * 30.,
         Color::new(0.055, 0.085, 0.075, 0.92),
     );
-    label(ui, "PLAYERS", x + 20., y + 30., 16., MUTED);
-    right(ui, "HP", x + width - 20., y + 30., 14., MUTED);
-    for (i, p) in players.iter().enumerate() {
-        let row = y + 60. + i as f32 * 30.;
-        if p.id == local_id {
-            label(ui, "You", x + 20., row, 19., INK);
-        } else {
-            formatted(
-                ui,
-                x + 20.,
-                row,
-                19.,
-                INK,
-                Align::Left,
-                format_args!("Operator {:02}", p.id),
+    let mut order = [0usize; ferravex_fps::MAX_PLAYERS];
+    for (i, slot) in order.iter_mut().enumerate().take(rows) {
+        *slot = i;
+    }
+    let line = |id: u8| {
+        board
+            .lines
+            .get(usize::from(id))
+            .copied()
+            .unwrap_or_default()
+    };
+    order[..rows].sort_by_key(|&i| {
+        let p = &players[i];
+        (std::cmp::Reverse(line(p.id).kills), line(p.id).deaths, p.id)
+    });
+    let narrow = width < 360.;
+    let (k, d, hp) = if narrow {
+        (x + width - 104., x + width - 62., x + width - 16.)
+    } else {
+        (x + width - 150., x + width - 88., x + width - 20.)
+    };
+    label(
+        ui,
+        if bots { "THE GAUNTLET" } else { "PLAYERS" },
+        x + 20.,
+        y + 30.,
+        16.,
+        MUTED,
+    );
+    right(ui, "K", k, y + 30., 14., MUTED);
+    right(ui, "D", d, y + 30., 14., MUTED);
+    right(ui, "HP", hp, y + 30., 14., MUTED);
+    for (row, &i) in order[..rows].iter().enumerate() {
+        let p = &players[i];
+        let ry = y + 62. + row as f32 * 30.;
+        let you = p.id == local_id;
+        let color = if you { rgb(0xf7cc6b) } else { INK };
+        if you {
+            draw_rectangle(
+                x + 8.,
+                ry - 20.,
+                width - 16.,
+                26.,
+                Color::new(0.25, 0.2, 0.08, 0.6),
             );
         }
+        let name = crate::crew::Who {
+            id: p.id,
+            local: local_id,
+            bots,
+        };
+        let size = if narrow { 15. } else { 19. };
         formatted(
             ui,
-            x + width - 20.,
-            row,
-            19.,
-            INK,
+            x + 20.,
+            ry,
+            size,
+            color,
+            Align::Left,
+            format_args!("{name}"),
+        );
+        let l = line(p.id);
+        formatted(
+            ui,
+            k,
+            ry,
+            size,
+            color,
+            Align::Right,
+            format_args!("{}", l.kills),
+        );
+        formatted(
+            ui,
+            d,
+            ry,
+            size,
+            MUTED,
+            Align::Right,
+            format_args!("{}", l.deaths),
+        );
+        formatted(
+            ui,
+            hp,
+            ry,
+            size,
+            if p.health == 0 { rgb(0xe69278) } else { color },
             Align::Right,
             format_args!("{}", p.health),
         );
@@ -605,6 +763,17 @@ fn round_banner(phase: ferravex_play::rounds::Phase, score: [u16; 2]) -> Option<
     }
 }
 
+/// The objective strip: centered, or shifted left when centering would put
+/// it under the fullscreen menu corner. Returns (left, width).
+pub(super) fn tactical_strip(w: f32) -> (f32, f32) {
+    let width = (w - 16.).clamp(0., 650.);
+    if (w + width) * 0.5 <= w - MENU_CORNER[0] {
+        ((w - width) * 0.5, width)
+    } else {
+        (8., (w - 8. - MENU_CORNER[0] - 8.).max(0.))
+    }
+}
+
 /// One compact objective strip; connection/tools stay in optional browser chrome.
 pub fn tactical(
     ui: &mut Ui,
@@ -621,8 +790,8 @@ pub fn tactical(
             formatted(
                 ui,
                 w * 0.5,
-                52.,
-                16.,
+                MENU_CORNER[1] + 16.,
+                16.0_f32.min((w - 24.) / 34. / 0.75),
                 INK,
                 Align::Center,
                 format_args!("LOBBY  {players} / {required}  - WAITING FOR PLAYERS"),
@@ -637,23 +806,24 @@ pub fn tactical(
         Phase::PostRound => "ROUND OVER",
         Phase::Finished => "MATCH OVER",
     };
-    let width = (w - 16.).clamp(0., 650.);
+    let (left, width) = tactical_strip(w);
+    let cx = left + width * 0.5;
     ui.panel(
         UiRect {
-            min: [(w - width) * 0.5, 30.],
+            min: [left, 30.],
             size: [width, 57.],
         },
         Color::new(0.04, 0.065, 0.055, 0.88),
     )
     .unwrap();
     if w < 640. {
-        formatted(
+        fitted_center(
             ui,
-            w * 0.5,
+            cx,
             52.,
             15.,
+            width - 16.,
             INK,
-            Align::Center,
             format_args!("A {} / {} D  {phase}", view.score[0], view.score[1]),
         );
         if let Some(player) = view.player(id) {
@@ -662,13 +832,13 @@ pub fn tactical(
             } else {
                 "DEFEND"
             };
-            formatted(
+            fitted_center(
                 ui,
-                w * 0.5,
+                cx,
                 75.,
                 13.,
+                width - 16.,
                 MUTED,
-                Align::Center,
                 format_args!(
                     "R{}  {}s  {role}  ${}",
                     view.round,
@@ -678,13 +848,13 @@ pub fn tactical(
             );
         }
     } else {
-        formatted(
+        fitted_center(
             ui,
-            w * 0.5,
+            cx,
             52.,
             16.,
+            width - 16.,
             INK,
-            Align::Center,
             format_args!(
                 "ATTACK {}  /  {} DEFEND    {phase}  {}s",
                 view.score[0],
@@ -703,13 +873,13 @@ pub fn tactical(
                 Weapon::Rifle => "RIFLE",
                 Weapon::Sniper => "SNIPER",
             };
-            formatted(
+            fitted_center(
                 ui,
-                w * 0.5,
+                cx,
                 75.,
                 14.,
+                width - 16.,
                 MUTED,
-                Align::Center,
                 format_args!("ROUND {}  {role}  ${}  {weapon}", view.round, player.money),
             );
         }

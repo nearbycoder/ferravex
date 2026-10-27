@@ -13,16 +13,22 @@
 //! assert_eq!(session.state(), SessionState::Playing);
 //! assert_eq!(session.tick(), 0);
 //! ```
+#[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+mod capture;
 mod compact;
 mod game;
 mod host;
+mod hud;
 #[cfg(test)]
 mod journey200_tests;
+mod juice;
 mod level;
 mod presentation;
+mod quips;
 mod save;
+mod scene;
 use ferravex_render::audio::{Cue, GameAudio, Surface};
-use ferravex_render::input::{PlayerInput, Preset};
+use ferravex_render::input::{ActionKind, Binding, InputCode, PlayerInput, Preset};
 use ferravex_render::ui::{Align, ButtonStyle, TextStyle, Ui, UiRect, Viewport};
 use ferravex_render::{canvas::Canvas2D, demo::Demo, prelude::*};
 use game::*;
@@ -39,6 +45,8 @@ fn conf() -> Conf {
     let mut c = ferravex_render::window_conf("Orchard Guard · Ferravex");
     c.window_width = 1200;
     c.window_height = 760;
+    #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+    capture::window(&mut c);
     c
 }
 fn label(s: &str, x: f32, y: f32, size: f32, color: Color) {
@@ -52,7 +60,7 @@ fn center(s: &str, x: f32, y: f32, size: f32, color: Color) {
         .width;
     label(s, x - width * 0.5, y, size, color);
 }
-fn button(ui: &mut Ui, id: u64, rect: Rect, title: &str, subtitle: &str, enabled: bool) {
+fn button(ui: &mut Ui, id: u64, rect: Rect, title: &str, enabled: bool, size: f32) {
     ui.hud_button(
         id,
         UiRect {
@@ -66,303 +74,19 @@ fn button(ui: &mut Ui, id: u64, rect: Rect, title: &str, subtitle: &str, enabled
             ink: CREAM,
             focus: GOLD,
             disabled: Color::from_hex(0x616956),
-            size: 17.,
+            size,
         },
     )
     .unwrap();
-    ui.label(
-        UiRect {
-            min: [rect.x + 10., rect.y + 37.],
-            size: [rect.w - 20., 14.],
-        },
-        subtitle,
-        TextStyle {
-            size: 12.,
-            color: CREAM,
-            align: Align::Center,
-            ..Default::default()
-        },
-    )
-    .unwrap();
-}
-fn tree(p: Vec2, variant: usize) {
-    draw_ellipse(
-        p.x + 7.,
-        p.y + 18.,
-        25.,
-        9.,
-        0.,
-        Color::new(0.22, 0.32, 0.19, 0.13),
-    );
-    draw_rectangle(p.x - 3., p.y, 6., 25., Color::from_hex(0x85704c));
-    draw_poly(p.x, p.y - 8., 7, 25., 15., Color::from_hex(0x69894f));
-    draw_poly(p.x - 8., p.y - 14., 7, 20., 0., Color::from_hex(0x78975b));
-    for i in 0..3 {
-        let a = (i as f32 * 2.1 + variant as f32) * 1.4;
-        draw_circle(
-            p.x + a.cos() * 14.,
-            p.y - 10. + a.sin() * 13.,
-            3.4,
-            Color::from_hex(0xc67545),
-        );
-    }
-}
-fn field(g: &Game, presentation: &Presentation, compact: bool) {
-    draw_rectangle(0., 70., 1200., 590., Color::from_hex(0xa7b87a));
-    for i in 0..130 {
-        let x = ((i * 97 + 31) % 1200) as f32;
-        let y = 85. + ((i * 67 + 21) % 560) as f32;
-        draw_line(x, y, x + 3., y - 5., 1., Color::new(0.35, 0.46, 0.25, 0.20));
-    }
-    for pair in g.level.path.windows(2) {
-        draw_line(
-            pair[0].x + 3.,
-            pair[0].y + 6.,
-            pair[1].x + 3.,
-            pair[1].y + 6.,
-            51.,
-            Color::new(0.38, 0.43, 0.24, 0.18),
-        );
-    }
-    for pair in g.level.path.windows(2) {
-        draw_line(
-            pair[0].x,
-            pair[0].y,
-            pair[1].x,
-            pair[1].y,
-            45.,
-            Color::from_hex(0xd5bf8a),
-        );
-    }
-    for p in &g.level.path {
-        draw_circle(p.x, p.y, 22.5, Color::from_hex(0xd5bf8a));
-    }
-    for pair in g.level.path.windows(2) {
-        let len = pair[0].distance(pair[1]);
-        let d = (pair[1] - pair[0]) / len;
-        for i in 0..(len / 23.) as usize {
-            let p = pair[0] + d * (i as f32 * 23.);
-            draw_circle(p.x, p.y, 1., Color::new(0.52, 0.42, 0.26, 0.25));
-        }
-    }
-    for (i, p) in [
-        vec2(65., 365.),
-        vec2(100., 455.),
-        vec2(180., 495.),
-        vec2(80., 565.),
-        vec2(180., 595.),
-        vec2(335., 590.),
-        vec2(540., 570.),
-        vec2(620., 570.),
-        vec2(870., 590.),
-        vec2(1090., 590.),
-        vec2(1150., 540.),
-        vec2(1140., 180.),
-        vec2(1035., 180.),
-        vec2(930., 175.),
-        vec2(670., 125.),
-        vec2(570., 125.),
-        vec2(375., 130.),
-        vec2(80., 115.),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        tree(p, i);
-    }
-    // Orchard gate and farmhouse establish the path's destination.
-    draw_rectangle(1120., 385., 69., 43., Color::from_hex(0xf0e5bc));
-    draw_triangle(
-        vec2(1111., 386.),
-        vec2(1154., 351.),
-        vec2(1197., 386.),
-        Color::from_hex(0xac6848),
-    );
-    draw_rectangle(1147., 404., 15., 24., Color::from_hex(0x7d6848));
-    for y in [302., 353.] {
-        for x in [1135., 1156., 1177.] {
-            draw_rectangle(x, y, 5., 23., CREAM);
-        }
-        draw_rectangle(1135., y + 7., 47., 4., CREAM);
-    }
-    label("ORCHARD", 1106., 452., 15., GREEN);
-    for (i, p) in g.level.plots.iter().enumerate() {
-        if g.selected == i && g.outcome == Outcome::Playing {
-            let range = g.towers[i]
-                .unwrap_or_else(|| Tower::planted(Kind::Seed))
-                .range();
-            draw_circle(p.x, p.y, range, Color::new(0.96, 0.95, 0.72, 0.10));
-            draw_circle_lines(p.x, p.y, range, 1., Color::new(0.96, 0.95, 0.72, 0.4));
-            if g.towers[i].is_none() {
-                draw_circle_lines(
-                    p.x,
-                    p.y,
-                    Tower::planted(Kind::Frost).range(),
-                    1.,
-                    Color::new(0.40, 0.70, 0.75, 0.55),
-                );
-            }
-        }
-        draw_ellipse(
-            p.x + 4.,
-            p.y + 15.,
-            25.,
-            11.,
-            0.,
-            Color::new(0.24, 0.31, 0.18, 0.22),
-        );
-        draw_circle(p.x, p.y, 25., Color::from_hex(0xc9bd8a));
-        draw_circle_lines(
-            p.x,
-            p.y,
-            25.,
-            2.,
-            if g.selected == i {
-                CREAM
-            } else {
-                Color::from_hex(0x8c9866)
-            },
-        );
-        if let Some(tower) = g.towers[i] {
-            match tower.kind {
-                Kind::Seed => {
-                    draw_rectangle(p.x - 12., p.y - 8., 24., 19., Color::from_hex(0x84623e));
-                    draw_rectangle(p.x - 17., p.y - 16., 34., 8., Color::from_hex(0xbaa477));
-                    let muzzle = *p + tower.aim * 25.;
-                    draw_line(p.x, p.y - 5., muzzle.x, muzzle.y - 5., 10., GREEN);
-                    draw_circle(p.x, p.y - 5., 12., Color::from_hex(0x496c3b));
-                }
-                Kind::Frost => {
-                    draw_rectangle(p.x - 14., p.y - 12., 28., 22., Color::from_hex(0x679b99));
-                    for y in [-12., -4., 4.] {
-                        draw_line(
-                            p.x - 15.,
-                            p.y + y,
-                            p.x + 15.,
-                            p.y + y,
-                            3.,
-                            Color::from_hex(0x9ec6b5),
-                        );
-                    }
-                    draw_triangle(
-                        vec2(p.x - 20., p.y - 14.),
-                        vec2(p.x, p.y - 28.),
-                        vec2(p.x + 20., p.y - 14.),
-                        Color::from_hex(0x447d80),
-                    );
-                    draw_circle(p.x, p.y, 5., INK);
-                }
-            }
-            for n in 0..=tower.level {
-                draw_circle(p.x - 6. + n as f32 * 6., p.y + 20., 2., CREAM);
-            }
-        } else {
-            draw_line(p.x - 7., p.y, p.x + 7., p.y, 2., Color::from_hex(0x7d8a5f));
-            draw_line(p.x, p.y - 7., p.x, p.y + 7., 2., Color::from_hex(0x7d8a5f));
-        }
-        if !compact {
-            center(&format!("{}", i + 1), p.x, p.y + 42., 14., INK);
-        }
-    }
-    for pest in &g.pests {
-        let p = pest.pos;
-        draw_ellipse(
-            p.x + 3.,
-            p.y + 7.,
-            13.,
-            6.,
-            0.,
-            Color::new(0.2, 0.2, 0.15, 0.2),
-        );
-        let dir =
-            (g.level.path[(pest.segment + 1).min(g.level.path.len() - 1)] - p).normalize_or_zero();
-        let side = vec2(-dir.y, dir.x);
-        let wiggle = presentation.wiggle(pest.id);
-        for n in [-1., 1.] {
-            for t in [-6., 0., 6.] {
-                let leg = p + side * n * 14. + dir * (t + wiggle * n);
-                let root = p + dir * t;
-                draw_line(root.x, root.y, leg.x, leg.y, 2., INK);
-            }
-        }
-        let color = if pest.slow().is_some() {
-            Color::from_hex(0x75bfca)
-        } else if pest.fast {
-            Color::from_hex(0x9a7451)
-        } else {
-            Color::from_hex(0xa65e4d)
-        };
-        let flash = presentation.flash(pest.id);
-        let color = Color::new(
-            color.r + (CREAM.r - color.r) * flash,
-            color.g + (CREAM.g - color.g) * flash,
-            color.b + (CREAM.b - color.b) * flash,
-            1.,
-        );
-        draw_circle(p.x, p.y, if pest.fast { 8. } else { 11. }, color);
-        draw_line(
-            p.x - dir.x * 8.,
-            p.y - dir.y * 8.,
-            p.x + dir.x * 8.,
-            p.y + dir.y * 8.,
-            1.5,
-            INK,
-        );
-        let head = p + dir * 10.;
-        draw_circle(head.x, head.y, 5., INK);
-        if let Some(slow) = pest.slow() {
-            // Shape and countdown remain legible with flashes/motion disabled.
-            draw_circle_lines(p.x, p.y, 17., 1.5, GREEN);
-            center(
-                &format!("SLOW {:.1}s", slow.remaining_seconds),
-                p.x,
-                p.y + 33.,
-                10.,
-                INK,
-            );
-        }
-        if pest.hp < pest.max_hp {
-            draw_rectangle(
-                p.x - 12.,
-                p.y - 20.,
-                24.,
-                3.,
-                Color::new(0.2, 0.25, 0.18, 0.4),
-            );
-            draw_rectangle(
-                p.x - 12.,
-                p.y - 20.,
-                24. * (pest.hp / pest.max_hp).max(0.),
-                3.,
-                CREAM,
-            );
-        }
-    }
-    if let Some(target) = g.selected_target() {
-        draw_circle_lines(target.pos.x, target.pos.y, 21., 2., INK);
-        center("TARGET", target.pos.x, target.pos.y - 26., 10., INK);
-    }
-    for s in &g.shots {
-        draw_circle(
-            s.pos.x,
-            s.pos.y,
-            4.,
-            if s.kind == Kind::Seed {
-                Color::from_hex(0xf3d080)
-            } else {
-                Color::from_hex(0xd1f1e8)
-            },
-        );
-    }
 }
 fn availability(status: Result<(), ActionError>, available: &str) -> String {
     match status {
         Ok(()) => available.into(),
-        Err(ActionError::Funds { missing }) => format!("Need {missing} more coins"),
-        Err(ActionError::FullyGrown) => "Maximum level reached".into(),
-        Err(ActionError::Occupied) => "Select an empty plot".into(),
-        Err(ActionError::Empty) => "Build a tower first".into(),
-        Err(_) => "Unavailable right now".into(),
+        Err(ActionError::Funds { missing }) => format!("NEED {missing} MORE COINS"),
+        Err(ActionError::FullyGrown) => "MAXED OUT. LOOKING GOOD.".into(),
+        Err(ActionError::Occupied) => "SELECT AN EMPTY PLOT".into(),
+        Err(ActionError::Empty) => "BUILD A TOWER FIRST".into(),
+        Err(_) => "UNAVAILABLE RIGHT NOW".into(),
     }
 }
 #[cfg(test)]
@@ -389,6 +113,7 @@ fn take_command(input: &mut PlayerInput) -> Option<Action> {
 
 fn hud_action(ui: &Ui, plots: usize) -> Option<Action> {
     [
+        (hud::SPEED_ID, Action::Speed),
         (5, Action::Restart),
         (8, Action::Restart),
         (6, Action::Pause),
@@ -416,193 +141,6 @@ fn notice_text(message: &str) -> &str {
         .trim_end_matches('.')
 }
 
-fn hud(ui: &mut Ui, campaign: &Campaign, save_error: bool, _input: &PlayerInput) {
-    let g = &campaign.game;
-    if campaign.session.is_paused() || g.outcome != Outcome::Playing {
-        return;
-    }
-    draw_rectangle(0., 0., 1200., 70., CREAM);
-    label("ORCHARD GUARD", 28., 33., 28., INK);
-    center(
-        &format!("WAVE  {} / {}", g.wave, g.level.waves.len()),
-        600.,
-        33.,
-        20.,
-        INK,
-    );
-    label(&format!("{}  HEARTS", g.lives), 880., 39., 19., INK);
-    draw_circle(1060., 32., 9., GOLD);
-    label(&format!("{}", g.money), 1078., 39., 24., INK);
-    draw_rectangle(0., 660., 1200., 100., CREAM);
-    if g.outcome != Outcome::Playing {
-        return;
-    }
-    if let Some(tower) = g.towers[g.selected] {
-        label(tower.kind.name(), 28., 684., 18., INK);
-        label(
-            &format!(
-                "Plot {} / L{} / range {:.0}",
-                g.selected + 1,
-                tower.level + 1,
-                tower.range()
-            ),
-            28.,
-            703.,
-            12.,
-            GREEN,
-        );
-        label(
-            &format!(
-                "{:.0} damage / {:.2}s reload",
-                tower.damage(),
-                tower.reload()
-            ),
-            28.,
-            721.,
-            12.,
-            Color::from_hex(0x727b59),
-        );
-        let status = g.upgrade_status(g.selected);
-        let next = Tower {
-            level: (tower.level + 1).min(2),
-            ..tower
-        };
-        button(
-            ui,
-            3,
-            Rect::new(240., 683., 415., 55.),
-            &if tower.level == 2 {
-                "FULLY GROWN".into()
-            } else {
-                format!("UPGRADE / {} coins", tower.upgrade_cost())
-            },
-            &availability(
-                status,
-                &format!(
-                    "{:.0} damage / {:.0} range / {:.2}s",
-                    next.damage(),
-                    next.range(),
-                    next.reload()
-                ),
-            ),
-            status.is_ok(),
-        );
-    } else {
-        label(
-            &format!("EMPTY PLOT {}", g.selected + 1),
-            28.,
-            684.,
-            18.,
-            INK,
-        );
-        let seed = g.build_status(g.selected, Kind::Seed);
-        let frost = g.build_status(g.selected, Kind::Frost);
-        button(
-            ui,
-            1,
-            Rect::new(240., 683., 190., 55.),
-            &format!("SEED / {}", Kind::Seed.price()),
-            &availability(seed, ""),
-            seed.is_ok(),
-        );
-        button(
-            ui,
-            2,
-            Rect::new(443., 683., 190., 55.),
-            &format!("FROST / {}", Kind::Frost.price()),
-            &availability(frost, ""),
-            frost.is_ok(),
-        );
-    }
-    button(
-        ui,
-        6,
-        Rect::new(695., 683., 110., 55.),
-        "PAUSE",
-        "",
-        campaign.session.is_started(),
-    );
-    button(ui, 5, Rect::new(820., 683., 110., 55.), "RESTART", "", true);
-    let next = g.next_wave();
-    let title = if g.active {
-        "WAVE ACTIVE".into()
-    } else {
-        format!(
-            "SEND WAVE {}",
-            next.as_ref().map_or(g.wave + 1, |wave| wave.number)
-        )
-    };
-    let subtitle = if g.active {
-        format!("{} pests left", g.pests.len() + usize::from(g.remaining))
-    } else {
-        next.map_or_else(String::new, |wave| {
-            format!("{} PESTS / {} FAST", wave.spec.count, wave.fast_count)
-        })
-    };
-    button(
-        ui,
-        4,
-        Rect::new(957., 683., 215., 55.),
-        &title,
-        &subtitle,
-        g.wave_status().is_ok(),
-    );
-    if save_error {
-        label("SAVE UNAVAILABLE", 28., 757., 14., INK);
-    } else if let Some(message) = campaign.notice() {
-        label(notice_text(message), 28., 757., 14., INK);
-    }
-}
-fn overlay(ui: &mut Ui, campaign: &Campaign, _input: &PlayerInput) {
-    let g = &campaign.game;
-    if !campaign.session.is_paused() && g.outcome == Outcome::Playing {
-        return;
-    }
-    draw_rectangle(0., 70., 1200., 590., Color::new(0.14, 0.20, 0.13, 0.55));
-    draw_rectangle(345., 235., 510., 270., CREAM);
-    let paused = campaign.session.is_paused();
-    center(
-        if paused {
-            "ORCHARD PAUSED"
-        } else if g.outcome == Outcome::Won {
-            "HARVEST SAVED"
-        } else {
-            "THE PESTS GOT THROUGH"
-        },
-        600.,
-        292.,
-        28.,
-        INK,
-    );
-    center(
-        &format!("{} stopped / {} hearts", g.kills, g.lives),
-        600.,
-        334.,
-        18.,
-        GREEN,
-    );
-    ui.modal(100).unwrap();
-    if paused {
-        button(ui, 7, Rect::new(375., 404., 215., 55.), "RESUME", "", true);
-        button(
-            ui,
-            8,
-            Rect::new(610., 404., 215., 55.),
-            "PLANT AGAIN",
-            "",
-            true,
-        );
-    } else {
-        button(
-            ui,
-            8,
-            Rect::new(490., 404., 220., 55.),
-            "PLANT AGAIN",
-            "",
-            true,
-        );
-    }
-}
 ferravex_render::game!(conf, game);
 async fn game() {
     let mut demo = Demo::with_content();
@@ -617,7 +155,20 @@ async fn game() {
     let mut campaign = Campaign::new(g, demo.autoplay);
     let mut sound = GameAudio::new();
     let mut presentation = Presentation::default();
+    let mut juice = juice::Juice::new();
+    let mut particles = ferravex_render::effects::ParticleRenderer::new(320)
+        .expect("bounded presentation particles");
+    #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+    let mut capture = capture::Capture::from_env();
     let mut player_input = PlayerInput::preset("orchard-guard", Preset::Strategy);
+    player_input
+        .action(
+            "speed",
+            "Fast-forward",
+            ActionKind::Button,
+            vec![Binding::digital(InputCode::Key(KeyCode::F as u16))],
+        )
+        .unwrap();
     let mut hud_ui = Ui::new();
     hud_ui.set_auto_focus(false);
     let mut plot_picker = false;
@@ -633,6 +184,7 @@ async fn game() {
             hud_ui.cancel();
             sound = GameAudio::new();
             presentation = Presentation::default();
+            juice.reset();
             true
         } else {
             false
@@ -663,10 +215,16 @@ async fn game() {
         let shortcuts = [
             (player_input.pressed("restart"), Action::Restart),
             (player_input.pressed("pause"), Action::Pause),
+            (player_input.pressed("speed"), Action::Speed),
         ];
-        let keyboard = shortcuts
+        #[allow(unused_mut)]
+        let mut keyboard = shortcuts
             .into_iter()
             .find_map(|(pressed, action)| pressed.then_some(action));
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        if let Some(action) = capture.action(&campaign) {
+            keyboard = Some(action);
+        }
         let plot = if click
             && !plot_picker
             && campaign.game.outcome == Outcome::Playing
@@ -686,30 +244,71 @@ async fn game() {
             None
         };
         clear_background(Color::from_hex(0x27372a));
-        set_camera(&compact.map_or_else(|| canvas.camera(), |layout| layout.camera()));
         presentation.frame(&campaign.game, demo.dt());
-        field(&campaign.game, &presentation, compact.is_some());
+        juice.apply_policy(ferravex_render::preferences::feedback_policy());
+        let base_camera = compact.map_or_else(|| canvas.camera(), |layout| layout.camera());
+        let mut shaken = base_camera;
+        shaken.target -= juice.shake();
+        set_camera(&shaken);
+        let boost = compact.map_or(1., |layout| layout.text_boost());
+        scene::field(
+            &campaign.game,
+            &presentation,
+            &juice,
+            compact.is_some(),
+            boost,
+        );
+        let finished = campaign.game.outcome != Outcome::Playing;
+        let mut draw_particles = || {
+            particles
+                .draw_2d(
+                    &juice.particles,
+                    ferravex_render::effects::ParticleStyle {
+                        stretch: 0.004,
+                        max_stretch: 2.5,
+                        ..Default::default()
+                    },
+                )
+                .expect("authored particle style");
+        };
+        if !finished {
+            draw_particles();
+            scene::pops(&juice, boost);
+        }
+        set_camera(&base_camera);
+        // Mask the letterbox so entering pests, clouds and shake never spill
+        // outside the authored board.
+        let bg = Color::from_hex(0x27372a);
+        draw_rectangle(-4000., -4000., 4000., 9000., bg);
+        draw_rectangle(1200., -4000., 4000., 9000., bg);
+        draw_rectangle(0., -4000., 1200., 4070., bg);
+        draw_rectangle(0., 660., 1200., 4000., bg);
         ferravex_render::set_world_colors(false);
+        let best = progress.best();
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        let best = capture.best(best, campaign.game.kills);
         if let Some(layout) = compact {
             hud_ui.begin(Viewport::responsive([screen.x, screen.y], [0.; 4]).unwrap());
             compact::hud(
                 &mut hud_ui,
                 layout,
                 &campaign,
+                &juice,
                 progress.error().is_some(),
                 &player_input,
                 plot_picker,
             );
-            compact::overlay(&mut hud_ui, layout, &campaign, &player_input);
+            compact::overlay(&mut hud_ui, layout, &campaign, best, &player_input);
         } else {
             hud_ui.begin(Viewport::fit([screen.x, screen.y], [1200., 760.], [0.; 4]).unwrap());
-            hud(
+            hud::hud(
                 &mut hud_ui,
                 &campaign,
+                &juice,
                 progress.error().is_some(),
                 &player_input,
             );
-            overlay(&mut hud_ui, &campaign, &player_input);
+            hud::overlay(&mut hud_ui, &campaign, best, &player_input, draw_particles);
         }
         hud_ui.set_auto_focus(
             campaign.session.is_paused() || campaign.game.outcome != Outcome::Playing,
@@ -724,10 +323,19 @@ async fn game() {
             plot_picker = false;
         }
         let previous_state = campaign.session.state();
+        #[allow(unused_mut)]
+        let mut elapsed = if reloaded { 0. } else { demo.dt() as f64 };
+        #[allow(unused_mut)]
+        let mut autoplay = demo.autoplay;
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        {
+            elapsed *= capture.turbo();
+            autoplay &= !capture.defenseless();
+        }
         let events = campaign.frame_with_input(
-            if reloaded { 0. } else { demo.dt() as f64 },
+            elapsed,
             blocked || reloaded,
-            demo.autoplay,
+            autoplay,
             [keyboard, ui_action, plot],
             || take_command(&mut player_input),
         );
@@ -737,16 +345,13 @@ async fn game() {
             hud_ui.cancel();
             sound = GameAudio::new();
             presentation = Presentation::default();
+            juice.reset();
+            campaign.game.feed.clear();
         } else {
             if campaign.session.state() != previous_state {
                 hud_ui.cancel();
             }
-            if events.fired {
-                sound.cue(Cue::Click, 0.5);
-            }
-            if events.killed {
-                sound.cue(Cue::Impact(Surface::Grass), 0.35);
-            }
+            route_feed(&mut campaign.game, &mut juice, &mut sound);
             if events.escaped && events.finished != Some(false) {
                 sound.cue(Cue::Failure, 0.3);
             }
@@ -754,6 +359,13 @@ async fn game() {
                 sound.cue(if won { Cue::Success } else { Cue::Failure }, 0.65);
             }
         }
+        // Effects age with presentation time but freeze while paused.
+        let paused = campaign.session.is_paused();
+        let rate = if campaign.fast { 2. } else { 1. };
+        juice.advance(
+            if paused { 0. } else { demo.dt() * rate },
+            campaign.game.outcome != Outcome::Playing,
+        );
         progress.sync(&campaign.game);
         if player_input.cursor_is_virtual() {
             if compact.is_some() {
@@ -766,10 +378,54 @@ async fn game() {
         }
         set_default_camera();
         player_input.draw_controls();
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        capture.end_frame();
         if demo.finish_frame() {
             break;
         }
         next_frame().await;
+    }
+}
+
+/// Drain this frame's accepted simulation events into juice and audio. Audio
+/// coalesces per frame so catch-up batches cannot stack identical voices.
+fn route_feed(game: &mut Game, juice: &mut juice::Juice, sound: &mut GameAudio) {
+    let mut fired = false;
+    let mut lucky = false;
+    let mut stopped = false;
+    let mut built = false;
+    let mut milestone = false;
+    let events = std::mem::take(&mut game.feed);
+    for &event in &events {
+        juice.on_event(game, event);
+        match event {
+            Feed::Fired { lucky: l, .. } => {
+                fired = true;
+                lucky |= l;
+            }
+            Feed::Stopped { .. } => stopped = true,
+            Feed::Planted { .. } | Feed::Grown { .. } => built = true,
+            Feed::Cleared { .. } => milestone = true,
+            _ => {}
+        }
+    }
+    // Hand the allocation back so the bounded log never reallocates.
+    game.feed = events;
+    game.feed.clear();
+    if lucky {
+        sound.cue(Cue::Fire, 0.35);
+    } else if fired {
+        sound.cue(Cue::Click, 0.5);
+    }
+    if stopped {
+        sound.cue(Cue::Impact(Surface::Grass), 0.4);
+        sound.cue(Cue::Pickup, 0.18);
+    }
+    if built {
+        sound.cue(Cue::Reload, 0.45);
+    }
+    if milestone {
+        sound.cue(Cue::Success, 0.4);
     }
 }
 

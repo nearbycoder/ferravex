@@ -1,5 +1,6 @@
 //! Game-owned screen composition. World fitting and simulation stay independent.
-use crate::{CORAL, CYAN, FLOOR, INK, MUTED, PAPER, game::*, hint};
+use crate::juice::Juice;
+use crate::{AMBER, CORAL, CYAN, FLOOR, INK, MUTED, PAPER, game::*, hint, quips};
 use ferravex_render::{
     canvas::Canvas2D,
     input::{
@@ -11,6 +12,9 @@ use ferravex_render::{
 };
 
 const TEXT: f32 = 14.;
+const TALL_HEADER: f32 = 100.;
+/// Top-right CSS-px region owned by the browser fullscreen menu button.
+pub(crate) const CORNER: [f32; 2] = [72., 60.];
 const ROW: f32 = 20.;
 
 pub(crate) struct ScreenLayout {
@@ -52,7 +56,16 @@ impl ScreenLayout {
         let arena_bottom = canvas.project(vec2(ARENA.x, ARENA.bottom())).y;
         // Keep the entire arena visible in portrait. In a very short window,
         // clip secondary rows rather than shrink text or cover the whole arena.
-        let header_height = 80_f32.min(safe.size[1]);
+        // Two short rows sit left of the browser's fullscreen menu corner;
+        // the stat grid starts below it, at y >= CORNER[1].
+        // Narrow (portrait) windows have a roomy top letterbox; wide-but-short
+        // ones keep a shorter header so less of the arena is covered.
+        let header_height = if screen[0] >= 560. {
+            80_f32
+        } else {
+            TALL_HEADER
+        }
+        .min(safe.size[1]);
         let header = UiRect {
             min: safe.min,
             size: [safe.size[0], header_height],
@@ -168,20 +181,78 @@ impl ScreenLayout {
         true
     }
 
-    pub fn hud(&self, ui: &mut Ui, game: &Game, _input: &PlayerInput) {
+    pub fn hud(&self, ui: &mut Ui, game: &Game, juice: &Juice) {
         ui.push_clip(self.header).unwrap();
         ui.panel(self.header, INK).unwrap();
         let inner = self.header.inset([8.; 4]).unwrap();
         let y = inner.min[1];
-        line(
-            ui,
-            rect(inner.min[0], y, inner.size[0] - 64., 20.),
-            &format!("WAVE {}/3", game.wave),
-            TEXT,
-            CYAN,
+        // Row one is the announcer: banners and callouts replace the wave line.
+        let (top, color) = if let Some(remaining) = game.wave_clear_remaining() {
+            (
+                format!("WAVE {} CLEAR · NEXT {remaining:.1}s", game.wave),
+                CYAN,
+            )
+        } else if game.wave_banner > 0. {
+            (
+                format!("WAVE {}: {}", game.wave, quips::wave_name(game.wave)),
+                AMBER,
+            )
+        } else if let Some(callout) = &juice.callout {
+            (callout.head.clone(), callout.color)
+        } else {
+            (
+                format!("WAVE {}/3 · {} LEFT", game.wave, game.remaining_enemies()),
+                CYAN,
+            )
+        };
+        let score = format!(
+            "{} x{}",
+            crate::hud::thousands(game.score.total()),
+            game.score.multiplier()
         );
-        let stats = rect(inner.min[0], y + 20., inner.size[0], 40.);
-        let mut slots = hud_slots(stats, 4, ((inner.size[0] - 8.) * 0.5).max(1.), ROW, 0.).unwrap();
+        // Rows above the corner end before the fullscreen menu button.
+        let clear =
+            (self.viewport.bounds().size[0] - CORNER[0] - inner.min[0]).clamp(0., inner.size[0]);
+        let tier = crate::juice::tier_color(if game.score.chain() > 0 {
+            game.score.multiplier()
+        } else {
+            0
+        });
+        let stats = if self.header.size[1] < TALL_HEADER {
+            // Wide but short windows: everything fits left of the corner in
+            // three rows, so the header covers less of the arena.
+            let score_width = 120_f32.min(clear * 0.4);
+            line(
+                ui,
+                rect(inner.min[0], y, clear - score_width - 4., 20.),
+                &top,
+                TEXT,
+                color,
+            );
+            ui.label(
+                rect(inner.min[0] + clear - score_width, y, score_width, 20.),
+                &score,
+                TextStyle {
+                    size: TEXT,
+                    color: tier,
+                    align: Align::Right,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            rect(inner.min[0], y + 20., clear, 40.)
+        } else {
+            line(ui, rect(inner.min[0], y, clear, 20.), &top, TEXT, color);
+            line(
+                ui,
+                rect(inner.min[0], y + 20., clear, 20.),
+                &format!("SCORE {score}"),
+                TEXT,
+                tier,
+            );
+            rect(inner.min[0], y + 44., inner.size[0], 40.)
+        };
+        let mut slots = hud_slots(stats, 4, ((stats.size[0] - 8.) * 0.5).max(1.), ROW, 0.).unwrap();
         let cells: [UiRect; 4] = std::array::from_fn(|_| slots.next().unwrap());
         // Fixed-size labels ellipsize at absurdly small widths; no font fitting.
         line(
@@ -189,30 +260,31 @@ impl ScreenLayout {
             cells[0],
             &format!("HEALTH {}", game.health),
             15.,
-            if game.health <= 30 { CORAL } else { CYAN },
+            if game.health <= 30 { CORAL } else { PAPER },
         );
         line(
             ui,
             cells[1],
             &format!("SHIELD {}", game.shield.value().ceil() as u32),
             15.,
-            CYAN,
+            crate::draw::BATTERY,
         );
         let ammo = if game.magazine.reloading() {
-            format!("RELOAD {:.1}s", game.magazine.remaining())
+            format!("RECHARGE {:.1}s", game.magazine.remaining())
         } else {
-            format!("AMMO {}/12", game.magazine.loaded())
+            format!("CELLS {}/12", game.magazine.loaded())
         };
-        line(ui, cells[2], &ammo, TEXT, PAPER);
+        line(ui, cells[2], &ammo, TEXT, MUTED);
         let dash = game.dash_availability();
-        let dash = if dash.check().is_ok() {
+        let ready = dash.check().is_ok();
+        let dash = if ready {
             "DASH READY".to_owned()
         } else if game.phase != Phase::Playing {
             "DASH OFFLINE".to_owned()
         } else {
             format!("DASH {:.1}s", dash.cooldown_remaining)
         };
-        line(ui, cells[3], &dash, TEXT, CYAN);
+        line(ui, cells[3], &dash, TEXT, if ready { CYAN } else { MUTED });
         ui.pop_clip();
     }
 
@@ -242,8 +314,16 @@ impl ScreenLayout {
             .unwrap();
         }
         if inner.size[1] >= 140. {
+            // Three wrapped lines fit above the action; Paused keeps a row free
+            // for its restart binding.
+            let detail_height = if title == "PAUSED" { 44. } else { 66. };
             ui.text(
-                rect(inner.min[0], inner.min[1] + 42., inner.size[0], 44.),
+                rect(
+                    inner.min[0],
+                    inner.min[1] + 42.,
+                    inner.size[0],
+                    detail_height,
+                ),
                 detail,
                 TextStyle {
                     size: 16.,
@@ -342,7 +422,7 @@ mod tests {
             assert!(layout.compact);
             assert_eq!(layout.viewport.scale(), 1.);
             assert_eq!(layout.viewport.bounds().size, size);
-            assert_eq!(layout.header.size[1], 80.);
+            assert_eq!(layout.header.size[1], 100.);
             assert!(layout.hints.size[1] >= 156.);
             assert!(
                 layout.header.min[1] + layout.header.size[1] + 8.
@@ -571,7 +651,7 @@ mod tests {
                     layout.canvas.screen.y as u32,
                     || {
                         ui.begin(layout.viewport);
-                        layout.hud(&mut ui, &game, &input);
+                        layout.hud(&mut ui, &game, &Juice::new());
                         layout.overlay(
                             &mut ui,
                             "NEON SWARM",
@@ -584,6 +664,78 @@ mod tests {
                     },
                 );
                 assert_eq!(ui.reserved_bytes(), reserved);
+            }
+        }
+    }
+
+    /// Browser fullscreen pins a 44px menu button 8px from the top-right
+    /// corner. HUD copy and controls stay out of that 72×60 CSS-px corner.
+    #[test]
+    fn hud_text_and_controls_leave_the_fullscreen_menu_corner_clear() {
+        use crate::juice::Priority;
+        use ferravex_render::ui::UiRole;
+        let mut game = Game::new();
+        for _ in 0..6 {
+            game.score.award(100);
+        }
+        let input = PlayerInput::transient("neon-corner");
+        for size in [
+            [1280., 800.],
+            [1600., 1000.],
+            [390., 844.],
+            [844., 390.],
+            [320., 480.],
+        ] {
+            let layout = ScreenLayout::new(size);
+            for (banner, callout) in [(2.4, false), (0., true), (0., false)] {
+                game.wave_banner = banner;
+                let mut juice = Juice::new();
+                if callout {
+                    juice.callout(
+                        "A VERY LONG ANNOUNCER CALLOUT".into(),
+                        "WITH A LONG SUBTITLE LINE".into(),
+                        CYAN,
+                        Priority::Epic,
+                    );
+                }
+                let mut ui = Ui::new();
+                ui.set_inspection_enabled(true);
+                host_frame(0., size[0] as u32, size[1] as u32, || {
+                    ui.begin(layout.viewport);
+                    if layout.compact {
+                        layout.hud(&mut ui, &game, &juice);
+                    } else {
+                        crate::hud::play(
+                            &mut ui,
+                            &game,
+                            &input,
+                            crate::hud::Learned::default(),
+                            1.,
+                        );
+                        crate::hud::announcements(&mut ui, &game, &juice);
+                    }
+                    ui.finish(false);
+                    let pixels = layout.viewport.pixels();
+                    let scale = layout.viewport.scale();
+                    let mut checked = 0;
+                    for element in ui.inspect().unwrap() {
+                        if !matches!(element.role, UiRole::Text | UiRole::Button) {
+                            continue;
+                        }
+                        let Some(b) = element.visible_bounds else {
+                            continue;
+                        };
+                        let right = pixels.min[0] + (b.min[0] + b.size[0]) * scale;
+                        let top = pixels.min[1] + b.min[1] * scale;
+                        assert!(
+                            right <= size[0] - CORNER[0] + 0.01 || top >= CORNER[1] - 0.01,
+                            "{size:?}: {:?} reaches the menu corner ({right}, {top})",
+                            element.painted_label
+                        );
+                        checked += 1;
+                    }
+                    assert!(checked >= 6, "{size:?} drew its HUD");
+                });
             }
         }
     }

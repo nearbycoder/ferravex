@@ -11,6 +11,9 @@ pub(super) enum Action {
     Select(Option<usize>),
     Pause,
     Restart,
+    /// Toggle 1x/2x simulation speed. Ticks stay fixed; only how many run
+    /// per presentation frame changes.
+    Speed,
 }
 
 #[derive(Default, Debug)]
@@ -26,6 +29,8 @@ pub(super) struct Campaign {
     pub game: Game,
     pub session: GameSession,
     manual_pause: bool,
+    /// Fast-forward runs two fixed ticks per supplied tick interval.
+    pub fast: bool,
     notice: String,
     notice_time: f32,
     /// One coalesced HUD purchase with its original plot, waiting for a real tick.
@@ -38,6 +43,7 @@ impl Campaign {
             game,
             session: GameSession::new(60., 8, autoplay),
             manual_pause: false,
+            fast: false,
             notice: String::new(),
             notice_time: 0.,
             pending: None,
@@ -85,6 +91,19 @@ impl Campaign {
             tick_action();
         }
         if !blocked {
+            // Speed is a local presentation-rate preference, never a gameplay
+            // command: it applies immediately and never competes for the tick.
+            if actions.contains(&Some(Action::Speed)) {
+                self.fast = !self.fast;
+                self.notice = if self.fast {
+                    "Fast-forward on: the orchard runs at double speed."
+                } else {
+                    "Normal speed."
+                }
+                .into();
+                self.notice_time = 2.5;
+            }
+            let actions = actions.map(|action| action.filter(|&a| a != Action::Speed));
             let mut action = if actions.contains(&Some(Action::Restart)) {
                 Some(Action::Restart)
             } else if actions.contains(&Some(Action::Pause)) {
@@ -127,7 +146,8 @@ impl Campaign {
                 }
             }
         }
-        let step = self.session.advance(elapsed);
+        let rate = if self.fast && !blocked { 2. } else { 1. };
+        let step = self.session.advance(elapsed * rate);
         let (fired, kills, escaped) = (self.game.fired, self.game.kills, self.game.escaped);
         for _ in 0..step.steps {
             if !blocked {
@@ -229,7 +249,9 @@ impl Campaign {
                     )
                 };
             }
-            Action::Pause | Action::Restart => unreachable!("handled before gameplay actions"),
+            Action::Pause | Action::Restart | Action::Speed => {
+                unreachable!("handled before gameplay actions")
+            }
         }
         Ok(())
     }
@@ -473,5 +495,45 @@ mod tests {
         c.frame(30., true, true, [None; 3]);
         assert_eq!(c.game.time, time);
         assert!(c.session.is_paused());
+    }
+
+    #[test]
+    fn fast_forward_runs_the_same_fixed_ticks_twice_as_often_and_never_while_blocked() {
+        let mut normal = Campaign::new(Game::new(), false);
+        let mut fast = Campaign::new(Game::new(), false);
+        for c in [&mut normal, &mut fast] {
+            frame(c, Action::Build(Kind::Seed));
+        }
+        // Speed applies with a same-frame command and is not a purchase.
+        fast.frame(
+            0.,
+            false,
+            false,
+            [Some(Action::Speed), Some(Action::Wave), None],
+        );
+        frame(&mut normal, Action::Wave);
+        assert!(fast.fast && fast.game.active);
+        assert_eq!(fast.game.money, normal.game.money);
+        for _ in 0..90 {
+            normal.frame(1. / 60., false, false, [None; 3]);
+        }
+        for _ in 0..45 {
+            fast.frame(1. / 60., false, false, [None; 3]);
+        }
+        assert_eq!(normal.session.tick(), 90);
+        assert_eq!(fast.session.tick(), 90);
+        assert_eq!(fast.game.time, normal.game.time);
+        assert_eq!(fast.game.fired, normal.game.fired);
+        let positions = |c: &Campaign| c.game.pests.iter().map(|p| p.pos).collect::<Vec<_>>();
+        assert_eq!(positions(&fast), positions(&normal));
+        let tick = fast.session.tick();
+        fast.frame(1. / 60., true, false, [Some(Action::Speed), None, None]);
+        assert!(fast.fast, "blocked frames ignore speed taps");
+        assert_eq!(fast.session.tick(), tick);
+        // Restart keeps the player's speed preference but nothing else.
+        frame(&mut fast, Action::Restart);
+        assert!(fast.fast && fast.game.wave == 0);
+        frame(&mut fast, Action::Speed);
+        assert!(!fast.fast);
     }
 }

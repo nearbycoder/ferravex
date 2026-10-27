@@ -54,6 +54,11 @@ impl RaceSession {
         self.countdown_ticks.div_ceil(HZ)
     }
 
+    /// Presentation-only countdown progress: 0 at the start, 1 at GO.
+    pub fn countdown_progress(&self) -> f32 {
+        1. - self.countdown_ticks as f32 / COUNTDOWN as f32
+    }
+
     pub fn off_track(&self) -> bool {
         self.offroad_ticks >= OFFROAD_NOTICE
     }

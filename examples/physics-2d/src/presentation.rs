@@ -2,13 +2,21 @@
 use ferravex_render::prelude::*;
 
 pub(super) const NARROW_FOOTER_HEIGHT: f32 = 536.;
+/// BALL, CRATE, DROP, PULSE, PAUSE, STEP, RESET, CHAOS, DOMINO.
+pub(super) const BUTTONS: usize = 9;
+/// Visual order groups make / toys / time: BALL CRATE DROP | PULSE CHAOS
+/// DOMINO | PAUSE STEP RESET. Indexed by the lab's stable button index.
+const SLOT: [usize; BUTTONS] = [0, 1, 2, 3, 6, 7, 8, 4, 5];
 #[cfg(test)]
 const ROW_HEIGHT: f32 = 20.;
 #[cfg(test)]
 const SLOT_LINES: [usize; 5] = [4, 3, 4, 5, 5];
 
+#[derive(Clone, Copy, Debug)]
 pub(super) struct LabLayout {
     pub narrow: bool,
+    /// Play layout with grouped buttons; `new` keeps the legacy hosted grid.
+    compact: bool,
     pub footer_height: f32,
     pub footer_y: f32,
     pub scale: f32,
@@ -30,6 +38,7 @@ impl LabLayout {
             .max(0.1);
         Self {
             narrow,
+            compact: false,
             footer_height,
             footer_y,
             scale,
@@ -41,13 +50,14 @@ impl LabLayout {
     /// Compact play layout: keep diagnostics out of the scene, without shrinking text.
     pub fn compact(width: f32, height: f32) -> Self {
         let mut layout = Self::new(width, height);
-        layout.footer_height = if width < 360. {
-            210.
-        } else if width < 640. {
-            166.
+        layout.compact = true;
+        let rows = BUTTONS.div_ceil(Self::columns(width)) as f32;
+        let lines = if Self::columns(width) == BUTTONS {
+            2.
         } else {
-            124.
+            3.
         };
+        layout.footer_height = 10. + rows * 44. + 14. + lines * 20.;
         layout.footer_y = height - layout.footer_height;
         layout.scale = ((width - 40.) / 26.)
             .min((layout.footer_y - 60.).max(1.) / 14.)
@@ -56,11 +66,56 @@ impl LabLayout {
         layout
     }
 
-    pub fn to_screen(&self, point: Vec2) -> Vec2 {
+    fn columns(width: f32) -> usize {
+        if width >= 820. {
+            BUTTONS
+        } else if width >= 480. {
+            5
+        } else {
+            3
+        }
+    }
+
+    /// Whether every button fits one row (two footer text lines follow).
+    pub fn single_row(&self) -> bool {
+        Self::columns(self.width) == BUTTONS
+    }
+
+    /// Baseline of the first footer text line, below every button row.
+    pub fn status_y(&self) -> f32 {
+        let rows = if self.compact {
+            BUTTONS.div_ceil(Self::columns(self.width))
+        } else {
+            1
+        };
+        self.footer_y + 10. + rows as f32 * 44. + 16.
+    }
+
+    /// Screen y of the scene's top grid line (13 m).
+    pub fn scene_top(&self) -> f32 {
+        self.to_screen(vec2(0., 13.)).y
+    }
+
+    /// The same layout viewed with a zoom about a world point plus a pixel
+    /// offset. Drawing and pointer mapping stay consistent through it.
+    pub fn zoomed(&self, center: Vec2, zoom: f32, offset: Vec2) -> Self {
+        if !center.is_finite() || !zoom.is_finite() || zoom <= 0. || !offset.is_finite() {
+            return *self;
+        }
+        let anchor = self.to_screen(center);
+        let scale = self.scale * zoom;
+        Self {
+            scale,
+            origin: anchor - vec2(center.x, -center.y) * scale + offset,
+            ..*self
+        }
+    }
+
+    pub fn to_screen(self, point: Vec2) -> Vec2 {
         self.origin + vec2(point.x, -point.y) * self.scale
     }
 
-    pub fn to_world(&self, point: Vec2) -> Vec2 {
+    pub fn to_world(self, point: Vec2) -> Vec2 {
         vec2(
             (point.x - self.origin.x) / self.scale,
             (self.origin.y - point.y) / self.scale,
@@ -75,6 +130,25 @@ impl LabLayout {
     }
 
     pub fn button(&self, index: usize) -> Rect {
+        if self.compact {
+            let columns = Self::columns(self.width);
+            let slot = SLOT[index.min(BUTTONS - 1)];
+            let gaps = if columns == BUTTONS { 20. } else { 0. };
+            let width =
+                ((self.width - 56. - gaps - (columns - 1) as f32 * 6.) / columns as f32).max(1.);
+            let column = slot % columns;
+            let group = if columns == BUTTONS {
+                (column / 3) as f32 * 10.
+            } else {
+                0.
+            };
+            return Rect::new(
+                28. + column as f32 * (width + 6.) + group,
+                self.footer_y + 10. + (slot / columns) as f32 * 44.,
+                width,
+                36.,
+            );
+        }
         let columns = if self.width < 360. {
             3
         } else if self.narrow {
@@ -167,6 +241,73 @@ mod tests {
                 assert!((layout.to_world(point) - world).length() < 0.001);
             }
         }
+    }
+
+    #[test]
+    fn compact_grouped_buttons_stay_readable_and_never_overlap() {
+        let labels = [
+            "BALL", "CRATE", "DROP", "PULSE", "RESUME", "STEP", "RESET", "CHAOS", "DOMINO",
+        ];
+        for (w, h) in [
+            (320., 480.),
+            (390., 700.),
+            (479., 640.),
+            (480., 640.),
+            (640., 400.),
+            (819., 600.),
+            (820., 600.),
+            (844., 390.),
+            (1280., 800.),
+            (1600., 1000.),
+        ] {
+            let layout = LabLayout::compact(w, h);
+            assert!(layout.footer_height < h * 0.5, "{w}x{h}");
+            let rects: Vec<_> = (0..BUTTONS).map(|i| layout.button(i)).collect();
+            for (i, rect) in rects.iter().enumerate() {
+                assert!(
+                    rect.x >= 28. && rect.x + rect.w <= w - 28. + 0.01,
+                    "{w}: {i}"
+                );
+                assert!(rect.y >= layout.footer_y);
+                assert!(rect.y + rect.h + 8. < layout.status_y() - 12.);
+                let measured = get_default_font()
+                    .try_metrics(17, 1.)
+                    .unwrap()
+                    .measure_line(labels[i])
+                    .unwrap()
+                    .width;
+                let size = 17. * ((rect.w - 12.) / measured).min(1.);
+                assert!(size >= 14., "{w}: {} at {size}", labels[i]);
+                for other in &rects[i + 1..] {
+                    assert!(
+                        rect.x + rect.w <= other.x
+                            || other.x + other.w <= rect.x
+                            || rect.y + rect.h <= other.y
+                            || other.y + other.h <= rect.y
+                    );
+                }
+            }
+            // Three footer text lines (two on the single-row layout) fit.
+            let lines = if layout.single_row() { 2. } else { 3. };
+            assert!(layout.status_y() + (lines - 1.) * 20. + 4. <= h);
+            // The top bar never overlaps the scene's 13 m grid line.
+            assert!(layout.scene_top() >= 44., "{w}x{h}: {}", layout.scene_top());
+        }
+    }
+
+    #[test]
+    fn zoomed_view_round_trips_and_keeps_its_focus_fixed() {
+        let layout = LabLayout::compact(1280., 800.);
+        let focus = vec2(-1.5, 4.);
+        let view = layout.zoomed(focus, 1.08, vec2(3., -2.));
+        assert!((view.to_screen(focus) - layout.to_screen(focus) - vec2(3., -2.)).length() < 1e-3);
+        for world in [vec2(-11.2, 0.6), vec2(11.2, 12.4), vec2(0., 7.)] {
+            assert!((view.to_world(view.to_screen(world)) - world).length() < 1e-4);
+        }
+        assert_eq!(
+            layout.zoomed(focus, f32::NAN, Vec2::ZERO).scale,
+            layout.scale
+        );
     }
 
     #[test]

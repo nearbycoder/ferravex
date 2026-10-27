@@ -13,6 +13,64 @@ const BOOST_EMPTY: f32 = 0.03;
 const BOOST_REARM: f32 = 0.25;
 const RECOVERY_DELAY: f32 = 2.5;
 pub const RECOVERY_PENALTY: f32 = 3.0;
+/// A gate crossed this close to its center line is "threaded".
+pub const THREAD_RADIUS: f32 = 2.2;
+/// Threaded-gate refill grows with the streak up to this multiplier.
+pub const MULTIPLIER_CAP: u32 = 5;
+/// Clearance (beyond contact) that counts as a close scrape past a rock.
+pub const SCRAPE_MARGIN: f32 = 1.6;
+/// Minimum speed for a scrape to count, in meters per second.
+pub const SCRAPE_SPEED: f32 = 20.0;
+pub const SCRAPE_REFILL: f32 = 0.06;
+/// Throttle first pressed at or below this countdown value earns a rocket start.
+pub const ROCKET_WINDOW: f32 = 0.9;
+pub const ROCKET_SPEED: f32 = 16.0;
+/// Accepted events kept between host drains; older runs without a host stay bounded.
+pub const MAX_EVENTS: usize = 32;
+
+/// Accepted simulation events. Presentation and audio react only to these (or
+/// to counters), so feedback never invents gameplay and replays read the same.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RaceEvent {
+    /// The countdown expired. `rocket` is a well-timed launch; `eager` means the
+    /// throttle was already held before the launch window.
+    Go {
+        rocket: bool,
+        eager: bool,
+    },
+    Gate {
+        gate: usize,
+        threaded: bool,
+        streak: u32,
+        refill: f32,
+    },
+    /// A threaded streak of at least two ended (clipped gate, impact or recovery).
+    StreakLost {
+        streak: u32,
+    },
+    /// `lap` is 1-based; `time` includes any recovery penalties in that lap.
+    Lap {
+        lap: u32,
+        time: f32,
+        perfect: bool,
+    },
+    Finished,
+    Scrape {
+        at: Vec2,
+        refill: f32,
+    },
+    Impact {
+        at: Vec2,
+        speed: f32,
+    },
+    BoostIgnited,
+    Recovered,
+}
+
+/// The threaded-gate boost refill for a streak that includes this gate.
+pub fn thread_refill(streak: u32) -> f32 {
+    0.10 + 0.02 * (streak.clamp(1, MULTIPLIER_CAP) - 1) as f32
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Traction {
@@ -150,10 +208,28 @@ pub struct Race {
     pub bank: f32,
     pub recovery_count: u32,
     pub recovery_timer: f32,
+    /// Consecutive threaded gates; clipping a gate, an impact or recovery ends it.
+    pub streak: u32,
+    pub best_streak: u32,
+    /// Threaded gates across the whole race.
+    pub threaded: u32,
+    pub scrapes: u32,
+    /// Laps in which all fourteen gates were threaded (the "mirage lap").
+    pub perfect_laps: u32,
+    /// Completed lap times; zero until that lap is complete.
+    pub lap_times: [f32; LAPS as usize],
+    pub rocket_start: bool,
     boost_exhausted: bool,
     impact_cooldown: f32,
     stranded_time: f32,
     turn_rate: f32,
+    lap_start: f32,
+    lap_threads: u32,
+    /// Rock currently within scrape range, and whether that pass is still clean.
+    scrape: Option<(usize, bool)>,
+    /// Countdown value when the currently held throttle was first pressed.
+    start_press: Option<f32>,
+    events: Vec<RaceEvent>,
 }
 impl Race {
     pub fn new() -> Self {
@@ -178,11 +254,57 @@ impl Race {
             bank: 0.0,
             recovery_count: 0,
             recovery_timer: 0.0,
+            streak: 0,
+            best_streak: 0,
+            threaded: 0,
+            scrapes: 0,
+            perfect_laps: 0,
+            lap_times: [0.; LAPS as usize],
+            rocket_start: false,
             boost_exhausted: false,
             impact_cooldown: 0.0,
             stranded_time: 0.0,
             turn_rate: 0.,
+            lap_start: 0.,
+            lap_threads: 0,
+            scrape: None,
+            start_press: None,
+            events: Vec::with_capacity(MAX_EVENTS),
         }
+    }
+    /// Take every accepted event since the previous drain, oldest first.
+    pub fn drain_events(&mut self) -> std::vec::Drain<'_, RaceEvent> {
+        self.events.drain(..)
+    }
+    fn emit(&mut self, event: RaceEvent) {
+        if self.events.len() < MAX_EVENTS {
+            self.events.push(event);
+        }
+    }
+    fn break_streak(&mut self) {
+        if self.streak >= 2 {
+            self.emit(RaceEvent::StreakLost {
+                streak: self.streak,
+            });
+        }
+        self.streak = 0;
+    }
+    /// Elapsed time in the lap being driven (penalties included).
+    pub fn lap_elapsed(&self) -> f32 {
+        (self.elapsed - self.lap_start).max(0.)
+    }
+    /// Fastest completed lap, if any.
+    pub fn best_lap(&self) -> Option<f32> {
+        self.lap_times
+            .iter()
+            .copied()
+            .filter(|&t| t > 0.)
+            .min_by(f32::total_cmp)
+    }
+    /// Gates of the current lap that were threaded, as a bit per gate index.
+    /// Bits are only meaningful for gates already earned this lap.
+    pub fn lap_threads(&self) -> u32 {
+        self.lap_threads
     }
     pub fn forward(&self) -> Vec2 {
         vec2(self.yaw.sin(), self.yaw.cos())
@@ -272,7 +394,23 @@ impl Race {
             return;
         }
         if self.countdown > 0.0 {
+            // Launch timing reads the held throttle on actual ticks only.
+            if input.throttle > 0.5 {
+                self.start_press.get_or_insert(self.countdown);
+            } else {
+                self.start_press = None;
+            }
             self.countdown = (self.countdown - dt).max(0.0);
+            if self.countdown == 0.0 {
+                let rocket = self.start_press.is_some_and(|at| at <= ROCKET_WINDOW);
+                let eager = self.start_press.is_some() && !rocket;
+                if rocket {
+                    self.velocity = self.forward() * ROCKET_SPEED;
+                    self.rocket_start = true;
+                }
+                self.start_press = None;
+                self.emit(RaceEvent::Go { rocket, eager });
+            }
             return;
         }
         self.elapsed += dt;
@@ -289,7 +427,11 @@ impl Race {
         if self.boost > BOOST_REARM {
             self.boost_exhausted = false;
         }
+        let was_boosting = self.boosting;
         self.boosting = input.boost && !self.boost_exhausted && throttle > 0.1 && !self.off_track;
+        if self.boosting && !was_boosting {
+            self.emit(RaceEvent::BoostIgnited);
+        }
         self.boost = (self.boost + dt * if self.boosting { -0.26 } else { 0.11 }).clamp(0.0, 1.0);
         // Turn rate stays useful at a standstill. Lateral damping gives the craft
         // controlled slip, while sand outside the racing line costs momentum.
@@ -324,8 +466,11 @@ impl Race {
         self.apply_motor(motor);
         self.bank +=
             (-steer * 0.30 * (self.speed() / 25.0).min(1.0) - self.bank) * (dt * 7.0).min(1.0);
-        for &(center, radius) in &course.rocks {
-            self.resolve_obstacle(center, radius);
+        let mut touched_rock = None;
+        for (index, &(center, radius)) in course.rocks.iter().enumerate() {
+            if self.resolve_obstacle(center, radius) {
+                touched_rock = Some(index);
+            }
         }
         for gate in course.gates {
             for side in [-1.0, 1.0] {
@@ -335,29 +480,12 @@ impl Race {
                 );
             }
         }
+        self.track_scrape(course, touched_rock);
         if course.gates[self.next_gate].crossed(
             world(self.previous_position, HOVER_HEIGHT),
             world(self.position, HOVER_HEIGHT),
         ) {
-            if self.next_gate == 0 {
-                self.laps += 1;
-                self.finished = self.laps == LAPS;
-                if self.finished {
-                    self.velocity = Vec2::ZERO;
-                    self.boosting = false;
-                }
-            }
-            // A centered pass feeds the next straight; clipping the opening
-            // still counts, but earns no extra boost.
-            if (self.position - course.gates[self.next_gate].position)
-                .dot(right(course.gates[self.next_gate].direction))
-                .abs()
-                < 2.2
-            {
-                self.boost = (self.boost + 0.10).min(1.);
-            }
-            self.next_gate = (self.next_gate + 1) % GATES;
-            self.last_gate_timer = 0.8;
+            self.earn_gate(course);
         }
         // Recovery returns to the last earned gate, so it cannot skip checkpoints.
         // It costs race time, and keeps exploration/errors from stranding a player.
@@ -371,10 +499,92 @@ impl Race {
             self.recover(course);
         }
     }
-    fn resolve_obstacle(&mut self, center: Vec2, radius: f32) {
+    fn earn_gate(&mut self, course: &Course) {
+        let gate = self.next_gate;
+        // A centered pass feeds the next straight; clipping the opening still
+        // counts, but earns no extra boost and ends a threaded streak.
+        let threaded = (self.position - course.gates[gate].position)
+            .dot(right(course.gates[gate].direction))
+            .abs()
+            < THREAD_RADIUS;
+        let mut refill = 0.;
+        if threaded {
+            self.streak += 1;
+            self.best_streak = self.best_streak.max(self.streak);
+            self.threaded += 1;
+            self.lap_threads |= 1 << gate;
+            refill = thread_refill(self.streak);
+            self.boost = (self.boost + refill).min(1.);
+        } else {
+            self.break_streak();
+        }
+        self.emit(RaceEvent::Gate {
+            gate,
+            threaded,
+            streak: self.streak,
+            refill,
+        });
+        if gate == 0 {
+            self.laps += 1;
+            let time = self.elapsed - self.lap_start;
+            self.lap_times[(self.laps - 1) as usize] = time;
+            self.lap_start = self.elapsed;
+            let perfect = self.lap_threads == (1 << GATES) - 1;
+            self.lap_threads = 0;
+            self.finished = self.laps == LAPS;
+            if perfect {
+                self.perfect_laps += 1;
+                // The mirage lap bonus: a full tank for the next one.
+                self.boost = 1.;
+                self.boost_exhausted = false;
+            }
+            self.emit(RaceEvent::Lap {
+                lap: self.laps,
+                time,
+                perfect,
+            });
+            if self.finished {
+                self.velocity = Vec2::ZERO;
+                self.boosting = false;
+                self.emit(RaceEvent::Finished);
+            }
+        }
+        self.next_gate = (gate + 1) % GATES;
+        self.last_gate_timer = 0.8;
+    }
+    /// Award a scrape when the craft leaves a rock's near zone at speed without
+    /// having touched it. Contact during the pass voids it.
+    fn track_scrape(&mut self, course: &Course, touched: Option<usize>) {
+        let near = course.rocks.iter().position(|&(center, radius)| {
+            self.position.distance_squared(center) < (radius + 0.8 + SCRAPE_MARGIN).powi(2)
+        });
+        let previous = self.scrape;
+        self.scrape = near.map(|index| {
+            let still_clean = match previous {
+                Some((old, clean)) if old == index => clean,
+                _ => true,
+            };
+            (index, still_clean && touched != Some(index))
+        });
+        if let Some((index, true)) = previous
+            && near != Some(index)
+            && self.speed() >= SCRAPE_SPEED
+            && !self.finished
+        {
+            self.scrapes += 1;
+            self.boost = (self.boost + SCRAPE_REFILL).min(1.);
+            self.emit(RaceEvent::Scrape {
+                at: course.rocks[index].0,
+                refill: SCRAPE_REFILL,
+            });
+        }
+    }
+    /// Push the craft out of a circular obstacle. Returns whether it touched.
+    fn resolve_obstacle(&mut self, center: Vec2, radius: f32) -> bool {
         let delta = self.position - center;
         let minimum = radius + 0.8;
-        if delta.length_squared() < minimum * minimum {
+        let touched = delta.length_squared() < minimum * minimum;
+        if touched {
             let normal = if delta.length_squared() > 0.0001 {
                 delta.normalize()
             } else {
@@ -394,9 +604,15 @@ impl Race {
                 if self.impact_cooldown <= 0.0 {
                     self.impacts += 1;
                     self.impact_cooldown = 0.7;
+                    self.emit(RaceEvent::Impact {
+                        at: center + normal * radius,
+                        speed: -into,
+                    });
+                    self.break_streak();
                 }
             }
         }
+        touched
     }
     fn recover(&mut self, course: &Course) {
         let gate = course.gates[(self.next_gate + GATES - 1) % GATES];
@@ -420,6 +636,9 @@ impl Race {
         self.impact_cooldown = 0.0;
         self.stranded_time = 0.0;
         self.bank = 0.;
+        self.scrape = None;
+        self.break_streak();
+        self.emit(RaceEvent::Recovered);
     }
     /// Pure pursuit drives exactly the same throttle/steer/boost path as a player.
     pub fn autoplay(&self, course: &Course) -> Input {
@@ -782,5 +1001,251 @@ mod tests {
         assert!(race.off_track);
         assert!(race.speed() < 3.0);
         assert!(race.boost > 0.10);
+    }
+
+    fn drive_gate(race: &mut Race, course: &Course, offset: f32) {
+        // Cross the next gate at a lateral offset with ordinary ticks.
+        let gate = course.gates[race.next_gate];
+        race.position = gate.position - gate.direction * 0.05 + right(gate.direction) * offset;
+        race.velocity = gate.direction * 25.0;
+        race.yaw = heading(gate.direction);
+        race.step(course, Input::default(), 1.0 / 120.0);
+    }
+
+    #[test]
+    fn threaded_streak_scales_refill_and_clipping_or_impact_breaks_it() {
+        let course = Course::new();
+        let mut race = Race::new();
+        race.countdown = 0.;
+        race.boost = 0.;
+        let mut refills = Vec::new();
+        for _ in 0..6 {
+            let before = race.boost;
+            drive_gate(&mut race, &course, 0.5);
+            refills.push(race.boost - before);
+        }
+        assert_eq!(race.streak, 6);
+        assert_eq!(race.threaded, 6);
+        for (i, refill) in refills.iter().enumerate() {
+            let streak = i as u32 + 1;
+            assert!(
+                (refill - thread_refill(streak)).abs() < 0.001,
+                "{i}: {refill}"
+            );
+        }
+        assert!((thread_refill(5) - 0.18).abs() < 1e-6);
+        assert_eq!(thread_refill(9), thread_refill(MULTIPLIER_CAP));
+        let events: Vec<_> = race.drain_events().collect();
+        assert!(matches!(
+            events.last(),
+            Some(RaceEvent::Gate {
+                threaded: true,
+                streak: 6,
+                ..
+            })
+        ));
+        // Clipping the opening still counts but ends the streak.
+        let before = race.boost;
+        drive_gate(&mut race, &course, 4.0);
+        assert_eq!(race.gates_completed(), 7);
+        assert_eq!((race.streak, race.best_streak), (0, 6));
+        assert!(
+            race.boost - before < 0.002,
+            "only the ordinary recharge tick"
+        );
+        let events: Vec<_> = race.drain_events().collect();
+        assert!(events.contains(&RaceEvent::StreakLost { streak: 6 }));
+        // An impact also ends a running streak.
+        drive_gate(&mut race, &course, 0.);
+        drive_gate(&mut race, &course, 0.);
+        race.drain_events().for_each(drop);
+        race.position = Vec2::X * 300.;
+        race.velocity = -Vec2::X * 20.;
+        assert!(race.resolve_obstacle(Vec2::X * 299., 1.));
+        assert_eq!(race.streak, 0);
+        let events: Vec<_> = race.drain_events().collect();
+        assert!(matches!(events[0], RaceEvent::Impact { .. }));
+        assert_eq!(events[1], RaceEvent::StreakLost { streak: 2 });
+    }
+
+    #[test]
+    fn a_fully_threaded_lap_is_perfect_refills_boost_and_records_the_lap_time() {
+        let course = Course::new();
+        let mut race = Race::new();
+        race.countdown = 0.;
+        for _ in 0..GATES {
+            race.boost = 0.2;
+            race.elapsed += 0.5;
+            drive_gate(&mut race, &course, -1.0);
+        }
+        assert_eq!(race.laps, 1);
+        assert_eq!(race.perfect_laps, 1);
+        assert_eq!(race.boost, 1.);
+        assert!((race.lap_times[0] - (GATES as f32 * 0.5 + GATES as f32 / 120.)).abs() < 0.001);
+        assert_eq!(race.best_lap(), Some(race.lap_times[0]));
+        assert!(race.drain_events().any(|e| matches!(
+            e,
+            RaceEvent::Lap {
+                lap: 1,
+                perfect: true,
+                ..
+            }
+        )));
+        // One clipped gate spoils the next lap's mirage.
+        for i in 0..GATES {
+            drive_gate(&mut race, &course, if i == 3 { 4.5 } else { 0. });
+        }
+        assert_eq!((race.laps, race.perfect_laps), (2, 1));
+        assert!(race.drain_events().any(|e| matches!(
+            e,
+            RaceEvent::Lap {
+                lap: 2,
+                perfect: false,
+                ..
+            }
+        )));
+        assert!(race.lap_elapsed() < 0.001);
+    }
+
+    #[test]
+    fn clean_close_pass_at_speed_scrapes_once_but_contact_or_crawling_does_not() {
+        let course = Course::new();
+        let (center, radius) = course.rocks[4];
+        let pass = |clearance: f32, speed: f32| {
+            let mut race = Race::new();
+            race.countdown = 0.;
+            race.boost = 0.5;
+            // Fly a straight chord past the rock along the local tangent.
+            let t = (4.43) / 18.0 * TAU;
+            let along = tangent(t);
+            let side = (center - path(t)).normalize();
+            let offset = center - side * (radius + 0.8 + clearance);
+            for step in -40..40 {
+                race.previous_position = race.position;
+                race.position = offset + along * (step as f32 * 0.25);
+                race.velocity = along * speed;
+                let touched = race.resolve_obstacle(center, radius).then_some(4);
+                race.track_scrape(&course, touched);
+            }
+            race
+        };
+        let close = pass(0.8, 26.);
+        assert_eq!(close.scrapes, 1);
+        assert!((close.boost - 0.5 - SCRAPE_REFILL).abs() < 1e-6);
+        assert_eq!(pass(0.8, 10.).scrapes, 0, "too slow");
+        assert_eq!(pass(SCRAPE_MARGIN + 0.5, 26.).scrapes, 0, "too far");
+        assert_eq!(pass(-0.3, 26.).scrapes, 0, "contact voids the pass");
+    }
+
+    #[test]
+    fn launch_timing_rewards_a_late_press_and_ignores_an_eager_hold() {
+        let course = Course::new();
+        let run = |press_below: f32| {
+            let mut race = Race::new();
+            let mut events = Vec::new();
+            while race.countdown > 0. {
+                let throttle = if race.countdown <= press_below {
+                    1.
+                } else {
+                    0.
+                };
+                race.step(
+                    &course,
+                    Input {
+                        throttle,
+                        ..Default::default()
+                    },
+                    1. / 120.,
+                );
+                events.extend(race.drain_events());
+            }
+            (race, events)
+        };
+        let (rocket, events) = run(0.4);
+        assert!(rocket.rocket_start);
+        assert!((rocket.speed() - ROCKET_SPEED).abs() < 1e-4);
+        assert_eq!(
+            rocket.position,
+            Race::new().position,
+            "launch never moves during the countdown"
+        );
+        assert_eq!(
+            events,
+            [RaceEvent::Go {
+                rocket: true,
+                eager: false
+            }]
+        );
+        let (eager, events) = run(10.);
+        assert!(!eager.rocket_start && eager.speed() == 0.);
+        assert_eq!(
+            events,
+            [RaceEvent::Go {
+                rocket: false,
+                eager: true
+            }]
+        );
+        let (idle, events) = run(-1.);
+        assert_eq!(idle.speed(), 0.);
+        assert_eq!(
+            events,
+            [RaceEvent::Go {
+                rocket: false,
+                eager: false
+            }]
+        );
+    }
+
+    #[test]
+    fn events_are_bounded_without_a_host_and_drain_in_order() {
+        let course = Course::new();
+        let mut race = Race::new();
+        race.countdown = 0.;
+        for _ in 0..(MAX_EVENTS * 2) {
+            drive_gate(&mut race, &course, 0.);
+        }
+        assert_eq!(race.drain_events().count(), MAX_EVENTS);
+        assert_eq!(race.drain_events().count(), 0);
+    }
+
+    #[test]
+    fn autoplay_reports_consistent_lap_times_and_threading_stats() {
+        let course = Course::new();
+        let mut race = Race::new();
+        let mut gates = 0;
+        let mut threaded = 0;
+        for _ in 0..120 * 120 {
+            race.step(&course, race.autoplay(&course), 1.0 / 120.0);
+            for event in race.drain_events() {
+                if let RaceEvent::Gate { threaded: t, .. } = event {
+                    gates += 1;
+                    threaded += u32::from(t);
+                }
+            }
+            if race.finished {
+                break;
+            }
+        }
+        assert!(race.finished);
+        assert_eq!(gates, GATES * LAPS as usize);
+        assert_eq!(threaded, race.threaded);
+        let total: f32 = race.lap_times.iter().sum();
+        assert!((total - race.elapsed).abs() < 0.01);
+        assert!(race.lap_times.iter().all(|&t| t > 0.));
+        // The HUD quotes Dusty (autoplay) as the time to beat; keep it truthful.
+        assert!(
+            (race.elapsed - crate::quips::DUSTY).abs() < 0.01,
+            "{}",
+            race.elapsed
+        );
+        eprintln!(
+            "autoplay: time={} laps={:?} threaded={} best_streak={} perfect={} scrapes={}",
+            race.elapsed,
+            race.lap_times,
+            race.threaded,
+            race.best_streak,
+            race.perfect_laps,
+            race.scrapes
+        );
     }
 }

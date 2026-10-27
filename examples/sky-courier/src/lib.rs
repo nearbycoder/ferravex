@@ -30,9 +30,15 @@ use ferravex_render::{
     shaders::{LitMaterial, LitSettings},
 };
 
+#[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+mod capture;
+mod courier;
 mod flight_ui;
+mod overlay;
 mod presentation;
-use flight_ui::hud;
+mod quips;
+use courier::{BONUS_RADIUS, BONUS_RINGS, Impact, Ledger, line_miss};
+use flight_ui::{Coach, HudView, Progress, Results, hud};
 use presentation::FlightPresentation;
 
 const SKY: Color = Color::new(0.64, 0.76, 0.77, 1.0);
@@ -93,6 +99,9 @@ struct Flight {
     gate_notice: f32,
     boosting: bool,
     slowing: bool,
+    ledger: Ledger,
+    /// Seconds left on the hidden-ring callout.
+    bonus_notice: f32,
 }
 impl Flight {
     fn new() -> Self {
@@ -115,15 +124,22 @@ impl Flight {
             gate_notice: 0.,
             boosting: false,
             slowing: false,
+            ledger: Ledger::default(),
+            bonus_notice: 0.,
         }
     }
     fn forward(&self) -> Vec3 {
         self.motor.forward()
     }
+    #[cfg(test)]
     fn damage(&mut self) {
+        self.crash(Impact::Water);
+    }
+    fn crash(&mut self, cause: Impact) {
         if self.recovery > 0. || self.outcome != Outcome::Flying {
             return;
         }
+        self.ledger.impact(cause);
         self.hull = self.hull.saturating_sub(1);
         self.remaining = (self.remaining - 5.).max(0.);
         if self.hull == 0 || self.remaining == 0. {
@@ -154,6 +170,7 @@ impl Flight {
         }
         self.recovery = (self.recovery - dt).max(0.);
         self.gate_notice = (self.gate_notice - dt).max(0.);
+        self.bonus_notice = (self.bonus_notice - dt).max(0.);
         if self.boost_energy < 0.03 {
             self.boost_exhausted = true;
         }
@@ -183,21 +200,45 @@ impl Flight {
             .unwrap();
         let previous = self.pos;
         self.pos += self.forward() * self.motor.speed * dt;
-        if self.pos.y < -17.
-            || self.pos.y > 110.
+        let impact = if self.pos.y < -17. {
+            Some(Impact::Water)
+        } else if self.pos.y > 110.
             || self.pos.x.abs() > 260.
             || self.pos.z < -90.
             || self.pos.z > 850.
-            || island_hit(self.pos)
         {
-            self.damage();
+            Some(Impact::Boundary)
+        } else if island_hit(self.pos) {
+            Some(Impact::Island)
+        } else {
+            None
+        };
+        if let Some(cause) = impact {
+            self.crash(cause);
             return;
+        }
+        // Hidden rings are optional and never affect route order.
+        for (index, ring) in BONUS_RINGS.iter().enumerate() {
+            if segment_hits(previous, self.pos, *ring, BONUS_RADIUS)
+                && self.ledger.bonus(index).is_some()
+            {
+                self.boost_energy = 1.;
+                self.boost_exhausted = false;
+                self.bonus_notice = 2.5;
+            }
         }
         // Swept sphere capture prevents missing a beacon between fixed steps.
         let radius = if self.next == GATES { 8. } else { 8.5 };
         if segment_hits(previous, self.pos, ROUTE[self.next], radius)
             && (self.next < GATES || self.motor.speed <= DELIVERY_SPEED)
         {
+            // Grade the line being flown, not the entry point of the sphere.
+            let miss = line_miss(self.pos, self.forward(), ROUTE[self.next]);
+            if self.next < GATES {
+                self.ledger.gate(self.next, miss, self.boosting);
+            } else {
+                self.ledger.deliver(miss, self.motor.speed, self.remaining);
+            }
             self.boost_energy = (self.boost_energy + 0.18).min(1.);
             self.next += 1;
             self.gate_notice = 2.;
@@ -206,19 +247,40 @@ impl Flight {
             }
         }
     }
+    /// Ordinary turn/climb inputs toward a point; shared by autopilot and tests.
+    fn steer_toward(&self, target: Vec3) -> Input {
+        let delta = target - self.pos;
+        let bearing = (delta.x.atan2(delta.z) - self.motor.yaw + std::f32::consts::PI)
+            .rem_euclid(std::f32::consts::TAU)
+            - std::f32::consts::PI;
+        let pitch = delta.y.atan2(vec2(delta.x, delta.z).length());
+        Input {
+            turn: (bearing * 2.7).clamp(-1., 1.),
+            climb: (pitch / 0.58).clamp(-1., 1.),
+            ..Input::default()
+        }
+    }
     fn autopilot(&self) -> Input {
         if self.outcome != Outcome::Flying {
             return Input::default();
         }
         let delta = ROUTE[self.next] - self.pos;
-        let error = self.navigation().unwrap().bearing;
-        let pitch = delta.y.atan2(vec2(delta.x, delta.z).length());
         Input {
-            turn: (error * 2.7).clamp(-1., 1.),
-            climb: (pitch / 0.58).clamp(-1., 1.),
             slow: self.next == GATES && delta.length() < 90.,
-            boost: false,
+            ..self.steer_toward(ROUTE[self.next])
         }
+    }
+    /// Autopilot with detours through each hidden ring, using ordinary inputs.
+    #[cfg(any(test, all(debug_assertions, not(target_arch = "wasm32"))))]
+    fn scenic_tour(&self) -> Input {
+        if self.outcome == Outcome::Flying {
+            for (index, after) in [1, 3, 5].into_iter().enumerate() {
+                if self.next == after && self.ledger.bonus & (1 << index) == 0 {
+                    return self.steer_toward(BONUS_RINGS[index]);
+                }
+            }
+        }
+        self.autopilot()
     }
     fn navigation(&self) -> Option<Navigation> {
         let target = *ROUTE.get(self.next)?;
@@ -282,6 +344,8 @@ struct FlightFrame {
     gates: usize,
     damaged: bool,
     outcome: Option<Outcome>,
+    /// Hidden rings first collected during this frame's accepted ticks.
+    bonus: u8,
 }
 
 // The same coordinator drives the host and headless regression tests.
@@ -320,6 +384,7 @@ impl FlightRun {
         for _ in 0..steps.steps {
             let next = self.flight.next;
             let hull = self.flight.hull;
+            let bonus = self.flight.ledger.bonus;
             self.flight.tick(
                 if autoplay {
                     self.flight.autopilot()
@@ -332,6 +397,7 @@ impl FlightRun {
             self.elapsed += f64::from(steps.dt);
             frame.gates += self.flight.next - next;
             frame.damaged |= self.flight.hull < hull;
+            frame.bonus |= self.flight.ledger.bonus & !bonus;
             if self.flight.outcome != Outcome::Flying {
                 self.session
                     .finish(self.flight.outcome == Outcome::Delivered);
@@ -375,7 +441,9 @@ struct Scene {
     strut: Mesh3d,
     propeller: Mesh3d,
     ring: Mesh3d,
+    hot_ring: Mesh3d,
     dim_ring: Mesh3d,
+    bonus_ring: Mesh3d,
     pad: Mesh3d,
     stripe: Mesh3d,
     cloud: Mesh3d,
@@ -408,14 +476,18 @@ impl Scene {
             strut: Mesh3d::cuboid(vec3(0.12, 1.6, 0.12), INK),
             propeller: Mesh3d::cuboid(vec3(0.15, 3.3, 0.12), INK),
             ring: Mesh3d::cuboid(vec3(3.6, 0.45, 0.5), Color::from_rgba(236, 178, 86, 255)),
+            hot_ring: Mesh3d::cuboid(vec3(3.7, 0.6, 0.65), Color::from_rgba(255, 236, 150, 255)),
             dim_ring: Mesh3d::cuboid(vec3(3.6, 0.4, 0.4), Color::from_rgba(121, 163, 157, 255)),
+            bonus_ring: Mesh3d::cuboid(vec3(2.5, 0.5, 0.5), Color::from_rgba(255, 226, 120, 255)),
             pad: Mesh3d::cylinder(11., 0.25, Color::from_rgba(228, 206, 146, 255), 16),
             stripe: Mesh3d::cuboid(vec3(1.2, 0.12, 9.), CORAL),
             cloud: Mesh3d::sphere(10., Color::from_rgba(217, 226, 214, 255), 7, 4),
             parcel: Mesh3d::cuboid(vec3(1.4, 1.2, 1.1), Color::from_rgba(165, 121, 71, 255)),
         }
     }
-    fn draw(&self, game: &Flight, time: f32) {
+    /// `clock` animates rings and is frozen (zero) under reduced motion.
+    /// `roll` is a cosmetic victory-roll angle; `aircraft` hides a shield blink.
+    fn draw(&self, game: &Flight, time: f32, clock: f32, roll: f32, aircraft: bool) {
         self.ocean.draw(vec3(0., -20., 350.), Quat::IDENTITY);
         for (i, (center, radius)) in ISLANDS.iter().enumerate() {
             let (rock, grass) = &self.islands[i];
@@ -434,21 +506,44 @@ impl Scene {
                 Quat::from_rotation_y(std::f32::consts::FRAC_PI_4),
             );
         }
+        // The live ring breathes, and turns gold once a streak pays ×3 or more.
+        let hot = game.ledger.multiplier() >= 3;
         for (i, gate) in ROUTE.iter().enumerate().take(5) {
             if i < game.next {
                 continue;
             }
-            let mesh = if i == game.next {
-                &self.ring
+            let current = i == game.next;
+            let mesh = match (current, hot) {
+                (true, true) => &self.hot_ring,
+                (true, false) => &self.ring,
+                _ => &self.dim_ring,
+            };
+            let radius = if current {
+                9. * (1. + 0.05 * (clock * 4.).sin())
             } else {
-                &self.dim_ring
+                9.
             };
             for segment in 0..16 {
                 let angle = segment as f32 * std::f32::consts::TAU / 16.;
-                let position = *gate + vec3(angle.cos() * 9., angle.sin() * 9., 0.);
+                let position = *gate + vec3(angle.cos() * radius, angle.sin() * radius, 0.);
                 mesh.draw(
                     position,
                     Quat::from_rotation_z(angle + std::f32::consts::FRAC_PI_2),
+                );
+            }
+        }
+        // Hidden rings spin slowly so their glint catches the eye.
+        for (i, ring) in BONUS_RINGS.iter().enumerate() {
+            if game.ledger.bonus & (1 << i) != 0 {
+                continue;
+            }
+            let spin = Quat::from_rotation_y(clock * 0.9 + i as f32);
+            for segment in 0..12 {
+                let angle = segment as f32 * std::f32::consts::TAU / 12.;
+                let offset = spin * vec3(angle.cos() * 5.5, angle.sin() * 5.5, 0.);
+                self.bonus_ring.draw(
+                    *ring + offset,
+                    spin * Quat::from_rotation_z(angle + std::f32::consts::FRAC_PI_2),
                 );
             }
         }
@@ -466,9 +561,12 @@ impl Scene {
             self.cloud
                 .draw(vec3(x + 10., y - 2., z + 3.), Quat::IDENTITY);
         }
+        if !aircraft {
+            return;
+        }
         let rotation = Quat::from_rotation_y(game.motor.yaw)
             * Quat::from_rotation_x(-game.motor.pitch)
-            * Quat::from_rotation_z(game.motor.bank);
+            * Quat::from_rotation_z(game.motor.bank + roll);
         let draw = |mesh: &Mesh3d, offset: Vec3| mesh.draw(game.pos + rotation * offset, rotation);
         draw(&self.body, Vec3::ZERO);
         self.nose.draw(
@@ -544,14 +642,33 @@ fn movement_hint<'a>(
     }
 }
 fn conf() -> Conf {
-    ferravex_render::window_conf("Sky Courier — Ferravex")
+    #[allow(unused_mut)]
+    let mut conf = ferravex_render::window_conf("Sky Courier — Ferravex");
+    #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+    capture::window(&mut conf);
+    conf
 }
+
+/// Records context for this route, tip table and delivery rules.
+const RECORD_RULES: u64 = 0x534b_5943_0001;
+const RECORD_ID: &str = "north-coast-mail";
+
+/// Best delivered tips. Failed shifts are recorded without a time, so only a
+/// record with a successful time has a meaningful tip best.
+fn best_tips(records: Option<&ferravex_render::storage::Records>) -> Option<u32> {
+    records?
+        .get(RECORD_ID, RECORD_RULES)
+        .filter(|record| record.fastest_us.is_some())
+        .map(|record| record.score.min(u64::from(u32::MAX)) as u32)
+}
+
 ferravex_render::game!(conf, game);
 async fn game() {
     let mut demo = Demo::new();
     let mut sound = GameAudio::new();
     let mut presentation = FlightPresentation::new();
     let mut exhaust_renderer = ParticleRenderer::new(128).unwrap();
+    let mut spark_renderer = ParticleRenderer::new(256).unwrap();
     let mut run = FlightRun::new(demo.autoplay);
     let mut ui = Ui::new();
     let mut activate = false;
@@ -560,6 +677,14 @@ async fn game() {
     let material = LitMaterial::new().expect("portable flight material");
     let mut player_input = PlayerInput::preset("sky-courier", Preset::Flight);
     let mut reported = false;
+    // Personal bests are optional: a storage failure still leaves a playable game.
+    let mut records = ferravex_render::storage::Records::new("sky-courier").ok();
+    let mut results = Results::default();
+    let mut coach = Coach::default();
+    let mut pauses = 0_u32;
+    let mut shifts = 0_u32;
+    #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+    let mut capture = capture::Capture::from_env();
     loop {
         let w = screen_width();
         let h = screen_height();
@@ -585,6 +710,10 @@ async fn game() {
             ])
             .unwrap();
         player_input.sample_play();
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        if capture.pause_now(&run) {
+            player_input.set_paused(true);
+        }
         let activated = std::mem::take(&mut activate);
         let restart = player_input.pressed("restart")
             || (activated && matches!(run.session.state(), SessionState::Won | SessionState::Lost));
@@ -604,21 +733,65 @@ async fn game() {
             transitioned = run.session.start() || run.session.set_paused(false);
         }
         // Explicit pause always applies; smoke autoplay remains independent of focus.
+        let was_paused = run.session.is_paused();
         transitioned |= run.session.set_paused(
             player_input.paused() || (!demo.autoplay && !player_input.gameplay_active()),
         );
+        if run.session.is_paused() && !was_paused {
+            pauses = pauses.wrapping_add(1);
+        }
         let movement = player_input.movement();
-        let human = Input {
+        #[allow(unused_mut)]
+        let mut human = Input {
             turn: movement.x,
             climb: movement.y,
             boost: player_input.held("boost"),
             slow: player_input.held("brake"),
         };
+        #[allow(unused_mut)]
+        let mut autoplay = demo.autoplay;
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        if demo.autoplay
+            && let Some(input) = capture.input(&run.flight)
+        {
+            human = input;
+            autoplay = false;
+        }
         let frame = run.advance(
             if transitioned { 0. } else { demo.dt() as f64 },
             human,
-            demo.autoplay,
+            autoplay,
         );
+        coach.update(&run.flight, frame.seconds);
+        if let Some(outcome) = frame.outcome {
+            // Compare against the stored best before recording this shift.
+            shifts = shifts.wrapping_add(1);
+            let delivered = outcome == Outcome::Delivered;
+            results = Results {
+                previous_best: best_tips(records.as_ref()),
+                shift: shifts,
+                demo: demo.autoplay,
+            };
+            #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+            if let Some(best) = capture.fake_best() {
+                results.previous_best = Some(best);
+                results.demo = false;
+            }
+            if !demo.autoplay
+                && let Some(records) = records.as_mut()
+            {
+                let tips = if delivered { run.flight.ledger.tips } else { 0 };
+                let time = if delivered {
+                    ferravex_render::storage::run_micros(run.elapsed as f32)
+                } else {
+                    None
+                };
+                let _ = records.attempt(RECORD_ID, RECORD_RULES, u64::from(tips), time);
+                if let Some(record) = records.get(RECORD_ID, RECORD_RULES) {
+                    results.shift = record.runs.min(u64::from(u32::MAX)) as u32;
+                }
+            }
+        }
         let flight = &run.flight;
         let (view, feedback) = presentation.update(&run, &frame, demo.dt(), |cue, gain| {
             sound.cue(cue, gain);
@@ -626,7 +799,7 @@ async fn game() {
         sound.motor(flight.motor.speed, 38., run.session.is_playing());
         let camera_pos = view.position;
         clear_background(SKY);
-        set_camera(&Camera3D {
+        let camera = Camera3D {
             position: camera_pos,
             target: view.target,
             up: view.up,
@@ -634,7 +807,8 @@ async fn game() {
             z_near: 0.2,
             z_far: 650.,
             ..Default::default()
-        });
+        };
+        set_camera(&camera);
         material.begin(LitSettings {
             camera_position: camera_pos,
             fog_color: SKY,
@@ -643,7 +817,13 @@ async fn game() {
             ambient: 0.65,
             ..Default::default()
         });
-        scene.draw(flight, presentation.propeller_time);
+        scene.draw(
+            flight,
+            presentation.propeller_time,
+            presentation.clock,
+            presentation.roll_angle(),
+            presentation.aircraft_visible(flight),
+        );
         material.end();
         for trail in &presentation.wing_trails {
             draw_ribbon(
@@ -657,20 +837,25 @@ async fn game() {
             )
             .unwrap();
         }
+        let billboard = BillboardView::new(
+            camera_pos,
+            (view.target - camera_pos).cross(view.up),
+            view.up,
+        )
+        .unwrap();
         exhaust_renderer
-            .draw_3d(
-                &presentation.exhaust,
-                BillboardView::new(
-                    camera_pos,
-                    (view.target - camera_pos).cross(view.up),
-                    view.up,
-                )
-                .unwrap(),
-                ParticleStyle::default(),
-            )
+            .draw_3d(&presentation.exhaust, billboard, ParticleStyle::default())
+            .unwrap();
+        spark_renderer
+            .draw_3d(&presentation.sparks, billboard, ParticleStyle::default())
             .unwrap();
         set_default_camera();
-        if feedback.flash > 0. {
+        let projector = overlay::Projector::new(&camera, w, h);
+        if run.session.is_playing() {
+            overlay::speed_lines(&presentation, w, h);
+        }
+        overlay::gate_glow(&presentation, w, h);
+        if feedback.flash > 0. && run.session.is_playing() {
             // A small edge cue, independently governed by reduced flash.
             draw_rectangle_lines(
                 2.,
@@ -681,6 +866,10 @@ async fn game() {
                 Color::new(CORAL.r, CORAL.g, CORAL.b, feedback.flash * 0.55),
             );
         }
+        if run.session.is_playing() {
+            overlay::waypoint(&projector, flight, w, h);
+        }
+        overlay::pops(&projector, &presentation);
         if player_input.touch_seen() && !player_input.touch_customized() && run.session.is_playing()
         {
             draw_circle_lines(90., h - 100., 60., 2., CREAM);
@@ -688,8 +877,14 @@ async fn game() {
         }
         if demo.autoplay && flight.outcome != Outcome::Flying && !reported {
             println!(
-                "Sky Courier autoplay: {:?}; beacons={}; hull={}; remaining={:.1}s",
-                flight.outcome, flight.next, flight.hull, flight.remaining
+                "Sky Courier autoplay: {:?}; beacons={}; hull={}; remaining={:.1}s; tips=${}; streak={}; rings={}/3",
+                flight.outcome,
+                flight.next,
+                flight.hull,
+                flight.remaining,
+                flight.ledger.tips,
+                flight.ledger.best_streak,
+                flight.ledger.bonus_count()
             );
             reported = true;
         }
@@ -699,8 +894,19 @@ async fn game() {
         } else if !player_input.held("confirm") && !player_input.held("restart") {
             menu_ready = true;
         }
-        activate = hud(&run, &mut ui, &mut player_input, menu_ready).expect("bounded courier HUD");
+        let hud_view = HudView {
+            progress: Progress {
+                best_tips: best_tips(records.as_ref()),
+            },
+            results: &results,
+            coach: &coach,
+            pauses,
+        };
+        activate = hud(&run, &mut ui, &mut player_input, menu_ready, &hud_view)
+            .expect("bounded courier HUD");
         player_input.draw_controls();
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        capture.end_frame();
         if demo.finish_frame() {
             break;
         }
@@ -1117,5 +1323,105 @@ mod tests {
         );
         assert_eq!(game.outcome, Outcome::Delivered);
         assert!(segment_hits(Vec3::ZERO, Vec3::Z * 20., Vec3::Z * 10., 1.));
+    }
+}
+
+#[cfg(test)]
+mod courier_tests {
+    use super::*;
+
+    fn fly(pattern: &[f64], tour: bool) -> (FlightRun, u8, usize) {
+        let mut run = FlightRun::new(true);
+        let mut bonus = 0;
+        let mut bonus_events = 0;
+        for frame in 0..30_000 {
+            let input = if tour {
+                run.flight.scenic_tour()
+            } else {
+                run.flight.autopilot()
+            };
+            // Re-steer from the current state only at whole-frame boundaries,
+            // like a human; the coordinator applies it to each executed tick.
+            let events = run.advance(pattern[frame % pattern.len()], input, false);
+            assert_eq!(bonus & events.bonus, 0, "a hidden ring is reported once");
+            bonus |= events.bonus;
+            bonus_events += events.bonus.count_ones() as usize;
+            if !run.session.is_playing() {
+                break;
+            }
+        }
+        (run, bonus, bonus_events)
+    }
+
+    #[test]
+    fn hidden_rings_are_off_route_safe_and_reachable_with_ordinary_inputs() {
+        for ring in BONUS_RINGS {
+            assert!(!island_hit(ring), "{ring:?} is clear of terrain");
+            assert!(ring.y - BONUS_RADIUS > -17. && ring.y + BONUS_RADIUS < 110.);
+            for gate in ROUTE {
+                assert!(ring.distance(gate) > 40., "hidden rings stay off-route");
+            }
+        }
+        let (route, bonus, _) = fly(&[1. / 120.], false);
+        assert_eq!(route.session.state(), SessionState::Won);
+        assert_eq!(
+            (bonus, route.flight.ledger.bonus),
+            (0, 0),
+            "autopilot never stumbles on them"
+        );
+        let (tour, bonus, events) = fly(&[1. / 120.], true);
+        assert_eq!(tour.session.state(), SessionState::Won);
+        assert_eq!(tour.flight.hull, 3);
+        assert_eq!((bonus, events), (0b111, 3));
+        assert!(tour.flight.ledger.scenic());
+        assert!(tour.flight.ledger.tips > route.flight.ledger.tips + 150);
+        assert_eq!(
+            quips::rank(&tour.flight.ledger, true, 3, GATES).0,
+            "SCENIC ROUTE SPECIALIST"
+        );
+    }
+
+    #[test]
+    fn autopilot_ledger_is_a_clean_deterministic_streak() {
+        let (run, _, _) = fly(&[1. / 120.], false);
+        let ledger = &run.flight.ledger;
+        assert_eq!(ledger.best_streak, GATES as u32);
+        assert_eq!(ledger.impacts, 0);
+        assert!(ledger.gates.iter().all(Option::is_some));
+        let drop = ledger.drop.expect("graded delivery");
+        assert_eq!(drop.multiplier, courier::MAX_MULTIPLIER);
+        let gates: u32 = ledger.gates.iter().flatten().map(|g| g.tip).sum();
+        assert_eq!(ledger.tips, gates + drop.tip + drop.early);
+        // Every render cadence produces the same accepted ledger.
+        for pattern in [
+            &[1. / 30.][..],
+            &[1. / 144.],
+            &[0., 1. / 240., 0.08, 1. / 60.],
+        ] {
+            let (other, _, _) = fly(pattern, false);
+            assert_eq!(other.flight.ledger, run.flight.ledger);
+        }
+    }
+
+    #[test]
+    fn impacts_break_the_streak_and_record_their_cause() {
+        let mut game = Flight::new();
+        game.pos = ROUTE[0];
+        game.tick(Input::default(), 1. / 120.);
+        assert_eq!((game.ledger.streak, game.ledger.multiplier()), (1, 2));
+        game.pos = ISLANDS[1].0;
+        game.tick(Input::default(), 1. / 120.);
+        assert_eq!(game.hull, 2);
+        assert_eq!(game.ledger.last_impact, Impact::Island);
+        assert_eq!((game.ledger.streak, game.ledger.impacts), (0, 1));
+        game.recovery = 0.;
+        game.pos = vec3(0., 115., 300.);
+        game.tick(Input::default(), 1. / 120.);
+        assert_eq!(game.ledger.last_impact, Impact::Boundary);
+        assert_eq!(game.ledger.best_streak, 1);
+        // Recovery protection ignores further contacts entirely.
+        game.pos = vec3(0., -30., 300.);
+        game.tick(Input::default(), 1. / 120.);
+        assert_eq!(game.ledger.impacts, 2);
     }
 }

@@ -64,7 +64,7 @@
     </div>
     <details id="lab-guide" class="lab-guide" open>
       <summary>How to use the lab · default controls</summary>
-      <p id="lab-help">An interactive 3D loading yard: stack crates, drop balls and inspect their collisions. The simulation starts automatically at 120 Hz; there is no start screen or win condition. Pause to inspect the scene or advance one physics tick at a time.</p>
+      <p id="lab-help">An interactive 3D loading yard: stack crates, drop balls, bowl a heavy ball at the big stack and inspect the collisions. The simulation starts automatically at 120 Hz; there is no start screen or win condition, just four optional goals (STRIKE, AIRTIME, AVALANCHE and CLEAN SWEEP), a yard rank and personal bests. Pause to inspect the scene or advance one physics tick at a time.</p>
       <p id="lab-navigation">Click the yard or use Tab to focus the canvas before using game keys. With Controls closed, Tab and Shift+Tab move between the canvas and page controls. Tab is reserved for page navigation here; use another key for gameplay bindings. Open Controls with its button or F2 while the canvas is focused.</p>
       <p id="lab-bindings"><strong>The bindings below are defaults.</strong> Saved or remapped controls can differ. Open Controls to view or change your current bindings; its action names are listed below. In Controls, use Tab or arrows to choose an item and Enter to activate it. Escape cancels a binding capture; otherwise Escape or F2 closes Controls. Close Controls before tabbing back to the page.</p>
       <dl aria-describedby="lab-bindings">
@@ -86,8 +86,14 @@
         <dd><kbd>R</kbd> (Restart) rebuilds the yard, restores the camera and resumes the simulation.</dd>
         <dt>Push nearby bodies</dt>
         <dd><kbd>F</kbd> (Impulse pulse) applies a radial kick while running, with a short cooldown.</dd>
+        <dt>Bowl at the stack</dt>
+        <dd><kbd>B</kbd> (Bowl a heavy ball at the stack) rolls a dense ball from the camera's side of the yard. Orbit first to pick your angle.</dd>
+        <dt>Throw in a pile</dt>
+        <dd><kbd>3</kbd> (CHAOS: throw in sixteen shapes) drops a ring of mixed crates and balls from above.</dd>
+        <dt>Engine stats</dt>
+        <dd><kbd>G</kbd> (Show engine stats) toggles a panel with the tick, sleep counts, contacts, the camera ray probe and pulse readiness.</dd>
       </dl>
-      <p>On narrow screens, use Scene / Lab actions / Guide above the yard, or drag the right-hand Scroll page strip to move the page without orbiting. The buttons drawn along the bottom of the canvas also provide crate, ball, drop, pulse, pause/resume, step, view and reset actions. Their keyboard equivalents are listed above.</p>
+      <p>On narrow screens, use Scene / Lab actions / Guide above the yard, or drag the right-hand Scroll page strip to move the page without orbiting. The buttons drawn along the bottom of the canvas also provide crate, ball, drop, pulse, bowl, chaos, pause/resume, step, view and reset actions; hovering one explains it. Their keyboard equivalents are listed above. The top bar tracks the current goal, each bowl gets a call from GUTTER BALL to STRIKE, and a clean sweep earns a YARD CERTIFIED card. Big pile-ups get a cinematic camera push-in; reduced motion or reduced flashes in Player tools turn the moving and flashing effects off.</p>
       <p>The Controls panel temporarily gates simulation and input. Returning from Controls or switching away from the browser preserves a manual pause. <strong>Details → Player tools</strong> contains presentation and accessibility preferences, screenshots and settings backups. Escape or Done closes Details and returns focus to the canvas; fullscreen may use Escape to exit first.</p>
       <p><a href="#lab-canvas">Return to the lab canvas</a></p>
       <noscript><p>JavaScript is required to load this interactive lab. The default controls remain available here for reference.</p></noscript>

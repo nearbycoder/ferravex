@@ -11,10 +11,15 @@
 //! waits for confirmation, Paused freezes the trial, and Won freezes the result.
 //! Fixed-tick input is consumed only when `GameSession::advance` schedules work.
 mod animation;
+#[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+mod capture;
 mod compact;
+mod hud;
 #[cfg(test)]
 mod journey200_tests;
+mod juice;
 mod presentation;
+mod quips;
 use animation::EmberAnimation;
 use ferravex_core::session::{GameSession, SessionState};
 use ferravex_physics::character::{
@@ -29,9 +34,11 @@ use ferravex_render::input::{
     touch::{Control, Output, Region},
 };
 use ferravex_render::{demo::Demo, prelude::*};
+use juice::Juice;
 use presentation::{
-    ControlHint, apply_policy, motion_scale, sync_audio, sync_preferences, touch_button_matches,
+    apply_policy, motion_scale, sync_audio, sync_preferences, touch_button_matches,
 };
+use quips::DeathCause;
 
 const WIDTH: f32 = 1280.0;
 const HEIGHT: f32 = 720.0;
@@ -45,6 +52,26 @@ const BUFFER: f32 = 0.12;
 const ORANGE: Color = Color::new(1.0, 0.54, 0.25, 1.0);
 const CREAM: Color = Color::new(0.96, 0.88, 0.72, 1.0);
 const GREEN: Color = Color::new(0.48, 0.68, 0.48, 1.0);
+/// Gold/silver/bronze trial targets in seconds.
+const MEDALS: [f32; 3] = [12., 18., 30.];
+/// The secret moth hovers above the Furnace spring: reachable only with a
+/// spring or full jump plus the earned air jump.
+const MOTH_AT: Vec2 = Vec2::new(2070., 160.);
+const MOTH_POINTS: u32 = 500;
+/// Feet within this many units above spikes, then a safe landing, is a close call.
+const CLOSE_CALL: f32 = 26.;
+const LIFT_X: f32 = 2590.;
+const ZONES: [&str; 3] = ["01 · THE TREELINE", "02 · THE OLD MILL", "03 · THE FURNACE"];
+
+/// Where each numbered lantern is drawn, beside (not under) its spring platform.
+fn lantern_position(index: usize) -> Vec2 {
+    vec2(if index <= 1 { 1494. } else { 2152. }, 474.)
+}
+
+/// Spikes are triangles: their outer corners and very tips do not hurt.
+fn hazard_hitbox(h: &Rect) -> Rect {
+    Rect::new(h.x + 4., h.y + 6., h.w - 8., h.h - 6.)
+}
 
 #[derive(Default, Clone, Copy)]
 struct Input {
@@ -62,6 +89,18 @@ struct Feedback {
     checkpoint: bool,
     respawned: bool,
     won: bool,
+    /// The jump this tick was the earned mid-air jump.
+    air_jumped: bool,
+    /// Points actually awarded this tick by embers or the moth.
+    pickup_points: u64,
+    pickup_at: Vec2,
+    /// The chain multiplier rose to this value this tick.
+    chain_up: Option<u32>,
+    air_jump_unlocked: bool,
+    close_call: bool,
+    secret: bool,
+    /// Index of a mid-course split recorded this tick (0 = mill, 1 = furnace).
+    split: Option<usize>,
 }
 
 struct Game {
@@ -88,6 +127,14 @@ struct Game {
     landing_at: Vec2,
     landing_strength: f32,
     checkpoint_notice: f32,
+    death_cause: DeathCause,
+    death_at: Vec2,
+    /// Falls since the latest lantern (or the trailhead); drives quips.
+    deaths_here: u32,
+    close_calls: u32,
+    /// Airborne feet skimmed spikes this arc; a safe landing makes it a close call.
+    skim: bool,
+    secret: bool,
 }
 
 impl Game {
@@ -146,7 +193,7 @@ impl Game {
                 2],
             elapsed: 0.0,
             trial: {
-                let mut t = ferravex_play::gameplay::trial::Trial::new([12., 18., 30.]).unwrap();
+                let mut t = ferravex_play::gameplay::trial::Trial::new(MEDALS).unwrap();
                 t.start();
                 t
             },
@@ -157,6 +204,12 @@ impl Game {
             landing_at: Vec2::ZERO,
             landing_strength: 0.,
             checkpoint_notice: 0.,
+            death_cause: DeathCause::default(),
+            death_at: Vec2::ZERO,
+            deaths_here: 0,
+            close_calls: 0,
+            skim: false,
+            secret: false,
         }
     }
 
@@ -237,7 +290,9 @@ impl Game {
         }
         self.air_jump_used = false;
         self.spring_flight = false;
+        self.skim = false;
         self.deaths += 1;
+        self.deaths_here += 1;
         self.score.break_chain();
         self.respawn_notice = 0.6;
         self.jump_feedback = 0.;
@@ -316,6 +371,7 @@ impl Game {
             self.motor.jump.buffer = 0.;
             self.air_jump_used = true;
             self.jumps += 1;
+            self.feedback.air_jumped = true;
         }
         if self.motor.grounded {
             self.spring_flight = false;
@@ -350,9 +406,34 @@ impl Game {
             .position
             .x
             .clamp(PLAYER.x * 0.5, WORLD_END - PLAYER.x * 0.5);
-        if self.position().y > 780.0 || self.hazards.iter().any(|h| self.body().overlaps(h)) {
+        let body = self.body();
+        let spiked = self
+            .hazards
+            .iter()
+            .any(|h| body.overlaps(&hazard_hitbox(h)));
+        if self.position().y > 780.0 || spiked {
+            self.death_cause = if spiked {
+                DeathCause::Spikes
+            } else {
+                DeathCause::Fissure
+            };
+            self.death_at = self.position();
             self.respawn();
             return;
+        }
+        // Skimming the spike tips in the air, then landing safely, is a close call.
+        if !self.motor.grounded {
+            let feet = body.bottom();
+            self.skim |= self.hazards.iter().any(|h| {
+                body.right() > h.x
+                    && body.x < h.right()
+                    && feet > h.y - CLOSE_CALL
+                    && feet <= h.y + 6.
+            });
+        } else if !grounded && self.skim {
+            self.skim = false;
+            self.close_calls += 1;
+            self.feedback.close_call = true;
         }
         self.feedback.jumped |= self.jumps > jumps;
         if self.feedback.jumped {
@@ -363,14 +444,14 @@ impl Game {
             self.landing_at = self.position() + vec2(PLAYER.x * 0.5, PLAYER.y);
             self.landing_strength = (landing_speed / 700.).clamp(0.25, 1.);
         }
-        let body = self.body();
+        let unlocked_before = self.ember_inventory.count(1) >= 3;
         for (position, collected) in &mut self.embers {
             if !*collected
                 && body.overlaps(&Rect::new(position.x - 12.0, position.y - 12.0, 24.0, 24.0))
             {
                 *collected = true;
                 self.feedback.pickup = true;
-                self.score.award(100);
+                award(&mut self.score, &mut self.feedback, 100, *position);
                 self.ember_inventory
                     .add(ferravex_play::gameplay::inventory::Stack {
                         item: 1,
@@ -379,6 +460,15 @@ impl Game {
                     })
                     .unwrap();
             }
+        }
+        if !unlocked_before && self.ember_inventory.count(1) >= 3 {
+            self.feedback.air_jump_unlocked = true;
+        }
+        if !self.secret && body.overlaps(&Rect::new(MOTH_AT.x - 12., MOTH_AT.y - 12., 24., 24.)) {
+            self.secret = true;
+            self.feedback.secret = true;
+            self.feedback.pickup = true;
+            award(&mut self.score, &mut self.feedback, MOTH_POINTS, MOTH_AT);
         }
         if self.position().x > 1380.0 && self.position().x < 1490.0 && self.motor.grounded {
             self.feedback.checkpoint |= matches!(
@@ -398,12 +488,13 @@ impl Game {
         }
         if self.feedback.checkpoint {
             self.checkpoint_notice = 2.5;
+            self.deaths_here = 0;
         }
-        if self.position().x >= 900. && self.trial.splits()[0].is_none() {
-            self.trial.split(0).unwrap();
-        }
-        if self.position().x >= 1800. && self.trial.splits()[1].is_none() {
-            self.trial.split(1).unwrap();
+        for (split, x) in [(0, 900.), (1, 1800.)] {
+            if self.position().x >= x && self.trial.splits()[split].is_none() {
+                self.trial.split(split).unwrap();
+                self.feedback.split = Some(split);
+            }
         }
         if self.position().x > 2560.0 && self.motor.grounded {
             self.trial.split(2).unwrap();
@@ -426,6 +517,27 @@ impl Game {
             direction: 1.0,
             jump: self.motor.grounded && (hazard || gap),
             jump_held: true,
+        }
+    }
+}
+
+/// Award through the shared chain and describe the accepted result for feedback.
+fn award(
+    score: &mut ferravex_play::gameplay::combo::ScoreChain,
+    feedback: &mut Feedback,
+    base: u32,
+    at: Vec2,
+) {
+    let before = if score.chain() == 0 {
+        1
+    } else {
+        score.multiplier()
+    };
+    if let Some(receipt) = score.award_with_receipt(base) {
+        feedback.pickup_points += receipt.total_change;
+        feedback.pickup_at = at;
+        if receipt.multiplier > before {
+            feedback.chain_up = Some(receipt.multiplier);
         }
     }
 }
@@ -497,7 +609,14 @@ fn tree(x: f32, y: f32, size: f32, color: Color) {
     );
 }
 
-fn world(game: &Game, camera: f32, time: f32, motion: &EmberAnimation, policy: FeedbackPolicy) {
+fn world(
+    game: &Game,
+    camera: f32,
+    time: f32,
+    motion: &EmberAnimation,
+    policy: FeedbackPolicy,
+    juice: &Juice,
+) {
     let movement = motion_scale(policy);
     let scenery_camera = camera * movement;
     clear_background(Color::from_hex(0x242c2b));
@@ -612,56 +731,121 @@ fn world(game: &Game, camera: f32, time: f32, motion: &EmberAnimation, policy: F
     }
     for (position, collected) in &game.embers {
         if !collected {
-            diamond(
-                *position - vec2(camera, 0.0)
-                    + vec2(0.0, (time * 3.0 + position.x).sin() * 3.0 * movement),
-                10.0,
-                ORANGE,
+            let at = *position - vec2(camera, 0.0)
+                + vec2(0.0, (time * 3.0 + position.x).sin() * 3.0 * movement);
+            diamond(at, 10.0, ORANGE);
+        }
+    }
+    if !game.secret {
+        moth(MOTH_AT - vec2(camera, 0.), time, movement);
+    }
+    // A filled flame (not color alone) marks lit lanterns; the number plate
+    // and HUD pips identify them. Only the next lantern carries a short hint.
+    for index in 1..=2 {
+        let at = lantern_position(index) - vec2(camera, 0.);
+        let lit = game.checkpoints.index() >= index;
+        let flare = juice.flare[index - 1];
+        if lit {
+            let pulse = 1. + (time * 2.6 + index as f32).sin() * 0.06 * movement;
+            draw_circle(at.x, at.y, 52. * pulse, Color::new(1., 0.62, 0.28, 0.08));
+            draw_circle(at.x, at.y, 30. * pulse, Color::new(1., 0.68, 0.32, 0.14));
+        }
+        if flare > 0. {
+            // A brief warm bloom as the wick catches; cleared under reduced flash.
+            draw_circle(
+                at.x,
+                at.y,
+                26. + 22. * (1. - flare),
+                Color::new(1., 0.78, 0.36, 0.45 * flare),
             );
         }
-    }
-    // Numbered labels and a filled lantern make activation readable without color alone.
-    for (index, x) in [(1, 1435.), (2, 2070.)] {
-        let cx = x - camera;
-        let lit = game.checkpoints.index() >= index;
-        let color = if lit { GREEN } else { CREAM };
-        draw_rectangle(cx - 3., 471., 6., 89., Color::from_hex(0x70715a));
-        draw_rectangle_lines(cx - 14., 459., 28., 30., 3., color);
+        draw_rectangle(
+            at.x - 3.,
+            at.y + 15.,
+            6.,
+            560. - at.y - 15.,
+            Color::from_hex(0x70715a),
+        );
+        let frame = if lit {
+            juice::GOLD
+        } else {
+            Color::from_hex(0xb9b49a)
+        };
+        draw_triangle(
+            vec2(at.x - 17., at.y - 15.),
+            vec2(at.x + 17., at.y - 15.),
+            vec2(at.x, at.y - 27.),
+            frame,
+        );
+        draw_rectangle(at.x - 14., at.y - 15., 28., 30., Color::from_hex(0x1a2420));
+        draw_rectangle_lines(at.x - 14., at.y - 15., 28., 30., 3., frame);
         if lit {
-            diamond(vec2(cx, 474.), 9., ORANGE);
+            let flicker = 1. + (time * 11. + index as f32 * 2.).sin() * 0.12 * movement;
+            diamond(vec2(at.x, at.y + 1.), 9. * flicker, ORANGE);
+            diamond(vec2(at.x, at.y + 3.), 4. * flicker, juice::GOLD);
         }
-        centered_label(
-            &format!(
-                "LANTERN {index} / {}",
-                if lit { "LIT" } else { "CHECKPOINT" }
-            ),
-            cx,
-            410.,
-            15.,
-            color,
-        );
-        centered_label(
-            if game.checkpoints.index() == index {
-                "RESPAWN HERE"
-            } else if lit {
-                "PASSED"
-            } else {
-                "LAND HERE"
-            },
-            cx,
-            447.,
-            15.,
-            color,
-        );
+        draw_rectangle(at.x - 10., at.y + 30., 20., 20., Color::from_hex(0x1a2420));
+        centered_label(&index.to_string(), at.x + 1., at.y + 46., 16., frame);
+        if !lit && game.checkpoints.index() + 1 == index && (40. ..WIDTH - 40.).contains(&at.x) {
+            let bob = (time * 4.).sin() * 3. * movement;
+            // Keep the whole hint on screen as the lantern scrolls in.
+            let x = at.x.clamp(84., WIDTH - 84.);
+            centered_label("SAVE POINT", x, at.y - 52. + bob, 16., CREAM);
+            centered_label("↓", at.x, at.y - 34. + bob, 16., CREAM);
+        }
     }
-    let exit = 2590.0 - camera;
+    // The exit lift: a car inside a green frame, with a beacon. It rises on a win.
+    let exit = LIFT_X - camera;
+    let rise = if game.won() {
+        (juice.celebrate * 140.).min(150.) * juice.motion().min(1.)
+    } else {
+        0.
+    };
+    // A shaft of rails climbs out of the night, so the car has somewhere to go.
+    let rail = Color::from_hex(0x1e2a26);
+    draw_rectangle(
+        exit - 33.,
+        -200.,
+        66.,
+        650.,
+        Color::new(0.07, 0.11, 0.10, 0.55),
+    );
+    for side in [-31., 27.] {
+        draw_rectangle(exit + side, -200., 4., 650., rail);
+    }
+    for rung in 0..8 {
+        let y = 430. - rung as f32 * 64.;
+        draw_line(exit - 29., y, exit + 29., y - 18., 2., rail);
+    }
     draw_rectangle(exit - 35.0, 450.0, 70.0, 110.0, Color::from_hex(0x1a2925));
+    let blink = if movement > 0. {
+        0.55 + 0.45 * (time * 5.).sin().max(0.)
+    } else {
+        1.
+    };
+    draw_circle(exit, 416., 6., Color::new(GREEN.r, GREEN.g, GREEN.b, blink));
+    draw_circle(
+        exit,
+        416.,
+        14.,
+        Color::new(GREEN.r, GREEN.g, GREEN.b, 0.15 * blink),
+    );
+    centered_label("LIFT", exit + 1., 442., 16., CREAM);
+    draw_rectangle(exit - 27., 456. - rise, 54., 98., Color::from_hex(0x2d3f36));
+    draw_rectangle_lines(
+        exit - 27.,
+        456. - rise,
+        54.,
+        98.,
+        2.,
+        Color::from_hex(0x5d7d62),
+    );
+    draw_rectangle(exit - 27., 452. - rise, 54., 4., Color::from_hex(0x5d7d62));
     draw_rectangle_lines(exit - 35.0, 450.0, 70.0, 110.0, 5.0, GREEN);
-    centered_label("EXIT / THE LIFT", exit, 422., 19., CREAM);
     draw_triangle(
-        vec2(exit - 8.0, 495.0),
-        vec2(exit + 9.0, 505.0),
-        vec2(exit - 8.0, 515.0),
+        vec2(exit - 8.0, 495.0 - rise),
+        vec2(exit + 9.0, 505.0 - rise),
+        vec2(exit - 8.0, 515.0 - rise),
         GREEN,
     );
     if game.landing_feedback > 0. {
@@ -677,7 +861,7 @@ fn world(game: &Game, camera: f32, time: f32, motion: &EmberAnimation, policy: F
             );
         }
     }
-    let p = game.position() - vec2(camera, 0.0);
+    let p = game.position() - vec2(camera, rise);
     if game.jump_feedback > 0. {
         draw_ellipse(
             p.x + PLAYER.x * 0.5,
@@ -712,79 +896,116 @@ fn world(game: &Game, camera: f32, time: f32, motion: &EmberAnimation, policy: F
     let (left, right, body) = (left * pose_scale, right * pose_scale, body * pose_scale);
     draw_ellipse(
         p.x + 12.0,
-        p.y + 42.0,
+        p.y + 42.0 + rise,
         15.0,
         3.0,
         0.0,
         Color::new(0.0, 0.0, 0.0, 0.20),
     );
-    draw_rectangle(p.x + 3.0, p.y + 15.0 + body, 18.0, 19.0, ORANGE);
-    draw_rectangle(
-        p.x + 4.0,
-        p.y + 32.0,
-        6.0,
-        8.0 + left,
-        Color::from_hex(0x1b2524),
-    );
-    draw_rectangle(
-        p.x + 15.0,
-        p.y + 32.0,
-        6.0,
-        8.0 + right,
-        Color::from_hex(0x1b2524),
-    );
-    draw_rectangle(p.x + 4.0, p.y + 1.0 + body, 17.0, 15.0, CREAM);
-    draw_rectangle(p.x + 1.0, p.y + body, 24.0, 6.0, Color::from_hex(0xc79d57));
-    let face = if motion.facing() < 0. { 5.0 } else { 14.0 };
-    draw_rectangle(
-        p.x + face,
-        p.y + 7.0 + body,
-        5.0,
-        3.0,
-        Color::from_hex(0x26312b),
-    );
+    // Squash/stretch scales the authored shapes around the feet.
+    let scale = juice.player_scale();
+    let anchor = p + vec2(PLAYER.x * 0.5, PLAYER.y);
+    let at =
+        |x: f32, y: f32| anchor + vec2((x - PLAYER.x * 0.5) * scale.x, (y - PLAYER.y) * scale.y);
+    let rect = |x: f32, y: f32, w: f32, h: f32, color: Color| {
+        let corner = at(x, y);
+        draw_rectangle(corner.x, corner.y, w * scale.x, h * scale.y, color);
+    };
     draw_triangle(
-        vec2(p.x + 5.0, p.y + 18.0),
-        vec2(
-            p.x + 12.0 - motion.facing() * 25.0,
-            p.y + 22.0 + left * 0.4 + body,
-        ),
-        vec2(p.x + 5.0, p.y + 26.0),
+        at(5.0, 18.0),
+        at(12.0 - motion.facing() * 25.0, 22.0 + left * 0.4 + body),
+        at(5.0, 26.0),
         Color::from_hex(0x9e5033),
+    );
+    rect(3.0, 15.0 + body, 18.0, 19.0, ORANGE);
+    rect(4.0, 32.0, 6.0, 8.0 + left, Color::from_hex(0x1b2524));
+    rect(15.0, 32.0, 6.0, 8.0 + right, Color::from_hex(0x1b2524));
+    rect(4.0, 1.0 + body, 17.0, 15.0, CREAM);
+    rect(1.0, body, 24.0, 6.0, Color::from_hex(0xc79d57));
+    // Eyes: a slow blink, and wide "uh-oh" eyes during a fast fall.
+    let face = if motion.facing() < 0. { 5.0 } else { 14.0 };
+    let worried = game.velocity().y > 420. && !game.motor.grounded;
+    let blink = movement > 0. && (time * 0.9).fract() < 0.035;
+    let eye = if worried {
+        5.
+    } else if blink {
+        1.
+    } else {
+        3.
+    };
+    rect(
+        face,
+        9.5 + body - eye * 0.5,
+        5.0,
+        eye,
+        Color::from_hex(0x26312b),
     );
 }
 
+/// The secret: a little moth that is visible early and reachable only with skill.
+fn moth(at: Vec2, time: f32, movement: f32) {
+    let flap = (time * 16.).sin() * movement;
+    let hover = (time * 2.).sin() * 4. * movement;
+    let at = at + vec2(0., hover);
+    draw_circle(at.x, at.y, 9., Color::new(0.86, 0.80, 1.0, 0.12));
+    let wing = juice::MOTH;
+    for side in [-1., 1.] {
+        draw_triangle(
+            at,
+            at + vec2(side * (10. + 3. * flap), -8.),
+            at + vec2(side * (9. + 2. * flap), 4.),
+            wing,
+        );
+    }
+    draw_ellipse(at.x, at.y, 2., 5., 0., Color::from_hex(0x5a4f6e));
+}
+
 fn label(text: &str, x: f32, y: f32, size: f32, color: Color) {
+    // The drop shadow fades with the text so toasts never leave a ghost.
     draw_text(
         text,
         x + 1.0,
         y + 2.0,
         size,
-        Color::new(0.08, 0.12, 0.10, 0.8),
+        Color::new(0.08, 0.12, 0.10, 0.8 * color.a),
     );
     draw_text(text, x, y, size, color);
 }
 
-fn centered_label(text: &str, x: f32, y: f32, size: f32, color: Color) {
-    let width = get_default_font()
+fn text_width(text: &str, size: f32) -> f32 {
+    get_default_font()
         .try_metrics(8, size / 8.)
         .and_then(|metrics| metrics.measure_line(text))
         .expect("finite authored label")
-        .width;
-    label(text, x - width * 0.5, y, size, color);
+        .width
+}
+
+fn centered_label(text: &str, x: f32, y: f32, size: f32, color: Color) {
+    label(text, x - text_width(text, size) * 0.5, y, size, color);
 }
 
 fn fitted_centered_label(text: &str, x: f32, y: f32, width: f32, size: f32, color: Color) {
-    let measured = get_default_font()
-        .try_metrics(8, size / 8.)
-        .and_then(|metrics| metrics.measure_line(text))
-        .expect("bounded control hint")
-        .width;
+    let measured = text_width(text, size);
     centered_label(text, x, y, size * (width / measured.max(1.)).min(1.), color);
 }
 
 fn config() -> Conf {
-    ferravex_render::window_conf("EMBERLINE | Ferravex")
+    #[allow(unused_mut)]
+    let mut conf = ferravex_render::window_conf("EMBERLINE | Ferravex");
+    #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+    capture::window(&mut conf);
+    conf
+}
+
+/// Records context for this course layout and medal rules.
+const RECORD_RULES: u64 = 0x454d_424c_0001;
+const RECORD_ID: &str = "course";
+
+fn best_clear(records: Option<&ferravex_render::storage::Records>) -> Option<f64> {
+    records?
+        .get(RECORD_ID, RECORD_RULES)?
+        .fastest_us
+        .map(|us| us as f64 / 1_000_000.)
 }
 
 ferravex_render::game!(config, game);
@@ -793,6 +1014,14 @@ async fn game() {
     let mut sound = GameAudio::new();
     let mut game = Game::new(demo.autoplay);
     let mut motion = EmberAnimation::new();
+    let mut juice = Juice::new();
+    let mut particles = ferravex_render::effects::ParticleRenderer::new(384)
+        .expect("bounded presentation particles");
+    // Personal bests are optional: a storage failure still leaves a playable game.
+    let mut records = ferravex_render::storage::Records::new("emberline").ok();
+    let mut results = hud::Results::default();
+    #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+    let mut capture = capture::Capture::from_env();
     let mut player_input = PlayerInput::preset("emberline", Preset::Platformer);
     let mut camera = Follow2::new(Follow2Settings {
         offset: vec2(WIDTH * 0.15, 0.),
@@ -816,6 +1045,7 @@ async fn game() {
             vec2(WIDTH, HEIGHT),
             vec2(screen_width(), screen_height()),
         );
+        let corner = hud::WideLayout::new(canvas, vec2(screen_width(), screen_height()));
         let button = |rect: Rect, code| Control {
             region: Region::Rect(Rect::new(
                 canvas.project(vec2(rect.x, rect.y)).x,
@@ -831,11 +1061,8 @@ async fn game() {
                     button(Rect::new(0., 590., 120., HEIGHT - 590.), 12),
                     button(Rect::new(120., 590., 130., HEIGHT - 590.), 13),
                     button(Rect::new(1080., 590., WIDTH - 1080., HEIGHT - 590.), 3),
-                    button(Rect::new(WIDTH - 112., 84., 96., 56.), 11),
-                    button(
-                        Rect::new(260., 220., 760., if game.won() { 250. } else { 220. }),
-                        10,
-                    ),
+                    button(corner.pause, 11),
+                    button(hud::card_rect(game.session.state()), 10),
                 ]
             },
             |hud| hud.touch_layout(),
@@ -846,15 +1073,23 @@ async fn game() {
         player_input.sample(game.session.is_playing());
         let touch_mode = player_input.current_device() == HintDevice::Touch;
         let state = game.session.state();
+        #[allow(unused_mut)]
+        let mut pause = player_input.pressed("pause");
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        {
+            pause |= capture.pause_now(&game);
+        }
         let restarted = game.menu(
             player_input.pressed("restart"),
             player_input.pressed("confirm"),
-            player_input.pressed("pause"),
+            pause,
         );
         if restarted {
             sound.reset();
             motion.reset();
             camera.cut();
+            juice.reset();
+            results = hud::Results::default();
         }
         if restarted || state != game.session.state() {
             // Disable once even for Playing -> Playing restarts, so held and
@@ -867,17 +1102,28 @@ async fn game() {
         game.gate_input(gameplay_active);
         sync_audio(&mut sound, game.session.state(), gameplay_active);
         let policy = sync_preferences(&mut game, &mut motion, &mut camera);
+        juice.apply_policy(policy);
         let direction = player_input.movement().x;
         let dt = if demo.autoplay {
             demo.dt()
         } else {
             player_input.simulation_dt(demo.dt())
         };
+        #[allow(unused_mut)]
+        let mut autoplay: fn(&Game) -> Input = Game::autoplay;
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        if capture.stop_jumping() {
+            autoplay = |_: &Game| Input {
+                direction: 1.,
+                ..Input::default()
+            };
+        }
+        let mut finished = false;
         let simulated = game.advance(
             f64::from(dt),
             |game| {
                 if demo.autoplay {
-                    game.autoplay()
+                    autoplay(game)
                 } else {
                     Input {
                         direction,
@@ -894,6 +1140,9 @@ async fn game() {
                 }
                 motion.update(game, dt);
                 apply_policy(game, &mut motion, policy);
+                juice.apply_policy(policy);
+                juice.on_tick(game);
+                juice.advance(dt);
                 let surface = if game.position().x > 1800. {
                     Surface::Metal
                 } else if game.position().x > 900. {
@@ -901,26 +1150,58 @@ async fn game() {
                 } else {
                     Surface::Grass
                 };
-                if game.feedback.jumped {
-                    sound.cue(Cue::Jump, 0.5);
+                let fb = game.feedback;
+                if fb.jumped {
+                    sound.cue(Cue::Jump, if fb.air_jumped { 0.6 } else { 0.5 });
                 }
-                if game.feedback.landed {
+                if fb.landed {
                     sound.cue(Cue::Impact(surface), 0.25 + game.landing_strength * 0.25);
                 }
-                if game.feedback.pickup {
-                    sound.cue(Cue::Pickup, 0.55);
+                if fb.pickup {
+                    sound.cue(Cue::Pickup, if fb.chain_up.is_some() { 0.7 } else { 0.55 });
                 }
-                if game.feedback.won || game.feedback.checkpoint {
+                if fb.won || fb.checkpoint || fb.secret || fb.air_jump_unlocked {
                     sound.cue(Cue::Success, 0.65);
                 }
-                if game.feedback.respawned {
+                if fb.close_call || fb.split.is_some() {
+                    sound.cue(Cue::Click, 0.45);
+                }
+                if fb.respawned {
                     sound.cue(Cue::Failure, 0.5);
                 }
                 for _ in 0..motion.footsteps() {
                     sound.cue(Cue::Footstep(surface), 0.32);
                 }
+                finished |= fb.won;
             },
         );
+        if finished {
+            // Compare against the stored best before recording this clear.
+            results = hud::Results {
+                previous_best: best_clear(records.as_ref()),
+                demo: demo.autoplay,
+            };
+            #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+            if let Some(best) = capture.fake_best() {
+                results = hud::Results {
+                    previous_best: Some(best),
+                    demo: false,
+                };
+            }
+            if !demo.autoplay
+                && let Some(records) = records.as_mut()
+            {
+                let _ = records.attempt(
+                    RECORD_ID,
+                    RECORD_RULES,
+                    game.score.total(),
+                    ferravex_render::storage::run_micros(game.trial.elapsed() as f32),
+                );
+            }
+        }
+        if game.won() {
+            juice.advance_celebration(demo.dt());
+        }
         let camera_x = camera
             .update(
                 simulated,
@@ -931,222 +1212,102 @@ async fn game() {
             .center
             .x
             - WIDTH * 0.5;
+        let shake = juice.shake();
+        let mut view = canvas.camera();
+        view.target.y -= shake.y;
+        set_camera(&view);
+        world(
+            &game,
+            camera_x + shake.x,
+            game.elapsed,
+            &motion,
+            policy,
+            &juice,
+        );
+        view.target.x += camera_x + shake.x;
+        set_camera(&view);
+        particles
+            .draw_2d(
+                &juice.particles,
+                ferravex_render::effects::ParticleStyle {
+                    stretch: 0.004,
+                    max_stretch: 2.5,
+                    ..Default::default()
+                },
+            )
+            .expect("authored particle style");
         set_camera(&canvas.camera());
-        world(&game, camera_x, game.elapsed, &motion, policy);
+        hud::world_effects(&juice, camera_x + shake.x);
+        if juice.flash > 0. {
+            // A soft red edge vignette, cleared entirely under reduced flash.
+            let a = juice.flash * 0.45;
+            let red = Color::new(0.75, 0.12, 0.08, a);
+            for (x, y, w, h) in [
+                (-200., -200., WIDTH + 400., 236.),
+                (-200., HEIGHT - 36., WIDTH + 400., 236.),
+                (-200., -200., 236., HEIGHT + 400.),
+                (WIDTH - 36., -200., 236., HEIGHT + 400.),
+            ] {
+                draw_rectangle(x, y, w, h, red);
+            }
+        }
         ferravex_render::set_world_colors(false);
+        let best = best_clear(records.as_ref());
+        let veteran = best.is_some();
         if let Some(hud) = compact {
-            hud.draw(&game, &player_input);
+            hud.draw(&game, &player_input, &juice, &results, best);
         } else {
-            let collected = game.embers.iter().filter(|(_, found)| *found).count();
-            let pause = ControlHint::new(&player_input, "pause");
-            let restart = ControlHint::new(&player_input, "restart");
-            let confirm = ControlHint::new(&player_input, "confirm");
-            let tap_confirm = touch_mode
-                && !player_input.touch_customized()
-                && touch_button_matches(&player_input, "confirm", 10);
-            if game.session.is_playing() {
-                label("EMBERLINE", 32.0, 48.0, 28.0, CREAM);
-                let zone = if game.position().x < 900.0 {
-                    "01 / THE TREELINE"
-                } else if game.position().x < 1800.0 {
-                    "02 / THE OLD MILL"
-                } else {
-                    "03 / THE FURNACE"
-                };
-                label(zone, 34.0, 72.0, 15.0, Color::from_hex(0xa3ab91));
-                centered_label(
-                    &format!(
-                        "LANTERNS {}/2   /   REACH THE LIFT >",
-                        game.checkpoints.index()
-                    ),
-                    WIDTH * 0.5,
-                    74.,
-                    15.,
-                    CREAM,
-                );
-                label(
-                    &format!(
-                        "{:.2}s / SPLITS {}",
-                        game.trial.elapsed(),
-                        game.trial.splits().iter().flatten().count()
-                    ),
-                    520.,
-                    48.,
-                    19.,
-                    CREAM,
-                );
-                label(
-                    &format!(
-                        "{} POINTS / x{}",
-                        game.score.total(),
-                        game.score.multiplier()
-                    ),
-                    850.,
-                    72.,
-                    15.,
-                    ORANGE,
-                );
-                let ember_count = format!("{collected} / {}", game.embers.len());
-                let ember_count_x = WIDTH - 32. - measure_text(&ember_count, None, 23, 1.).width;
-                diamond(vec2(ember_count_x - 20., 70.0), 8.0, ORANGE);
-                label(&ember_count, ember_count_x, 77.0, 23.0, CREAM);
-                if game.ember_inventory.count(1) >= 3 {
-                    label(
-                        if game.air_jump_used {
-                            "AIR JUMP SPENT"
-                        } else {
-                            "AIR JUMP READY"
-                        },
-                        34.,
-                        105.,
-                        15.,
-                        GREEN,
-                    );
+            let hints = hud::Hints::new(&player_input, touch_mode);
+            match game.session.state() {
+                SessionState::Ready => {
+                    let best = records
+                        .as_ref()
+                        .and_then(|r| r.get(RECORD_ID, RECORD_RULES))
+                        .and_then(|r| r.fastest_us)
+                        .map(|us| {
+                            let time = us as f64 / 1_000_000.;
+                            (time, hud::pace(time))
+                        });
+                    hud::ready(&hints, best, &juice);
                 }
-
-                if touch_mode
-                    && game.session.is_playing()
-                    && !player_input.touch_customized()
-                    && [
-                        ("move_left", 12),
-                        ("move_right", 13),
-                        ("jump", 3),
-                        ("pause", 11),
-                    ]
-                    .iter()
-                    .all(|(action, channel)| touch_button_matches(&player_input, action, *channel))
-                {
-                    for (x, text) in [(68.0, "<"), (182.0, ">"), (1184.0, "^")] {
-                        draw_circle(x, 651.0, 38.0, Color::new(0.09, 0.14, 0.12, 0.65));
-                        label(text, x - 11.0, 663.0, 32.0, CREAM);
+                SessionState::Paused => hud::paused(&game, &hints, &juice),
+                SessionState::Won => hud::won(&game, &hints, &juice, &results),
+                _ => {
+                    hud::play(&game, &juice, &hints, veteran, corner.right);
+                    if touch_mode
+                        && !player_input.touch_customized()
+                        && [
+                            ("move_left", 12),
+                            ("move_right", 13),
+                            ("jump", 3),
+                            ("pause", 11),
+                        ]
+                        .iter()
+                        .all(|(action, channel)| {
+                            touch_button_matches(&player_input, action, *channel)
+                        })
+                    {
+                        for (x, text) in [(68.0, "<"), (182.0, ">"), (1184.0, "^")] {
+                            draw_circle(x, 651.0, 38.0, Color::new(0.09, 0.14, 0.12, 0.65));
+                            label(text, x - 11.0, 663.0, 32.0, CREAM);
+                        }
+                        let pause = corner.pause;
+                        draw_rectangle(
+                            pause.x,
+                            pause.y,
+                            pause.w,
+                            pause.h,
+                            Color::new(0.09, 0.14, 0.12, 0.85),
+                        );
+                        centered_label("PAUSE", pause.center().x, pause.y + 34., 16., CREAM);
                     }
-                    draw_rectangle(
-                        WIDTH - 112.,
-                        84.,
-                        96.,
-                        56.,
-                        Color::new(0.09, 0.14, 0.12, 0.85),
-                    );
-                    centered_label("PAUSE", WIDTH - 64., 118., 15., CREAM);
                 }
-                if game.respawn_notice > 0.0 || game.checkpoint_notice > 0. {
-                    centered_label(
-                        if game.respawn_notice > 0. {
-                            if game.checkpoints.index() == 0 {
-                                "Back to the trailhead"
-                            } else {
-                                "Back to the lit lantern"
-                            }
-                        } else {
-                            "LANTERN LIT / Respawn point saved"
-                        },
-                        WIDTH * 0.5,
-                        112.0,
-                        19.0,
-                        CREAM,
-                    );
-                }
-            }
-            if matches!(
-                game.session.state(),
-                SessionState::Ready | SessionState::Paused
-            ) {
-                draw_rectangle(260., 220., 760., 220., Color::new(0.08, 0.13, 0.11, 0.96));
-                let ready = game.session.state() == SessionState::Ready;
-                centered_label(
-                    if ready {
-                        "CARRY THE LIGHT"
-                    } else {
-                        "TAKE A BREATHER"
-                    },
-                    WIDTH * 0.5,
-                    275.,
-                    33.,
-                    CREAM,
-                );
-                centered_label(
-                    if ready {
-                        "Light two lanterns. Reach the green lift."
-                    } else {
-                        ""
-                    },
-                    WIDTH * 0.5,
-                    320.,
-                    19.,
-                    CREAM,
-                );
-                if !ready {
-                    fitted_centered_label(
-                        &format!("{} RESTART", restart.text()),
-                        WIDTH * 0.5,
-                        350.,
-                        700.,
-                        17.,
-                        ORANGE,
-                    );
-                }
-                fitted_centered_label(
-                    &if tap_confirm {
-                        "TAP HERE TO CONTINUE".to_owned()
-                    } else if ready {
-                        format!("{} TO START", confirm.text())
-                    } else {
-                        format!("{} / {} TO RESUME", confirm.text(), pause.text())
-                    },
-                    WIDTH * 0.5,
-                    411.,
-                    700.,
-                    23.,
-                    GREEN,
-                );
-            }
-            if game.won() {
-                draw_rectangle(
-                    260.0,
-                    220.0,
-                    760.0,
-                    250.0,
-                    Color::new(0.08, 0.13, 0.11, 0.96),
-                );
-                centered_label("THE LIGHT CARRIES ON", WIDTH * 0.5, 280.0, 33.0, CREAM);
-                centered_label(
-                    &format!(
-                        "{:?} / {:.2}s",
-                        game.trial.medal().unwrap(),
-                        game.trial.elapsed()
-                    ),
-                    WIDTH * 0.5,
-                    370.,
-                    19.,
-                    GREEN,
-                );
-                centered_label(
-                    &format!(
-                        "{collected} embers / {} points / {} falls",
-                        game.score.total(),
-                        game.deaths
-                    ),
-                    WIDTH * 0.5,
-                    330.0,
-                    19.0,
-                    ORANGE,
-                );
-                fitted_centered_label(
-                    &if tap_confirm {
-                        "TAP HERE TO RUN AGAIN".to_owned()
-                    } else {
-                        format!("{} / {} TO RUN AGAIN", confirm.text(), restart.text())
-                    },
-                    WIDTH * 0.5,
-                    417.0,
-                    700.,
-                    23.0,
-                    CREAM,
-                );
             }
         }
         set_default_camera();
         player_input.draw_controls();
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        capture.end_frame();
         if demo.finish_frame() {
             break;
         }
@@ -1888,5 +2049,179 @@ mod journey200_131 {
             assert!(reduced.checkpoints.recovery().next.is_none());
             assert!(reduced.trial.splits().iter().all(Option::is_some));
         }
+    }
+}
+
+/// Polish pass: forgiving spikes, fall causes, close calls, the moth secret,
+/// chain/unlock receipts and section splits, all from real fixed ticks.
+#[cfg(test)]
+mod polish_tests {
+    use super::*;
+
+    const DT: f32 = 1. / 120.;
+    const RIGHT: Input = Input {
+        direction: 1.,
+        jump: false,
+        jump_held: false,
+    };
+
+    #[test]
+    fn spike_corners_forgive_but_spike_centers_still_hurt() {
+        let mut game = Game::new(true);
+        // Overlap only the first 3 units of the first spike strip (x=350).
+        game.motor = Character::new(feet(vec2(329., 520.)));
+        game.update(Input::default(), DT);
+        assert_eq!(game.deaths, 0, "a triangle's outer corner does not hurt");
+        game.motor = Character::new(feet(vec2(340., 520.)));
+        game.update(Input::default(), DT);
+        assert_eq!(game.deaths, 1);
+        assert!(game.feedback.respawned);
+        assert_eq!(game.death_cause, DeathCause::Spikes);
+        assert_eq!(game.death_at, vec2(340., 520.));
+    }
+
+    #[test]
+    fn fissure_falls_name_their_cause_and_lanterns_reset_the_local_fall_count() {
+        let mut game = Game::new(true);
+        for expected in 1..=2 {
+            game.motor = Character::new(feet(vec2(600., 600.)));
+            for _ in 0..120 {
+                game.update(Input::default(), DT);
+                if game.feedback.respawned {
+                    break;
+                }
+            }
+            assert_eq!(game.death_cause, DeathCause::Fissure);
+            assert_eq!((game.deaths, game.deaths_here), (expected, expected));
+        }
+        game.motor = Character::new(feet(vec2(1410., 520.)));
+        game.update(Input::default(), DT);
+        assert!(game.feedback.checkpoint);
+        assert_eq!((game.deaths, game.deaths_here), (2, 0));
+    }
+
+    #[test]
+    fn skimming_spike_tips_then_landing_safely_is_exactly_one_close_call() {
+        let mut game = Game::new(true);
+        game.motor = Character::new(feet(vec2(370., 494.)));
+        game.motor.grounded = false;
+        game.motor.velocity.x = SPEED;
+        let mut calls = 0;
+        for _ in 0..60 {
+            game.update(RIGHT, DT);
+            calls += usize::from(game.feedback.close_call);
+            if game.motor.grounded {
+                break;
+            }
+        }
+        assert_eq!(game.deaths, 0);
+        assert!(game.motor.grounded);
+        assert_eq!((calls, game.close_calls), (1, 1));
+        assert!(!game.skim);
+
+        // A full-height autoplay course clears spikes with room to spare.
+        let mut tidy = Game::new(true);
+        for _ in 0..2400 {
+            tidy.update(tidy.autoplay(), DT);
+            if tidy.won() {
+                break;
+            }
+        }
+        assert!(tidy.won());
+        assert_eq!(tidy.close_calls, 0);
+
+        // A fall cancels a pending skim, and restart clears the count.
+        let mut fallen = Game::new(true);
+        fallen.motor = Character::new(feet(vec2(360., 500.)));
+        fallen.motor.grounded = false;
+        fallen.update(Input::default(), DT);
+        assert!(fallen.skim);
+        fallen.respawn();
+        assert!(!fallen.skim);
+        game.restart();
+        assert_eq!(
+            (game.close_calls, game.secret, game.deaths_here),
+            (0, false, 0)
+        );
+    }
+
+    fn launch_from_furnace_spring(embers: bool) -> Game {
+        let mut game = Game::new(true);
+        game.embers = if embers {
+            vec![(vec2(2070., 410.), false); 3]
+        } else {
+            Vec::new()
+        };
+        game.motor = Character::new(feet(vec2(2058., 390.)));
+        game.update(Input::default(), DT);
+        assert!(game.spring_flight, "the spring really launches");
+        game
+    }
+
+    #[test]
+    fn the_moth_needs_the_earned_air_jump_and_pays_out_once() {
+        let mut plain = launch_from_furnace_spring(false);
+        for _ in 0..240 {
+            plain.update(
+                Input {
+                    jump: plain.motor.velocity.y.abs() < 40.,
+                    jump_held: true,
+                    ..Input::default()
+                },
+                DT,
+            );
+        }
+        assert!(!plain.secret, "a spring alone cannot reach the moth");
+
+        let mut game = launch_from_furnace_spring(true);
+        assert!(game.feedback.air_jump_unlocked);
+        let before = game.score.total();
+        let mut found = 0;
+        let mut pressed = false;
+        for _ in 0..240 {
+            let apex = !pressed && game.motor.velocity.y < 40.;
+            pressed |= apex;
+            game.update(
+                Input {
+                    jump: apex,
+                    jump_held: true,
+                    ..Input::default()
+                },
+                DT,
+            );
+            found += usize::from(game.feedback.secret);
+        }
+        assert!(pressed && game.secret);
+        assert_eq!(found, 1);
+        assert!(game.score.total() >= before + u64::from(MOTH_POINTS));
+        assert_eq!(game.deaths, 0);
+    }
+
+    #[test]
+    fn pickups_report_accepted_points_chain_rises_and_one_unlock() {
+        let mut game = Game::new(true);
+        game.embers = vec![(vec2(102., 540.), false); 3];
+        game.update(Input::default(), DT);
+        let fb = game.feedback;
+        assert!(fb.pickup && fb.air_jump_unlocked);
+        assert_eq!(fb.pickup_points, 400);
+        assert_eq!(fb.chain_up, Some(2));
+        assert_eq!(fb.pickup_at, vec2(102., 540.));
+        game.update(Input::default(), DT);
+        assert!(!game.feedback.air_jump_unlocked && game.feedback.pickup_points == 0);
+    }
+
+    #[test]
+    fn section_splits_announce_once_each_in_order() {
+        let mut game = Game::new(true);
+        let mut splits = Vec::new();
+        for _ in 0..2400 {
+            game.update(game.autoplay(), DT);
+            splits.extend(game.feedback.split);
+            if game.won() {
+                break;
+            }
+        }
+        assert_eq!(splits, [0, 1]);
     }
 }

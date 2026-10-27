@@ -8,7 +8,9 @@ use ferravex_render::prelude::*;
 pub const ROAD_HALF: f32 = 33.0;
 pub const LAPS: u32 = 3;
 const SAMPLES: usize = 192;
-const GATES: usize = 16;
+pub(crate) const GATES: usize = 16;
+/// Ghost poses are recorded every six 120 Hz ticks.
+const GHOST_STEP: f32 = 6. / 120.;
 
 pub struct Track {
     pub points: Vec<Vec2>,
@@ -225,6 +227,10 @@ pub struct Race {
     pub last_lap: Option<f32>,
     pub last_comparison: Option<RecordDelta>,
     pub best_ghost: Vec<Pose>,
+    /// Lap time at each gate of the best lap (index 0, the finish, is unused).
+    /// Presentation-only: split deltas never change gates, laps or records.
+    pub best_splits: [Option<f32>; GATES],
+    lap_splits: [Option<f32>; GATES],
     recording: Vec<Pose>,
     ghost_track: Option<ferravex_play::replay::ghost::GhostTrack>,
     lap_ticks: u64,
@@ -243,6 +249,8 @@ impl Race {
             last_lap: None,
             last_comparison: None,
             best_ghost: Vec::new(),
+            best_splits: [None; GATES],
+            lap_splits: [None; GATES],
             recording: vec![Car::new(track).pose],
             ghost_track: None,
             lap_ticks: 0,
@@ -268,11 +276,13 @@ impl Race {
         let ghost = std::mem::take(&mut self.best_ghost);
         let best = self.best_time;
         let ghost_track = self.ghost_track.take();
+        let splits = self.best_splits;
         *self = Self::new(track);
         self.car.set_tuning(tuning).unwrap();
         self.best_ghost = ghost;
         self.best_time = best;
         self.ghost_track = ghost_track;
+        self.best_splits = splits;
     }
     pub fn step(&mut self, track: &Track, controls: Controls, dt: f32) {
         if self.finished()
@@ -301,14 +311,46 @@ impl Race {
                 if self.best_time.is_none_or(|best| self.lap_time < best) {
                     self.best_time = Some(self.lap_time);
                     self.best_ghost.clone_from(&self.recording);
+                    self.best_splits = self.lap_splits;
                     self.rebuild_ghost();
                 }
+                self.lap_splits = [None; GATES];
                 self.recording.clear();
                 self.recording.push(self.car.pose);
                 self.lap_ticks = 0;
                 self.lap_time = 0.;
+            } else {
+                self.lap_splits[self.next_gate] = Some(self.lap_time);
             }
             self.next_gate = (self.next_gate + 1) % GATES;
+        }
+    }
+    /// Seconds versus the best lap at an intermediate gate cleared this lap.
+    /// Negative is faster. `None` before a best lap exists or for the finish.
+    pub fn split_delta(&self, gate: usize) -> Option<f32> {
+        Some(self.lap_splits.get(gate).copied()?? - self.best_splits.get(gate).copied()??)
+    }
+    /// Rebuild best-lap gate splits from saved 20 Hz ghost poses. A restored
+    /// save carries no split table, and the saved format stays unchanged.
+    pub fn derive_splits(&mut self, track: &Track) {
+        self.best_splits = [None; GATES];
+        let mut from = 0;
+        for gate in 1..GATES {
+            let Some(index) = (from..self.best_ghost.len().saturating_sub(1)).find(|&i| {
+                track.crossed(
+                    gate,
+                    self.best_ghost[i].position,
+                    self.best_ghost[i + 1].position,
+                )
+            }) else {
+                return;
+            };
+            let (center, tangent) = track.gate(gate);
+            let before = (self.best_ghost[index].position - center).dot(tangent);
+            let after = (self.best_ghost[index + 1].position - center).dot(tangent);
+            let fraction = -before / (after - before);
+            self.best_splits[gate] = Some((index as f32 + fraction) * GHOST_STEP);
+            from = index + 1;
         }
     }
     pub fn ghost(&self) -> Option<Pose> {

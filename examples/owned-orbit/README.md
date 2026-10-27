@@ -1,6 +1,19 @@
 # Orbit Breaker
 
-A playable original 2D paddle-and-ball game built exclusively with Ferravex's first-party crates and Rust std. Clear two fields of 35 destructible panels. Reinforced panels in sector two take two impacts. Three misses end the run; turquoise capsules widen the paddle for nine seconds. Paddle contact position controls the return angle.
+A playable original 2D paddle-and-ball game built exclusively with Ferravex's first-party crates and Rust std. Clear two fields of 35 destructible panels: sector one, **Low Orbit** ("mind the space junk"), and sector two, **The Armored Belt**, whose reinforced panels take two impacts. Three misses end the run. Paddle contact position controls the return angle.
+
+## What makes it fun
+
+- **Three capsules.** Panel clears drop capsules in a fixed, replayable rotation: turquoise **Wide** (nine seconds of 55% more paddle), violet **Multi-ball** (two free bonus balls burst from the paddle; losing them never costs a life, and if your main ball drains a bonus ball takes over) and green **Sticky** (the next three returns catch the ball; it rides the paddle with an aim preview until you press launch or 0.9 seconds pass).
+- **Volleys.** Panel hits since any ball last touched the paddle form a volley. Milestones at 3, 5, 8, 12, 16, 20 and 25 hits get escalating callouts ("TRIPLE TAP!" through "PLEASE STOP. IT'S TOO POWERFUL."), the ball trail heats from cyan to gold, and in the browser each panel chime climbs in pitch.
+- **Bonuses.** Clear a sector without losing a ball for a **+1000 flawless** bonus. The last panel of a sector gets a pulsing spotlight and a "LAST ONE!" callout. A small secret: a satellite drifts through the gap above the panels every 24 seconds of play (from 12 seconds in); punch a hole through the panels and bonk it for **+1000**. The ball flies straight through, so collisions are unchanged.
+- **Juice.** Panels shatter into tumbling shards in their own color, scores pop and rise from the panel that earned them, the paddle squashes on contact, big moments add shockwave rings and a small camera kick, and a lost ball flashes a red edge vignette.
+- **Personality.** Rotating, never-repeating quips for lost balls ("GRAVITY 1, PADDLE 0"), ball saves, retries and pause, plus sector taglines on the ready card.
+- **Results card.** Win or lose, you get a silly title ("SPACE TOURIST", "ORBIT INTERN", "GRAVITY TAMER", "COMET WRANGLER", "THE ORBIT BREAKER", rarer feats like "UNTOUCHABLE" and "SPACE JUNK ARTIST"), the score, a stats grid (time, panels, best volley, best precise streak, ball saves, satellites, flawless sectors, balls lost), your personal best or a **NEW PERSONAL BEST!** banner, the points or panels still needed for the next title, and a teaser if you have not found the secret yet. The HUD says **NEW BEST PACE!** once a run passes your best.
+
+The browser keeps the personal best on this device with the shared `ferravex_render::storage::Records` (owner `owned-orbit`, record `campaign`); storage failures leave the game fully playable. The native CLI is headless and session-only.
+
+The ready card shows the sector or a lost-ball quip, serve charge, the current launch binding and an onboarding line: steering bindings until you have steered for about a second, then a full-charge tip until you have fired one, then a reminder about capsules and the secret. These learned hints survive restarts within a session.
 
 - **A/D or arrow keys:** move
 - **Mouse/touch drag:** steer in the browser
@@ -14,19 +27,23 @@ Every ball displacement uses `ferravex-dynamics::PhysicsWorld<2>::cast_ball` for
 
 All game visuals—including the original bitmap lettering—are rasterized into an RGBA framebuffer in Rust. The browser presents this with `CanvasRenderingContext2D.putImageData`; it contains no game rules, rendering library, or JavaScript dependency. The CPU raster is a portable 2D reference path, not a GPU renderer. No external assets are included; the interactive adapter uses first-party synthesized audio cues.
 
-The ready overlay shows serve charge progress, remaining lives after a miss, and a fresh-run acknowledgement on retry. Launch and ball-save messages confirm accepted events. The HUD identifies armor-piercing volleys until the first paddle return, shows remaining wide-paddle seconds, and gives explicit panel/precision/pickup point awards. Clearing sector one shows a countdown and explains reinforced panels; terminal overlays retain the final score, best precision streak and ball-save count. Pause also appears inside the software framebuffer with run status and resume/restart hints. Browser pause retains the explicit Resume button and accessible status text, and refocusing the tab never resumes automatically.
+The HUD keeps only what matters now: score (with a chain multiplier badge when it is above x1) and your best, sector name, a row of active-state chips (armor piercing, wide-paddle seconds, multi-ball count, sticky catches or the launch-to-fire binding), the live volley count, lives, panels left (highlighted at one), a draining ball-save bar, the precise-return streak, and pause/restart bindings when nothing else needs that corner. Callouts appear in the open space above the paddle with short fades. Clearing sector one shows a countdown card that names the next sector, explains reinforced panels and announces a flawless bonus. Pause also appears inside the software framebuffer with run status, a quip and resume/restart bindings. Browser pause retains the explicit Resume button and accessible status text, and refocusing the tab never resumes automatically.
 
 Browser framebuffer hints use `PlayerInput::format_hint` after sampling, so remaps, unbound actions and device changes are reflected even in menus. Long binding lists point to Controls or fit within the panel using the shared checked bitmap metrics; authored bitmap glyphs and the CPU renderer are retained. The controls above are defaults. F2 opens Controls; Shift+Tab from the canvas reaches HTML help, as described by the existing host.
 
 Every `Orbit::advance_input` and `Orbit::render` consumes the shared `render::preferences` policy, including paused, terminal and zero-tick frames. Reduced motion clears/suppresses cosmetic particles, ball trails and paddle hit emphasis, and stops decorative capsule pulses. Reduced flash independently clears/suppresses panel flashes; damaged-panel cracks, charge meters, falling pickups and the ball remain readable. Zero visual intensity retires both channels. Re-enabling cannot revive cleared effects. These settings do not change collisions, input, charge, scores, rewards or simulation time. The host publishes choices through the existing common `ferravex_feedback_preferences` ABI; this game adds no export or preference store.
 
-Accepted game events feed the shared bounded `EventQueue` and `FeedbackController`, replacing the browser's frame-total audio inference. Orbit drains events after every fixed tick and coalesces repeated cue categories into at most five cues per presentation frame. Distinct catch-up events remain audible; render-only frames never replay them, and restart discards pending cues. Standalone `Game` use retains at most 32 unconsumed presentation events. No camera shake or hit-stop is applied to gameplay.
+Accepted game events feed the shared bounded `EventQueue` and `FeedbackController`, replacing the browser's frame-total audio inference. Orbit drains events after every fixed tick and coalesces repeated cue categories into at most five cues per presentation frame. Distinct catch-up events remain audible; render-only frames never replay them, and restart discards pending cues. Standalone `Game` use retains at most 32 unconsumed presentation events. Presentation-only detail (where a panel broke, volley milestones, pickups, drains) rides the same queue but never adds cues.
+
+All juice lives in `src/juice.rs`, is created only from those accepted events and is aged by fixed simulation ticks, so pause and terminal screens freeze it (only the victory confetti runs on presentation time once a run is won); nothing in it can change collisions, input, scoring or time. The camera kick moves only the playfield layer, never the HUD, and there is no hit-stop. Reduced motion clears and blocks camera kick, paddle squash, shockwave rings, shards and victory confetti, and keeps score pops and callouts still; reduced flash clears and blocks the drain vignette and bonus glow. Text stays because it is information. Quips, titles and next goals in `src/quips.rs` are pure functions of accepted counters, so the same run always reads the same way and consecutive quips never repeat.
 
 ```sh
 cargo test -p owned-orbit --offline --locked -j 2
 cargo clippy -p owned-orbit --all-targets --offline --locked -j 2 -- -D warnings
 node examples/owned-orbit/tests/platform-input.mjs
 cargo run --release -p owned-orbit --offline --locked -j 2 -- --autoplay --frames 1800 --screenshot /tmp/orbit.png
+# Debug builds only: review hooks for specific screens (see src/main.rs).
+ORBIT_UNTIL=multi ORBIT_FAKE_BEST=9000 cargo run -p owned-orbit --offline --locked -j 2 -- --autoplay --frames 72000 --screenshot /tmp/orbit-multi.png
 cargo build --release --target wasm32-unknown-unknown -p owned-orbit --lib --offline --locked -j 2
 ```
 
@@ -62,6 +79,8 @@ never guesses a remapped key. All earlier exports retain their signatures.
 
 For Rust hosts, `advance(dt, axis, buttons)` takes held button levels. The additive `advance_input(dt: f64, input: game::Input)` takes already sampled press edges, with launch buffered across zero-tick frames and consumed once. `session_state() -> SessionState`, `set_paused(bool) -> bool` and `restart()` expose the local lifecycle. `game::Game` remains usable independently through `tick`; `feedback() -> Option<Feedback>` and `transition_remaining() -> f32` support presentation without putting rules in the host.
 
+Hosts that keep records call `set_personal_best(Option<u32>)` before or during a run, read `personal_best()`, and record each finished run once from `take_finished_run() -> Option<FinishedRun>` (`won`, `score`, `seconds`, `new_best`). `Game::satellite()` reports where the bonus satellite is passing, if anywhere.
+
 ```rust
 use owned_orbit::{Orbit, game::Input};
 
@@ -73,11 +92,13 @@ orbit.advance_input(5.0, Input::default()); // no accumulated pause time
 orbit.restart(); // fresh ready ball, cleared timing and input
 ```
 
+Regression tests also cover the capsule rotation and replay, multi-ball hand-over without life loss, sticky catch/ride/release, satellite bonks once per pass without deflection, flawless bonuses, volley milestones, last-panel announcement, results/personal-best comparison recorded once, juice freezing on pause, learned hints surviving restart, reduced-motion camera kick, never-repeating quips, rank tiers and readable prose.
+
 Regression tests cover high-speed CCD (12,000 pixels/second), full two-sector victory through both simulation and session autoplay, loss/restart, pickup expiry, opaque RGBA output, 30/60/144 Hz ready-state timing, quick taps, catch-up, terminal freezing and pause/retry input cleanup. Migration regressions compare the full autoplay run with effects enabled/disabled, exercise live independent policy changes while paused, effect retirement and re-enabling, accepted cue batching, remapped/unbound/oversized hints, label bounds and static reduced-motion capsule rendering. The browser adapter is also compiled by native unit tests; that is not a Wasm export/linkage test. The Node host test covers input routing, accessible phase feedback, blur/visibility pause and elapsed-time rebasing on resume/restart. Fresh Wasm and browser visual/audio validation remain parent integration checks; host mocks and framebuffer assertions do not establish them.
 
 Successive panel hits within four seconds build a volley multiplier every three hits, capped at x4. Paddle returns and misses break the chain. The input harness now supplies the performance clock required by the host’s existing diagnostics.
 
-Panel clears roll a seeded 25% capsule reward with a guarantee by the sixth eligible clear. The shared reward table and pity counter bound unlucky droughts while preserving replayable runs; drop storage remains capped at eight.
+Panel clears roll a seeded 25% capsule reward with a guarantee by the sixth eligible clear; capsule kinds then follow the fixed Wide, Multi-ball, Sticky, Multi-ball, Wide, Sticky rotation. The shared reward table and pity counter bound unlucky droughts while preserving replayable runs; drop storage remains capped at eight.
 
 Capsules within 100 pixels bend toward the paddle using the shared magnet rule. This rewards steering toward a drop without requiring a pixel-perfect catch; distant or already-missed drops keep falling.
 

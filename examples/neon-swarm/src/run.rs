@@ -258,4 +258,43 @@ mod tests {
         assert_eq!(regular.game.shots, irregular.game.shots);
         assert_eq!(regular.game.score.total(), irregular.game.score.total());
     }
+
+    #[test]
+    fn accepted_notes_and_style_match_across_render_cadences() {
+        let collect = |cadence: &[f64]| {
+            let mut run = Run::new(true);
+            let mut notes = Vec::new();
+            let mut all = Vec::new();
+            for frame in 0..20_000 {
+                run.advance(cadence[frame % cadence.len()], Game::autoplay, |_| {});
+                run.game.take_notes(&mut notes);
+                all.extend(notes.drain(..).map(|n| format!("{n:?}")));
+                if !run.session.is_playing() {
+                    break;
+                }
+            }
+            assert_eq!(run.session.state(), SessionState::Won);
+            (all, run.game.style)
+        };
+        let (regular, style) = collect(&[1. / 60.]);
+        let (irregular, other) = collect(&[0.001, 1. / 30., 1. / 144., 0.075]);
+        assert_eq!(regular, irregular);
+        assert_eq!(style, other);
+        assert!(style.overseer_down, "autoplay defeats the Overseer");
+        assert_eq!(regular.iter().filter(|n| n.starts_with("Kill")).count(), 41);
+        assert_eq!(
+            regular
+                .iter()
+                .filter(|n| n.starts_with("EliteInbound"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            regular
+                .iter()
+                .filter(|n| n.starts_with("WaveClear"))
+                .count(),
+            3
+        );
+    }
 }

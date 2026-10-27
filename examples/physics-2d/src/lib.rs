@@ -21,7 +21,15 @@ use ferravex_render::audio::{Cue, GameAudio, Surface};
 use ferravex_render::input::{ActionKind, Binding, InputCode, PlayerInput, Preset};
 use ferravex_render::{preferences, prelude::*, ui};
 
+#[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+mod capture;
+mod hud;
+mod juice;
 mod presentation;
+mod quips;
+mod toys;
+
+use toys::{Fun, Scenario};
 
 const MAX_BODIES: usize = 240;
 const TICK_HZ: f64 = 120.0;
@@ -31,6 +39,8 @@ enum Shape {
     Ball(f32),
     Box(Vec2),
     Dumbbell,
+    /// A domino: a tall thin box drawn with pips.
+    Plank(Vec2),
 }
 
 struct Body {
@@ -53,27 +63,7 @@ struct Sandbox {
 
 impl Sandbox {
     fn new() -> Self {
-        let mut world = Self {
-            physics: PhysicsWorld::new([0.0, -9.81]),
-            bodies: Vec::new(),
-            platforms: vec![],
-            links: Vec::new(),
-            impact: None,
-            pulse_time: 0.,
-            pulse_center: Vec2::ZERO,
-        };
-        for (position, half) in [
-            (vec2(0.0, -0.5), vec2(12.0, 0.5)),
-            (vec2(-12.25, 6.0), vec2(0.25, 6.5)),
-            (vec2(12.25, 6.0), vec2(0.25, 6.5)),
-            (vec2(-8.0, 0.8), vec2(2.0, 0.8)),
-            (vec2(8.0, 0.8), vec2(2.0, 0.8)),
-        ] {
-            world
-                .physics
-                .add_box(position.to_array(), half.to_array(), false);
-            world.platforms.push((position, half));
-        }
+        let mut world = Self::shell();
         for row in 0..6 {
             for column in 0..(6 - row) {
                 world.spawn(
@@ -95,6 +85,33 @@ impl Sandbox {
             );
         }
         world.mechanisms();
+        world
+    }
+
+    /// Floor, walls and platforms shared by every scenario.
+    fn shell() -> Self {
+        let mut world = Self {
+            physics: PhysicsWorld::new([0.0, -9.81]),
+            bodies: Vec::new(),
+            platforms: vec![],
+            links: Vec::new(),
+            impact: None,
+            pulse_time: 0.,
+            pulse_center: Vec2::ZERO,
+        };
+        world.record_impacts();
+        for (position, half) in [
+            (vec2(0.0, -0.5), vec2(12.0, 0.5)),
+            (vec2(-12.25, 6.0), vec2(0.25, 6.5)),
+            (vec2(12.25, 6.0), vec2(0.25, 6.5)),
+            (vec2(-8.0, 0.8), vec2(2.0, 0.8)),
+            (vec2(8.0, 0.8), vec2(2.0, 0.8)),
+        ] {
+            world
+                .physics
+                .add_box(position.to_array(), half.to_array(), false);
+            world.platforms.push((position, half));
+        }
         world
     }
 
@@ -308,8 +325,17 @@ struct LabInput {
     pulse: Option<Vec2>,
 }
 
+/// Render-frame toy commands. CHAOS queues for the next actual tick (or places
+/// immediately while paused, like a drop); a scene toggle rebuilds like RESET.
+#[derive(Clone, Copy, Debug, Default)]
+struct ToyInput {
+    chaos: bool,
+    scene: bool,
+}
+
 struct Lab {
     sandbox: Sandbox,
+    fun: Fun,
     session: GameSession,
     ball: bool,
     impact_cooldown: f32,
@@ -395,8 +421,12 @@ impl PulseVisual {
 
 impl Lab {
     fn new() -> Self {
+        let sandbox = Sandbox::new();
+        let mut fun = Fun::default();
+        fun.on_rebuild(&sandbox);
         Self {
-            sandbox: Sandbox::new(),
+            sandbox,
+            fun,
             // A sandbox has no start screen or terminal state.
             session: GameSession::try_new(TICK_HZ, 8, true).expect("valid lab fixed clock"),
             ball: true,
@@ -417,7 +447,8 @@ impl Lab {
 
     fn reset(&mut self) {
         let paused = self.session.is_paused();
-        self.sandbox = Sandbox::new();
+        self.sandbox = Sandbox::with_scenario(self.fun.scenario);
+        self.fun.on_rebuild(&self.sandbox);
         self.session.restart();
         self.session.set_paused(paused);
         self.impact_cooldown = 0.;
@@ -425,10 +456,29 @@ impl Lab {
         self.pulsed = false;
         self.pending = LabCommands::default();
         self.selected = None;
-        self.notice(if paused {
-            "Scene reset. Still paused; STEP advances one tick."
+        self.notice(match (self.fun.scenario, paused) {
+            (Scenario::Workshop, true) => "Scene reset. Still paused; STEP advances one tick.",
+            (Scenario::Workshop, false) => "Scene reset. Original 34 bodies restored.",
+            (Scenario::Dominoes, true) => "Domino run set. Still paused; STEP advances one tick.",
+            (Scenario::Dominoes, false) => "Domino run set. Here comes the kicker ball.",
+        });
+    }
+
+    /// One deterministic CHAOS burst, bounded by the body cap.
+    fn chaos(&mut self) {
+        let count = self.sandbox.chaos(self.fun.chaos_serial);
+        if count == 0 {
+            self.notice("Body limit reached (240). RESET clears the scene.");
+            return;
+        }
+        self.fun.touch();
+        self.fun.chaos_serial = self.fun.chaos_serial.wrapping_add(1);
+        self.fun.stats.chaos += 1;
+        self.fun.events.chaos += count;
+        self.notice(if self.session.is_paused() {
+            "CHAOS placed. It waits for STEP or RESUME."
         } else {
-            "Scene reset. Original 34 bodies restored."
+            "CHAOS delivered."
         });
     }
 
@@ -438,7 +488,7 @@ impl Lab {
 
     fn button_enabled(&self, index: usize) -> bool {
         match index {
-            2 => self.sandbox.bodies.len() < MAX_BODIES,
+            2 | 7 => self.sandbox.bodies.len() < MAX_BODIES,
             3 => self.session.is_playing() && self.sandbox.pulse_time == 0.,
             5 => self.session.is_paused(),
             _ => true,
@@ -486,6 +536,7 @@ impl Lab {
             Shape::Ball(_) => "BALL",
             Shape::Box(_) => "BOX",
             Shape::Dumbbell => "COMPOUND",
+            Shape::Plank(_) => "DOMINO",
         };
         let state = if sleep.sleeping {
             "ASLEEP"
@@ -506,24 +557,56 @@ impl Lab {
         self.update_with_actions(elapsed_seconds, input, LabCommands::default)
     }
 
+    #[cfg(test)]
+    fn update_toys(&mut self, elapsed_seconds: f64, input: LabInput, toys: ToyInput) -> FrameStep {
+        self.update_toys_with_actions(elapsed_seconds, input, toys, || {
+            (LabCommands::default(), false)
+        })
+    }
+
+    #[cfg(test)]
     fn update_with_actions(
         &mut self,
         elapsed_seconds: f64,
         input: LabInput,
         mut actions: impl FnMut() -> LabCommands,
     ) -> FrameStep {
+        self.update_toys_with_actions(elapsed_seconds, input, ToyInput::default(), || {
+            (actions(), false)
+        })
+    }
+
+    /// The full controller. `actions` is read once per actual tick (or once on
+    /// a paused zero-tick editor frame) and returns that tick's gameplay
+    /// commands plus whether its CHAOS edge was pressed.
+    fn update_toys_with_actions(
+        &mut self,
+        elapsed_seconds: f64,
+        input: LabInput,
+        toys: ToyInput,
+        mut actions: impl FnMut() -> (LabCommands, bool),
+    ) -> FrameStep {
         self.impact = None;
         self.pulsed = false;
+        self.fun.begin_frame();
         if elapsed_seconds.is_finite() {
             self.feedback_time =
                 (self.feedback_time - elapsed_seconds.clamp(0., 0.1) as f32).max(0.);
         }
-        // Reset wins over every edge from this frame, including pending drops.
-        if input.reset {
+        // Reset (or a scene toggle, which is a rebuild) wins over every edge
+        // from this frame, including pending drops and CHAOS.
+        if input.reset || toys.scene {
+            if toys.scene {
+                self.fun.scenario = match self.fun.scenario {
+                    Scenario::Workshop => Scenario::Dominoes,
+                    Scenario::Dominoes => Scenario::Workshop,
+                };
+            }
             self.reset();
             return self.session.advance(0.);
         }
         if input.toggle_pause {
+            self.fun.pending_chaos = false;
             self.pending = LabCommands::default();
             self.session.toggle_pause();
             self.notice(if self.session.is_paused() {
@@ -541,6 +624,7 @@ impl Lab {
         if self.pending.pulse.is_none() {
             self.pending.pulse = input.pulse;
         }
+        self.fun.pending_chaos |= toys.chaos;
 
         let frame = if input.single_step && self.session.is_paused() {
             let frame = self.session.step_paused().expect("paused lab step");
@@ -559,12 +643,15 @@ impl Lab {
         // Paused placement is an editor operation, deliberately available
         // without a tick. Running gameplay edges stay in PlayerInput until here.
         if self.session.is_paused() && frame.steps == 0 {
-            self.apply_commands(actions());
+            let (commands, chaos) = actions();
+            self.apply_commands(commands, chaos);
         }
         for _ in 0..frame.steps {
-            self.apply_commands(actions());
+            let (commands, chaos) = actions();
+            self.apply_commands(commands, chaos);
             self.impact_cooldown = (self.impact_cooldown - frame.dt).max(0.);
             self.sandbox.step(frame.dt);
+            self.fun.after_tick(&mut self.sandbox, frame.dt);
             if self.impact_cooldown == 0.
                 && let Some(impact) = self.sandbox.impact
             {
@@ -575,13 +662,14 @@ impl Lab {
         frame
     }
 
-    fn apply_commands(&mut self, actions: LabCommands) {
+    fn apply_commands(&mut self, actions: LabCommands, chaos: bool) {
         let pending = std::mem::take(&mut self.pending);
         if let Some((position, force_crate)) = pending.drop.or(actions.drop) {
             let ball = self.ball && !force_crate;
             if !position.is_finite() {
                 self.notice("Drop rejected: position must be finite.");
             } else if self.sandbox.spawn(Self::drop_position(position), ball) {
+                self.fun.stats.drops += 1;
                 self.selected = self.sandbox.bodies.last().map(|body| body.handle);
                 self.notice(if self.session.is_paused() {
                     "Shape placed. Paused until STEP or RESUME."
@@ -599,6 +687,7 @@ impl Lab {
                 self.notice("Resume the simulation to pulse.");
             } else if center.is_finite() && self.sandbox.pulse(center) {
                 self.pulsed = true;
+                self.fun.stats.pulses += 1;
                 self.notice("Pulse applied.");
             } else if !center.is_finite() {
                 self.notice("Pulse rejected: position must be finite.");
@@ -606,29 +695,18 @@ impl Lab {
                 self.notice("Pulse recharging.");
             }
         }
+        if std::mem::take(&mut self.fun.pending_chaos) | chaos {
+            self.chaos();
+        }
     }
 }
 
-fn fitted_label(text: &str, x: f32, y: f32, width: f32, color: Color) {
-    let measured = get_default_font()
-        .try_metrics(16, 1.)
-        .and_then(|font| font.measure_line(text))
-        .expect("bounded lab text")
-        .width;
-    draw_text_ex(
-        text,
-        x,
-        y,
-        TextParams {
-            font_size: 16,
-            font_scale: (width.max(1.) / measured.max(1.)).min(1.),
-            color,
-        },
-    );
-}
-
 fn window_conf() -> Conf {
-    ferravex_render::window_conf("Ferravex / 2D physics laboratory")
+    #[allow(unused_mut)]
+    let mut conf = ferravex_render::window_conf("Ferravex / 2D physics laboratory");
+    #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+    capture::window(&mut conf);
+    conf
 }
 
 #[cfg(test)]
@@ -645,6 +723,13 @@ fn register_lab_actions(input: &mut PlayerInput) {
         ("drop", "Drop selected shape", KeyCode::Enter, 7),
         ("step", "Single step while paused", KeyCode::N, 5),
         ("inspect", "Inspect body at cursor", KeyCode::I, 6),
+        (
+            "chaos",
+            "CHAOS: throw in fourteen shapes",
+            KeyCode::Key3,
+            10,
+        ),
+        ("domino", "Toggle the domino run", KeyCode::Key4, 11),
     ] {
         input
             .action(
@@ -658,6 +743,31 @@ fn register_lab_actions(input: &mut PlayerInput) {
             )
             .expect("valid lab input binding");
     }
+    input
+        .action(
+            "stats",
+            "Show engine stats",
+            ActionKind::Button,
+            vec![Binding::digital(InputCode::Key(KeyCode::G as u16))],
+        )
+        .expect("valid lab input binding");
+}
+
+fn faded(color: Color, alpha: f32) -> Color {
+    Color {
+        a: color.a * alpha.clamp(0., 1.),
+        ..color
+    }
+}
+
+fn mix(a: Color, b: Color, t: f32) -> Color {
+    let t = t.clamp(0., 1.);
+    Color::new(
+        a.r + (b.r - a.r) * t,
+        a.g + (b.g - a.g) * t,
+        a.b + (b.b - a.b) * t,
+        a.a,
+    )
 }
 
 ferravex_render::game!(window_conf, game);
@@ -666,6 +776,14 @@ async fn game() {
     let mut lab = Lab::new();
     let mut sound = GameAudio::new();
     let mut pulse_visual = PulseVisual::default();
+    let mut juice = juice::Juice::new();
+    juice.rebuild(lab.sandbox.bodies.len());
+    let mut hud = hud::Hud::default();
+    // Personal bests are optional; autoplay demos never claim one.
+    #[allow(unused_mut)]
+    let mut bests = hud::Bests::load(!demo.autoplay);
+    #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+    let mut capture = capture::Capture::from_env();
     let mut player_input = PlayerInput::preset("physics-2d", Preset::Lab2);
     register_lab_actions(&mut player_input);
     loop {
@@ -673,32 +791,54 @@ async fn game() {
         // Editing and manual stepping remain available while the session pauses.
         // Controls/Details and focus still suspend all sandbox input and time.
         player_input.sample(true);
-        let active = player_input.gameplay_active();
+        // Debug captures may keep an unfocused review window running.
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        let forced = capture.forced();
+        #[cfg(not(all(debug_assertions, not(target_arch = "wasm32"))))]
+        let forced = false;
+        let active = player_input.gameplay_active() || forced;
         let dt = demo.dt();
+        let simulation_dt = if forced {
+            dt.clamp(0., 0.1)
+        } else {
+            player_input.simulation_dt(dt)
+        };
         // Always reconcile policy before accepted feedback and presentation,
         // including controls/focus suspension, paused and zero-tick frames.
         pulse_visual.begin_frame(dt);
+        juice.apply_policy(preferences::feedback_policy());
         if !active {
             lab.pending = LabCommands::default();
+            lab.fun.pending_chaos = false;
         }
         let layout = presentation::LabLayout::compact(screen_width(), screen_height());
-        let narrow = layout.narrow;
-        let footer_height = layout.footer_height;
-        let footer_y = layout.footer_y;
-        let scale = layout.scale;
-        let to_screen = |point| layout.to_screen(point);
+        // Shake and the collapse beat move the camera, never the simulation.
+        let (focus, beat) = juice.beat().unwrap_or((Vec2::ZERO, 0.));
+        let view = layout.zoomed(focus, 1. + 0.08 * beat, juice.shake());
+        let scale = view.scale;
+        let to_screen = |point| view.to_screen(point);
         let pointer = player_input.cursor(dt, 600.);
-        let pointer_in_scene = active && layout.contains_scene(pointer);
-        let spawn_position = Lab::drop_position(layout.to_world(pointer));
+        let pointer_in_scene = active && layout.contains_scene(pointer) && hud.card.is_none();
+        let spawn_position = Lab::drop_position(view.to_world(pointer));
+        let mouse = Vec2::from(mouse_position());
+        let clicked_mouse = is_mouse_button_pressed(MouseButton::Left);
         // Off-scene primary activates menus. Scene placement remains a fixed-
         // tick action (or a paused editor action) below.
         let primary = !pointer_in_scene && player_input.pressed("primary");
+        let card_closed = active && (clicked_mouse || primary) && hud.dismiss_card();
         let mut input = LabInput {
             reset: player_input.pressed("restart"),
             toggle_pause: player_input.pressed("pause"),
             single_step: player_input.pressed("step"),
             ..LabInput::default()
         };
+        let mut toys = ToyInput {
+            scene: player_input.pressed("domino"),
+            ..ToyInput::default()
+        };
+        if player_input.pressed("stats") {
+            hud.stats = !hud.stats;
+        }
         if player_input.pressed("select_one") {
             input.ball = Some(true);
         }
@@ -708,13 +848,18 @@ async fn game() {
         let inspect = player_input.pressed("inspect");
 
         clear_background(ui::BACKGROUND);
-        let button_rect = |i| layout.button(i);
-        let mut clicked = [false; 7];
+        let mut clicked = [false; presentation::BUTTONS];
+        let mut hovered = None;
         for (i, click) in clicked.iter_mut().enumerate() {
-            let rect = button_rect(i);
-            let mouse_clicked = rect.contains(Vec2::from(mouse_position()))
-                && is_mouse_button_pressed(MouseButton::Left);
+            let rect = layout.button(i);
+            let over = rect.contains(mouse)
+                || (player_input.cursor_is_virtual() && rect.contains(pointer));
+            if active && over {
+                hovered = Some(i);
+            }
+            let mouse_clicked = rect.contains(mouse) && clicked_mouse;
             *click = active
+                && !card_closed
                 && lab.button_enabled(i)
                 && (mouse_clicked
                     || (primary && player_input.cursor_is_virtual() && rect.contains(pointer)));
@@ -734,18 +879,22 @@ async fn game() {
         input.toggle_pause |= clicked[4];
         input.single_step |= clicked[5];
         input.reset |= clicked[6];
-        let reset = input.reset;
-        if input.reset || input.toggle_pause {
+        toys.chaos |= clicked[7];
+        toys.scene |= clicked[8];
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        capture.inject(&mut lab, &mut input, &mut toys, &mut hud);
+        let reset = input.reset || toys.scene;
+        if reset || input.toggle_pause {
             // Lifecycle transitions discard stale gameplay requests.
-            player_input.take_tick(["primary", "secondary", "drop", "pulse"]);
+            player_input.take_tick(["primary", "secondary", "drop", "pulse", "chaos"]);
         }
-        let frame = lab.update_with_actions(player_input.simulation_dt(dt) as f64, input, || {
-            if !active {
-                return LabCommands::default();
+        let frame = lab.update_toys_with_actions(simulation_dt as f64, input, toys, || {
+            if !active || card_closed {
+                return (LabCommands::default(), false);
             }
-            let [primary, secondary, drop, pulse] =
-                player_input.take_tick(["primary", "secondary", "drop", "pulse"]);
-            LabCommands {
+            let [primary, secondary, drop, pulse, chaos] =
+                player_input.take_tick(["primary", "secondary", "drop", "pulse", "chaos"]);
+            let commands = LabCommands {
                 drop: (drop.pressed
                     || (pointer_in_scene && (primary.pressed || secondary.pressed)))
                     .then_some((
@@ -761,11 +910,18 @@ async fn game() {
                 } else {
                     vec2(0., 1.)
                 }),
-            }
+            };
+            (commands, chaos.pressed)
         });
         if reset {
             pulse_visual.ring = None;
         }
+        // Feedback follows accepted lab events only.
+        let added = lab.sandbox.bodies.len() > juice.known();
+        juice.on_frame(&lab, reset);
+        juice.advance_sim(frame.steps as f32 * frame.dt);
+        juice.advance_render(dt);
+        hud.advance(&lab, active, dt);
         if lab.pulsed {
             pulse_visual.accepted_pulse(lab.sandbox.pulse_center);
             sound.cue(Cue::Impact(Surface::Metal), 0.5);
@@ -773,40 +929,65 @@ async fn game() {
         if let Some((strength, surface)) = lab.impact {
             sound.cue(Cue::Impact(surface), (strength * 0.09).clamp(0.15, 0.7));
         }
+        let events = &lab.fun.events;
+        if added && !reset {
+            sound.cue(Cue::Click, if events.chaos > 0 { 0.45 } else { 0.25 });
+        }
+        if events.collapse.is_some() {
+            sound.cue(Cue::Impact(Surface::Stone), 0.8);
+        }
+        if !events.goals.is_empty() || events.secret {
+            sound.cue(Cue::Success, 0.7);
+        }
+        if events.returned > 0 {
+            sound.cue(Cue::Pickup, 0.4);
+        }
+        if let Some(down) = events.dominoes_down
+            && down == lab.fun.domino_count()
+            && down > 0
+            && events.goals.is_empty()
+        {
+            sound.cue(Cue::Success, 0.5);
+        }
+        if let Some(headline) = bests.update(&lab.fun) {
+            juice.toast(
+                "NEW PERSONAL BEST!",
+                headline,
+                juice::GOLD,
+                2.6,
+                juice::Priority::Alert,
+            );
+            sound.cue(Cue::Success, 0.6);
+        }
         let alpha = if lab.session.is_paused() || !active {
             1.
         } else {
             frame.alpha
         };
-        let inspection = pointer_in_scene.then(|| lab.sandbox.inspect(layout.to_world(pointer)));
+        let inspection = pointer_in_scene.then(|| lab.sandbox.inspect(view.to_world(pointer)));
         if inspect && !reset {
             lab.select_body(inspection.as_ref().and_then(|result| result.as_ref().ok()));
         }
         let sandbox = &lab.sandbox;
         ferravex_render::set_world_colors(true);
+        let grid = Color::from_rgba(25, 38, 53, 255);
         for x in -12..=12 {
             let start = to_screen(vec2(x as f32, 0.0));
             let end = to_screen(vec2(x as f32, 13.0));
-            draw_line(
-                start.x,
-                start.y,
-                end.x,
-                end.y,
-                1.0,
-                Color::from_rgba(25, 38, 53, 255),
-            );
+            draw_line(start.x, start.y, end.x, end.y, 1.0, grid);
         }
         for y in 0..=13 {
             let start = to_screen(vec2(-12.0, y as f32));
             let end = to_screen(vec2(12.0, y as f32));
-            draw_line(
-                start.x,
-                start.y,
-                end.x,
-                end.y,
-                1.0,
-                Color::from_rgba(25, 38, 53, 255),
-            );
+            draw_line(start.x, start.y, end.x, end.y, 1.0, grid);
+        }
+        // Tall narrow screens show open sky above the lab, where launches go.
+        let sky = view.to_world(vec2(0., 100.)).y.floor().clamp(13., 40.) as i32;
+        for y in 14..=sky {
+            let fade = 1. - (y - 13) as f32 / (sky - 12) as f32;
+            let start = to_screen(vec2(-12.0, y as f32));
+            let end = to_screen(vec2(12.0, y as f32));
+            draw_line(start.x, start.y, end.x, end.y, 1.0, faded(grid, fade));
         }
         for (position, half) in &sandbox.platforms {
             let top_left = to_screen(*position + vec2(-half.x, half.y));
@@ -834,7 +1015,7 @@ async fn game() {
                 draw_circle(a.x, a.y, 3.5, ui::AMBER);
             }
         }
-        for body in &sandbox.bodies {
+        for (index, body) in sandbox.bodies.iter().enumerate() {
             let rigid_body = &sandbox.physics.bodies[body.handle];
             let position = body
                 .previous_position
@@ -847,70 +1028,96 @@ async fn game() {
             let angle = body.previous_angle + difference * alpha;
             let center = to_screen(position);
             let rotation = Vec2::from_angle(angle);
+            // Spawn pop-in scales the drawing only; the collider never changes.
+            let pop = juice.body_scale(index);
+            let flash = juice.body_flash(index);
+            let fill = mix(body.color, WHITE, flash * 0.75);
             match body.shape {
                 Shape::Dumbbell => {
                     let a = to_screen(position + rotation.rotate(vec2(-0.75, 0.)));
                     let b = to_screen(position + rotation.rotate(vec2(0.75, 0.)));
                     draw_line(a.x, a.y, b.x, b.y, 0.2 * scale, ui::MUTED);
                     for p in [a, b] {
-                        draw_circle(p.x, p.y, 0.28 * scale, body.color);
+                        draw_circle(p.x, p.y, 0.28 * scale, fill);
                         draw_circle_lines(p.x, p.y, 0.28 * scale, 1.5, ui::AMBER);
                     }
                 }
-
                 Shape::Ball(radius) => {
-                    draw_circle(center.x, center.y, radius * scale, body.color);
+                    let r = radius * scale * pop;
+                    draw_circle(center.x, center.y, r, fill);
                     draw_circle_lines(
                         center.x,
                         center.y,
-                        radius * scale,
+                        r,
                         1.5,
                         Color::from_rgba(191, 239, 230, 255),
                     );
-                    let end = to_screen(position + rotation * radius * 0.72);
+                    let end = center + vec2(rotation.x, -rotation.y) * r * 0.72;
                     draw_line(center.x, center.y, end.x, end.y, 2.0, ui::BACKGROUND);
                 }
-                Shape::Box(half) => {
+                Shape::Box(half) | Shape::Plank(half) => {
                     let corners = [
                         vec2(-half.x, -half.y),
                         vec2(half.x, -half.y),
                         vec2(half.x, half.y),
                         vec2(-half.x, half.y),
                     ]
-                    .map(|p| to_screen(position + rotation.rotate(p)));
-                    draw_triangle(corners[0], corners[1], corners[2], body.color);
-                    draw_triangle(corners[0], corners[2], corners[3], body.color);
+                    .map(|p| to_screen(position + rotation.rotate(p * pop)));
+                    draw_triangle(corners[0], corners[1], corners[2], fill);
+                    draw_triangle(corners[0], corners[2], corners[3], fill);
+                    let plank = matches!(body.shape, Shape::Plank(_));
+                    let edge = if plank {
+                        Color::from_rgba(70, 64, 58, 255)
+                    } else {
+                        Color::from_rgba(250, 212, 147, 255)
+                    };
                     for index in 0..4 {
                         let a = corners[index];
                         let b = corners[(index + 1) % 4];
+                        draw_line(a.x, a.y, b.x, b.y, 1.5, edge);
+                    }
+                    if plank {
+                        // Domino face: a divider and two pips.
+                        let mid_a = to_screen(position + rotation.rotate(vec2(-half.x, 0.)));
+                        let mid_b = to_screen(position + rotation.rotate(vec2(half.x, 0.)));
+                        draw_line(mid_a.x, mid_a.y, mid_b.x, mid_b.y, 1.5, edge);
+                        for y in [-0.4, 0.4] {
+                            let pip = to_screen(position + rotation.rotate(vec2(0., y * half.y)));
+                            draw_circle(pip.x, pip.y, (half.x * 0.45 * scale).max(1.5), edge);
+                        }
+                    } else {
                         draw_line(
-                            a.x,
-                            a.y,
-                            b.x,
-                            b.y,
-                            1.5,
-                            Color::from_rgba(250, 212, 147, 255),
+                            corners[0].x,
+                            corners[0].y,
+                            corners[2].x,
+                            corners[2].y,
+                            1.0,
+                            Color::from_rgba(189, 126, 57, 255),
                         );
                     }
-                    draw_line(
-                        corners[0].x,
-                        corners[0].y,
-                        corners[2].x,
-                        corners[2].y,
-                        1.0,
-                        Color::from_rgba(189, 126, 57, 255),
-                    );
                 }
             }
             if lab.selected == Some(body.handle) {
                 let radius = match body.shape {
                     Shape::Ball(radius) => radius,
-                    Shape::Box(half) => half.length(),
+                    Shape::Box(half) | Shape::Plank(half) => half.length(),
                     Shape::Dumbbell => 1.03,
                 };
                 // A steady outline carries selection without flashing or shake.
                 draw_circle_lines(center.x, center.y, radius * scale + 4., 2., ui::INK);
             }
+        }
+        for particle in juice.particles.iter() {
+            let p = to_screen(vec2(particle.position[0], particle.position[1]));
+            let [r, g, b, a] = particle.color;
+            draw_poly(
+                p.x,
+                p.y,
+                4,
+                (particle.size * scale).max(1.),
+                particle.rotation.to_degrees(),
+                Color::new(r, g, b, a),
+            );
         }
         if pointer_in_scene && sandbox.bodies.len() < MAX_BODIES {
             let preview = to_screen(spawn_position);
@@ -926,6 +1133,16 @@ async fn game() {
                     ui::AMBER,
                 );
             }
+            // A faint drop line shows where the shape will fall.
+            let floor = to_screen(vec2(spawn_position.x, 0.));
+            draw_line(
+                preview.x,
+                preview.y,
+                floor.x,
+                floor.y,
+                1.,
+                faded(ui::MUTED, 0.25),
+            );
         }
         if let Some((center, age)) = pulse_visual.ring {
             let point = to_screen(center);
@@ -943,12 +1160,24 @@ async fn game() {
             );
         }
         ferravex_render::set_world_colors(false);
-        draw_text("PHYSICS 2D", 16., 29., 18., ui::INK);
+        if beat > 0. {
+            // Cinematic letterbox for the collapse beat (motion only).
+            let bar = 28. * beat;
+            let top = 44.;
+            draw_rectangle(0., top, screen_width(), bar, Color::new(0., 0., 0., 0.85));
+            draw_rectangle(
+                0.,
+                layout.footer_y - bar,
+                screen_width(),
+                bar,
+                Color::new(0., 0., 0., 0.85),
+            );
+        }
         ui::panel(Rect::new(
             16.,
-            footer_y,
+            layout.footer_y,
             screen_width() - 32.,
-            footer_height,
+            layout.footer_height,
         ));
         let labels = [
             "BALL",
@@ -962,6 +1191,8 @@ async fn game() {
             },
             "STEP",
             "RESET",
+            "CHAOS",
+            "DOMINO",
         ];
         for (i, label) in labels.iter().enumerate() {
             let selected = match i {
@@ -969,10 +1200,11 @@ async fn game() {
                 1 => !lab.ball,
                 3 => lab.sandbox.pulse_time > 0.,
                 4 => lab.session.is_paused(),
+                8 => lab.fun.scenario == Scenario::Dominoes,
                 _ => false,
             };
             ui::button_with_options(
-                button_rect(i),
+                layout.button(i),
                 label,
                 ui::ButtonOptions {
                     enabled: active && lab.button_enabled(i),
@@ -980,44 +1212,24 @@ async fn game() {
                 },
             );
         }
-
-        let state = if !active {
-            "SUSPENDED"
-        } else if lab.session.is_paused() {
-            "PAUSED"
-        } else {
-            "RUNNING"
-        };
-        let status_y = footer_y
-            + if screen_width() < 360. {
-                164.
-            } else if narrow {
-                120.
-            } else {
-                76.
-            };
-        // Controls are visible; repeating their keyboard bindings and a paragraph
-        // of per-frame engine diagnostics adds no interaction affordance.
-        fitted_label(
-            &format!("{state} / {} BODIES", sandbox.bodies.len()),
-            28.,
-            status_y,
-            screen_width() - 56.,
-            ui::INK,
-        );
-        if lab.selected.is_some() {
-            let selected = lab.selected_label();
-            for (row, line) in presentation::label_lines(&selected, screen_width() - 56.)
-                .take(2)
-                .enumerate()
-            {
-                draw_text(line, 28., status_y + 24. + row as f32 * 18., 16., ui::INK);
-            }
-        }
+        let inspection = inspection.as_ref().and_then(|query| query.as_ref().ok());
+        hud.draw(&hud::Frame {
+            lab: &lab,
+            layout: &layout,
+            view: &view,
+            juice: &juice,
+            bests: &bests,
+            input: &player_input,
+            hovered,
+            inspection,
+            active,
+        });
         if player_input.gameplay_active() && player_input.cursor_is_virtual() {
             draw_circle_lines(pointer.x, pointer.y, 5., 1.3, WHITE);
         }
         player_input.draw_controls();
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        capture.end_frame();
         if demo.finish_frame() {
             break;
         }

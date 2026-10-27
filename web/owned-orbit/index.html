@@ -39,6 +39,13 @@
     body.ferravex-fullscreen:has(#orbit-toolbar) main{width:min(100%,760px)}
     body.ferravex-fullscreen :is(#orbit-title,#orbit-description,#orbit-keys,#orbit-navigation){display:none}
     body.ferravex-fullscreen .orbit-stage{width:min(100%,640px,calc((100dvh - env(safe-area-inset-top,0px) - env(safe-area-inset-bottom,0px))*.8888889));margin:0 auto}
+    /* Near an 8:9 viewport the centered canvas would touch both the top and right
+       edges, putting the score under the fixed 44px game-menu button. Keep a 60px
+       top or side gutter (whichever costs less). Compact canvases use the
+       left-aligned DOM HUD instead; phones and wide screens are unchanged. */
+    @media(min-width:480px) and (min-height:540px){
+      body.ferravex-fullscreen main .orbit-stage #game{--orbit-fit:min(100vw,calc(100dvh * 8 / 9),max(calc(100vw - 120px),calc((100dvh - 120px) * 8 / 9)));width:var(--orbit-fit)!important;height:calc(var(--orbit-fit) * 9 / 8)!important}
+    }
     @media(max-width:480px){
       #orbit-toolbar>a{flex-basis:100%}.toolbar .spacer{display:none}
       .help dl{grid-template-columns:minmax(0,1fr);gap:4px}.help dd{margin-bottom:8px}
@@ -82,7 +89,7 @@
           <p><kbd>Shift</kbd> + <kbd>Tab</kbd> leaves the canvas for this help heading even while Controls is open, without closing that panel. <kbd>Enter</kbd> or <kbd>Space</kbd> expands the help; <kbd>Escape</kbd> closes this help and keeps focus on its heading. Use <kbd>Shift</kbd> + <kbd>Tab</kbd> from the heading to reach the toolbar, then <kbd>Tab</kbd> / <kbd>Shift</kbd> + <kbd>Tab</kbd> to navigate the page.</p>
           <p>Open <strong>Details → Player tools</strong> for accessibility preferences, screenshots and settings backups. <kbd>Escape</kbd> or Done closes Details and returns focus to the canvas. Switching away from the browser pauses play; returning requires an explicit resume.</p>
           <h2>Serve and return</h2>
-          <p>Wait before launch to charge your serve. Full charge pierces reinforced panels until the first paddle return. Each launch gets one opening ball save. Paddle edges angle your return. Catch turquoise capsules for a wider paddle.</p>
+          <p>Wait before launch to charge your serve. Full charge pierces reinforced panels until the first paddle return. Each launch gets one opening ball save. Paddle edges angle your return. Catch capsules: turquoise widens the paddle, violet splits off two free bonus balls, and green makes the next three returns stick until you launch again. Chain panel hits without touching the paddle for volley callouts, clear a sector without losing a ball for a flawless bonus, and keep an eye on the gap above the panels. Your best score is kept on this device.</p>
           <p>With default pointer controls, click or tap the playfield to launch or retry; hold and drag to steer. Release before launching again. Controls also lists controller bindings and touch settings.</p>
         </div>
       </details>

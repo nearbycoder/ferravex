@@ -12,6 +12,15 @@ let inputOverlay;
 let wasm,gl,program,shadowProgram,meshes=[],shadowTarget,shadowTexture,view=0,playing=false,recording=false;
 let connected=false,pauseReason='';
 const trainingDrills=['Move five meters with WASD or the left stick.','Fire one shot with click or your fire binding.','Press R to reload, then wait for the magazine to refill.','Aim at a moving operator and land a hit.'];
+const grades=['','S','A','B','C','D'],points=value=>Number(value).toLocaleString('en-US');
+// Optional qualifier exports; older or mocked engines fall back to free practice.
+function qualifierText(){
+ const phase=wasm?.ferravex_qualifier_phase?.()??0;
+ if(phase===1)return 'Qualifier starting · 30 seconds · hit operators, headshots pay more';
+ if(phase===2)return 'Qualifier running · hit operators, misses break your streak';
+ if(phase===3)return `Qualifier result: grade ${grades[wasm.ferravex_qualifier_grade(0)]}, ${points(wasm.ferravex_qualifier_score())} points · best ${points(wasm.ferravex_qualifier_best())} · shoot the bell on the central cover to go again`;
+ return 'Keep practicing';
+}
 let shadowSize=1024,maxFramebufferDimension=8192;
 let uniforms={},gpuTimer,gpuFrame=0,lastGpuFrame=0,gpuMs=null,gpuFresh=false,contextLost=false;const cpuSamples=new Float32Array(120);let cpuIndex=0,cpuCount=0;
 const buckets=new Map(),edits=new Map();let draws=0,frameMs=0,frames=0,elapsed=0,previous=0;
@@ -82,7 +91,9 @@ function render(){
  gl.bindFramebuffer(gl.FRAMEBUFFER,shadowTarget);gl.viewport(0,0,shadowSize,shadowSize);gl.clear(gl.DEPTH_BUFFER_BIT);gl.useProgram(shadowProgram);gl.uniformMatrix4fv(gl.getUniformLocation(shadowProgram,'lightProjection'),false,light);gl.enable(gl.POLYGON_OFFSET_FILL);gl.polygonOffset(1.5,3);drawGroups();gl.disable(gl.POLYGON_OFFSET_FILL);}
  uploadInstances(wasm.ferravex_instances(),wasm.ferravex_instances_len());
  gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.viewport(0,0,width,height);gl.clearColor(.66,.72,.73,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);gl.useProgram(program);gl.uniformMatrix4fv(uniforms.viewProjection,false,f32(wasm.ferravex_matrix(),16));gl.uniformMatrix4fv(uniforms.lightProjection,false,light);const status=f32(wasm.ferravex_status(),wasm.ferravex_status_len());gl.uniform3fv(uniforms.eye,status.subarray(8,11));gl.uniform1f(uniforms.fogDensity,Number($('fog').value));gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,shadowTexture);gl.uniform1i(uniforms.shadowMap,0);gl.uniform1i(uniforms.visualLook,wasm.ferravex_visual_look());gl.uniform1i(uniforms.shadowsEnabled,desired?1:0);gl.uniform1f(uniforms.shadowTexel,1/shadowSize);gl.uniform1i(uniforms.shadowRadius,detail===3?1:0);canvas.dataset.look=String(wasm.ferravex_visual_look());drawGroups();
- $('vitals').innerHTML=`${status[0]}<span>HEALTH</span>${status[6]>0?'—':status[1]}<span>${status[6]>0?'RELOADING':'/ 30'}</span>`;$('score').textContent=`${status[2]} eliminations · ${Math.floor(status[7]/60)}:${String(Math.floor(status[7]%60)).padStart(2,'0')}`;
+ // Offline operators never fire back: show health only when it can change.
+ const health=connected||status[0]<100?`${status[0]}<span>HEALTH</span>`:'',ammo=status[6]>0?'—<span>RELOADING</span>':status[1]===0?'0<span class="empty">EMPTY · RELOAD</span>':`${status[1]}<span>/ 30</span>`;
+ $('vitals').innerHTML=health+ammo;$('score').textContent=`${status[2]} eliminations · ${Math.floor(status[7]/60)}:${String(Math.floor(status[7]%60)).padStart(2,'0')}`;
  gpuTimer.end();
  return status;
 }
@@ -90,8 +101,10 @@ function trainingText(id,text){if($(id).textContent!==text)$(id).textContent=tex
 function refreshTraining(){
  const progress=wasm?.ferravex_training_progress()??0;
  const done=trainingDrills.reduce((n,_,i)=>n+Number(Boolean(progress&(1<<i))),0),next=trainingDrills.findIndex((_,i)=>!(progress&(1<<i)));
- const objective=connected?'Peer match · host owns movement, weapons and damage':next<0?'4 / 4 drills complete · Keep practicing':`${done} / 4 drills complete · ${trainingDrills[next]}`;
+ const objective=connected?'Peer match · host owns movement, weapons and damage':next<0?`4 / 4 drills complete · ${qualifierText()}`:`${done} / 4 drills complete · ${trainingDrills[next]}`;
  trainingText('objective',objective);trainingText('menu-objective',objective);
+ const best=wasm?.ferravex_qualifier_best?.()??0;
+ trainingText('menu-best',connected||!best?'':`Personal best: ${points(best)} pts · grade ${grades[wasm.ferravex_qualifier_grade(1)]}. Ring the bell to beat it.`);
  const state=wasm?.ferravex_training_state()??0;
  trainingText('play',connected?'Return to live match':state===0?'Enter training':'Resume training');
  trainingText('menu-status',connected?'Match stays live while this menu is open.':pauseReason);

@@ -1,9 +1,10 @@
 # Ferravex quickstart
 
-Start from this checkout with the Rust toolchain required by the workspace
-(`rust-version = "1.88"`, edition 2024). All Rust dependencies are local,
-first-party workspace crates. Read the [dependency policy](../DEPENDENCIES.md)
-before adding a package. Commands below run from the repository root.
+Get a Ferravex program running with a single dependency: the `ferravex` facade.
+You need the Rust toolchain required by the workspace (`rust-version = "1.88"`,
+edition 2024). Every Rust dependency is a first-party crate in this repository;
+the [dependency policy](../DEPENDENCIES.md) explains why. Run the commands below
+from the repository root.
 
 ## Run an existing example
 
@@ -46,7 +47,7 @@ python3 -B scripts/ferravex.py run emberline --dry-run
 ```
 
 Omit `--dry-run` to launch it on a supported native graphics host.
-The [catalog](../examples/catalog.json) lists all fifteen packages and browser
+The [catalog](../examples/catalog.json) lists every game package and browser
 hosts. Courtyard's package is `owned-lab`, while its browser host is `owned`.
 
 With the `wasm32-unknown-unknown` standard-library target installed, compile the
@@ -259,7 +260,7 @@ Apply game rules first, then route accepted shots, hits, landings or pickups
 through `FeedbackController`. Only a returned `Some(FeedbackResponse)` should
 play the cue or spawn effects. Clear input debt, transient feedback, camera
 history and game timers alongside session restart. The [migration cookbook](MIGRATION_50.md)
-provides compiling before/after recipes for these integrations and all fifteen
+provides compiling before/after recipes for these integrations and the original
 demos.
 
 Synchronize `render::preferences::sync_feedback(&mut feedback)` on every
@@ -317,8 +318,7 @@ Select the matching hashed `libferravex-….rlib` in Cargo's `debug/deps` direct
 the checker searches that artifact's directory for its first-party dependencies.
 The top-level `debug/libferravex.rlib` copy does not supply that dependency path.
 
-These commands do not launch a window or validate browser play. Replace the
-package/filter with the code you changed. During [Journey200](JOURNEY_200.md),
-the parent owns combined workspace, staged Wasm and visual checks after concurrent
-changes settle. The [Journey50 baseline](JOURNEY_50_RESULTS.md) remains intact.
+These commands do not open a window or test browser play. Swap in the package
+and filter for the code you changed. Full workspace, WebAssembly and visual
+checks are described in the [validation guide](GAME_TESTS.md).
 See the [agent guide](AGENT_GUIDE.md) for ownership and exact validation reporting.

@@ -4,7 +4,9 @@ pub mod game;
 mod interactive;
 #[cfg(test)]
 mod journey200_tests;
+mod juice;
 mod presentation;
+mod quips;
 mod raster;
 mod readable;
 use ferravex_core::session::{GameSession, SessionState};
@@ -12,6 +14,17 @@ use ferravex_engine::input::{ActionKind, ActionMap, Binding, ContextId, InputCod
 use game::{Game, HEIGHT, Input, WIDTH};
 use raster::Canvas;
 use std::sync::Mutex;
+
+/// A finished run awaiting the host's record keeping. See [`Orbit::take_finished_run`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FinishedRun {
+    pub won: bool,
+    pub score: u32,
+    /// Simulated run time in seconds.
+    pub seconds: f32,
+    /// Whether this score beat the personal best supplied by the host.
+    pub new_best: bool,
+}
 
 pub struct Orbit {
     pub game: Game,
@@ -24,6 +37,7 @@ pub struct Orbit {
     pending_launch: bool,
     presentation: presentation::Presentation,
     readable_status: readable::ReadableStatus,
+    unrecorded: Option<FinishedRun>,
 }
 impl Default for Orbit {
     fn default() -> Self {
@@ -67,6 +81,7 @@ impl Orbit {
             pending_launch: false,
             presentation: presentation::Presentation::default(),
             readable_status: readable::ReadableStatus::default(),
+            unrecorded: None,
         };
         app.render();
         app
@@ -112,7 +127,11 @@ impl Orbit {
         }
         if matches!(self.game.phase, game::Phase::Won | game::Phase::Lost) {
             self.session.finish(self.game.phase == game::Phase::Won);
+            self.finish();
             self.pending_launch = false;
+            if self.game.phase == game::Phase::Won {
+                self.presentation.juice.celebrate(dt as f32);
+            }
             if input.launch {
                 self.restart();
             }
@@ -130,11 +149,85 @@ impl Orbit {
                 step.dt,
             );
             self.presentation.accept_tick(self.game.events.drain());
+            let juice = &mut self.presentation.juice;
+            juice.tick(step.dt);
+            if matches!(self.game.phase, game::Phase::Ready | game::Phase::Playing) {
+                juice.steered(input.axis, step.dt);
+            }
+            juice.charge_learned |= self.game.armor_piercing();
             if matches!(self.game.phase, game::Phase::Won | game::Phase::Lost) {
                 self.session.finish(self.game.phase == game::Phase::Won);
+                self.finish();
                 break;
             }
         }
+    }
+
+    /// Build the results card once, from the accepted final state.
+    fn finish(&mut self) {
+        if self.presentation.results.is_some() {
+            return;
+        }
+        let g = &self.game;
+        let summary = quips::RunSummary {
+            won: g.phase == game::Phase::Won,
+            score: g.score,
+            sector: g.sector,
+            clears: g.clears,
+            lives_lost: g.lives_lost,
+            saves: g.saves,
+            satellites: g.satellites,
+        };
+        let previous_best = self.presentation.best;
+        let new_best = g.score > 0 && previous_best.is_none_or(|best| g.score > best);
+        if new_best {
+            self.presentation.best = Some(g.score);
+        }
+        self.presentation.runs = self.presentation.runs.saturating_add(1);
+        self.presentation.results = Some(presentation::Results {
+            summary,
+            rank: quips::rank(summary),
+            previous_best,
+            new_best,
+        });
+        self.unrecorded = Some(FinishedRun {
+            won: summary.won,
+            score: g.score,
+            seconds: g.time,
+            new_best,
+        });
+    }
+
+    /// Supply the stored personal best so the results card can compare.
+    /// Storage stays with the host; the simulation never reads it.
+    ///
+    /// ```
+    /// let mut orbit = owned_orbit::Orbit::new();
+    /// orbit.set_personal_best(Some(9000));
+    /// assert_eq!(orbit.personal_best(), Some(9000));
+    /// ```
+    pub fn set_personal_best(&mut self, best: Option<u32>) {
+        self.presentation.best = best;
+    }
+
+    /// The best score known to this session, including a just-finished run.
+    pub fn personal_best(&self) -> Option<u32> {
+        self.presentation.best
+    }
+
+    /// The run that just finished, returned once so a host can record it.
+    ///
+    /// ```
+    /// use owned_orbit::{Orbit, game::Phase};
+    /// let mut orbit = Orbit::new();
+    /// orbit.game.phase = Phase::Lost;
+    /// orbit.advance(0.0, 0.0, 0);
+    /// let run = orbit.take_finished_run().unwrap();
+    /// assert!(!run.won && run.score == 0 && !run.new_best);
+    /// assert_eq!(orbit.take_finished_run(), None);
+    /// ```
+    pub fn take_finished_run(&mut self) -> Option<FinishedRun> {
+        self.unrecorded.take()
     }
 
     /// The host lifecycle; `Playing` also permits pre-serve charging and sector transitions.
@@ -160,6 +253,9 @@ impl Orbit {
     pub fn set_paused(&mut self, paused: bool) -> bool {
         let changed = self.session.set_paused(paused);
         if changed {
+            if paused {
+                self.presentation.pauses = self.presentation.pauses.wrapping_add(1);
+            }
             self.pending_launch = false;
             self.actions.suppress_held();
         }
@@ -180,6 +276,8 @@ impl Orbit {
     pub fn restart(&mut self) {
         self.game.restart();
         self.presentation.clear();
+        self.presentation.restarts = self.presentation.restarts.wrapping_add(1);
+        self.unrecorded = None;
         self.sync_presentation();
         self.session.restart();
         self.pending_launch = false;
@@ -204,19 +302,16 @@ impl Orbit {
     /// assert!(orbit.status_text_v1().contains("Best precision: 0. Ball saves: 0."));
     /// ```
     pub fn status_text_v1(&mut self) -> &str {
-        self.readable_status.refresh(
-            &self.game,
-            self.session.is_paused(),
-            &self.presentation.hints,
-            self.presentation.notice,
-        );
+        self.readable_status
+            .refresh(&self.game, self.session.is_paused(), &self.presentation);
         self.readable_status.as_str()
     }
 
     fn sync_presentation(&mut self) {
         ferravex_engine::render::preferences::sync_feedback(&mut self.presentation.feedback);
-        self.game
-            .apply_policy(ferravex_engine::render::preferences::feedback_policy());
+        let policy = ferravex_engine::render::preferences::feedback_policy();
+        self.game.apply_policy(policy);
+        self.presentation.juice.apply_policy(policy);
     }
 }
 static APP: Mutex<Option<Orbit>> = Mutex::new(None);
@@ -401,6 +496,7 @@ mod tests {
             app.game.velocity = [0., 325.];
             app.game.drops.push(game::Drop {
                 position: [app.game.paddle_x, game::PADDLE_Y - 2.],
+                kind: game::Pickup::Wide,
             });
             app.advance_input(6. * DT, Input::default());
             assert_eq!((app.game.saves, app.game.lives), (1, 3));
@@ -633,5 +729,115 @@ mod tests {
                 .count()
                 > 5000
         );
+    }
+
+    #[test]
+    fn results_compare_with_the_supplied_best_once_and_restart_keeps_it() {
+        for (best, new_best) in [(None, true), (Some(100), true), (Some(99_999), false)] {
+            let mut app = Orbit::new();
+            app.set_personal_best(best);
+            app.game.phase = game::Phase::Playing;
+            app.game.score = 4321;
+            app.game.lives = 1;
+            app.game.ball = [100., 676.];
+            app.game.velocity = [0., 325.];
+            app.advance(DT, 0., 0);
+            assert_eq!(app.session_state(), SessionState::Lost);
+            let results = app.presentation.results.expect("results card");
+            assert_eq!((results.previous_best, results.new_best), (best, new_best));
+            assert_eq!(results.rank.title, "SPACE TOURIST");
+            let run = app.take_finished_run().expect("one record");
+            assert_eq!((run.won, run.score, run.new_best), (false, 4321, new_best));
+            app.advance(1., 0., 0);
+            assert_eq!(
+                app.take_finished_run(),
+                None,
+                "terminal frames never re-record"
+            );
+            let expected = if new_best { Some(4321) } else { best };
+            assert_eq!(app.personal_best(), expected);
+            app.restart();
+            assert!(app.presentation.results.is_none());
+            assert_eq!(app.personal_best(), expected);
+            assert_eq!(app.take_finished_run(), None);
+        }
+    }
+
+    #[test]
+    fn juice_freezes_with_pause_and_presentation_detail_never_adds_cues() {
+        let _restore = RestorePolicy::new();
+        let mut app = Orbit::new();
+        app.game.phase = game::Phase::Playing;
+        app.game.ball = [80., 380.];
+        app.game.velocity = [0., -12000.];
+        app.advance_input(DT, Input::default());
+        assert!(app.presentation.juice.pops.iter().any(Option::is_some));
+        assert!(app.presentation.juice.chime.is_some());
+        let cues: Vec<_> = app.presentation.take_cues().collect();
+        assert!(cues.len() <= 2, "{cues:?}");
+        let time = app.presentation.juice.time;
+        app.set_paused(true);
+        app.advance_input(5., Input::default());
+        app.render();
+        assert_eq!(app.presentation.juice.time, time);
+        assert!(app.presentation.juice.pops.iter().any(Option::is_some));
+        app.set_paused(false);
+        for _ in 0..240 {
+            app.advance_input(DT, Input::default());
+        }
+        assert!(app.presentation.juice.pops.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn steering_hint_retires_after_real_steering_and_survives_restart() {
+        let mut app = Orbit::new();
+        assert!(!app.presentation.juice.steering_learned());
+        for _ in 0..120 {
+            app.advance_input(
+                DT,
+                Input {
+                    axis: 1.,
+                    ..Input::default()
+                },
+            );
+        }
+        assert!(app.presentation.juice.steering_learned());
+        app.restart();
+        assert!(app.presentation.juice.steering_learned());
+    }
+
+    #[test]
+    fn every_screen_renders_opaque_and_reduced_motion_ignores_camera_kick() {
+        let _restore = RestorePolicy::new();
+        let mut app = Orbit::new();
+        app.set_personal_best(Some(5000));
+        app.game.phase = game::Phase::Playing;
+        app.game.extra_balls.push(game::Ball {
+            position: [200., 400.],
+            velocity: [0., -300.],
+        });
+        app.game.sticky = 2;
+        app.game.time = 15.;
+        app.render();
+        app.presentation
+            .juice
+            .accept(presentation::Spark::Drain { at: [100., 653.] });
+        let kicked = app.presentation.juice.shake();
+        assert_ne!(kicked, [0, 0]);
+        preferences::set_feedback_policy(FeedbackPolicy::new(true, true, 1.).unwrap());
+        app.render();
+        assert_eq!(app.presentation.juice.shake(), [0, 0]);
+        for phase in [game::Phase::Transition, game::Phase::Won, game::Phase::Lost] {
+            app.game.phase = phase;
+            app.advance(0., 0., 0);
+            app.render();
+            assert!(app.canvas.frame.pixels().iter().all(|p| p[3] == 255));
+        }
+        assert!(app.presentation.results.is_some());
+        app.set_paused(false);
+        app.restart();
+        app.set_paused(true);
+        app.render();
+        assert!(app.canvas.frame.pixels().iter().all(|p| p[3] == 255));
     }
 }

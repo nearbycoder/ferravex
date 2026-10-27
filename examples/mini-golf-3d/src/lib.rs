@@ -3,14 +3,17 @@ use ferravex_core::session::GameSession;
 use ferravex_render::{demo::Demo, prelude::*};
 use mini_golf::{App, View};
 fn conf() -> Conf {
-    ferravex_render::window_conf("Copper Greens / 3D")
+    let mut conf = ferravex_render::window_conf("Copper Greens / 3D");
+    // Debug-native screenshot sizing only; inert in release and Wasm.
+    mini_golf::capture::window(&mut conf);
+    conf
 }
 async fn game() {
     let mut demo = Demo::new();
     let mut app = App::new(View::ThreeD, demo.autoplay);
     let mut session = GameSession::new(120., 12, true);
     loop {
-        let dt = demo.dt();
+        let dt = demo.dt() * mini_golf::capture::turbo();
         app.prepare(&mut session, dt);
         let batch = session.advance(f64::from(dt));
         for _ in 0..batch.steps {

@@ -54,6 +54,11 @@ impl Trial {
         (self.countdown_ticks > 0).then(|| self.countdown_ticks.div_ceil(HZ))
     }
 
+    /// 0..1 progress through the current countdown second, for presentation.
+    pub fn countdown_progress(&self) -> f32 {
+        ((HZ - self.countdown_ticks % HZ) % HZ) as f32 / HZ as f32
+    }
+
     pub fn showing_go(&self) -> bool {
         self.go_ticks > 0
     }

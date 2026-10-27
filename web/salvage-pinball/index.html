@@ -60,7 +60,7 @@ kbd{font:inherit;font-weight:600}
 </header>
 <main id="pinball-main">
   <div class="pinball-intro">
-    <p id="pinball-description">A salvage-yard pinball table. Keep three balls in play and hit the bumpers to score.</p>
+    <p id="pinball-description">A salvage-yard pinball table with a grumpy foreman. Keep three balls in play, light all three bumpers to arm the magnet crane, then shoot under it for a jackpot.</p>
     <p id="pinball-keys"><strong>Default keys:</strong> <kbd>A</kbd> / <kbd>Left arrow</kbd> and <kbd>D</kbd> / <kbd>Right arrow</kbd> hold the flippers; <kbd>Space</kbd> starts and launches; <kbd>Escape</kbd> pauses or resumes. Release before each serve. Open <strong>Controls</strong> or press <kbd>F2</kbd> in the table to view or remap your current bindings.</p>
     <p id="pinball-navigation">Pause before reading help. <kbd>Shift</kbd> + <kbd>Tab</kbd> from the table moves to <strong>How to play</strong>; use <kbd>Tab</kbd> to reach page controls. This focus shortcut does not pause the game.</p>
   </div>
@@ -84,7 +84,8 @@ kbd{font:inherit;font-weight:600}
     <p><kbd>Shift</kbd> + <kbd>Tab</kbd> leaves the canvas for this help heading, even while Controls is open. It leaves the panel state unchanged. Press <kbd>Enter</kbd> or <kbd>Space</kbd> to expand this help. Continue with <kbd>Tab</kbd> for page links and buttons; <kbd>Shift</kbd> + <kbd>Tab</kbd> from this heading returns to the canvas.</p>
     <p>Open <strong>Details → Player tools</strong> for accessibility preferences, screenshots and settings backups. <kbd>Escape</kbd> or Done closes Details and returns focus to the canvas.</p>
     <h2>Scoring and ball saves</h2>
-    <p>Each bumper hit scores 100 points. The first launch of each life lights a five-second save for one early drain. A saved ball needs a new launch. Later drains consume a ball; after three unsaved drains, retry for a fresh game. Score, ball count and table status are drawn in the canvas.</p>
+    <p>Each bumper hit scores 100 points times the yard multiplier, and quick back-to-back hits build a chain bonus. Each bumper you hit lights its lamp; light all three to lower the magnet crane, then send the ball into the top lane under it. The crane grabs the ball, pays a jackpot, raises the multiplier (up to 5×) and drops the ball back into play. An unsaved drain resets the multiplier.</p>
+    <p>Skill shot: while a ball waits in the lane, a lamp hops between the bumpers. Launch so that the lit bumper is the first one your ball hits for a bonus. The first launch of each life lights a five-second save for one early drain. A saved ball needs a new launch. Later drains consume a ball; after three unsaved drains, the results card shows your rank, personal best and the next goal. Score, ball count, multiplier and the dot-matrix messages are drawn in the canvas.</p>
     <p>With the default pointer controls, click or tap the table to launch; hold its lower left or right half to flip. Controls also lists controller bindings and touch settings. Keyboard help does not require touch input.</p>
   </details>
   <noscript><p class="pinball-intro">Enable JavaScript to load the game. The instructions and All games link remain available.</p></noscript>

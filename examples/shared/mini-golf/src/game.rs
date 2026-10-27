@@ -18,6 +18,14 @@ pub struct Events {
     pub water: bool,
     pub holed: bool,
     pub stopped: bool,
+    /// Fastest approach speed of an accepted wall or rail contact, in cm/s.
+    pub impact_cms: u16,
+    /// A moving copper barrier struck the ball this tick.
+    pub moving_hit: bool,
+    /// The ball crossed the cup too fast to drop. At most once per stroke.
+    pub lip_out: bool,
+    /// The ball rolled onto sand this tick.
+    pub sand: bool,
 }
 #[derive(Clone, Debug)]
 pub struct Round {
@@ -33,8 +41,15 @@ pub struct Round {
     pub last_safe: Vec2,
     pub penalties: u8,
     pub picked_up: [bool; 12],
+    /// Distinct bank contacts since the current stroke began.
+    pub stroke_banks: u8,
+    /// A moving copper barrier touched the ball since the current stroke began.
+    pub stroke_assist: bool,
     water_timer: f32,
     route_index: usize,
+    stroke_lipped: bool,
+    last_bank: f32,
+    in_sand: bool,
 }
 impl Default for Round {
     fn default() -> Self {
@@ -57,8 +72,13 @@ impl Round {
             time: 0.,
             penalties: 0,
             picked_up: [false; 12],
+            stroke_banks: 0,
+            stroke_assist: false,
             water_timer: 0.,
             route_index: 0,
+            stroke_lipped: false,
+            last_bank: f32::NEG_INFINITY,
+            in_sand: false,
         }
     }
     pub fn load(&mut self, index: usize) {
@@ -73,6 +93,14 @@ impl Round {
         self.time = 0.;
         self.water_timer = 0.;
         self.route_index = 0;
+        self.in_sand = false;
+        self.begin_stroke();
+    }
+    fn begin_stroke(&mut self) {
+        self.stroke_banks = 0;
+        self.stroke_assist = false;
+        self.stroke_lipped = false;
+        self.last_bank = f32::NEG_INFINITY;
     }
     pub fn practice_hole(&mut self, index: usize) {
         *self = Self::new();
@@ -104,6 +132,7 @@ impl Round {
         self.velocity = direction.normalize() * (power * 11.5);
         self.strokes += 1;
         self.phase = Phase::Rolling;
+        self.begin_stroke();
         true
     }
     pub fn drop_ball(&mut self) -> bool {
@@ -185,6 +214,10 @@ impl Round {
                 .patches
                 .iter()
                 .any(|p| p.surface == Surface::Sand && p.contains(self.ball));
+            if sand && !self.in_sand {
+                e.sand = true;
+            }
+            self.in_sand = sand;
             let speed = self.velocity.length();
             let drag = if sand { 7.2 } else { DRAG };
             // Static friction holds a resting ball. A moving ball responds to slopes.
@@ -197,17 +230,22 @@ impl Round {
                 let v = if axis == 0 { self.ball.x } else { self.ball.y };
                 let hi = if axis == 0 { SIZE.x } else { SIZE.y };
                 if v < RADIUS || v > hi - RADIUS {
-                    if axis == 0 {
+                    let approach = if axis == 0 {
                         self.ball.x = v.clamp(RADIUS, hi - RADIUS);
+                        let approach = self.velocity.x.abs();
                         self.velocity.x *= -0.76;
+                        approach
                     } else {
                         self.ball.y = v.clamp(RADIUS, hi - RADIUS);
+                        let approach = self.velocity.y.abs();
                         self.velocity.y *= -0.76;
-                    }
-                    e.bank = true;
+                        approach
+                    };
+                    self.contact(&mut e, approach, time, false);
                 }
             }
-            for &w in &self.course.walls {
+            for index in 0..self.course.walls.len() {
+                let w = self.course.walls[index];
                 let (center, angle) = w.pose(time);
                 let r = Vec2::from_angle(-angle);
                 let local = r.rotate(self.ball - center);
@@ -240,7 +278,8 @@ impl Round {
                     if into < 0. {
                         self.velocity -= n * (1.72 * into);
                         self.velocity = self.velocity.clamp_length_max(15.);
-                        e.bank = true;
+                        let moving = w.spin != 0. || w.travel != Vec2::ZERO;
+                        self.contact(&mut e, -into, time, moving);
                     }
                 }
             }
@@ -266,6 +305,10 @@ impl Round {
                 e.holed = true;
                 return e;
             }
+            if dist < 0.37 && !self.stroke_lipped {
+                self.stroke_lipped = true;
+                e.lip_out = true;
+            }
             if dist < 0.85 && self.velocity.length() < 2.4 {
                 self.velocity += to.normalize_or_zero() * (3.2 * dt);
             }
@@ -278,6 +321,19 @@ impl Round {
             e.stopped = true;
         }
         e
+    }
+    /// Report one accepted contact. Rattles within 0.1 s count as one bank.
+    fn contact(&mut self, e: &mut Events, approach: f32, time: f32, moving: bool) {
+        e.bank = true;
+        e.impact_cms = e
+            .impact_cms
+            .max((approach * 100.).clamp(0., f32::from(u16::MAX)) as u16);
+        e.moving_hit |= moving;
+        self.stroke_assist |= moving;
+        if time - self.last_bank > 0.1 {
+            self.stroke_banks = self.stroke_banks.saturating_add(1);
+        }
+        self.last_bank = time;
     }
     /// Legal demonstration shot: bounded prediction of the real simulation toward
     /// authored route points. It never places the ball or awards a score directly.
@@ -510,5 +566,82 @@ mod moving_contact_regression {
         assert!(r.ball.x < 8.6);
         assert!(r.velocity.x < 0.);
         assert_eq!(r.phase, Phase::Rolling);
+    }
+}
+
+#[cfg(test)]
+mod style_event_regressions {
+    use super::*;
+    fn roll(r: &mut Round) -> Vec<Events> {
+        let mut events = Vec::new();
+        for _ in 0..2400 {
+            events.push(r.tick());
+            if !matches!(r.phase, Phase::Rolling | Phase::Water) {
+                break;
+            }
+        }
+        events
+    }
+    #[test]
+    fn a_hot_putt_lips_out_once_and_never_drops() {
+        let mut r = Round::new();
+        assert!(r.shoot(Vec2::X, 0.9));
+        let events = roll(&mut r);
+        assert_eq!(events.iter().filter(|e| e.lip_out).count(), 1);
+        assert!(events.iter().all(|e| !e.holed));
+        assert_eq!(r.phase, Phase::Aiming);
+        // A fresh stroke re-arms the lip-out callout.
+        let before = r.clone();
+        assert!(r.shoot(-Vec2::X, 0.05));
+        assert!(!r.stroke_lipped && r.stroke_banks == 0 && !r.stroke_assist);
+        assert_eq!(r.strokes, before.strokes + 1);
+    }
+    #[test]
+    fn banks_count_distinct_contacts_with_impact_strength() {
+        let mut r = Round::new();
+        r.load(1);
+        assert!(r.shoot(Vec2::X, 1.));
+        let events = roll(&mut r);
+        let contacts = events.iter().filter(|e| e.bank).count();
+        assert!(r.stroke_banks >= 2, "wall and rail: {}", r.stroke_banks);
+        assert!(usize::from(r.stroke_banks) <= contacts);
+        let hardest = events.iter().map(|e| e.impact_cms).max().unwrap();
+        assert!(hardest > 500, "a full-power wall hit is hard: {hardest}");
+        assert!(events.iter().all(|e| !e.moving_hit), "stone is not copper");
+        assert!(!r.stroke_assist);
+    }
+    #[test]
+    fn copper_contact_marks_the_hidden_assist() {
+        let mut r = Round::new();
+        r.load(5);
+        r.ball = vec2(8.6, 7.5);
+        r.last_safe = r.ball;
+        let e = r.tick();
+        assert!(e.moving_hit && e.bank);
+        assert!(r.stroke_assist);
+    }
+    #[test]
+    fn entering_a_bunker_reports_sand_once() {
+        let mut r = Round::new();
+        r.load(2);
+        assert!(r.shoot(Vec2::X, 0.6));
+        let events = roll(&mut r);
+        assert_eq!(events.iter().filter(|e| e.sand).count(), 1);
+    }
+    #[test]
+    fn style_counters_do_not_change_the_ball() {
+        // Event bookkeeping is observation only: the same putt from a clone
+        // with stale counters follows the identical path.
+        let mut a = Round::new();
+        a.load(1);
+        let mut b = a.clone();
+        b.stroke_banks = 9;
+        b.stroke_assist = true;
+        assert!(a.shoot(vec2(1., 0.3), 0.8) && b.shoot(vec2(1., 0.3), 0.8));
+        for _ in 0..900 {
+            a.tick();
+            b.tick();
+            assert_eq!((a.ball, a.velocity, a.phase), (b.ball, b.velocity, b.phase));
+        }
     }
 }

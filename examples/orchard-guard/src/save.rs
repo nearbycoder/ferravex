@@ -218,12 +218,36 @@ impl Stamp {
         }
     }
 }
+/// How a finished run compares with the stored personal records.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Best {
+    /// Most pests stopped in any earlier run, if one was recorded.
+    pub previous_score: Option<u64>,
+    /// Fastest earlier winning harvest in microseconds of simulated time.
+    pub previous_fastest_us: Option<u64>,
+    pub new_score: bool,
+    pub new_fastest: bool,
+}
+impl Best {
+    /// Compare an attempt with the records that existed before it.
+    pub fn compare(previous: Option<(u64, Option<u64>)>, score: u64, time: Option<u64>) -> Self {
+        let previous_score = previous.map(|p| p.0);
+        let previous_fastest_us = previous.and_then(|p| p.1);
+        Self {
+            previous_score,
+            previous_fastest_us,
+            new_score: previous_score.is_none_or(|best| score > best),
+            new_fastest: time.is_some_and(|t| previous_fastest_us.is_none_or(|best| t < best)),
+        }
+    }
+}
 pub struct Progress {
     slot: Slot<Checkpoint>,
     records: Records,
     context: u64,
     last: Stamp,
     ended: bool,
+    best: Option<Best>,
     error: Option<StorageError>,
 }
 impl Progress {
@@ -249,6 +273,7 @@ impl Progress {
             context,
             last: Stamp::new(g),
             ended: false,
+            best: None,
             error,
         }
     }
@@ -256,14 +281,20 @@ impl Progress {
         self.context = context;
         self.last = Stamp::new(g);
         self.ended = false;
+        self.best = None;
     }
     pub fn restart(&mut self, g: &Game) {
         self.last = Stamp::new(g);
         self.ended = false;
+        self.best = None;
         self.error = self.slot.reset(Checkpoint::default()).err();
     }
     pub fn error(&self) -> Option<StorageError> {
         self.error
+    }
+    /// The finished run's record comparison, available once it has ended.
+    pub fn best(&self) -> Option<Best> {
+        self.best
     }
     pub fn sync(&mut self, g: &Game) {
         if g.outcome != Outcome::Playing {
@@ -274,6 +305,11 @@ impl Progress {
                 } else {
                     None
                 };
+                let previous = self
+                    .records
+                    .get("harvest", self.context)
+                    .map(|r| (r.score, r.fastest_us));
+                self.best = Some(Best::compare(previous, g.kills as u64, time));
                 let _ = self
                     .records
                     .attempt("harvest", self.context, g.kills as u64, time);
@@ -299,6 +335,17 @@ impl Progress {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn best_comparison_flags_first_and_improved_records_only() {
+        let first = Best::compare(None, 0, None);
+        assert!(first.new_score && !first.new_fastest);
+        let better = Best::compare(Some((40, Some(200))), 41, Some(150));
+        assert!(better.new_score && better.new_fastest);
+        assert_eq!(better.previous_score, Some(40));
+        let worse = Best::compare(Some((40, Some(200))), 40, Some(250));
+        assert!(!worse.new_score && !worse.new_fastest);
+        assert!(Best::compare(Some((64, None)), 64, Some(9)).new_fastest);
+    }
     #[test]
     fn checkpoints_restore_valid_builds_and_reject_forged_economy_or_context() {
         let mut g = Game::new();

@@ -1,5 +1,8 @@
 //! Presentation-only effects. Neither preferences nor render cadence own combat.
-use crate::game::{Enemy, Game};
+use crate::game::{Enemy, Foe, Game, Note, Style, Supply};
+use crate::juice::{self, GOLD, Juice, MAGENTA, Priority, VIOLET};
+use crate::quips;
+use crate::{AMBER, CORAL, CYAN, PAPER};
 use ferravex_core::session::SessionState;
 use ferravex_play::feedback::{
     FeedbackConfig, FeedbackController, FeedbackError, FeedbackEvent, FeedbackKind, FeedbackPolicy,
@@ -8,6 +11,8 @@ use ferravex_play::feedback::{
 use ferravex_play::particles::{
     Emitter, EmitterDesc, EmitterTransform, ParticleDesc, ParticleMotion, ParticlePool,
 };
+use ferravex_render::audio::{Cue, Surface};
+use ferravex_render::prelude::{Color, Vec2, vec2};
 use ferravex_render::{audio::GameAudio, preferences};
 
 const SEED: u64 = 0x4e454f4e;
@@ -17,9 +22,37 @@ pub(crate) struct Presentation {
     next_id: u64,
     pub particles: ParticlePool,
     sparks: Emitter,
+    chunks: Emitter,
     pub muzzle: f32,
     pub hurt: f32,
     pub dash: f32,
+    pub juice: Juice,
+    facing: Vec2,
+    focus: bool,
+}
+
+fn chunk_desc(start: Color, end: Color, speed: f32, size: f32, life: f32) -> EmitterDesc {
+    EmitterDesc {
+        particle: ParticleDesc {
+            lifetime: life,
+            start_color: [start.r, start.g, start.b, 1.],
+            end_color: [end.r, end.g, end.b, 0.],
+            start_size: size,
+            end_size: size * 0.25,
+            ..Default::default()
+        },
+        motion: ParticleMotion {
+            drag: 3.2,
+            angular_velocity: 9.,
+            ..Default::default()
+        },
+        velocity_jitter: [speed, speed, 0.],
+        lifetime_jitter: 0.35,
+        size_jitter: 0.4,
+        rotation_jitter: std::f32::consts::PI,
+        rate: 0.,
+        ..Default::default()
+    }
 }
 
 impl Presentation {
@@ -53,9 +86,13 @@ impl Presentation {
                 SEED,
             )
             .unwrap(),
+            chunks: Emitter::new(chunk_desc(CORAL, AMBER, 240., 7., 0.55), SEED ^ 0x55).unwrap(),
             muzzle: 0.,
             hurt: 0.,
             dash: 0.,
+            juice: Juice::new(),
+            facing: Vec2::X,
+            focus: false,
         }
     }
 
@@ -65,6 +102,12 @@ impl Presentation {
     /// Game is authoritative invulnerability and must never be cleared here.
     pub fn sync(&mut self, game: &mut Game) {
         preferences::sync_feedback(&mut self.feedback);
+        self.juice.apply_motion(self.motion_scale());
+        self.facing = game.facing;
+        self.focus = game.final_drone();
+        if self.juice.stretch > 0. {
+            self.juice.stretch_dir = game.dash_direction();
+        }
         if self.motion_scale() == 0. {
             self.dash = 0.;
         }
@@ -107,9 +150,12 @@ impl Presentation {
         self.next_id = 0;
         self.particles.clear();
         self.sparks.reset(SEED);
+        self.chunks.reset(SEED ^ 0x55);
         self.muzzle = 0.;
         self.hurt = 0.;
         self.dash = 0.;
+        self.juice.reset();
+        self.focus = false;
     }
 
     /// Age only cosmetics with presentation time, including while paused.
@@ -120,6 +166,25 @@ impl Presentation {
         self.muzzle = (self.muzzle - dt).max(0.);
         self.hurt = (self.hurt - dt).max(0.);
         self.dash = (self.dash - dt).max(0.);
+        let before = self.juice.celebrate;
+        self.juice.age(dt, self.focus);
+        // Victory fireworks pop along the arena sides, beside the results card.
+        if let (Some(before), Some(after)) = (before, self.juice.celebrate) {
+            for (i, at) in [0.3_f32, 0.6, 0.9, 1.2, 1.5].into_iter().enumerate() {
+                if before < at && after >= at {
+                    let spot = [
+                        vec2(200., 250.),
+                        vec2(1080., 600.),
+                        vec2(1080., 250.),
+                        vec2(200., 600.),
+                        vec2(640., 660.),
+                    ][i];
+                    let color = [GOLD, CYAN, MAGENTA, AMBER, VIOLET][i];
+                    self.juice.ring(spot, 10., 110., 0.6, color);
+                    self.chunk_burst(spot, chunk_desc(color, PAPER, 300., 8., 0.9), 24);
+                }
+            }
+        }
     }
 
     pub fn accept(
@@ -130,6 +195,12 @@ impl Presentation {
         let Some(response) = self.feedback.emit(self.next_id, event)? else {
             return Ok(None);
         };
+        match event.kind {
+            FeedbackKind::Fire => self.juice.recoil(self.facing),
+            FeedbackKind::Hurt => self.juice.trauma(0.25 + 0.3 * event.intensity),
+            FeedbackKind::Dash => self.juice.dash(self.facing),
+            _ => {}
+        }
         match event.kind {
             FeedbackKind::Fire if self.flash_scale() > 0. => self.muzzle = 0.055,
             FeedbackKind::Hurt if self.flash_scale() > 0. => self.hurt = 0.75,
@@ -153,6 +224,209 @@ impl Presentation {
             _ => {}
         }
         Ok(Some(response))
+    }
+
+    fn chunk_burst(&mut self, at: Vec2, desc: EmitterDesc, count: u16) {
+        // Additive and moving: either opt-out suppresses them with no backlog.
+        let budget = if self.flash_scale() == 0. {
+            0
+        } else {
+            (f32::from(count) * self.motion_scale()) as u16
+        };
+        self.chunks.set_config(desc).expect("authored chunk burst");
+        self.chunks
+            .burst_with_budget(
+                u32::from(count),
+                budget,
+                EmitterTransform::at([at.x, at.y, 0.]),
+                &mut self.particles,
+            )
+            .expect("validated accepted note position");
+    }
+
+    /// Route one accepted simulation note to juice. Returns an extra audio cue
+    /// for moments the base feedback events do not already voice.
+    pub fn note(&mut self, note: Note, style: &Style) -> Option<(Cue, f32)> {
+        let j = &mut self.juice;
+        match note {
+            Note::Kill {
+                at,
+                foe,
+                points,
+                multiplier,
+                multi,
+                drive_by,
+            } => {
+                let tier = juice::tier_color(multiplier);
+                let (color, size, ring, trauma, count) = match foe {
+                    Foe::Drone => (CORAL, 18., 46., 0.1, 14),
+                    Foe::Brute => (MAGENTA, 22., 70., 0.3, 24),
+                    Foe::Overseer => (GOLD, 30., 150., 0.85, 60),
+                };
+                j.ring(at, 8., ring, 0.32, color);
+                j.ring(at, 4., ring * 0.55, 0.22, PAPER);
+                j.trauma(trauma);
+                j.pop(at, format!("+{points}"), tier, size);
+                if foe == Foe::Overseer {
+                    j.ring(at, 20., 260., 0.7, VIOLET);
+                    j.callout(
+                        "OVERSEER DOWN!".into(),
+                        "+250 STYLE · THE HIVE IS LEADERLESS".into(),
+                        GOLD,
+                        Priority::Epic,
+                    );
+                } else if let Some(line) = quips::multi_kill(multi) {
+                    j.callout(
+                        line.into(),
+                        format!("{multi} IN A BLINK · +{} STYLE", 25 * (multi - 1)),
+                        tier,
+                        Priority::Combo,
+                    );
+                } else if drive_by {
+                    j.callout(
+                        quips::drive_by(style.drive_bys).into(),
+                        "+50 STYLE".into(),
+                        CYAN,
+                        Priority::Minor,
+                    );
+                }
+                let desc = match foe {
+                    Foe::Drone => chunk_desc(CORAL, AMBER, 230., 7., 0.5),
+                    Foe::Brute => chunk_desc(MAGENTA, CORAL, 280., 9., 0.65),
+                    Foe::Overseer => chunk_desc(GOLD, VIOLET, 420., 12., 1.0),
+                };
+                self.chunk_burst(at, desc, count);
+                Some((
+                    Cue::Impact(Surface::Metal),
+                    match foe {
+                        Foe::Drone => 0.35,
+                        Foe::Brute => 0.55,
+                        Foe::Overseer => 0.9,
+                    },
+                ))
+            }
+            Note::MultiplierUp(tier) => {
+                j.callout(
+                    format!("x{tier} {}", quips::multiplier(tier)),
+                    "KEEP THE CHAIN ALIVE".into(),
+                    juice::tier_color(tier),
+                    Priority::Combo,
+                );
+                Some((Cue::Success, 0.18 + 0.04 * tier as f32))
+            }
+            Note::ChainBroken(chain) => {
+                j.callout(
+                    quips::chain_broken(style.hits_taken).into(),
+                    format!("{chain}-KILL CHAIN LOST"),
+                    CORAL,
+                    Priority::Minor,
+                );
+                None
+            }
+            Note::CloseShave(at) => {
+                j.ring(at, 12., 40., 0.25, AMBER);
+                j.callout(
+                    quips::close_shave(style.close_shaves).into(),
+                    "+20 STYLE".into(),
+                    AMBER,
+                    Priority::Minor,
+                );
+                Some((Cue::Jump, 0.25))
+            }
+            Note::LevelUp { level, damage } => {
+                j.callout(
+                    format!("WEAPON LV {level}"),
+                    format!("SHOTS NOW HIT FOR {damage:.0}"),
+                    CYAN,
+                    Priority::Major,
+                );
+                Some((Cue::Reload, 0.4))
+            }
+            Note::EliteInbound(at) => {
+                j.ring(at, 10., 120., 0.6, GOLD);
+                j.trauma(0.3);
+                j.callout(
+                    "OVERSEER INBOUND".into(),
+                    "BIG, ARMORED, GRUMPY · FOCUS FIRE TO STAGGER".into(),
+                    GOLD,
+                    Priority::Epic,
+                );
+                Some((Cue::Impact(Surface::Metal), 0.8))
+            }
+            Note::LastDrone => {
+                j.callout(
+                    "ONE LEFT!".into(),
+                    "MAKE IT COUNT".into(),
+                    PAPER,
+                    Priority::Major,
+                );
+                None
+            }
+            Note::WaveClear {
+                untouched, health, ..
+            } => {
+                if health <= crate::game::CLUTCH_HEALTH {
+                    j.callout(
+                        format!("SURVIVED ON {health} HP"),
+                        "+150 STYLE · BREATHE".into(),
+                        CORAL,
+                        Priority::Epic,
+                    );
+                } else if untouched {
+                    j.callout(
+                        "UNTOUCHED!".into(),
+                        "NOT A SCRATCH · +200 STYLE".into(),
+                        GOLD,
+                        Priority::Epic,
+                    );
+                }
+                None
+            }
+            Note::Beacon { index, lit } => {
+                let at = crate::game::BEACONS[index];
+                j.ring(at, 6., 60., 0.5, CYAN);
+                if lit == 4 {
+                    j.callout(
+                        "DISCO MODE UNLOCKED".into(),
+                        "ALL FOUR LAMPS LIT · THE SECTOR IS NOW A PARTY".into(),
+                        MAGENTA,
+                        Priority::Epic,
+                    );
+                    for beacon in crate::game::BEACONS {
+                        self.chunk_burst(beacon, chunk_desc(MAGENTA, CYAN, 260., 8., 0.9), 16);
+                    }
+                    Some((Cue::Success, 0.6))
+                } else {
+                    j.callout(
+                        format!("LAMP {lit}/4 LIT"),
+                        "SOMETHING IS WARMING UP...".into(),
+                        CYAN,
+                        Priority::Major,
+                    );
+                    Some((Cue::Pickup, 0.4))
+                }
+            }
+            Note::Supply { at, kind } => {
+                let (text, color) = match kind {
+                    Supply::Repair => ("+22 HP", Color::from_rgba(130, 246, 160, 255)),
+                    Supply::Battery => ("SHIELD FULL", Color::from_rgba(140, 200, 255, 255)),
+                };
+                j.ring(at, 10., 44., 0.3, color);
+                j.pop(at - vec2(0., 18.), text.into(), color, 16.);
+                None
+            }
+        }
+    }
+
+    /// Start the victory celebration once; it ages with presentation time.
+    pub fn celebrate(&mut self) {
+        if self.juice.celebrate.is_none() {
+            self.juice.celebrate = Some(0.);
+            for (i, at) in crate::game::BEACONS.into_iter().enumerate() {
+                let color = [CYAN, GOLD, MAGENTA, AMBER][i];
+                self.chunk_burst(at, chunk_desc(color, PAPER, 320., 9., 1.1), 20);
+            }
+        }
     }
 
     pub fn sample(&mut self, dt: f32) -> ImpactSample {
@@ -437,5 +711,53 @@ mod tests {
             .iter()
             .count();
         assert_eq!(enemies, 0);
+    }
+
+    #[test]
+    fn notes_respect_reduced_motion_and_flash_but_keep_cues_and_text() {
+        let _guard = RestorePolicy::new();
+        let mut game = Game::new();
+        let kill = Note::Kill {
+            at: Vec2::new(300., 300.),
+            foe: Foe::Overseer,
+            points: 500,
+            multiplier: 5,
+            multi: 1,
+            drive_by: false,
+        };
+        let style = Style::default();
+        let mut full = Presentation::new();
+        full.sync(&mut game);
+        let cue = full.note(kill, &style);
+        assert!(full.particles.len() >= 60, "chunky death pop");
+        assert!(full.juice.rings.iter().flatten().count() >= 2);
+        assert!(full.juice.pops.iter().flatten().any(|p| p.text == "+500"));
+        assert_eq!(full.juice.callout.as_ref().unwrap().head, "OVERSEER DOWN!");
+        full.age(0.01);
+        assert!(full.juice.shake().length() > 0.);
+        for (motion, flash) in [(true, false), (false, true), (true, true)] {
+            preferences::set_feedback_policy(FeedbackPolicy::new(motion, flash, 1.).unwrap());
+            let mut p = Presentation::new();
+            p.sync(&mut game);
+            assert_eq!(
+                p.note(kill, &style),
+                cue,
+                "audio ignores visual preferences"
+            );
+            assert!(p.particles.is_empty());
+            assert_eq!(p.juice.rings.iter().flatten().count() == 0, motion);
+            assert!(p.juice.pops.iter().flatten().any(|p| p.text == "+500"));
+            assert!(p.juice.callout.is_some());
+            p.age(0.01);
+            if motion {
+                assert_eq!(p.juice.shake(), Vec2::ZERO);
+            }
+        }
+        preferences::set_feedback_policy(FeedbackPolicy::default());
+        full.celebrate();
+        full.age(2.);
+        full.reset();
+        assert!(full.juice.callout.is_none() && full.juice.celebrate.is_none());
+        assert!(full.particles.is_empty());
     }
 }

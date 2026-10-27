@@ -35,6 +35,8 @@ pub struct Enemy {
     pub radius: f32,
     pub speed: f32,
     pub heavy: bool,
+    /// The final wave's single armored Overseer: a bigger brute with more armor.
+    pub elite: bool,
     pub flash: f32,
     pub knockback: Vec2,
     pub attack: ActionTimeline,
@@ -59,6 +61,16 @@ pub struct Bullet {
 #[derive(Clone, Copy)]
 pub struct Pickup {
     pub remaining: f32,
+    pub kind: Supply,
+}
+
+/// Every fifth kill drops one of two readable supplies, alternating.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Supply {
+    /// Restores 22 health; ignored at full health.
+    Repair,
+    /// Instantly refills the shield; ignored while the shield is full.
+    Battery,
 }
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Phase {
@@ -74,6 +86,100 @@ pub struct Input {
     pub dash: bool,
     /// A consumed input edge, including a press/release between simulation ticks.
     pub dash_pressed: bool,
+}
+
+/// Wall lamps at the arena's four edge midpoints. Shooting one lights it; it
+/// is a cosmetic secret and never changes combat or score.
+pub const BEACONS: [Vec2; 4] = [
+    vec2(72.0, 414.0),
+    vec2(1208.0, 414.0),
+    vec2(640.0, 112.0),
+    vec2(640.0, 716.0),
+];
+const NOTE_CAPACITY: usize = 64;
+pub const ELITE_HEALTH: f32 = 252.0;
+const MULTI_WINDOW: f32 = 0.3;
+const DRIVE_BY_GRACE: f32 = 0.5;
+/// Health at or below this when a wave clears counts as a clutch survival.
+pub const CLUTCH_HEALTH: i32 = 15;
+
+/// What kind of foe went down, for presentation sizing and callouts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Foe {
+    Drone,
+    Brute,
+    Overseer,
+}
+
+/// Accepted gameplay moments for presentation: callouts, pops and the results
+/// card. Notes are produced only on actual simulation ticks, from outcomes the
+/// rules already decided, and never feed back into combat.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Note {
+    Kill {
+        at: Vec2,
+        foe: Foe,
+        /// The points this kill actually added to the score.
+        points: u64,
+        multiplier: u32,
+        /// Kills within a short window of each other, including this one.
+        multi: u32,
+        /// The kill landed during, or just after, a dash.
+        drive_by: bool,
+    },
+    MultiplierUp(u32),
+    /// The length of a chain of at least three kills that a hit just broke.
+    ChainBroken(u32),
+    /// An attack activated while the player dashed through or barely escaped.
+    CloseShave(Vec2),
+    LevelUp {
+        level: u16,
+        damage: f32,
+    },
+    EliteInbound(Vec2),
+    /// Exactly one drone (live or queued) remains in the current wave.
+    LastDrone,
+    WaveClear {
+        wave: u32,
+        untouched: bool,
+        health: i32,
+    },
+    /// A wall beacon lit up; `lit` counts all lit beacons including this one.
+    Beacon {
+        index: usize,
+        lit: u32,
+    },
+    Supply {
+        at: Vec2,
+        kind: Supply,
+    },
+}
+
+/// Style tallies for the results card and rank. Style is separate from the
+/// recorded score, so record rules and the authored 1x..5x kill awards hold.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Style {
+    pub points: u32,
+    pub drive_bys: u32,
+    pub close_shaves: u32,
+    pub multi_kills: u32,
+    pub best_multi: u32,
+    pub untouched_waves: u32,
+    pub clutches: u32,
+    pub hits_taken: u32,
+    /// Bit per lit wall beacon.
+    pub beacons: u8,
+    pub overseer_down: bool,
+}
+
+impl Style {
+    pub fn beacons_lit(&self) -> u32 {
+        self.beacons.count_ones()
+    }
+
+    pub fn disco(&self) -> bool {
+        self.beacons == 0b1111
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -117,6 +223,13 @@ pub struct Game {
     dash_direction: Vec2,
     dash_buffer: ferravex_play::gameplay::buffer::CommandBuffer<()>,
     dash_held: bool,
+    pub style: Style,
+    notes: Vec<Note>,
+    dash_grace: f32,
+    multi_window: f32,
+    multi_count: u32,
+    wave_hits: u32,
+    wave_cleared: bool,
 }
 
 impl Game {
@@ -177,7 +290,37 @@ impl Game {
             dash_direction: Vec2::X,
             dash_buffer: ferravex_play::gameplay::buffer::CommandBuffer::new(0.15).unwrap(),
             dash_held: false,
+            style: Style::default(),
+            notes: Vec::with_capacity(NOTE_CAPACITY),
+            dash_grace: 0.,
+            multi_window: 0.,
+            multi_count: 0,
+            wave_hits: 0,
+            wave_cleared: false,
         })
+    }
+
+    /// Move accepted notes into `out`, keeping both buffers' allocations.
+    pub fn take_notes(&mut self, out: &mut Vec<Note>) {
+        out.clear();
+        out.append(&mut self.notes);
+    }
+
+    fn note(&mut self, note: Note) {
+        // Bounded: a host that never drains loses only cosmetic notes.
+        if self.notes.len() < NOTE_CAPACITY {
+            self.notes.push(note);
+        }
+    }
+
+    /// The direction of the current or most recent dash.
+    pub fn dash_direction(&self) -> Vec2 {
+        self.dash_direction
+    }
+
+    /// Exactly one drone, live or queued, remains in the final wave.
+    pub fn final_drone(&self) -> bool {
+        self.phase == Phase::Playing && self.wave == 3 && self.remaining_enemies() == 1
     }
 
     pub fn shot_damage(&self) -> f32 {
@@ -278,6 +421,8 @@ impl Game {
         self.dash_time = (self.dash_time - dt).max(0.0);
         self.hurt_time = (self.hurt_time - dt).max(0.0);
         self.wave_banner = (self.wave_banner - dt).max(0.0);
+        self.dash_grace = (self.dash_grace - dt).max(0.);
+        self.multi_window = (self.multi_window - dt).max(0.);
         let direction = (input.aim - self.player).normalize_or_zero();
         if direction.length_squared() > 0.0 {
             self.facing = direction;
@@ -297,6 +442,7 @@ impl Game {
                 self.facing
             };
             self.dash_time = 0.18;
+            self.dash_grace = 0.18 + DRIVE_BY_GRACE;
             self.dash_cooldown = self.abilities.remaining(1).unwrap();
             emit(FeedbackEvent {
                 kind: FeedbackKind::Dash,
@@ -353,6 +499,9 @@ impl Game {
             self.spawn_enemy(position);
         }
         self.ai.update(&self.world, self.player, shot, dt);
+        let mut shaves = [None; 4];
+        let mut shave_count = 0;
+        let mut broken = None;
         for (mut p, mut enemy) in &mut self.world.query::<(&mut Position, &mut Enemy)>() {
             enemy.flash = (enemy.flash - dt).max(0.0);
             enemy.stagger.advance(dt).unwrap();
@@ -373,11 +522,22 @@ impl Game {
             let attack = enemy.attack.step(dt, can_attack).unwrap();
             if within_range && attack.activated() && self.hurt_time == 0.0 && self.dash_time == 0.0
             {
-                let damage =
-                    ((if enemy.heavy { 24. } else { 14. }) * self.tuning.difficulty).round() as i32;
+                let base = if enemy.elite {
+                    30.
+                } else if enemy.heavy {
+                    24.
+                } else {
+                    14.
+                };
+                let damage = (base * self.tuning.difficulty).round() as i32;
                 let unabsorbed = self.shield.absorb(damage.max(1) as f32).unwrap().ceil() as i32;
                 self.health = (self.health - unabsorbed).max(0);
                 self.hurt_time = 0.75;
+                self.style.hits_taken += 1;
+                self.wave_hits += 1;
+                if self.score.chain() >= 3 {
+                    broken = Some(self.score.chain());
+                }
                 self.score.break_chain();
                 self.recoil = (self.player - p.0).try_normalize().unwrap_or(-self.facing) * 150.;
                 emit(FeedbackEvent {
@@ -385,10 +545,27 @@ impl Game {
                     intensity: if unabsorbed == 0 { 0.55 } else { 1. },
                     position: self.player.extend(0.),
                 });
+            } else if attack.activated() && self.hurt_time == 0.0 {
+                // The attack already resolved without damage: either a dash
+                // carried the player through it, or they stepped out in time.
+                let escaped = p.0.distance(self.player) < enemy.radius + PLAYER_RADIUS + 26.;
+                if (within_range || escaped) && shave_count < shaves.len() {
+                    shaves[shave_count] = Some(p.0);
+                    shave_count += 1;
+                }
             }
+        }
+        if let Some(chain) = broken {
+            self.note(Note::ChainBroken(chain));
+        }
+        for at in shaves.into_iter().flatten() {
+            self.style.close_shaves += 1;
+            self.style.points += 20;
+            self.note(Note::CloseShave(at));
         }
         self.update_bullets(dt, &mut emit);
         let mut despawn = Vec::new();
+        let mut supplied = None;
         for (id, mut p, mut pickup) in
             &mut self.world.query::<(Entity, &mut Position, &mut Pickup)>()
         {
@@ -407,8 +584,19 @@ impl Game {
             {
                 p.0 = attraction.position;
             }
-            if p.0.distance(self.player) <= 28.0 && (1..100).contains(&self.health) {
-                self.health = (self.health + 22).min(100);
+            let wanted = match pickup.kind {
+                Supply::Repair => (1..100).contains(&self.health),
+                Supply::Battery => self.health > 0 && self.shield.value() < self.shield.maximum(),
+            };
+            if p.0.distance(self.player) <= 28.0 && wanted {
+                match pickup.kind {
+                    Supply::Repair => self.health = (self.health + 22).min(100),
+                    Supply::Battery => {
+                        self.shield =
+                            ferravex_play::gameplay::shield::Shield::new(20., 8., 4.).unwrap();
+                    }
+                }
+                supplied = Some((p.0, pickup.kind));
                 despawn.push(id);
                 emit(FeedbackEvent {
                     kind: FeedbackKind::Pickup,
@@ -422,9 +610,29 @@ impl Game {
         for id in despawn {
             let _ = self.world.despawn(id);
         }
+        if let Some((at, kind)) = supplied {
+            self.note(Note::Supply { at, kind });
+        }
         if self.health == 0 {
             self.phase = Phase::Lost;
         } else if self.remaining == 0 && self.enemy_count() == 0 {
+            if !self.wave_cleared {
+                self.wave_cleared = true;
+                let untouched = self.wave_hits == 0;
+                if untouched {
+                    self.style.untouched_waves += 1;
+                    self.style.points += 200;
+                }
+                if self.health <= CLUTCH_HEALTH {
+                    self.style.clutches += 1;
+                    self.style.points += 150;
+                }
+                self.note(Note::WaveClear {
+                    wave: self.wave,
+                    untouched,
+                    health: self.health,
+                });
+            }
             self.intermission -= dt;
             if self.intermission <= 0.0 {
                 if self.wave == 3 {
@@ -435,6 +643,8 @@ impl Game {
                     self.intermission = 1.6;
                     self.director = encounter(self.remaining, self.wave, 0.7);
                     self.wave_banner = 2.4;
+                    self.wave_hits = 0;
+                    self.wave_cleared = false;
                 }
             }
         }
@@ -497,22 +707,42 @@ impl Game {
         let index = self.spawn_index;
         self.spawn_index += 1;
         self.remaining -= 1;
-        let heavy = self.wave > 1 && index.is_multiple_of(4);
+        // The final wave's last admission is its Overseer: a boss-sized brute.
+        let elite = self.wave == 3 && self.remaining == 0;
+        let heavy = elite || self.wave > 1 && index.is_multiple_of(4);
         let ai_slot = index as usize % 64;
         self.ai.reset_agent(ai_slot);
+        if elite {
+            self.note(Note::EliteInbound(p));
+        }
         self.world.spawn((
             Position(p),
             Enemy {
                 knockback: Vec2::ZERO,
                 ai_slot,
-                health: if heavy { 72.0 } else { 24.0 },
-                radius: if heavy { 22.0 } else { 14.0 },
-                speed: if heavy {
+                health: if elite {
+                    ELITE_HEALTH
+                } else if heavy {
+                    72.0
+                } else {
+                    24.0
+                },
+                radius: if elite {
+                    27.0
+                } else if heavy {
+                    22.0
+                } else {
+                    14.0
+                },
+                speed: if elite {
+                    64.0
+                } else if heavy {
                     68.0
                 } else {
                     89.0 + self.wave as f32 * 8.0
                 },
                 heavy,
+                elite,
                 attack: attack_timeline(heavy),
                 stagger: ferravex_play::gameplay::stagger::Stagger::new(40., 10., 0.8).unwrap(),
                 flash: 0.16,
@@ -529,6 +759,7 @@ impl Game {
             .collect();
         let mut impacts = Vec::new();
         let mut despawn = Vec::new();
+        let mut lamps = Vec::new();
         for (id, mut pos, mut bullet) in
             &mut self.world.query::<(Entity, &mut Position, &mut Bullet)>()
         {
@@ -549,7 +780,25 @@ impl Game {
                 impacts.push((enemy, old.lerp(pos.0, t)));
                 despawn.push(id);
             } else if blocked.is_some() || bullet.remaining <= 0.0 || !ARENA.contains(pos.0) {
+                if blocked.is_none() && !ARENA.contains(pos.0) {
+                    for (index, beacon) in BEACONS.iter().enumerate() {
+                        if segment_circle(old, pos.0, *beacon, 13.).is_some() {
+                            lamps.push(index);
+                        }
+                    }
+                }
                 despawn.push(id);
+            }
+        }
+        for index in lamps {
+            let bit = 1 << index;
+            if self.style.beacons & bit == 0 {
+                self.style.beacons |= bit;
+                self.style.points += if self.style.disco() { 175 } else { 25 };
+                self.note(Note::Beacon {
+                    index,
+                    lit: self.style.beacons_lit(),
+                });
             }
         }
         for id in despawn {
@@ -565,7 +814,9 @@ impl Game {
                 }
                 enemy.health -= damage;
                 if enemy.heavy {
-                    if enemy.stagger.hit(24.).unwrap() {
+                    // The Overseer's plating needs three concentrated hits.
+                    let plating = if enemy.elite { 16. } else { 24. };
+                    if enemy.stagger.hit(plating).unwrap() {
                         enemy.attack.cancel(true);
                     }
                 } else {
@@ -594,18 +845,81 @@ impl Game {
             }
         }
         for (id, point) in dead {
+            let mut foe = Foe::Drone;
             if let Ok(enemy) = self.world.get::<&Enemy>(id) {
                 self.ai.reset_agent(enemy.ai_slot);
+                foe = if enemy.elite {
+                    Foe::Overseer
+                } else if enemy.heavy {
+                    Foe::Brute
+                } else {
+                    Foe::Drone
+                };
             }
             let _ = self.world.despawn(id);
             self.kills += 1;
-            self.score.award(100);
-            for _ in 0..self.progression.award(10) {
+            let multiplier = self.score.multiplier();
+            // Same saturating policy as `award`, with the accepted receipt.
+            let award = self.score.award_with_receipt(100);
+            let points = award.map_or(0, |a| a.nominal_points);
+            let upgrades = self.progression.award(10);
+            for _ in 0..upgrades {
                 self.weapon_upgrades.apply(0).unwrap();
             }
+            self.multi_count = if self.multi_window > 0. {
+                self.multi_count + 1
+            } else {
+                1
+            };
+            self.multi_window = MULTI_WINDOW;
+            let drive_by = self.dash_grace > 0.;
+            let style = &mut self.style;
+            if drive_by {
+                style.drive_bys += 1;
+                style.points += 50;
+            }
+            if self.multi_count >= 2 {
+                style.multi_kills += 1;
+                style.points += 25 * (self.multi_count - 1);
+            }
+            style.best_multi = style.best_multi.max(self.multi_count);
+            if foe == Foe::Overseer {
+                style.overseer_down = true;
+                style.points += 250;
+            }
+            self.note(Note::Kill {
+                at: point,
+                foe,
+                points,
+                multiplier: self.score.multiplier(),
+                multi: self.multi_count,
+                drive_by,
+            });
+            if self.score.multiplier() > multiplier {
+                self.note(Note::MultiplierUp(self.score.multiplier()));
+            }
+            if upgrades > 0 {
+                self.note(Note::LevelUp {
+                    level: self.progression.level(),
+                    damage: self.shot_damage(),
+                });
+            }
+            if self.remaining_enemies() == 1 {
+                self.note(Note::LastDrone);
+            }
             if self.kills.is_multiple_of(5) {
-                self.world
-                    .spawn((Position(point), Pickup { remaining: 16.0 }));
+                let kind = if self.kills.is_multiple_of(10) {
+                    Supply::Battery
+                } else {
+                    Supply::Repair
+                };
+                self.world.spawn((
+                    Position(point),
+                    Pickup {
+                        remaining: 16.0,
+                        kind,
+                    },
+                ));
             }
         }
     }
@@ -659,6 +973,7 @@ mod tests {
                 radius: 22.,
                 speed: 0.,
                 heavy: true,
+                elite: false,
                 attack: attack_timeline(true),
                 stagger: ferravex_play::gameplay::stagger::Stagger::new(40., 10., 0.8).unwrap(),
                 flash: 0.,
@@ -717,6 +1032,7 @@ mod tests {
                 radius: 14.0,
                 speed: 0.0,
                 heavy: false,
+                elite: false,
                 attack: attack_timeline(false),
                 stagger: ferravex_play::gameplay::stagger::Stagger::new(40., 10., 0.8).unwrap(),
                 flash: 0.0,
@@ -747,6 +1063,7 @@ mod tests {
                 radius: 14.0,
                 speed: 0.0,
                 heavy: false,
+                elite: false,
                 attack: attack_timeline(false),
                 stagger: ferravex_play::gameplay::stagger::Stagger::new(40., 10., 0.8).unwrap(),
                 flash: 0.0,
@@ -813,8 +1130,13 @@ mod tests {
     fn pickups_heal_and_zero_health_loses() {
         let mut game = Game::new();
         game.health = 40;
-        game.world
-            .spawn((Position(game.player), Pickup { remaining: 5.0 }));
+        game.world.spawn((
+            Position(game.player),
+            Pickup {
+                remaining: 5.0,
+                kind: Supply::Repair,
+            },
+        ));
         game.update(Input::default(), 1.0 / 120.0);
         assert_eq!(game.health, 62);
         assert_eq!(game.world.query::<&Pickup>().iter().count(), 0);
@@ -839,6 +1161,7 @@ mod telegraph_tests {
                 radius: 22.,
                 speed: 0.,
                 heavy: true,
+                elite: false,
                 attack: attack_timeline(true),
                 stagger: ferravex_play::gameplay::stagger::Stagger::new(40., 10., 0.8).unwrap(),
                 flash: 0.,
@@ -919,7 +1242,10 @@ mod magnet_loop_tests {
         g.remaining = 0;
         let pickup = g.world.spawn((
             Position(g.player + Vec2::X * 100.),
-            Pickup { remaining: 5. },
+            Pickup {
+                remaining: 5.,
+                kind: Supply::Repair,
+            },
         ));
         for _ in 0..120 {
             g.update(Input::default(), 1. / 120.);
@@ -931,9 +1257,13 @@ mod magnet_loop_tests {
         g.remaining = 0;
         g.player = vec2(330., 284.);
         let position = vec2(460., 284.);
-        let pickup = g
-            .world
-            .spawn((Position(position), Pickup { remaining: 5. }));
+        let pickup = g.world.spawn((
+            Position(position),
+            Pickup {
+                remaining: 5.,
+                kind: Supply::Repair,
+            },
+        ));
         for _ in 0..60 {
             g.update(Input::default(), 1. / 120.);
         }
@@ -1296,8 +1626,13 @@ mod migration_tests {
             .step(0.155, true)
             .unwrap();
         game.health = 90;
-        game.world
-            .spawn((Position(game.player), Pickup { remaining: 5. }));
+        game.world.spawn((
+            Position(game.player),
+            Pickup {
+                remaining: 5.,
+                kind: Supply::Repair,
+            },
+        ));
         let mut events = Vec::new();
         game.update_with_feedback(Input::default(), 1. / 120., |event| events.push(event));
         assert_eq!((game.health, game.shield.value()), (100, 6.));
@@ -1324,8 +1659,13 @@ mod migration_tests {
         game.wave = 3;
         game.health = 5;
         game.shield.absorb(20.).unwrap();
-        game.world
-            .spawn((Position(game.player), Pickup { remaining: 5. }));
+        game.world.spawn((
+            Position(game.player),
+            Pickup {
+                remaining: 5.,
+                kind: Supply::Repair,
+            },
+        ));
         bullet(&mut game);
         let mut events = Vec::new();
         game.update_with_feedback(Input::default(), 1. / 120., |event| events.push(event));
@@ -1367,5 +1707,358 @@ mod migration_tests {
         game.update_with_feedback(input, 1. / 120., |_| {
             panic!("cooldowns reject both requests")
         });
+    }
+}
+
+#[cfg(test)]
+mod polish_tests {
+    use super::*;
+
+    const TICK: f32 = 1. / 120.;
+
+    fn drone(game: &mut Game, at: Vec2, heavy: bool) -> Entity {
+        game.world.spawn((
+            Position(at),
+            Enemy {
+                ai_slot: 0,
+                health: if heavy { 72. } else { 24. },
+                radius: if heavy { 22. } else { 14. },
+                speed: 0.,
+                heavy,
+                elite: false,
+                attack: attack_timeline(heavy),
+                stagger: ferravex_play::gameplay::stagger::Stagger::new(40., 10., 0.8).unwrap(),
+                flash: 0.,
+                knockback: Vec2::ZERO,
+            },
+        ))
+    }
+
+    fn shot(game: &mut Game, from: Vec2, toward: Vec2) {
+        game.world.spawn((
+            Position(from),
+            Bullet {
+                velocity: (toward - from).normalize() * 900.,
+                remaining: 1.4,
+            },
+        ));
+    }
+
+    fn fire_at(game: &mut Game, toward: Vec2) {
+        let from = game.player;
+        shot(game, from, toward);
+    }
+
+    fn notes(game: &mut Game) -> Vec<Note> {
+        let mut out = Vec::new();
+        game.take_notes(&mut out);
+        out
+    }
+
+    #[test]
+    fn the_final_admission_is_an_armored_overseer_with_its_own_notes() {
+        let mut game = Game::new();
+        game.wave = 3;
+        game.remaining = 2;
+        game.spawn_enemy(vec2(1180., 150.));
+        game.spawn_enemy(vec2(100., 678.));
+        let elites: Vec<_> = game
+            .world
+            .query::<&Enemy>()
+            .iter()
+            .map(|e| (e.elite, e.heavy, e.health, e.radius))
+            .collect();
+        assert_eq!(elites.iter().filter(|e| e.0).count(), 1, "exactly one");
+        assert!(elites.contains(&(true, true, ELITE_HEALTH, 27.)));
+        assert!(matches!(
+            notes(&mut game).as_slice(),
+            [Note::EliteInbound(p)] if *p == vec2(100., 678.)
+        ));
+        // Earlier waves never field an Overseer.
+        let mut early = Game::new();
+        early.wave = 2;
+        early.remaining = 1;
+        early.spawn_enemy(vec2(100., 150.));
+        assert!(early.world.query::<&Enemy>().iter().all(|e| !e.elite));
+        assert!(notes(&mut early).is_empty());
+    }
+
+    #[test]
+    fn overseer_plating_needs_three_hits_and_its_kill_is_noted() {
+        let mut game = Game::new();
+        game.wave = 3;
+        game.remaining = 1;
+        let at = game.player + Vec2::X * 90.;
+        game.spawn_enemy(at);
+        game.remaining = 0;
+        notes(&mut game);
+        let id = game
+            .world
+            .query::<(Entity, &Enemy)>()
+            .iter()
+            .next()
+            .unwrap()
+            .0;
+        for hit in 1..=3 {
+            fire_at(&mut game, at);
+            game.update_bullets(0.1, &mut |_| {});
+            let staggered = game.world.get::<&Enemy>(id).unwrap().stagger.active();
+            assert_eq!(staggered, hit == 3, "hit {hit}");
+        }
+        for _ in 0..20 {
+            if game.world.get::<&Enemy>(id).is_err() {
+                break;
+            }
+            game.world
+                .get::<&mut Enemy>(id)
+                .unwrap()
+                .stagger
+                .advance(1.)
+                .unwrap();
+            fire_at(&mut game, at);
+            game.update_bullets(0.1, &mut |_| {});
+        }
+        assert!(game.world.get::<&Enemy>(id).is_err());
+        assert!(game.style.overseer_down);
+        assert!(notes(&mut game).iter().any(|n| matches!(
+            n,
+            Note::Kill {
+                foe: Foe::Overseer,
+                points: 100,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn supplies_alternate_and_each_is_left_for_later_when_not_needed() {
+        let mut game = Game::new();
+        game.remaining = 0;
+        game.intermission = 100.;
+        for kill in 1..=10 {
+            let at = game.player + vec2(150., -150. + kill as f32 * 30.);
+            drone(&mut game, at, false);
+            fire_at(&mut game, at);
+            game.update_bullets(0.3, &mut |_| {});
+        }
+        assert_eq!(game.kills, 10);
+        let kinds: Vec<Supply> = game
+            .world
+            .query::<&Pickup>()
+            .iter()
+            .map(|p| p.kind)
+            .collect();
+        assert_eq!(kinds, [Supply::Repair, Supply::Battery]);
+
+        let mut game = Game::new();
+        game.remaining = 0;
+        game.intermission = 100.;
+        let battery = game.world.spawn((
+            Position(game.player),
+            Pickup {
+                remaining: 5.,
+                kind: Supply::Battery,
+            },
+        ));
+        game.update(Input::default(), TICK);
+        assert!(
+            game.world.get::<&Pickup>(battery).is_ok(),
+            "full shield leaves it"
+        );
+        game.shield.absorb(15.).unwrap();
+        game.health = 100;
+        game.update(Input::default(), TICK);
+        assert!(game.world.get::<&Pickup>(battery).is_err());
+        assert_eq!((game.shield.value(), game.health), (20., 100));
+        assert!(notes(&mut game).iter().any(|n| matches!(
+            n,
+            Note::Supply {
+                kind: Supply::Battery,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn kills_during_a_dash_are_drive_bys_and_quick_kills_are_multi_kills() {
+        let mut game = Game::new();
+        game.remaining = 0;
+        game.intermission = 100.;
+        game.update(
+            Input {
+                dash_pressed: true,
+                aim: game.player + Vec2::X,
+                ..Input::default()
+            },
+            TICK,
+        );
+        // The empty wave already counted as an untouched clear.
+        let before = game.style.points;
+        let a = game.player + vec2(120., -30.);
+        let b = game.player + vec2(120., 30.);
+        drone(&mut game, a, false);
+        drone(&mut game, b, false);
+        fire_at(&mut game, a);
+        fire_at(&mut game, b);
+        game.update_bullets(0.2, &mut |_| {});
+        let kills: Vec<(bool, u32)> = notes(&mut game)
+            .into_iter()
+            .filter_map(|n| match n {
+                Note::Kill {
+                    drive_by, multi, ..
+                } => Some((drive_by, multi)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(kills, [(true, 1), (true, 2)]);
+        assert_eq!(game.style.drive_bys, 2);
+        assert_eq!(game.style.multi_kills, 1);
+        assert_eq!(game.style.points - before, 50 * 2 + 25);
+        assert_eq!(
+            game.score.total(),
+            100 + 100,
+            "style never changes the score"
+        );
+        // After the grace and multi windows, an ordinary kill is plain.
+        for _ in 0..120 {
+            game.update(Input::default(), TICK);
+        }
+        let c = game.player + Vec2::X * 120.;
+        drone(&mut game, c, false);
+        fire_at(&mut game, c);
+        game.update_bullets(0.2, &mut |_| {});
+        assert!(notes(&mut game).iter().any(|n| matches!(
+            n,
+            Note::Kill {
+                drive_by: false,
+                multi: 1,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn dashing_through_an_attack_is_a_close_shave_and_a_hit_breaks_the_chain() {
+        let mut game = Game::new();
+        game.remaining = 0;
+        game.intermission = 100.;
+        let here = game.player;
+        let enemy = drone(&mut game, here, false);
+        game.world
+            .get::<&mut Enemy>(enemy)
+            .unwrap()
+            .attack
+            .step(0.155, true)
+            .unwrap();
+        game.update(
+            Input {
+                dash_pressed: true,
+                aim: game.player + Vec2::X,
+                ..Input::default()
+            },
+            TICK,
+        );
+        assert_eq!(game.health, 100);
+        assert_eq!(game.style.close_shaves, 1);
+        assert!(
+            notes(&mut game)
+                .iter()
+                .any(|n| matches!(n, Note::CloseShave(_)))
+        );
+
+        let mut game = Game::new();
+        game.remaining = 0;
+        game.intermission = 100.;
+        for _ in 0..3 {
+            game.score.award(100);
+        }
+        let here = game.player;
+        let enemy = drone(&mut game, here, false);
+        game.world
+            .get::<&mut Enemy>(enemy)
+            .unwrap()
+            .attack
+            .step(0.155, true)
+            .unwrap();
+        game.update(Input::default(), TICK);
+        assert!(game.health < 100 || game.shield.value() < 20.);
+        assert_eq!(game.style.hits_taken, 1);
+        assert!(notes(&mut game).contains(&Note::ChainBroken(3)));
+    }
+
+    #[test]
+    fn wall_lamps_light_once_each_and_four_unlock_disco() {
+        let mut game = Game::new();
+        game.remaining = 0;
+        game.intermission = 100.;
+        for round in 0..2 {
+            for (index, lamp) in BEACONS.into_iter().enumerate() {
+                let from = lamp + (CENTER_POINT - lamp).normalize() * 60.;
+                shot(&mut game, from, lamp);
+                game.update_bullets(0.1, &mut |_| {});
+                let lit: Vec<_> = notes(&mut game)
+                    .into_iter()
+                    .filter(|n| matches!(n, Note::Beacon { .. }))
+                    .collect();
+                if round == 0 {
+                    assert_eq!(
+                        lit,
+                        [Note::Beacon {
+                            index,
+                            lit: index as u32 + 1
+                        }]
+                    );
+                } else {
+                    assert!(lit.is_empty(), "a lit lamp stays lit quietly");
+                }
+            }
+        }
+        assert!(game.style.disco());
+        assert_eq!(game.style.points, 25 * 3 + 175);
+        // A shot into an empty stretch of wall lights nothing.
+        let mut plain = Game::new();
+        shot(&mut plain, vec2(300., 200.), vec2(300., 100.));
+        plain.update_bullets(0.2, &mut |_| {});
+        assert_eq!(plain.style.beacons, 0);
+    }
+
+    const CENTER_POINT: Vec2 = vec2(640., 414.);
+
+    #[test]
+    fn wave_clears_report_untouched_and_clutch_once_and_notes_stay_bounded() {
+        let mut game = Game::new();
+        game.remaining = 0;
+        game.health = 9;
+        game.update(Input::default(), TICK);
+        game.update(Input::default(), TICK);
+        let clears: Vec<_> = notes(&mut game)
+            .into_iter()
+            .filter(|n| matches!(n, Note::WaveClear { .. }))
+            .collect();
+        assert_eq!(
+            clears,
+            [Note::WaveClear {
+                wave: 1,
+                untouched: true,
+                health: 9
+            }]
+        );
+        assert_eq!(
+            (
+                game.style.untouched_waves,
+                game.style.clutches,
+                game.style.points
+            ),
+            (1, 1, 350)
+        );
+        let mut flood = Game::new();
+        for _ in 0..500 {
+            flood.note(Note::LastDrone);
+        }
+        assert_eq!(flood.notes.len(), NOTE_CAPACITY);
+        let mut out = Vec::new();
+        flood.take_notes(&mut out);
+        assert_eq!(out.len(), NOTE_CAPACITY);
+        assert!(flood.notes.is_empty());
     }
 }

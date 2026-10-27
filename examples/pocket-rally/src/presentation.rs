@@ -17,7 +17,7 @@ pub(crate) const TOUCH_BUTTONS: [(u8, &str); 4] = [(12, "<"), (13, ">"), (14, "G
 
 /// Read the host policy on *every* render frame, including pause and zero ticks.
 /// Existing skid geometry is discarded, so restoring motion cannot revive it.
-/// There are no camera impulses, particles or screen flashes in this game.
+/// Juice particles, shake and squash follow the same policy in `juice`.
 pub(crate) fn sync_marks(marks: &mut [Trail; 2]) -> bool {
     let policy = ferravex_render::preferences::feedback_policy();
     let enabled = !policy.reduced_motion() && policy.intensity() > 0.;
@@ -41,7 +41,7 @@ pub(crate) fn touch_layout(width: f32, height: f32) -> [Control; 4] {
     })
 }
 
-fn hint_for(input: &PlayerInput, name: &str, device: HintDevice) -> String {
+pub(crate) fn hint_for(input: &PlayerInput, name: &str, device: HintDevice) -> String {
     let mut buffer = [0; 256];
     let Ok(label) = input.format_hint_for(name, Some(device), &mut buffer) else {
         return "See Controls".to_owned();

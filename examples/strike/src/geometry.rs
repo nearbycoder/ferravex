@@ -506,3 +506,22 @@ impl Objectives {
         }
     }
 }
+
+/// The dock duck: a tiny rubber-duck secret, built around its base.
+pub fn build_duck() -> Model {
+    let [body, beak, eye] = crate::juice::duck_colors();
+    let mut m = Model::new();
+    m.cube(vec3(0., 0.1, 0.), vec3(0.36, 0.2, 0.26), body);
+    m.box_rotated(
+        vec3(-0.17, 0.17, 0.),
+        vec3(0.1, 0.1, 0.16),
+        Quat::from_rotation_z(0.6),
+        body,
+    );
+    m.cube(vec3(0.12, 0.28, 0.), vec3(0.17, 0.16, 0.16), body);
+    m.cube(vec3(0.24, 0.26, 0.), vec3(0.1, 0.04, 0.09), beak);
+    for z in [-0.081, 0.081] {
+        m.cube(vec3(0.16, 0.31, z), vec3(0.035, 0.035, 0.01), eye);
+    }
+    m
+}

@@ -6,6 +6,9 @@ const MARGIN: f32 = 8.;
 const GAP: f32 = 6.;
 const FONT: f32 = 14.;
 pub(super) const PLOT_ID: u64 = 200;
+/// Browser fullscreen pins a 44x44 menu button 8px from the top-right corner;
+/// keep text and controls out of this reserved region (logical pixels).
+pub(super) const MENU_CORNER: Vec2 = vec2(72., 60.);
 
 #[derive(Clone, Copy)]
 pub(super) struct Layout {
@@ -13,6 +16,9 @@ pub(super) struct Layout {
     pub board: Rect,
     pub plots: [Rect; 8],
     pub detail: Rect,
+    pub speed: Rect,
+    /// Two top status lines, inset clear of the fullscreen menu corner.
+    pub status: [Rect; 2],
     pub build: [Rect; 2],
     pub wave: Rect,
     pub menu: [Rect; 2],
@@ -35,7 +41,14 @@ impl Layout {
                 44.,
             )
         });
-        let detail = Rect::new(108., dock + 4., (width - 100.).max(1.), 38.);
+        // Speed sits at the right of the plot row, away from the menu corner.
+        let speed = Rect::new(screen.x - MARGIN - 60., dock + 4., 60., 44.);
+        let detail = Rect::new(108., dock + 4., (speed.x - GAP - 108.).max(1.), 38.);
+        let line = (screen.x - 2. * MARGIN - MENU_CORNER.x).max(1.);
+        let status = [
+            Rect::new(MARGIN, 5., line, 20.),
+            Rect::new(MARGIN, 25., line, 20.),
+        ];
         let half = (width - GAP) * 0.5;
         let build = [
             Rect::new(MARGIN, dock + 46., half, 44.),
@@ -47,13 +60,15 @@ impl Layout {
             Rect::new(MARGIN + third + GAP, dock + 96., third, 44.),
             Rect::new(MARGIN + 2. * (third + GAP), dock + 96., third, 44.),
         ];
-        let preview = Rect::new(MARGIN, 52., width - 64., 18.);
+        let preview = Rect::new(MARGIN, 52., line, 18.);
         let notice = Rect::new(MARGIN, 76., width, 36.);
         Self {
             screen,
             board,
             plots,
             detail,
+            speed,
+            status,
             build,
             wave,
             menu,
@@ -64,6 +79,12 @@ impl Layout {
 
     fn scale(self) -> f32 {
         (self.board.w / 1200.).min(self.board.h / 590.)
+    }
+
+    /// World-text enlargement so pops and labels stay legible when the board
+    /// is drawn small.
+    pub fn text_boost(self) -> f32 {
+        (0.6 / self.scale()).clamp(1., 3.)
     }
 
     pub fn project(self, point: Vec2) -> Vec2 {
@@ -131,6 +152,7 @@ pub(super) fn hud(
     ui: &mut Ui,
     layout: Layout,
     campaign: &Campaign,
+    juice: &crate::juice::Juice,
     save_error: bool,
     _input: &PlayerInput,
     picker: bool,
@@ -146,21 +168,37 @@ pub(super) fn hud(
         CREAM,
     )
     .unwrap();
-    text(
+    let line = |ui: &mut Ui, rect: Rect, value: &str, color: Color| {
+        ui.label(
+            area(rect),
+            value,
+            TextStyle {
+                size: FONT,
+                color,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    };
+    line(
         ui,
-        Rect::new(MARGIN, 5., layout.screen.x - 16., 20.),
+        layout.status[0],
         &format!(
-            "WAVE {}/{}   {} HEARTS",
+            "WAVE {}/{} · {} HEARTS",
             g.wave,
             g.level.waves.len(),
             g.lives
         ),
-        INK,
+        if juice.hurt > 0.3 {
+            crate::juice::APPLE
+        } else {
+            INK
+        },
     );
-    text(
+    line(
         ui,
-        Rect::new(MARGIN, 25., layout.screen.x - 16., 20.),
-        &format!("{} COINS   {} STOPPED", g.money, g.kills),
+        layout.status[1],
+        &format!("{} COINS · {} STOPPED", g.money, g.kills),
         INK,
     );
     // Large screen-space numbers identify the board even at 320 logical pixels.
@@ -267,25 +305,65 @@ pub(super) fn hud(
         false,
     );
     control(ui, 5, layout.menu[1], "RESTART", true, false);
+    control(
+        ui,
+        crate::hud::SPEED_ID,
+        layout.speed,
+        if campaign.fast { ">>2×" } else { ">>1×" },
+        true,
+        campaign.fast,
+    );
     if !g.active
         && let Some(next) = g.next_wave()
     {
-        text(
+        // A backing strip keeps the preview legible where it meets the board.
+        let p = layout.preview;
+        ui.panel(
+            area(Rect::new(p.x - 4., p.y - 1., p.w + 8., p.h + 2.)),
+            Color::new(0.98, 0.95, 0.84, 0.92),
+        )
+        .unwrap();
+        line(
             ui,
             layout.preview,
-            &format!("NEXT: {} PESTS", next.spec.count),
+            &format!(
+                "NEXT: {} BEETLES + {} ZOOMIES",
+                u32::from(next.spec.count) - next.fast_count,
+                next.fast_count
+            ),
             GREEN,
         );
     }
     if save_error {
         text(ui, layout.notice, "SAVE UNAVAILABLE", CREAM);
+    } else if let Some(toast) = &juice.toast {
+        ui.panel(area(layout.notice), INK).unwrap();
+        let n = layout.notice;
+        for (row, line, color) in [(0., &toast.head, toast.color), (1., &toast.sub, CREAM)] {
+            ui.label(
+                area(Rect::new(n.x + 6., n.y + 2. + row * 17., n.w - 12., 16.)),
+                line,
+                TextStyle {
+                    size: if row == 0. { FONT } else { 12. },
+                    color,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
     } else if let Some(message) = campaign.notice() {
         ui.panel(area(layout.notice), GREEN).unwrap();
         text(ui, layout.notice, notice_text(message), CREAM);
     }
 }
 
-pub(super) fn overlay(ui: &mut Ui, layout: Layout, campaign: &Campaign, _input: &PlayerInput) {
+pub(super) fn overlay(
+    ui: &mut Ui,
+    layout: Layout,
+    campaign: &Campaign,
+    best: Option<crate::save::Best>,
+    _input: &PlayerInput,
+) {
     let g = &campaign.game;
     let paused = campaign.session.is_paused();
     if !paused && g.outcome == Outcome::Playing {
@@ -297,11 +375,15 @@ pub(super) fn overlay(ui: &mut Ui, layout: Layout, campaign: &Campaign, _input: 
         Color::new(0.14, 0.20, 0.13, 0.75),
     )
     .unwrap();
+    let tall = if paused { 220. } else { 320. };
+    // Short landscape screens start the card below the fullscreen menu corner.
     let card = Rect::new(
         8.,
-        ((layout.screen.y - 220.) * 0.5).max(0.),
+        ((layout.screen.y - tall) * 0.5)
+            .max(MENU_CORNER.y)
+            .min((layout.screen.y - tall).max(0.)),
         layout.screen.x - 16.,
-        220.,
+        tall,
     );
     ui.panel(area(card), CREAM).unwrap();
     let line = |y, height| Rect::new(card.x + 8., card.y + y, card.w - 16., height);
@@ -331,8 +413,32 @@ pub(super) fn overlay(ui: &mut Ui, layout: Layout, campaign: &Campaign, _input: 
     );
     if paused {
         control(ui, 7, line(100., 44.), "RESUME", true, false);
+        control(ui, 8, line(154., 44.), "PLANT AGAIN", true, false);
+        return;
     }
-    control(ui, 8, line(154., 44.), "PLANT AGAIN", true, false);
+    let run = crate::hud::run_summary(g);
+    let rank = crate::quips::rank(run);
+    ui.panel(area(line(96., 30.)), GOLD).unwrap();
+    text(ui, line(102., 20.), &format!("RANK: {}", rank.title), INK);
+    let best_score = best.and_then(|b| b.previous_score);
+    let record = match best_score {
+        Some(score) if best.is_some_and(|b| b.new_score) => format!("NEW BEST! WAS {score}"),
+        Some(score) => format!("BEST {score}"),
+        None => "FIRST RECORDED RUN".into(),
+    };
+    text(
+        ui,
+        line(134., 40.),
+        &format!("{record} · {} LUCKY BONKS", g.lucky_hits),
+        GREEN,
+    );
+    text(
+        ui,
+        line(176., 60.),
+        &crate::quips::next_goal(run, best_score),
+        INK,
+    );
+    control(ui, 8, line(254., 44.), "PLANT AGAIN", true, false);
 }
 
 #[cfg(test)]
@@ -396,8 +502,16 @@ mod tests {
             input::host_frame(0., 320, 734, || {
                 input.sample(true);
                 ui.begin(Viewport::responsive([320., 734.], [0.; 4]).unwrap());
-                hud(ui, layout, campaign, false, input, true);
-                overlay(ui, layout, campaign, input);
+                hud(
+                    ui,
+                    layout,
+                    campaign,
+                    &crate::juice::Juice::new(),
+                    false,
+                    input,
+                    true,
+                );
+                overlay(ui, layout, campaign, None, input);
                 ui.finish_player(input, true);
                 let action = hud_action(ui, campaign.game.level.plots.len());
                 campaign.frame(0., false, false, [action, None, None]);
@@ -469,5 +583,54 @@ mod tests {
                     .is_none()
             );
         }
+    }
+
+    #[test]
+    fn fullscreen_menu_corner_stays_clear_of_compact_controls_and_text() {
+        for screen in [
+            vec2(390., 844.),
+            vec2(844., 390.),
+            vec2(320., 480.),
+            vec2(320., 734.),
+            vec2(899., 776.),
+        ] {
+            let layout = Layout::new(screen);
+            let clear = |r: Rect| r.x + r.w <= screen.x - MENU_CORNER.x || r.y >= MENU_CORNER.y;
+            for rect in layout
+                .plots
+                .into_iter()
+                .chain(layout.build)
+                .chain(layout.menu)
+                .chain(layout.status)
+                .chain([
+                    layout.wave,
+                    layout.speed,
+                    layout.detail,
+                    layout.preview,
+                    layout.notice,
+                ])
+            {
+                assert!(clear(rect), "{screen:?}: {rect:?}");
+            }
+            assert!(layout.speed.w >= 44. && layout.speed.y + layout.speed.h <= screen.y);
+            assert!(
+                layout.detail.w >= text_width_14("SEED SLING L1"),
+                "{screen:?}"
+            );
+            // Results/pause cards begin below the corner when they fit there.
+            for tall in [220., 320.] {
+                let y = ((screen.y - tall) * 0.5)
+                    .max(MENU_CORNER.y)
+                    .min((screen.y - tall).max(0.));
+                assert!(
+                    y >= MENU_CORNER.y && y + tall <= screen.y,
+                    "{screen:?} {tall}"
+                );
+            }
+        }
+    }
+
+    fn text_width_14(s: &str) -> f32 {
+        crate::scene::text_width(s, FONT)
     }
 }

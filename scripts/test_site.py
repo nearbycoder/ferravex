@@ -84,6 +84,23 @@ class SiteTests(unittest.TestCase):
         self.assertEqual(self.request('/../../etc/passwd')[0], 404)
         self.assertEqual(self.request('/%2e%2e/%2e%2e/etc/passwd')[0], 404)
 
+    def test_missing_paths_serve_custom_not_found_page(self):
+        directory = Path(self.temp.name)
+        page = b'<h1>Out of bounds</h1>'
+        (directory / '404.html').write_bytes(page)
+        try:
+            for path in ['/missing/', '/missing.png', '/empty/']:
+                with self.subTest(path=path):
+                    status, headers, body = self.request(path)
+                    self.assertEqual((status, body), (404, page))
+                    self.assertEqual(headers['Content-Type'], 'text/html; charset=utf-8')
+                    self.assertEqual(headers['Cache-Control'], 'no-cache')
+            status, headers, body = self.request('/missing/', method='HEAD')
+            self.assertEqual((status, body, int(headers['Content-Length'])), (404, b'', len(page)))
+            self.assertEqual(self.request('/../../etc/passwd')[2], page)
+        finally:
+            (directory / '404.html').unlink()
+
     def test_generated_links_and_catalog(self):
         root = ROOT / 'dist/site'
         self.assertTrue((root / 'index.html').is_file(), 'Build the documentation site first')
@@ -118,7 +135,13 @@ class SiteTests(unittest.TestCase):
 
     def test_current_workflows_are_in_navigation_and_search(self):
         root = ROOT / 'dist/site'
-        self.assertIn('A playground for the engine.', (root / 'play/index.html').read_text())
+        gallery = (root / 'play/index.html').read_text()
+        self.assertIn('Pick a game. Press play.', gallery)
+        # Every card carries both filter axes; every genre filter matches at least one card.
+        self.assertEqual(gallery.count('class="example-tile"'), len(json.loads((ROOT / 'examples/catalog.json').read_text())))
+        for genre in re.findall(r'<button type="button" data-genre="([a-z]+)"', gallery):
+            if genre != 'all':
+                self.assertIn(f'data-genre="{genre}" data-search=', gallery)
         for slug in ('engine-workflows', 'responsive-games'):
             url = '/docs/' + slug + '/'
             for path in ('index.html', 'docs/index.html', 'docs/getting-started/index.html'):

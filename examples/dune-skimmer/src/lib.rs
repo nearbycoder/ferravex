@@ -14,12 +14,17 @@
 //! session.finish(true);
 //! assert_eq!(session.state(), SessionState::Won);
 //! ```
-use ferravex_render::audio::{Cue, GameAudio, Surface};
+use ferravex_render::audio::{Cue, GameAudio};
 use ferravex_render::input::{
     PlayerInput, Preset,
     touch::{Control, Output, Region},
 };
+#[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+mod capture;
+mod hud;
+mod juice;
 mod presentation;
+mod quips;
 mod race;
 mod session;
 
@@ -38,12 +43,11 @@ use ferravex_render::{
     ui,
     visibility::{LodChain, LodState},
 };
-use presentation::{
-    Presentation, binding_hint, chase_input, exhaust_source, fitted_size, text_width,
-};
+use hud::{Hud, Results};
+use juice::Juice;
+use presentation::{Presentation, chase_input, exhaust_source, fitted_size, text_width};
 use race::{
-    BoostStatus, Course, GATES, HALF_WIDTH, HOVER_HEIGHT, Input, LAPS, RECOVERY_PENALTY, Race,
-    Traction, heading, path, right, tangent, world,
+    Course, HALF_WIDTH, HOVER_HEIGHT, Input, Race, RaceEvent, heading, path, right, tangent, world,
 };
 use session::RaceSession;
 use std::f32::consts::{PI, TAU};
@@ -68,7 +72,21 @@ fn conf() -> Conf {
     let mut conf = ferravex_render::window_conf("Dune Skimmer / Ferravex");
     conf.window_width = 1280;
     conf.window_height = 800;
+    #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+    capture::window(&mut conf);
     conf
+}
+
+/// Records context for this course layout and medal rules.
+const RECORD_RULES: u64 = 0x4455_4e45_0001;
+const RECORD_RACE: &str = "race";
+const RECORD_LAP: &str = "lap";
+
+fn stored_time(records: Option<&ferravex_render::storage::Records>, id: &str) -> Option<f32> {
+    records?
+        .get(id, RECORD_RULES)?
+        .fastest_us
+        .map(|us| (us as f64 / 1_000_000.) as f32)
 }
 
 struct Prop {
@@ -89,6 +107,7 @@ struct Scene {
     lintel: Mesh3d,
     cap: Mesh3d,
     marker: Mesh3d,
+    gold_marker: Mesh3d,
     active_marker: Mesh3d,
     arrow: Mesh3d,
     hull: Mesh3d,
@@ -243,6 +262,7 @@ impl Scene {
             lintel: Mesh3d::cuboid(vec3(HALF_WIDTH * 2.0 + 1.5, 0.7, 1.15), PALE),
             cap: Mesh3d::cuboid(vec3(1.1, 0.5, 1.5), PALE),
             marker: Mesh3d::cuboid(vec3(0.8, 1.0, 1.2), ORANGE),
+            gold_marker: Mesh3d::cuboid(vec3(0.8, 1.0, 1.2), Color::from_rgba(255, 204, 92, 255)),
             active_marker: Mesh3d::cuboid(vec3(0.82, 1.0, 1.22), TEAL),
             arrow: Mesh3d::cone(0.65, 1.1, TEAL, 3),
             hull: Mesh3d::cuboid(vec3(1.8, 0.42, 3.2), TEAL),
@@ -342,6 +362,9 @@ impl Scene {
                 self.cap.draw(world(p, 0.4), rotation);
                 if index == race.next_gate {
                     self.active_marker.draw(world(p, 4.7), rotation);
+                } else if race.perfect_laps > 0 {
+                    // The mirage lap gilds the whole circuit for the rest of the race.
+                    self.gold_marker.draw(world(p, 4.7), rotation);
                 } else {
                     self.marker.draw(world(p, 4.7), rotation);
                 }
@@ -431,248 +454,6 @@ fn time_label(time: f32) -> String {
         centiseconds % 100
     )
 }
-fn draw_hud(race: &Race, input: &PlayerInput, waiting_for_controls: bool) {
-    let touch_mode = input.touch_seen();
-    let w = screen_width();
-    let h = screen_height();
-    let margin = (w * 0.035).clamp(18.0, 44.0);
-    let compact = w < 600.;
-    if race.finished {
-        let panel_w = (w - 32.0).clamp(1.0, 360.0);
-        let panel = Rect::new((w - panel_w) * 0.5, h * 0.5 - 130.0, panel_w, 265.0);
-        draw_rectangle(
-            panel.x,
-            panel.y,
-            panel.w,
-            panel.h,
-            Color::new(0.10, 0.19, 0.18, 0.94),
-        );
-        let centered =
-            |text: &str, y, size, color| centered_in(text, y, size, color, panel.w - 24.);
-        centered("CIRCUIT COMPLETE", h * 0.5 - 94.0, 22, PALE);
-        centered("FINAL TIME / PENALTIES INCLUDED", h * 0.5 - 65.0, 13, PALE);
-        centered(&time_label(race.elapsed), h * 0.5 - 20.0, 49, WHITE);
-        centered(
-            &format!(
-                "DRIVING {} + {:.2}s RECOVERY",
-                time_label(race.driving_seconds()),
-                race.penalty_seconds()
-            ),
-            h * 0.5 + 10.,
-            14,
-            PALE,
-        );
-        centered(
-            &format!(
-                "3 laps / {} impacts / {} recoveries",
-                race.impacts, race.recovery_count
-            ),
-            h * 0.5 + 39.0,
-            16,
-            PALE,
-        );
-        let mut retry_buffer = [0; 256];
-        let mut confirm_buffer = [0; 256];
-        let retry = binding_hint(input, "restart", &mut retry_buffer);
-        let confirm = binding_hint(input, "confirm", &mut confirm_buffer);
-        centered(
-            &format!("RETRY {retry} / {confirm}"),
-            h * 0.5 + 92.0,
-            15,
-            TEAL,
-        );
-        return;
-    }
-    label(
-        &format!("LAP {}/3", (race.laps + 1).min(LAPS)),
-        margin,
-        if compact { 28. } else { 66.0 },
-        if compact { 14. } else { 18.0 },
-        WHITE,
-    );
-    let timer = time_label(race.elapsed);
-    let width = measure_text(&timer, None, 20, 1.0).width;
-    label(
-        &timer,
-        if compact {
-            w - 80. - width
-        } else {
-            (w - width) * 0.5
-        },
-        28.0,
-        20.0,
-        WHITE,
-    );
-    let completed = race.gates_completed();
-    let total = GATES * LAPS as usize;
-    let short_start = compact && h < 460. && (race.countdown > 0. || race.elapsed < 0.8);
-    let next = format!("NEXT GATE {:02} / {GATES}", completed % GATES + 1);
-    if short_start {
-        // Reuse the next-gate row before driving starts. A separate center cue
-        // would overlap boost telemetry at the 352px minimum in touch mode.
-        let text = if race.countdown > 0. {
-            format!("{}", race.countdown.ceil() as u32)
-        } else {
-            "GO".to_owned()
-        };
-        centered(&text, SHORT_START_ROW.0, SHORT_START_ROW.1, TEAL);
-    } else if compact {
-        centered(&next, 54., 14, TEAL);
-    } else {
-        label(
-            &next,
-            w - margin - 64. - text_width(&next, 14),
-            39.,
-            14.,
-            TEAL,
-        );
-    }
-    let progress_y = if compact {
-        if short_start { 100. } else { 68. }
-    } else if race.recovery_count > 0 {
-        109.0
-    } else {
-        83.0
-    };
-    if race.recovery_count > 0 {
-        centered(
-            &format!("TOTAL INCLUDES +{:.2}s RECOVERY", race.penalty_seconds()),
-            if compact { 130.0 } else { 92.0 },
-            13,
-            ORANGE,
-        );
-    }
-    let progress_w = (w - margin * 2.0).max(1.0);
-    draw_rectangle(margin, progress_y, progress_w, 4.0, DARK);
-    draw_rectangle(
-        margin,
-        progress_y,
-        progress_w * completed as f32 / total as f32,
-        4.0,
-        TEAL,
-    );
-    let bottom = if touch_mode { h - 150.0 } else { h - 75.0 };
-    let speed = format!("{:03}", (race.speed() * 3.6) as u32);
-    let speed_size = if w < 400.0 { 36 } else { 47 };
-    let speed_width = measure_text(&speed, None, speed_size, 1.).width;
-    label(&speed, margin, bottom, speed_size as f32, WHITE);
-    label("KM/H", margin + speed_width + 7., bottom, 13.0, PALE);
-    let (traction, traction_color) = match race.traction() {
-        Traction::Track => ("", PALE),
-        Traction::Sliding => ("SLIDING", ORANGE),
-        Traction::Reversing => ("REVERSING", PALE),
-        Traction::Sand => ("LOOSE SAND", ORANGE),
-    };
-    label(traction, margin, bottom + 25., 13., traction_color);
-    let bar_w = (w * 0.38).min(170.0);
-    let cooling_hint = format!("COOL {:.1}s >25%", race.cooling_seconds());
-    let (boost_label, boost_hint, boost_color) = match race.boost_status() {
-        BoostStatus::Countdown => ("BOOST", "", PALE),
-        BoostStatus::Ready => ("BOOST", "", TEAL),
-        BoostStatus::Active => ("BOOSTING", "", ORANGE),
-        BoostStatus::Overheated => ("OVERHEATED", cooling_hint.as_str(), ORANGE),
-        BoostStatus::Sand => ("BOOST BLOCKED", "RETURN TO TRACK", PALE),
-        BoostStatus::Finished => ("TRIAL COMPLETE", "", TEAL),
-    };
-    label(
-        boost_label,
-        w - margin - bar_w,
-        bottom - 28.0,
-        fitted_size(boost_label, bar_w, 14),
-        boost_color,
-    );
-    draw_rectangle(
-        w - margin - bar_w,
-        bottom - 16.0,
-        bar_w,
-        4.0,
-        Color::new(0.1, 0.2, 0.19, 0.45),
-    );
-    draw_rectangle(
-        w - margin - bar_w,
-        bottom - 16.0,
-        bar_w * race.boost,
-        4.0,
-        boost_color,
-    );
-    draw_rectangle(w - margin - bar_w * 0.75, bottom - 19.0, 2.0, 10.0, PALE);
-    label(
-        &format!("{:03}%", (race.boost * 100.0) as u32),
-        w - margin - bar_w,
-        bottom + 8.0,
-        13.0,
-        PALE,
-    );
-    label(
-        boost_hint,
-        w - margin - bar_w,
-        bottom + 26.0,
-        fitted_size(boost_hint, bar_w, 13),
-        PALE,
-    );
-    if race.countdown > 0.0 && !short_start {
-        if h < 460. {
-            // Short landscape canvases also need a single line; the compact
-            // portrait case uses the next-gate row above instead.
-            centered(
-                &format!("{}", race.countdown.ceil() as u32),
-                progress_y + 27.,
-                22,
-                WHITE,
-            );
-        } else {
-            centered(
-                &format!("{}", race.countdown.ceil() as u32),
-                h * 0.48,
-                74,
-                WHITE,
-            );
-        }
-    } else if race.countdown <= 0. && race.elapsed < 0.8 && !short_start {
-        if h < 460. {
-            centered("GO", progress_y + 27., 22, TEAL);
-        } else {
-            centered("GO", h * 0.42, 54, TEAL);
-        }
-    }
-    if waiting_for_controls && !race.finished {
-        centered(
-            "RELEASE DRIVE CONTROLS TO REARM",
-            h - if touch_mode { 106.0 } else { 22.0 },
-            16,
-            PALE,
-        );
-    } else if race.off_track && !race.finished {
-        centered(
-            "LOOSE SAND / BOOST DISABLED",
-            h - if touch_mode { 106.0 } else { 22.0 },
-            16,
-            PALE,
-        );
-    }
-    if race.recovery_timer > 0.0 && !race.finished {
-        centered(
-            &format!("SAFE RETURN / +{RECOVERY_PENALTY:.2}s ADDED"),
-            progress_y + 29.0,
-            17,
-            ORANGE,
-        );
-    } else if let Some(seconds) = race.recovery_in() {
-        centered(
-            &format!("RETURN TO TRACK / RECOVERY IN {:.1}s", seconds),
-            progress_y + 29.0,
-            17,
-            ORANGE,
-        );
-    } else if race.last_gate_timer > 0.0 && race.countdown == 0.0 && !race.finished {
-        let text = if race.next_gate == 1 {
-            "LAP COMPLETE".to_owned()
-        } else {
-            format!("GATE {:02} / {GATES} CLEAR", completed % GATES)
-        };
-        centered(&text, progress_y + 29.0, 17, PALE);
-    }
-}
 fn touch_controls() -> [Rect; 4] {
     let h = screen_height();
     let w = screen_width();
@@ -696,6 +477,7 @@ async fn game() {
     let mut dust_emitter =
         Emitter::new(presets::dust([SAND.r, SAND.g, SAND.b, 0.32]), DUST_SEED).unwrap();
     let mut dust_renderer = ParticleRenderer::new(256).unwrap();
+    let mut spark_renderer = ParticleRenderer::new(192).unwrap();
     ferravex_render::set_quality(ferravex_render::lighting::Quality::Medium);
     let mut player_input = PlayerInput::preset("dune-skimmer", Preset::HoverRacer);
     player_input
@@ -715,12 +497,31 @@ async fn game() {
     })
     .unwrap();
     let blockers = scene.camera_blockers(&course);
-    let mut previous_impacts = 0;
     let mut previous_recoveries = 0;
     let mut effects = Presentation::default();
+    // Personal bests are optional: a storage failure still leaves a playable game.
+    let mut records = ferravex_render::storage::Records::new("dune-skimmer").ok();
+    let mut results = Results::default();
+    let mut juice = Juice::new();
+    #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+    let mut capture = capture::Capture::from_env();
+    let runs = |records: Option<&ferravex_render::storage::Records>| {
+        records
+            .and_then(|r| r.get(RECORD_RACE, RECORD_RULES))
+            .map_or(0, |r| r.runs.min(u32::MAX as u64) as u32)
+    };
+    juice.veteran = stored_time(records.as_ref(), RECORD_RACE).is_some();
+    #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+    {
+        juice.veteran |= capture.veteran;
+    }
+    juice.attempt = runs(records.as_ref());
+    juice.say(quips::start(juice.attempt), 0);
+    let mut events = Vec::with_capacity(race::MAX_EVENTS);
+    let mut was_off_track = false;
     loop {
         ferravex_render::ui::warm_up_font_sizes(&[
-            10, 13, 14, 16, 17, 18, 20, 22, 28, 36, 47, 49, 54, 74,
+            10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24, 30, 36, 42, 47, 50, 80,
         ]);
         ui::warm_up_font();
         let rects = touch_controls();
@@ -730,7 +531,12 @@ async fn game() {
         });
         player_input.set_touch_layout(&layout).unwrap();
         player_input.sample_play();
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        if capture.pause_now() {
+            player_input.set_paused(true);
+        }
         effects.sync(&mut camera, &mut dust, &mut dust_emitter);
+        juice.apply_policy(effects.policy);
         let touch_mode = player_input.touch_seen();
         if !player_input.controls_open()
             && (player_input.pressed("restart")
@@ -747,8 +553,11 @@ async fn game() {
             sound.reset();
             reset_drive_feedback(&mut camera, &mut dust, &mut dust_emitter);
             effects.reset();
-            previous_impacts = 0;
+            juice.reset();
+            juice.say(quips::start(juice.attempt), 0);
+            results = Results::default();
             previous_recoveries = 0;
+            was_off_track = false;
         }
         let movement = player_input.movement();
         let input = Input {
@@ -760,21 +569,18 @@ async fn game() {
             .session
             .set_paused(!demo.autoplay && !player_input.gameplay_active());
         let elapsed = demo.dt();
-        let laps = trial.race.laps;
-        let gates = trial.race.gates_completed();
-        let finished = trial.race.finished;
+        let countdown = trial.race.countdown;
+        let tick = trial.session.tick();
         trial.advance(&course, input, demo.autoplay, elapsed as f64);
+        let ticked = trial.session.tick() != tick;
+        events.clear();
+        events.extend(trial.race.drain_events());
         let race = &trial.race;
         let dt = if trial.session.is_playing() {
             elapsed
         } else {
             0.0
         };
-        if race.finished && !finished {
-            sound.cue(Cue::Success, 0.65);
-        } else if race.gates_completed() > gates {
-            sound.cue(Cue::Pickup, if race.laps > laps { 0.5 } else { 0.3 });
-        }
         sound.motor(race.speed(), 48., trial.session.is_playing());
         let position = race.previous_position.lerp(race.position, trial.alpha);
         let yaw =
@@ -789,13 +595,63 @@ async fn game() {
                     rotation: Quat::from_rotation_y(yaw).to_array(),
                 })
                 .unwrap();
-        } else if race.impacts > previous_impacts {
-            sound.cue(Cue::Impact(Surface::Metal), 0.7);
-            effects.impact(&mut camera);
         }
-        previous_impacts = race.impacts;
         previous_recoveries = race.recovery_count;
+        // Countdown beeps follow accepted countdown ticks, never wall time.
+        if ticked && race.countdown > 0. && countdown.ceil() != race.countdown.ceil() {
+            sound.cue(Cue::Click, 0.4);
+        }
+        if ticked && race.off_track && !was_off_track && !race.finished {
+            juice.sand();
+        }
+        was_off_track = race.off_track;
+        for &event in &events {
+            if let RaceEvent::Impact { .. } = event {
+                effects.impact(&mut camera);
+            }
+            if event == RaceEvent::Finished {
+                // Compare against stored bests before recording this finish.
+                results = Results {
+                    previous_best: stored_time(records.as_ref(), RECORD_RACE),
+                    previous_lap: stored_time(records.as_ref(), RECORD_LAP),
+                    demo: demo.autoplay,
+                };
+                #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+                if let Some(best) = capture.fake_best() {
+                    results = Results {
+                        previous_best: Some(best),
+                        previous_lap: race.best_lap().map(|lap| lap + 0.2),
+                        demo: false,
+                    };
+                }
+                if !demo.autoplay
+                    && let Some(records) = records.as_mut()
+                {
+                    let micros = ferravex_render::storage::run_micros;
+                    let _ = records.attempt(
+                        RECORD_RACE,
+                        RECORD_RULES,
+                        race.threaded as u64,
+                        micros(race.elapsed),
+                    );
+                    let _ = records.attempt(
+                        RECORD_LAP,
+                        RECORD_RULES,
+                        race.best_streak as u64,
+                        race.best_lap().and_then(micros),
+                    );
+                    juice.veteran = true;
+                    juice.attempt = runs(Some(records));
+                }
+            }
+            if let Some((cue, gain)) = juice.on_event(event, race, &mut camera) {
+                sound.cue(cue, gain);
+            }
+        }
         effects.advance(dt);
+        // Finished races keep their celebration moving on frame time; the race
+        // itself is frozen, so this cannot affect results.
+        juice.advance(if race.finished { elapsed } else { dt }, race);
         dust.update(dt).unwrap();
         let density = match ferravex_render::quality() {
             ferravex_render::lighting::Quality::Low => 0.5,
@@ -805,7 +661,7 @@ async fn game() {
         dust_emitter
             .set_rate(
                 if !effects.policy.reduced_motion() && race.speed() > 3. && !race.finished {
-                    32. * density * if race.boosting { 1.5 } else { 1. }
+                    32. * density * if race.boosting { 2.2 } else { 1. }
                 } else {
                     0.
                 },
@@ -821,12 +677,10 @@ async fn game() {
                 &mut dust,
             )
             .unwrap();
+        let mut chase = chase_input(race, position, yaw, effects.policy);
+        chase.fov_y += juice.fov_kick.to_radians();
         let view = camera
-            .update(
-                dt,
-                chase_input(race, position, yaw, effects.policy),
-                &blockers[..],
-            )
+            .update(dt, chase, &blockers[..])
             .expect("valid hover camera")
             .pose;
         let camera_position = view.position;
@@ -850,25 +704,41 @@ async fn game() {
         });
         scene.draw(&course, race, position, yaw, &effects);
         material.end();
+        let billboard = BillboardView::new(
+            camera_position,
+            (view.target - camera_position).cross(view.up),
+            view.up,
+        )
+        .unwrap();
         dust_renderer
+            .draw_3d(&dust, billboard, ParticleStyle::default())
+            .unwrap();
+        spark_renderer
             .draw_3d(
-                &dust,
-                BillboardView::new(
-                    camera_position,
-                    (view.target - camera_position).cross(view.up),
-                    view.up,
-                )
-                .unwrap(),
-                ParticleStyle::default(),
+                &juice.sparks,
+                billboard,
+                ParticleStyle {
+                    draw: ferravex_render::effects::EffectStyle {
+                        blend: ferravex_render::effects::EffectBlend::Additive,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
             )
             .unwrap();
         set_default_camera();
-        draw_hud(
+        hud::effects(race, &juice);
+        let paused = player_input.paused() && !player_input.controls_open();
+        let hud = Hud {
             race,
-            &player_input,
-            trial.waiting_for_controls && !demo.autoplay,
-        );
-        if touch_mode && !player_input.touch_customized() && !race.finished {
+            input: &player_input,
+            juice: &juice,
+            results: &results,
+            waiting_for_controls: trial.waiting_for_controls && !demo.autoplay,
+            best: stored_time(records.as_ref(), RECORD_RACE),
+        };
+        hud.draw();
+        if touch_mode && !player_input.touch_customized() && !race.finished && !paused {
             for (rect, text) in touch_controls().into_iter().zip(["<", ">", "GO", "BOOST"]) {
                 draw_rectangle(
                     rect.x,
@@ -887,16 +757,25 @@ async fn game() {
                 );
             }
         }
-        player_input.draw_settings();
+        if paused && !race.finished {
+            hud.pause_card();
+        }
+        // The game paints its own pause card; the editor still draws above it.
+        player_input.draw_controls();
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        capture.end_frame();
         if demo.finish_frame() {
             println!(
-                "DUNE SKIMMER laps={} next_gate={} time={:.2} finished={} impacts={} recoveries={} finite={}",
+                "DUNE SKIMMER laps={} next_gate={} time={:.2} finished={} impacts={} recoveries={} threaded={} best_streak={} scrapes={} finite={}",
                 race.laps,
                 race.next_gate,
                 race.elapsed,
                 race.finished,
                 race.impacts,
                 race.recovery_count,
+                race.threaded,
+                race.best_streak,
+                race.scrapes,
                 race.position.is_finite()
             );
             break;

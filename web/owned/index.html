@@ -43,7 +43,13 @@
     #vitals { font-size: 1.5rem; }
     #vitals span { font-size: .875rem; color: #e1e5dd; margin: 0 16px 0 6px; }
     #score { font-size: .875rem; color: #e1e5dd; }
-    #crosshair { pointer-events: none; position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; background: #f4ead6; box-shadow: 0 0 2px #000; border-radius: 50%; transform: translate(-50%, -50%); }
+    #crosshair { pointer-events: none; position: absolute; left: 50%; top: 50%; width: 22px; height: 22px; background: radial-gradient(circle, #f4ead6 0 1.5px, transparent 2px); filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 1px #000); transform: translate(-50%, -50%); }
+    #crosshair::before, #crosshair::after { content: ""; position: absolute; inset: 0; margin: auto; }
+    #crosshair::before { width: 2px; height: 22px; background: linear-gradient(#f4ead6 0 7px, transparent 7px 15px, #f4ead6 15px); }
+    #crosshair::after { width: 22px; height: 2px; background: linear-gradient(90deg, #f4ead6 0 7px, transparent 7px 15px, #f4ead6 15px); }
+    #vitals .empty { color: #f08a6e; font-weight: 600; }
+    #menu-best { color: #e8c493; font-weight: 600; }
+    #menu-best:empty { display: none; }
     #training { position: absolute; left: 16px; top: 16px; max-width: min(400px, calc(100% - 32px)); padding: 10px 14px; background: #101c22eb; border: 1px solid #657b80; border-radius: 4px; pointer-events: none; }
     #objective { margin: 0; color: #f1ede2; }
     #capture-status { margin: 5px 0 0; font-size: .875rem; color: #ded9c4; }
@@ -121,6 +127,7 @@
       <p id="courtyard-intro">Move, aim and complete four training drills.</p>
       <p id="menu-status" role="status" aria-atomic="true">Preparing training…</p>
       <p id="menu-objective">Move five meters · Fire a shot · Finish a reload · Hit an operator</p>
+      <p id="menu-best" role="status" aria-atomic="true"></p>
       <div class="row">
         <button id="play" type="button" disabled>Loading engine…</button>
         <button id="overview" class="secondary" type="button" disabled>2D overview</button>

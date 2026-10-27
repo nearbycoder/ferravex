@@ -1,6 +1,7 @@
 //! Narrow-window presentation in screen units; the authored world stays 1280×720.
 use super::*;
 use ferravex_render::canvas::Canvas2D;
+use presentation::ControlHint;
 
 #[derive(Clone, Copy)]
 pub(super) struct CompactHud {
@@ -52,7 +53,14 @@ impl CompactHud {
         })
     }
 
-    pub(super) fn draw(self, game: &Game, input: &PlayerInput) {
+    pub(super) fn draw(
+        self,
+        game: &Game,
+        input: &PlayerInput,
+        juice: &Juice,
+        results: &hud::Results,
+        best: Option<f64>,
+    ) {
         set_camera(&self.canvas.camera());
         let w = self.canvas.size.x;
         let center = w * 0.5;
@@ -60,49 +68,87 @@ impl CompactHud {
         let touch = input.current_device() == HintDevice::Touch;
         let defaults = touch && !input.touch_customized();
         if game.session.is_playing() {
+            // The shared fullscreen game menu owns the top-right 72 units.
+            let right = bar_right(w);
             draw_rectangle(0., 0., w, 64., Color::new(0.08, 0.13, 0.11, 0.96));
+            draw_rectangle(0., 62., w, 2., hud::fade(ORANGE, 0.5));
+            let elapsed = game.trial.elapsed();
             label(
-                &format!(
-                    "{:.2}s / LANTERNS {}/2",
-                    game.trial.elapsed(),
-                    game.checkpoints.index()
-                ),
+                &format!("{elapsed:.2}S"),
                 12.,
                 28.,
-                15.,
-                CREAM,
+                16.,
+                hud::medal_color(hud::pace(elapsed)),
             );
-            fitted_centered_label(
-                &format!(
-                    "{collected}/{} EMBERS / {} PTS",
-                    game.embers.len(),
-                    game.score.total()
-                ),
-                (w - 64.) * 0.5,
-                52.,
-                w - 88.,
-                15.,
+            let embers = format!("{collected}/{}", game.embers.len());
+            hud::right_label(&embers, right, 28., 16., CREAM);
+            diamond(
+                vec2(right - text_width(&embers, 16.) - 12., 22.),
+                7.,
                 ORANGE,
             );
+            for index in 1..=2 {
+                hud::lantern_icon(
+                    20. + (index - 1) as f32 * 22.,
+                    52.,
+                    game.checkpoints.index() >= index,
+                );
+            }
+            let air = game.ember_inventory.count(1) >= 3 && !game.air_jump_used;
+            label(
+                "AIR JUMP",
+                58.,
+                56.,
+                14.,
+                if air { GREEN } else { hud::MUTED },
+            );
+            let mut points = format!("{} PTS", game.score.total());
+            if game.score.multiplier() > 1 && game.score.chain() > 0 && w >= 360. {
+                points = format!("×{} {points}", game.score.multiplier());
+            }
+            hud::right_label(&points, right, 56., 14., ORANGE);
 
-            let notice = if game.respawn_notice > 0. {
-                if game.checkpoints.index() == 0 {
-                    "BACK TO THE TRAILHEAD"
-                } else {
-                    "BACK TO THE LIT LANTERN"
+            if let Some(toast) = &juice.toast {
+                let alpha = toast.alpha();
+                let lines = wrap(&toast.head, w - 40.);
+                let sub = wrap(&toast.sub, w - 40.);
+                let rows = lines.iter().chain(&sub).filter(|l| !l.is_empty()).count() as f32;
+                draw_rectangle(
+                    12.,
+                    72.,
+                    w - 24.,
+                    14. + rows * 20.,
+                    Color::new(0.07, 0.11, 0.10, 0.9 * alpha),
+                );
+                let mut y = 92.;
+                for (text, color) in lines
+                    .iter()
+                    .map(|l| (l, toast.color))
+                    .chain(sub.iter().map(|l| (l, CREAM)))
+                {
+                    if !text.is_empty() {
+                        centered_label(text, center, y, 14., hud::fade(color, alpha));
+                        y += 20.;
+                    }
                 }
-            } else if game.checkpoint_notice > 0. {
-                "LANTERN LIT / SAVED"
-            } else if game.ember_inventory.count(1) >= 3 {
-                if game.air_jump_used {
-                    "AIR JUMP SPENT"
-                } else {
-                    "AIR JUMP READY"
+            } else if best.is_none()
+                && let Some(text) = hud::coach(game, ControlHint::new(input, "jump").text())
+            {
+                let lines = wrap(&text, w - 40.);
+                let rows = lines.iter().filter(|l| !l.is_empty()).count() as f32;
+                // Share the toast slot: in landscape the lower band is the course.
+                let top = 72.;
+                draw_rectangle(
+                    12.,
+                    top,
+                    w - 24.,
+                    10. + rows * 20.,
+                    Color::new(0.07, 0.11, 0.10, 0.9),
+                );
+                for (i, text) in lines.iter().enumerate() {
+                    centered_label(text, center, top + 20. + i as f32 * 20., 14., CREAM);
                 }
-            } else {
-                ""
-            };
-            centered_label(notice, center, 82., 14., CREAM);
+            }
             if defaults
                 && [
                     ("move_left", 12),
@@ -133,49 +179,85 @@ impl CompactHud {
             return;
         }
 
+        // Let the finish celebration play before the results card settles in.
+        let alpha = if game.won() && juice.motion() > 0. {
+            ((juice.celebrate - 0.45) / 0.25).clamp(0., 1.)
+        } else {
+            1.
+        };
+        if alpha <= 0. {
+            return;
+        }
         let card = self.card;
         draw_rectangle(
             card.x,
             card.y,
             card.w,
             card.h,
-            Color::new(0.08, 0.13, 0.11, 0.98),
+            Color::new(0.08, 0.13, 0.11, 0.98 * alpha),
         );
-        let line = |text: &str, y: f32, color| centered_label(text, center, card.y + y, 15., color);
-        let ready = game.session.state() == SessionState::Ready;
-        let title = if game.won() {
-            "THE LIGHT CARRIES ON"
-        } else if ready {
-            "CARRY THE LIGHT"
-        } else {
-            "TAKE A BREATHER"
+        draw_rectangle(card.x, card.y, card.w, 3., hud::fade(ORANGE, alpha));
+        let line = |text: &str, y: f32, size: f32, color: Color| {
+            fitted_centered_label(
+                text,
+                center,
+                card.y + y,
+                card.w - 24.,
+                size,
+                hud::fade(color, alpha),
+            )
         };
-        centered_label(title, center, card.y + 30., 18., CREAM);
+        let ready = game.session.state() == SessionState::Ready;
         let confirm = ControlHint::new(input, "confirm");
         let restart = ControlHint::new(input, "restart");
         let pause = ControlHint::new(input, "pause");
         if game.won() {
-            fitted_centered_label(
-                &format!("{collected} EMBERS / {} POINTS", game.score.total()),
-                center,
-                card.y + 64.,
-                card.w - 24.,
-                15.,
-                ORANGE,
-            );
-            line(&format!("{} FALLS", game.deaths), 87., CREAM);
+            let run = hud::summary(game);
+            line(quips::rank(run).title, 30., 20., juice::GOLD);
             line(
                 &format!(
-                    "{:?} / {:.2}s",
-                    game.trial.medal().unwrap(),
+                    "{} · {:.2}S",
+                    quips::medal_name(run.medal),
                     game.trial.elapsed()
                 ),
-                116.,
-                GREEN,
+                56.,
+                18.,
+                hud::medal_color(run.medal),
             );
+            let (record, record_color) = hud::record_line(game, results);
+            line(&record, 80., 14., record_color);
+            line(
+                &format!(
+                    "{}/{} EMBERS · {} FALLS",
+                    run.embers, run.total_embers, run.falls
+                ),
+                102.,
+                14.,
+                CREAM,
+            );
+            let (hook, hook_color) = hud::hook(game);
+            line(&hook, 124., 14., hook_color);
         } else if ready {
-            line("REACH THE GREEN LIFT", 72., CREAM);
+            line("EMBERLINE", 34., 24., CREAM);
+            line("LIGHT THE LANTERNS,", 62., 14., hud::MUTED);
+            line("RIDE THE GREEN LIFT", 82., 14., hud::MUTED);
+            if let Some(best) = best {
+                line(&format!("YOUR BEST {best:.2}S"), 112., 14., juice::GOLD);
+            } else {
+                line("UNDER 12S = GOLD", 112., 14., hud::MUTED);
+            }
         } else {
+            line("PAUSED", 34., 24., CREAM);
+            line(
+                &format!(
+                    "{:.2}S · {collected}/{} EMBERS",
+                    game.trial.elapsed(),
+                    game.embers.len()
+                ),
+                60.,
+                14.,
+                CREAM,
+            );
             let restart = if defaults {
                 keyboard_restart_hint(input)
             } else {
@@ -191,6 +273,7 @@ impl CompactHud {
                     "TAP TO PLAY"
                 },
                 174.,
+                16.,
                 GREEN,
             );
         } else {
@@ -211,6 +294,7 @@ impl CompactHud {
                     "TO RESUME"
                 },
                 184.,
+                16.,
                 GREEN,
             );
         }
@@ -226,6 +310,25 @@ impl CompactHud {
             CREAM,
         );
     }
+}
+
+/// Right edge of top-bar text, leaving the fullscreen menu corner clear.
+pub(super) fn bar_right(width: f32) -> f32 {
+    width - hud::MENU_CORNER.x - 8.
+}
+
+/// Up to two 14-unit lines; a longer second line is fitted by the caller's label.
+fn wrap(text: &str, width: f32) -> [&str; 2] {
+    if text_width(text, 14.) <= width {
+        return [text, ""];
+    }
+    let split = text
+        .char_indices()
+        .filter(|&(i, c)| c == ' ' && text_width(&text[..i], 14.) <= width)
+        .map(|(i, _)| i)
+        .next_back()
+        .unwrap_or(text.len());
+    [&text[..split], text[split..].trim_start()]
 }
 
 fn keyboard_restart_hint(input: &PlayerInput) -> String {
@@ -368,6 +471,22 @@ mod tests {
         }
         assert!(CompactHud::for_screen(vec2(700., 448.)).is_none());
         assert!(CompactHud::for_screen(vec2(1280., 560.)).is_none());
+    }
+
+    #[test]
+    fn narrow_messages_wrap_onto_two_whole_word_lines_at_320_wide() {
+        let width = CompactHud::for_screen(vec2(320., 448.)).unwrap().card.w - 16.;
+        for text in [
+            "STICK THE LANDING, NOT THE SPIKES",
+            "PRESS JUMP AGAIN IN MID-AIR · ONCE PER LANDING",
+            "LAND BY THE LANTERN TO SAVE YOUR SPOT",
+        ] {
+            let [first, second] = wrap(text, width);
+            assert!(text_width(first, 14.) <= width, "{first}");
+            assert!(text_width(second, 14.) <= width, "{second}");
+            assert_eq!(format!("{first} {second}"), text);
+        }
+        assert_eq!(wrap("WHEW!", width), ["WHEW!", ""]);
     }
 
     #[test]

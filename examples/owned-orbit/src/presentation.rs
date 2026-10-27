@@ -8,16 +8,69 @@ use ferravex_engine::{
     render::preferences,
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum AcceptedEvent {
     Launch,
     Impact,
     Panel(u32),
     Precision(u32),
     Wide,
+    Split,
+    Sticky,
     Save,
     LifeLost,
     SectorCleared,
+    /// Presentation-only detail for juice; never a cue or feedback emission.
+    Spark(Spark),
+}
+
+/// Where and how an accepted event happened, for pops, rings and callouts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Spark {
+    Panel {
+        at: [f32; 2],
+        points: u32,
+        destroyed: bool,
+        row: usize,
+        volley: u32,
+    },
+    Paddle {
+        at: [f32; 2],
+        bonus: u32,
+    },
+    Volley(u32),
+    Pickup {
+        kind: crate::game::Pickup,
+        at: [f32; 2],
+    },
+    Satellite {
+        at: [f32; 2],
+        points: u32,
+    },
+    Drain {
+        at: [f32; 2],
+    },
+    LastPanel {
+        at: [f32; 2],
+    },
+    Flawless(u32),
+    Backup {
+        at: [f32; 2],
+    },
+    Caught,
+    Release {
+        at: [f32; 2],
+    },
+    Fizzle,
+}
+
+/// The results card for a finished run, built once from accepted state.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Results {
+    pub summary: crate::quips::RunSummary,
+    pub rank: crate::quips::Rank,
+    pub previous_best: Option<u32>,
+    pub new_best: bool,
 }
 
 pub(crate) struct Presentation {
@@ -29,6 +82,14 @@ pub(crate) struct Presentation {
     pub notice: Option<(&'static str, u32)>,
     notice_time: f32,
     pub hints: ControlHints,
+    pub juice: crate::juice::Juice,
+    pub results: Option<Results>,
+    /// Personal best score supplied by the host; survives restarts.
+    pub best: Option<u32>,
+    /// Finished runs, restarts and pauses this session; they rotate quips.
+    pub runs: u32,
+    pub restarts: u32,
+    pub pauses: u32,
 }
 impl Default for Presentation {
     fn default() -> Self {
@@ -48,6 +109,12 @@ impl Default for Presentation {
             notice: None,
             notice_time: 0.,
             hints: ControlHints::default(),
+            juice: crate::juice::Juice::default(),
+            results: None,
+            best: None,
+            runs: 0,
+            restarts: 0,
+            pauses: 0,
         }
     }
 }
@@ -63,6 +130,7 @@ impl Presentation {
             .advance(dt)
             .expect("validated presentation delta");
         self.cues.fill(None);
+        self.juice.chime = None;
         self.notice_time = (self.notice_time - dt).max(0.);
         if self.notice_time == 0. {
             self.notice = None;
@@ -75,6 +143,8 @@ impl Presentation {
         self.cues.fill(None);
         self.notice = None;
         self.notice_time = 0.;
+        self.juice.reset();
+        self.results = None;
     }
 
     pub fn accept_tick(&mut self, events: impl Iterator<Item = AcceptedEvent>) {
@@ -87,15 +157,23 @@ impl Presentation {
     }
 
     fn accept(&mut self, event: AcceptedEvent) {
+        match event {
+            AcceptedEvent::Spark(spark) => return self.juice.accept(spark),
+            AcceptedEvent::Save => self.juice.saved(),
+            _ => {}
+        }
         let (kind, slot, cue, gain) = match event {
             AcceptedEvent::Launch => (FeedbackKind::Dash, 0, Cue::Jump, 0.45),
             AcceptedEvent::Impact => (FeedbackKind::Hit, 1, Cue::Impact(Surface::Metal), 0.5),
-            AcceptedEvent::Panel(_) | AcceptedEvent::Precision(_) | AcceptedEvent::Wide => {
-                (FeedbackKind::Pickup, 2, Cue::Pickup, 0.45)
-            }
+            AcceptedEvent::Panel(_)
+            | AcceptedEvent::Precision(_)
+            | AcceptedEvent::Wide
+            | AcceptedEvent::Split
+            | AcceptedEvent::Sticky => (FeedbackKind::Pickup, 2, Cue::Pickup, 0.45),
             AcceptedEvent::Save => (FeedbackKind::Pickup, 2, Cue::Pickup, 0.55),
             AcceptedEvent::LifeLost => (FeedbackKind::Hurt, 3, Cue::Failure, 0.45),
             AcceptedEvent::SectorCleared => (FeedbackKind::Pickup, 4, Cue::Success, 0.65),
+            AcceptedEvent::Spark(_) => return,
         };
         self.serial = self.serial.checked_add(1).unwrap_or_else(|| {
             self.feedback.clear();
@@ -111,6 +189,8 @@ impl Presentation {
             AcceptedEvent::Panel(points) => Some(("PANEL", points)),
             AcceptedEvent::Precision(points) => Some(("PRECISE RETURN", points)),
             AcceptedEvent::Wide => Some(("WIDE PADDLE", 50)),
+            AcceptedEvent::Split => Some(("MULTI-BALL", 50)),
+            AcceptedEvent::Sticky => Some(("STICKY PADDLE", 50)),
             _ => None,
         };
         if let Some(notice) = notice {

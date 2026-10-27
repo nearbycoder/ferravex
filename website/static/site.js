@@ -10,8 +10,8 @@ function currentTheme() {
 function updateThemeButton() {
   const next = currentTheme() === 'dark' ? 'light' : 'dark';
   if (themeButton) {
-    themeButton.textContent = next === 'dark' ? 'Dark' : 'Light';
     themeButton.setAttribute('aria-label', `Switch to ${next} theme`);
+    themeButton.title = `Switch to ${next} theme`;
   }
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', getComputedStyle(document.documentElement).getPropertyValue('--bg').trim());
 }
@@ -23,12 +23,15 @@ themeButton?.addEventListener('click', () => {
   updateThemeButton();
 });
 for (const button of document.querySelectorAll('.copy')) {
+  let reset;
   button.addEventListener('click', async () => {
+    clearTimeout(reset);
     try {
-      await navigator.clipboard.writeText(button.parentElement.querySelector('code').textContent);
+      await navigator.clipboard.writeText(button.closest('.code-wrap').querySelector('code').textContent);
       button.textContent = 'Copied';
-      setTimeout(() => button.textContent = 'Copy', 1800);
-    } catch { button.textContent = 'Select the code to copy'; }
+      button.classList.add('copied');
+    } catch { button.textContent = 'Select to copy'; }
+    reset = setTimeout(() => { button.textContent = 'Copy'; button.classList.remove('copied'); }, 1800);
   });
 }
 for (const button of document.querySelectorAll('.menu-toggle')) {
@@ -49,6 +52,7 @@ for (const button of document.querySelectorAll('.menu-toggle')) {
   });
 }
 const gameQuery = document.getElementById('game-query');
+const GENRES = [...document.querySelectorAll('[data-genre]:not(.example-tile)')].map(button => button.dataset.genre);
 function saveFilters(values) {
   const url = new URL(location.href);
   for (const [key, value] of Object.entries(values)) {
@@ -57,39 +61,62 @@ function saveFilters(values) {
   }
   history.replaceState(null, '', url);
 }
+function pressed(selector, fallback) {
+  return document.querySelector(`${selector}[aria-pressed="true"]`)?.getAttribute(selector.slice(1, -1)) ?? fallback;
+}
 function filterGames(save = true) {
-  const filter = document.querySelector('[data-filter][aria-pressed="true"]')?.dataset.filter ?? 'all';
+  const filter = pressed('[data-filter]', 'all');
+  const genre = pressed('[data-genre]', 'all');
   const query = gameQuery?.value.trim().toLowerCase() ?? '';
   let count = 0;
   for (const tile of document.querySelectorAll('.example-tile')) {
-    tile.hidden = !((filter === 'all' || tile.dataset.dimension === filter) && (!query || (tile.dataset.search ?? tile.textContent).toLowerCase().includes(query)));
+    tile.hidden = !((filter === 'all' || tile.dataset.dimension === filter)
+      && (genre === 'all' || tile.dataset.genre === genre)
+      && (!query || (tile.dataset.search ?? tile.textContent).toLowerCase().includes(query)));
     if (!tile.hidden) count++;
   }
   const status = document.getElementById('filter-status');
-  if (status) status.textContent = `${count} example${count === 1 ? '' : 's'}`;
+  if (status) status.textContent = `${count} game${count === 1 ? '' : 's'}`;
   const empty = document.getElementById('games-empty');
   if (empty) empty.hidden = count !== 0;
-  if (save && gameQuery) saveFilters({q: gameQuery.value.trim(), dimension: filter});
+  if (save && gameQuery) saveFilters({q: gameQuery.value.trim(), dimension: filter, genre});
 }
-for (const button of document.querySelectorAll('[data-filter]')) {
-  button.addEventListener('click', () => {
-    for (const other of document.querySelectorAll('[data-filter]')) other.setAttribute('aria-pressed', String(other === button));
-    filterGames();
-  });
+function press(attribute, value) {
+  for (const button of document.querySelectorAll(`button[${attribute}]`)) button.setAttribute('aria-pressed', String(button.getAttribute(attribute) === value));
+}
+for (const attribute of ['data-filter', 'data-genre']) {
+  for (const button of document.querySelectorAll(`button[${attribute}]`)) {
+    button.addEventListener('click', () => { press(attribute, button.getAttribute(attribute)); filterGames(); });
+  }
 }
 gameQuery?.addEventListener('input', () => filterGames());
+document.querySelector('[data-clear-filters]')?.addEventListener('click', () => {
+  if (gameQuery) gameQuery.value = '';
+  press('data-filter', 'all'); press('data-genre', 'all'); filterGames(); gameQuery?.focus();
+});
 function restoreFilters() {
   const params = new URL(location.href).searchParams;
   if (gameQuery) {
     gameQuery.value = params.get('q') ?? '';
-    const dimension = ['2D', '3D'].includes(params.get('dimension')) ? params.get('dimension') : 'all';
-    for (const button of document.querySelectorAll('[data-filter]')) button.setAttribute('aria-pressed', String(button.dataset.filter === dimension));
+    press('data-filter', ['2D', '3D'].includes(params.get('dimension')) ? params.get('dimension') : 'all');
+    press('data-genre', GENRES.includes(params.get('genre')) ? params.get('genre') : 'all');
     filterGames(false);
   }
-
 }
 restoreFilters();
 window.addEventListener('popstate', restoreFilters);
+// Highlight the on-page section currently being read.
+const tocLinks = [...document.querySelectorAll('.toc a[href^="#"]:not(.toc-top)')];
+if (tocLinks.length && 'IntersectionObserver' in window) {
+  const headings = tocLinks.map(link => document.getElementById(decodeURIComponent(link.hash.slice(1)))).filter(Boolean);
+  const visible = new Set();
+  const observer = new IntersectionObserver(entries => {
+    for (const entry of entries) entry.isIntersecting ? visible.add(entry.target) : visible.delete(entry.target);
+    const current = headings.find(h => visible.has(h)) ?? headings.filter(h => h.getBoundingClientRect().top < 120).at(-1);
+    for (const link of tocLinks) link.classList.toggle('active', !!current && link.hash.slice(1) === current.id);
+  }, {rootMargin: '-90px 0px -65% 0px'});
+  for (const heading of headings) observer.observe(heading);
+}
 for (const button of document.querySelectorAll('[data-launch]')) {
   button.addEventListener('click', () => {
     const player = button.closest('.player'), frame = document.createElement('iframe');

@@ -1,6 +1,6 @@
 # Build the documentation site locally
 
-The Ferravex site is generated from repository Markdown, crate READMEs and the first-party example catalog. Python's standard library builds the pages; the browser uses Ferravex CSS/JavaScript plus the explicitly requested, self-hosted Qikbar command menu. The current source stopping point and verification limits are recorded in the [release status](/docs/release-status/). Building this site creates local artifacts; publishing remains a separate step.
+The Ferravex site is generated from repository Markdown, crate READMEs and the first-party example catalog. Python's standard library builds the pages; the browser uses Ferravex CSS/JavaScript plus the explicitly requested, self-hosted Qikbar command menu. What has shipped, and its verification limits, is recorded in the [release scope](../../docs/STOPPING_POINT.md). Building this site creates local artifacts; publishing remains a separate step.
 
 ## Build and inspect
 
@@ -18,7 +18,7 @@ For content-only changes after a complete local build:
 python3 scripts/build-site.py --skip-build
 ```
 
-This requires matching game and API artifacts and still runs the dependency audit. A successful content build does not establish gameplay correctness, browser input support or device performance; use the [example validation guide](/docs/validation/) separately.
+This requires matching game and API artifacts and still runs the dependency audit. A successful content build does not establish gameplay correctness, browser input support or device performance; use the [example validation guide](../../docs/GAME_TESTS.md) separately.
 
 ## Hosting configuration
 
@@ -28,7 +28,7 @@ The production service builds this Dockerfile from the merged main branch. Verif
 
 ## Add an example
 
-Add a first-party workspace crate and a browser host, then record its id, host directory, title, controls, description, source and screenshot in `examples/catalog.json`. The Wasm file uses the package name with hyphens replaced by underscores. The catalog drives staging, documentation pages and size reports. Keep every Cargo dependency within the workspace and original source tree.
+Add a first-party workspace crate and a browser host, then record its id, host directory, title, controls, description, source and screenshot in `examples/catalog.json`. The Wasm file uses the package name with hyphens replaced by underscores. The catalog drives staging, documentation pages and size reports. Keep every Cargo dependency within the workspace and original source tree. On the site, each example page also reads its objective and related guide from `GAME_GUIDES`, and its gallery genre from `GAME_GENRE`, in `scripts/build-site.py`; a game without entries falls back to its catalog description and the Arcade genre.
 
 The restored games share `web/runtime.js`; Courtyard and Orbit Breaker keep their specialized hosts. Example pages instantiate only the selected game after Play is pressed. The gallery does not download or run all seventeen modules automatically.
 
@@ -42,7 +42,7 @@ Edit the relevant Markdown or crate README. Search, navigation and sitemap pages
 
 The shared corpus is generated into `search.json` from the current rendered pages and documentation. It loads only when the menu is opened, stays in memory for that page visit, and is searched locally. Source requests are debounced and canceled as the query changes. Failed index loads can be retried without reloading the page.
 
-`website/static/vendor/qikbar` contains the official Qikbar 0.2.1 ESM distribution and license. No CDN or package installation is needed to build or use the site. To update it, replace the pinned official browser modules and chunks together, preserve the license, refresh the provenance manifest hashes, and run the search/browser checks. See the [dependency policy](/docs/dependencies/) for its separate website scope.
+`website/static/vendor/qikbar` contains the official Qikbar 0.2.1 ESM distribution and license. No CDN or package installation is needed to build or use the site. To update it, replace the pinned official browser modules and chunks together, preserve the license, refresh the provenance manifest hashes, and run the search/browser checks. See the [dependency policy](../../DEPENDENCIES.md) for its separate website scope.
 
 ```sh
 python3 -B scripts/test_search.py

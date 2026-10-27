@@ -15,15 +15,20 @@
 //! session.restart(); // The host also rebuilds bodies, ammunition and feedback.
 //! assert_eq!(session.tick(), 0);
 //! ```
+#[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+mod capture;
+mod hud;
+mod juice;
+mod quips;
+mod score;
+
 use ferravex_core::session::{GameSession, SessionState};
 use ferravex_physics::d3::{
     ColliderBuilder, PhysicsWorld, RigidBodyBuilder, RigidBodyHandle, Vector,
 };
 use ferravex_render::audio::{Cue, GameAudio, Surface};
-#[cfg(test)]
-use ferravex_render::input::HintDevice;
 use ferravex_render::input::{
-    PlayerInput, Preset,
+    HintDevice, PlayerInput, Preset,
     touch::{Control, Output, Region},
 };
 use ferravex_render::{
@@ -32,8 +37,11 @@ use ferravex_render::{
     preferences,
     prelude::*,
     shaders::{LitMaterial, LitSettings},
-    ui::{self, ButtonOptions},
+    ui,
 };
+use juice::{Juice, Material};
+use quips::{Banter, Mood};
+use score::{Callout, Events, RangeEvent, Tally};
 
 #[cfg(test)]
 const DT: f32 = 1.0 / 120.0;
@@ -69,6 +77,9 @@ struct Block {
 struct Shot {
     handle: RigidBodyHandle,
     previous_position: Vec3,
+    /// Velocity after the previous tick; a sharp change is a reported impact.
+    velocity: Vec3,
+    impacts: u8,
 }
 
 struct Range {
@@ -85,6 +96,10 @@ struct Range {
     preview: Vec<Vec3>,
     preview_hit: Option<Vec3>,
     preview_aim: (u32, u32),
+    /// Demolition score, fed only by accepted ticks and shots.
+    tally: Tally,
+    /// Accepted events from the latest fire/step, drained by the session host.
+    events: Events,
 }
 
 impl Range {
@@ -144,7 +159,25 @@ impl Range {
             preview: Vec::with_capacity(45),
             preview_hit: None,
             preview_aim: (u32::MAX, u32::MAX),
+            tally: Tally::default(),
+            events: Events::new(),
         }
+    }
+
+    /// The nearest block whose cube is touched by a ball centred at `point`
+    /// (the preview reports the ball's centre at first contact).
+    fn block_at(&self, point: Vec3) -> Option<&Block> {
+        self.blocks
+            .iter()
+            .filter_map(|block| {
+                let body = &self.physics.bodies[block.handle];
+                let center = Vec3::from_array(body.translation().to_array());
+                let rotation = Quat::from_array(body.rotation().to_array());
+                let local = (rotation.inverse() * (point - center)).abs();
+                (local.max_element() < 1.0).then_some((block, local.length()))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(block, _)| block)
     }
 
     fn refresh_preview(&mut self, simulated: bool) {
@@ -223,10 +256,21 @@ impl Range {
         self.shots.push(Shot {
             handle,
             previous_position: muzzle,
+            velocity: direction * SPEED,
+            impacts: 0,
         });
         self.ammo -= 1;
         self.cooldown = RELOAD;
         self.since_shot = 0.0;
+        let cleared = (0..score::COLUMNS)
+            .filter(|column| self.blocks[column * 4 + 2].down && self.blocks[column * 4 + 3].down)
+            .fold(0, |mask, column| mask | 1 << column);
+        self.tally.fired(cleared, &mut self.events);
+        self.events.push(RangeEvent::Fired {
+            muzzle,
+            direction,
+            last: self.ammo == 0,
+        });
         true
     }
 
@@ -252,19 +296,58 @@ impl Range {
                 Vec3::from_array(self.physics.bodies[shot.handle].translation().to_array());
         }
         self.physics.step(dt);
-        for block in &mut self.blocks {
-            if !block.target || block.down {
+        for shot in &mut self.shots {
+            let body = &self.physics.bodies[shot.handle];
+            let position = Vec3::from_array(body.translation().to_array());
+            let velocity = Vec3::from_array(body.linvel().to_array());
+            let change = (velocity - shot.velocity).length();
+            if change > 6.0 && shot.impacts < 3 {
+                shot.impacts += 1;
+                self.events.push(RangeEvent::Impact {
+                    at: position,
+                    strength: change,
+                });
+            }
+            shot.velocity = velocity;
+            if position.distance(score::BELL) < score::BELL_RADIUS {
+                self.tally.bell(score::BELL, &mut self.events);
+            }
+        }
+        // Every block can be knocked down for points; only targets count
+        // toward the win. Blocks are stored tower by tower, bottom to top.
+        let mut down: [bool; 12] = std::array::from_fn(|i| self.blocks[i].down);
+        let mut fallen = [0_usize; 12];
+        let mut count = 0;
+        for (index, block) in self.blocks.iter_mut().enumerate() {
+            if block.down {
                 continue;
             }
             let body = &self.physics.bodies[block.handle];
             let p = Vec3::from_array(body.translation().to_array());
             let rotation = Quat::from_array(body.rotation().to_array());
-            block.down = p.distance(block.home) > 1.3
-                || p.y < block.home.y - 0.75
-                || (rotation * Vec3::Y).y < 0.45;
+            let up = (rotation * Vec3::Y).y;
+            block.down = p.distance(block.home) > 1.3 || p.y < block.home.y - 0.75 || up < 0.45;
+            if block.down {
+                fallen[count] = index;
+                count += 1;
+            } else if index % 4 == 3 && (up < 0.985 || p.distance(block.home) > 0.25) {
+                self.tally.wobble(index / 4, p, &mut self.events);
+            }
         }
+        for &index in &fallen[..count] {
+            down[index] = true;
+            let column = index / 4;
+            let block = &self.blocks[index];
+            let at = Vec3::from_array(self.physics.bodies[block.handle].translation().to_array());
+            let tower = [0, 1, 2, 3].map(|layer| down[column * 4 + layer]);
+            self.tally
+                .knocked(column, block.target, at, tower, &mut self.events);
+        }
+        self.tally.tick(self.since_shot, &mut self.events);
         if self.score() == GOAL {
             self.phase = Phase::Won;
+            self.tally
+                .won(self.ammo, vec3(0.0, 2.4, -4.0), &mut self.events);
         } else if self.ammo == 0 && self.since_shot > SETTLE {
             self.phase = Phase::Lost;
         }
@@ -354,6 +437,12 @@ struct FrameFeedback {
     fired: bool,
     destroyed: usize,
     outcome: Option<Phase>,
+    /// Sandstone supports knocked down this frame.
+    loosened: usize,
+    impacts: usize,
+    wobbled: bool,
+    /// The most important callout this frame, for audio.
+    callout: Option<Callout>,
 }
 
 #[derive(Default)]
@@ -369,16 +458,37 @@ struct Foundry {
     session: GameSession,
     pending_fire: bool,
     feedback: Feedback,
+    juice: Juice,
+    /// Foreman Gus's line counters; kept across rebuilds so retries vary.
+    banter: Banter,
+    /// Debug capture only: replaces autoplay's next aim. Always `None` in play.
+    scripted_aim: Option<(f32, f32)>,
 }
 
 impl Foundry {
     fn new(autoplay: bool) -> Self {
-        Self {
+        let mut foundry = Self {
             range: Range::new(),
             session: GameSession::new(120.0, 12, autoplay),
             pending_fire: false,
             feedback: Feedback::default(),
+            juice: Juice::new(),
+            banter: Banter::default(),
+            scripted_aim: None,
+        };
+        if foundry.session.is_playing() {
+            // Autoplay sessions start themselves; Gus still says hello.
+            foundry.juice.say(&mut foundry.banter, Mood::Start);
         }
+        foundry
+    }
+
+    fn start(&mut self) -> bool {
+        let started = self.session.start();
+        if started {
+            self.juice.say(&mut self.banter, Mood::Start);
+        }
+        started
     }
 
     fn rebuild(&mut self) {
@@ -389,12 +499,18 @@ impl Foundry {
             rebuilt: 1.8,
             ..Feedback::default()
         };
+        self.juice.reset();
+        self.juice.say(&mut self.banter, Mood::Retry);
     }
 
     fn set_paused(&mut self, paused: bool) {
+        let was_paused = self.session.is_paused();
         self.session.set_paused(paused);
         if paused {
             self.pending_fire = false;
+            if !was_paused && self.session.is_paused() {
+                self.banter.pause();
+            }
         }
     }
 
@@ -402,6 +518,21 @@ impl Foundry {
         // Ignore reload/terminal presses instead of deferring an unwanted shot.
         if self.session.is_playing() && self.range.can_fire() {
             self.pending_fire = true;
+        }
+    }
+
+    /// The finished (or current) run for the results card and rank title.
+    fn summary(&self) -> quips::RunSummary {
+        let tally = &self.range.tally;
+        let won = self.range.phase == Phase::Won;
+        quips::RunSummary {
+            won,
+            stars: score::stars(won, tally.shots),
+            targets: self.range.score() as u32,
+            misses: tally.misses,
+            wonder: tally.wonders > 0,
+            domino: tally.dominoes > 0,
+            bell: tally.bell,
         }
     }
 
@@ -419,6 +550,12 @@ impl Foundry {
         // Presentation settings are sampled even when session.advance produces
         // no ticks (ready, paused, controls, results, or a high render rate).
         self.feedback.sync_preferences();
+        let policy = preferences::feedback_policy();
+        self.juice.apply_policy(
+            policy.reduced_motion(),
+            policy.reduced_flash(),
+            policy.intensity(),
+        );
         let frame = self.session.advance(elapsed);
         let mut events = FrameFeedback {
             alpha: frame.alpha,
@@ -426,6 +563,7 @@ impl Foundry {
         };
         for _ in 0..frame.steps {
             self.feedback.step(frame.dt);
+            self.juice.step(frame.dt, self.range.tally.points);
             let input = input();
             if !autoplay {
                 self.range.yaw =
@@ -437,6 +575,10 @@ impl Foundry {
                 }
             }
             if autoplay && self.range.autoplay() {
+                if let Some((yaw, elevation)) = self.scripted_aim.take() {
+                    self.range.yaw = yaw;
+                    self.range.elevation = elevation;
+                }
                 self.queue_fire();
             }
             if std::mem::take(&mut self.pending_fire) && self.range.fire() {
@@ -455,6 +597,37 @@ impl Foundry {
                 self.feedback.destruction = 2.0;
                 events.destroyed += destroyed;
             }
+            // Juice and audio react only to events the range accepted.
+            for event in self.range.events.as_slice() {
+                match *event {
+                    RangeEvent::Knocked { target: false, .. } => events.loosened += 1,
+                    RangeEvent::Impact { .. } => events.impacts += 1,
+                    RangeEvent::Wobble { .. } => events.wobbled = true,
+                    RangeEvent::Callout { callout, .. }
+                        if events
+                            .callout
+                            .is_none_or(|old| callout.priority() > old.priority()) =>
+                    {
+                        events.callout = Some(callout);
+                    }
+                    _ => {}
+                }
+                self.juice.event(*event, &mut self.banter);
+            }
+            self.range.events.clear();
+            self.juice.sample_trail(self.range.shots.last().map(|shot| {
+                let body = &self.range.physics.bodies[shot.handle];
+                (
+                    Vec3::from_array(body.translation().to_array()),
+                    Vec3::from_array(body.linvel().to_array()).length(),
+                )
+            }));
+            if self.range.ammo == 0
+                && self.range.phase == Phase::Aiming
+                && self.range.since_shot > score::MISS_AFTER
+            {
+                self.juice.settling(&mut self.banter);
+            }
             if self.range.phase != Phase::Aiming {
                 self.session.finish(self.range.phase == Phase::Won);
                 self.pending_fire = false;
@@ -470,6 +643,20 @@ impl Foundry {
         events
     }
 }
+
+/// Foreman Gus stands beside the right tower, safely out of the line of fire.
+const GUS: Vec3 = vec3(6.7, 0.0, -2.0);
+const GUS_FACING: f32 = 0.5;
+/// Gus is a big lad, drawn half again life size so he reads at a distance.
+const GUS_SCALE: f32 = 1.5;
+/// The bell hangs from the girder's centre on a short rope.
+const BELL_PIVOT: Vec3 = vec3(0.0, 6.75, -9.0);
+const HIVIS: Color = Color::from_rgba(240, 150, 44, 255);
+const HARDHAT: Color = Color::from_rgba(250, 206, 64, 255);
+const SKIN: Color = Color::from_rgba(226, 178, 138, 255);
+const DENIM: Color = Color::from_rgba(58, 72, 98, 255);
+const BRASS: Color = Color::from_rgba(214, 168, 72, 255);
+const SOOT: Color = Color::from_rgba(76, 78, 72, 255);
 
 struct Art {
     floor: Mesh3d,
@@ -488,6 +675,22 @@ struct Art {
     roof: Mesh3d,
     building: Mesh3d,
     rivet: Mesh3d,
+    chunk_rust: Mesh3d,
+    chunk_sand: Mesh3d,
+    chunk_soot: Mesh3d,
+    bell: Mesh3d,
+    clapper: Mesh3d,
+    rope: Mesh3d,
+    gus_legs: Mesh3d,
+    gus_torso: Mesh3d,
+    gus_stripe: Mesh3d,
+    gus_arm: Mesh3d,
+    gus_head: Mesh3d,
+    gus_hat: Mesh3d,
+    gus_brim: Mesh3d,
+    gus_tash: Mesh3d,
+    gus_eye: Mesh3d,
+    gus_board: Mesh3d,
 }
 
 impl Art {
@@ -512,12 +715,35 @@ impl Art {
             roof: Mesh3d::cuboid(vec3(8.5, 0.3, 6.5), STEEL),
             building: Mesh3d::cuboid(vec3(8.0, 4.0, 6.0), Color::from_rgba(158, 145, 114, 255)),
             rivet: Mesh3d::cylinder(0.16, 0.015, PAPER, 8),
+            chunk_rust: Mesh3d::cuboid(Vec3::ONE, RUST),
+            chunk_sand: Mesh3d::cuboid(Vec3::ONE, SAND),
+            chunk_soot: Mesh3d::cuboid(Vec3::ONE, SOOT),
+            bell: Mesh3d::frustum(0.44, 0.2, 0.55, BRASS, 10),
+            clapper: Mesh3d::sphere(0.09, INK, 6, 4),
+            rope: Mesh3d::cuboid(vec3(0.05, 0.72, 0.05), INK),
+            gus_legs: Mesh3d::cuboid(vec3(0.42, 0.62, 0.28), DENIM),
+            gus_torso: Mesh3d::cuboid(vec3(0.62, 0.62, 0.38), HIVIS),
+            gus_stripe: Mesh3d::cuboid(vec3(0.64, 0.07, 0.4), PAPER),
+            gus_arm: Mesh3d::cuboid(vec3(0.14, 0.5, 0.14), HIVIS),
+            gus_head: Mesh3d::sphere(0.21, SKIN, 10, 6),
+            gus_hat: Mesh3d::frustum(0.24, 0.16, 0.16, HARDHAT, 10),
+            gus_brim: Mesh3d::cylinder(0.31, 0.03, HARDHAT, 10),
+            gus_tash: Mesh3d::cuboid(vec3(0.22, 0.05, 0.05), Color::from_rgba(92, 62, 44, 255)),
+            gus_eye: Mesh3d::cuboid(Vec3::splat(0.045), INK),
+            gus_board: Mesh3d::cuboid(vec3(0.3, 0.38, 0.04), Color::from_rgba(150, 112, 70, 255)),
         }
     }
 
-    fn draw(&self, game: &Range, alpha: f32, recoil: f32, material: &LitMaterial) {
-        let camera = RangeCamera::new(screen_width(), screen_height());
-        set_camera(&camera);
+    fn draw(
+        &self,
+        game: &Range,
+        alpha: f32,
+        recoil: f32,
+        juice: &Juice,
+        camera: &RangeCamera,
+        material: &LitMaterial,
+    ) {
+        set_camera(camera);
         material.begin(LitSettings {
             camera_position: camera.eye,
             fog_color: SKY,
@@ -539,6 +765,14 @@ impl Art {
             .draw(vec3(-15.0, 4.15, -15.0), Quat::from_rotation_z(-0.1));
         self.chimney.draw(vec3(-12.0, 6.0, -17.0), Quat::IDENTITY);
         self.chimney.draw(vec3(-16.0, 5.0, -18.0), Quat::IDENTITY);
+        // The secret lunch bell swings when rung (motion only).
+        let swing = Quat::from_rotation_x(juice.bell_angle());
+        self.rope
+            .draw(BELL_PIVOT + swing * vec3(0.0, -0.36, 0.0), swing);
+        self.bell
+            .draw(BELL_PIVOT + swing * (score::BELL - BELL_PIVOT), swing);
+        self.clapper
+            .draw(BELL_PIVOT + swing * vec3(0.0, -1.3, 0.0), swing);
         for block in &game.blocks {
             let body = &game.physics.bodies[block.handle];
             let p = block
@@ -547,12 +781,10 @@ impl Art {
             let q = block
                 .previous_rotation
                 .slerp(Quat::from_array(body.rotation().to_array()), alpha);
-            let mesh = if block.down {
-                &self.fallen
-            } else if block.target {
-                &self.target
-            } else {
-                &self.stone
+            let mesh = match (block.target, block.down) {
+                (true, true) => &self.fallen,
+                (true, false) => &self.target,
+                (false, _) => &self.stone,
             };
             mesh.draw(p, q);
             if block.target && !block.down {
@@ -569,10 +801,27 @@ impl Art {
             );
             self.ball.draw(p, Quat::IDENTITY);
         }
+        for chunk in juice.chunks.iter().flatten() {
+            let mesh = match chunk.material {
+                Material::Rust => &self.chunk_rust,
+                Material::Sand => &self.chunk_sand,
+                Material::Soot => &self.chunk_soot,
+            };
+            mesh.draw_transformed(Mat4::from_scale_rotation_translation(
+                Vec3::splat(chunk.scale()),
+                chunk.rotation,
+                chunk.position,
+            ));
+        }
+        self.draw_gus(juice);
         let direction = game.direction();
         let q = Quat::from_rotation_arc(Vec3::Y, direction);
         self.chassis
-            .draw(vec3(0.0, 0.7, 15.0), Quat::from_rotation_y(-game.yaw));
+            .draw_transformed(Mat4::from_scale_rotation_translation(
+                juice.carriage_scale(),
+                Quat::from_rotation_y(-game.yaw),
+                vec3(0.0, 0.7, 15.0),
+            ));
         for x in [-0.95, 0.95] {
             self.wheel.draw(
                 vec3(x, 0.6, 15.0),
@@ -582,19 +831,49 @@ impl Art {
         self.barrel.draw(PIVOT + direction * (0.3 - recoil), q);
         self.muzzle.draw(PIVOT + direction * (1.515 - recoil), q);
         material.end();
-        if game.phase == Phase::Aiming && game.ammo > 0 && game.cooldown == 0. {
-            for (i, segment) in game.preview.windows(2).enumerate() {
-                if i % 2 == 0 {
-                    draw_line_3d(segment[0], segment[1], Color::from_rgba(249, 225, 157, 180));
-                }
-            }
-            if let Some(hit) = game.preview_hit {
-                let size = 0.38;
-                draw_line_3d(hit - Vec3::X * size, hit + Vec3::X * size, PAPER);
-                draw_line_3d(hit - Vec3::Y * size, hit + Vec3::Y * size, PAPER);
-            }
-        }
         set_default_camera();
+    }
+
+    /// Foreman Gus: idles, frets while a tower wobbles, and hops at a collapse.
+    fn draw_gus(&self, juice: &Juice) {
+        let motion = juice.motion().min(1.0);
+        let bob = (juice.time * 3.1).sin() * 0.025 * motion;
+        let root = Mat4::from_scale_rotation_translation(
+            Vec3::splat(GUS_SCALE),
+            Quat::from_rotation_y(GUS_FACING) * Quat::from_rotation_z(juice.fret()),
+            GUS + Vec3::Y * (juice.hop_height() + bob),
+        );
+        let part = |mesh: &Mesh3d, at: Vec3, rotation: Quat| {
+            mesh.draw_transformed(root * Mat4::from_rotation_translation(rotation, at));
+        };
+        part(&self.gus_legs, vec3(0.0, 0.31, 0.0), Quat::IDENTITY);
+        part(&self.gus_torso, vec3(0.0, 0.93, 0.0), Quat::IDENTITY);
+        part(&self.gus_stripe, vec3(0.0, 0.86, 0.0), Quat::IDENTITY);
+        part(&self.gus_head, vec3(0.0, 1.46, 0.0), Quat::IDENTITY);
+        part(&self.gus_tash, vec3(0.0, 1.4, 0.2), Quat::IDENTITY);
+        for x in [-0.075, 0.075] {
+            part(&self.gus_eye, vec3(x, 1.5, 0.19), Quat::IDENTITY);
+        }
+        part(&self.gus_brim, vec3(0.0, 1.57, 0.03), Quat::IDENTITY);
+        part(&self.gus_hat, vec3(0.0, 1.66, 0.0), Quat::IDENTITY);
+        part(
+            &self.gus_board,
+            vec3(0.12, 0.95, 0.23),
+            Quat::from_rotation_x(-0.35),
+        );
+        // Arms rise in despair on a collapse and flap while he frets.
+        let raise = (juice.hop * 2.6).min(1.0).max(juice.alarm * 0.7) * motion;
+        for side in [-1.0_f32, 1.0] {
+            let flap = (juice.time * 16.0 + side).sin() * 0.25 * juice.alarm * motion;
+            let angle = side * (0.12 + 2.5 * raise + flap);
+            let shoulder = vec3(side * 0.39, 1.2, 0.0);
+            let rotation = Quat::from_rotation_z(angle);
+            part(
+                &self.gus_arm,
+                shoulder + rotation * vec3(0.0, -0.25, 0.0),
+                rotation,
+            );
+        }
     }
 }
 
@@ -668,6 +947,27 @@ impl RangeCamera {
             eye: base.position,
         }
     }
+
+    /// A screen-space presentation offset in pixels (camera kick and shake).
+    /// The eye, depth and fog are unchanged.
+    fn shifted(mut self, w: f32, h: f32, pixels: Vec2) -> Self {
+        if pixels != Vec2::ZERO && w > 0.0 && h > 0.0 {
+            let offset = vec3(2.0 * pixels.x / w, -2.0 * pixels.y / h, 0.0);
+            self.matrix = Mat4::from_translation(offset) * self.matrix;
+        }
+        self
+    }
+
+    /// Screen position of a world point, or `None` behind the eye.
+    fn project(&self, w: f32, h: f32, point: Vec3) -> Option<Vec2> {
+        let clip = self.matrix * point.extend(1.0);
+        (clip.w > 0.01).then(|| {
+            vec2(
+                (clip.x / clip.w + 1.0) * w * 0.5,
+                (1.0 - clip.y / clip.w) * h * 0.5,
+            )
+        })
+    }
 }
 
 impl Camera for RangeCamera {
@@ -690,7 +990,7 @@ fn label(text: &str, x: f32, y: f32, size: f32, color: Color) {
         x + 1.0,
         y + 1.0,
         size,
-        Color::new(0.0, 0.0, 0.0, 0.22),
+        Color::new(0.0, 0.0, 0.0, 0.22 * color.a),
     );
     draw_text(text, x, y, size, color);
 }
@@ -699,46 +999,6 @@ fn clicked(rect: Rect) -> bool {
     rect.contains(Vec2::from(mouse_position())) && is_mouse_button_pressed(MouseButton::Left)
 }
 
-fn button(rect: Rect, title: &str, enabled: bool) {
-    // Keep click-on-press input resolution before simulation; the common helper
-    // supplies the matching disabled/hover palette and bounded label sizing.
-    let _ = ui::button_with_options(
-        rect,
-        title,
-        ButtonOptions {
-            enabled,
-            selected: false,
-        },
-    );
-}
-
-fn fitted_label(text: &str, rect: Rect, size: u16, centered: bool) {
-    let metrics = get_default_font()
-        .try_metrics(size, 1.0)
-        .expect("HUD font size");
-    let fitted =
-        ui::fit_label(text, rect.w.max(0.0), metrics.glyph_advance()).expect("finite HUD bounds");
-    let x = rect.x
-        + if centered {
-            (rect.w - fitted.width) * 0.5
-        } else {
-            0.0
-        };
-    label(fitted.prefix, x, rect.y, f32::from(size), PAPER);
-    let prefix_width = metrics
-        .measure_line(fitted.prefix)
-        .expect("bounded HUD label")
-        .width;
-    label(
-        fitted.suffix,
-        x + prefix_width,
-        rect.y,
-        f32::from(size),
-        PAPER,
-    );
-}
-
-#[cfg(test)]
 fn action_hint<'a>(input: &PlayerInput, action: &str, buffer: &'a mut [u8]) -> &'a str {
     if input.current_device() == HintDevice::Touch {
         // The preset's Touch 2/confirm channels are not installed here: this
@@ -773,128 +1033,56 @@ impl HudLayout {
     }
 }
 
-fn draw_hud(foundry: &Foundry, layout: &HudLayout, input: &PlayerInput) {
-    let game = &foundry.range;
-    let controls_open = input.controls_open();
-    let w = screen_width();
-    let state = foundry.session.state();
-    let panel_color = Color::new(0.10, 0.14, 0.13, 0.94);
-    if state != SessionState::Ready {
-        draw_rectangle(16.0, 12.0, (w - 96.0).min(280.0), 32.0, panel_color);
-        label(
-            &format!("TARGETS {} / {}", game.score(), GOAL),
-            28.0,
-            34.0,
-            16.0,
-            PAPER,
-        );
-    }
-    let panel = layout.panel;
-    draw_rectangle(panel.x, panel.y, panel.w, panel.h, panel_color);
-    if state != SessionState::Ready {
-        label(
-            &format!("SHOTS {} / {AMMO}", game.ammo),
-            28.0,
-            panel.y + 24.0,
-            16.0,
-            PAPER,
-        );
-    }
-    let feedback = &foundry.feedback;
-    let status = if feedback.destruction > 0.0 {
-        format!("+{} TARGETS DOWN", feedback.knocked_down)
-    } else if feedback.shot > 0.0 {
-        format!("SHOT {} AWAY", AMMO - game.ammo)
-    } else if feedback.rebuilt > 0.0 {
-        "REBUILT: 8 SHOTS READY".into()
-    } else if game.ammo == 0 && game.phase == Phase::Aiming {
-        format!("SETTLING {:.1}s", (SETTLE - game.since_shot).max(0.0))
-    } else if game.cooldown > 0.0 {
-        format!("RELOADING {:.1}s", game.cooldown)
-    } else {
-        "".into()
+/// Personal records are stored per layout/rules version.
+const RECORD_CONTEXT: u64 = 1;
+
+/// Read the stored best points and best stars, if any.
+fn stored_best(records: Option<&ferravex_render::storage::Records>) -> hud::Best {
+    let Some(records) = records else {
+        return hud::Best::default();
     };
-    fitted_label(
-        &status,
-        Rect::new(28.0, panel.y + 48.0, panel.w - 24.0, 20.0),
-        16,
-        false,
-    );
-    let fire_title = match state {
-        SessionState::Ready => "START",
-        SessionState::Won => "AGAIN",
-        SessionState::Lost => "RETRY",
-        SessionState::Paused => "PAUSED",
-        SessionState::Playing if game.ammo == 0 => "EMPTY",
-        SessionState::Playing if game.cooldown > 0.0 => "LOADING",
-        SessionState::Playing => "FIRE",
-    };
-    let fire_enabled = !controls_open
-        && match state {
-            SessionState::Ready | SessionState::Won | SessionState::Lost => true,
-            SessionState::Playing => game.can_fire(),
-            SessionState::Paused => false,
-        };
-    button(layout.fire, fire_title, fire_enabled);
-    button(layout.rebuild, "REBUILD", !controls_open);
-    button(
-        layout.pause,
-        if foundry.session.is_paused() {
-            "RESUME"
-        } else {
-            "PAUSE"
-        },
-        !controls_open && matches!(state, SessionState::Playing | SessionState::Paused),
-    );
-    if game.cooldown > 0.0 {
-        draw_rectangle(
-            layout.fire.x,
-            layout.fire.y + layout.fire.h + 5.0,
-            layout.fire.w,
-            3.0,
-            STEEL,
-        );
-        draw_rectangle(
-            layout.fire.x,
-            layout.fire.y + layout.fire.h + 5.0,
-            layout.fire.w * (1.0 - game.cooldown / RELOAD),
-            3.0,
-            PAPER,
-        );
+    hud::Best {
+        points: records.get("points", RECORD_CONTEXT).map(|r| r.score),
+        stars: records.get("spared", RECORD_CONTEXT).map_or(0, |r| {
+            score::stars(true, AMMO.saturating_sub(r.score as u8))
+        }),
     }
-    let (title, detail) = match state {
-        SessionState::Ready => ("DEMOLITION RANGE", "6 targets. 8 shots."),
-        SessionState::Paused => ("RANGE PAUSED", ""),
-        SessionState::Won => ("FOUNDRY CLEARED", ""),
-        SessionState::Lost => ("OUT OF SHOTS", ""),
-        SessionState::Playing => return,
-    };
-    let panel_width = (w - 32.0).min(430.0);
-    let y = 104.0;
-    draw_rectangle(
-        (w - panel_width) * 0.5,
-        y,
-        panel_width,
-        if detail.is_empty() { 56. } else { 82. },
-        panel_color,
-    );
-    for (text, offset, size) in [(title, 30.0, 20), (detail, 61.0, 16)] {
-        fitted_label(
-            text,
-            Rect::new(
-                (w - panel_width) * 0.5 + 12.0,
-                y + offset,
-                panel_width - 24.0,
-                24.0,
-            ),
-            size,
-            true,
-        );
+}
+
+/// Capture the comparison once at the result, then record the attempt.
+fn finish_run(
+    records: Option<&mut ferravex_render::storage::Records>,
+    foundry: &Foundry,
+    fake_best: Option<u64>,
+) -> hud::Results {
+    let tally = &foundry.range.tally;
+    let won = foundry.range.phase == Phase::Won;
+    let points = u64::from(tally.points);
+    let mut previous = stored_best(records.as_deref());
+    if fake_best.is_some() {
+        previous.points = fake_best;
+    }
+    if let Some(records) = records {
+        // Storage failures keep the in-memory session best; play continues.
+        let _ = records.attempt("points", RECORD_CONTEXT, points, None);
+        if won {
+            let _ = records.attempt("spared", RECORD_CONTEXT, u64::from(tally.spare), None);
+        }
+    }
+    let stars = score::stars(won, tally.shots);
+    hud::Results {
+        previous,
+        new_best: points > 0 && previous.points.is_none_or(|best| points > best),
+        new_stars: stars > previous.stars,
     }
 }
 
 fn window_conf() -> Conf {
-    ferravex_render::window_conf("Siege Foundry / Ferravex")
+    #[allow(unused_mut)]
+    let mut conf = ferravex_render::window_conf("Siege Foundry / Ferravex");
+    #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+    capture::window(&mut conf);
+    conf
 }
 
 ferravex_render::game!(window_conf, game);
@@ -906,35 +1094,46 @@ async fn game() {
     let mut sound = GameAudio::new();
     let mut player_input = PlayerInput::preset("siege-foundry", Preset::Turret);
     player_input.set_mouse_look_button(Some(1)).unwrap();
+    let mut records = ferravex_render::storage::Records::new("siege-foundry").ok();
+    let mut results = hud::Results::default();
+    let mut coach = hud::Coach::default();
+    let mut hints = hud::Hints::default();
+    #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+    let mut capture = capture::Capture::from_env();
+    #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+    let fake_best = capture.fake_best();
+    #[cfg(not(all(debug_assertions, not(target_arch = "wasm32"))))]
+    let fake_best = None;
     loop {
-        ferravex_render::ui::warm_up_font_sizes(&[16, 19, 20, 23]);
-        let layout = HudLayout::new(screen_width(), screen_height());
+        let (w, h) = (screen_width(), screen_height());
+        let layout = HudLayout::new(w, h);
         player_input
             .set_touch_layout(&[Control {
-                region: Region::Rect(Rect::new(
-                    0.0,
-                    90.0,
-                    screen_width(),
-                    (layout.panel.y - 90.0).max(1.0),
-                )),
+                region: Region::Rect(Rect::new(0.0, 90.0, w, (layout.panel.y - 90.0).max(1.0))),
                 output: Output::Look { x: 0, y: 1 },
             }])
             .unwrap();
         // Resolve pointer pause before sampling, so keyboard and pointer resume
         // both re-enable the gameplay context on this frame.
-        if !demo.autoplay
-            && !player_input.controls_open()
-            && matches!(
-                foundry.session.state(),
-                SessionState::Playing | SessionState::Paused
-            )
-            && clicked(layout.pause)
-        {
+        let pausable = matches!(
+            foundry.session.state(),
+            SessionState::Playing | SessionState::Paused
+        );
+        if !demo.autoplay && !player_input.controls_open() && pausable && clicked(layout.pause) {
             player_input.set_paused(!foundry.session.is_paused());
         }
         player_input.sample_play();
+        hints.refresh(&player_input);
         let dt = demo.dt();
-        let active = demo.autoplay || player_input.gameplay_active() && !player_input.paused();
+        #[allow(unused_mut)]
+        let mut active = demo.autoplay || player_input.gameplay_active() && !player_input.paused();
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        {
+            if capture.hold(foundry.session.is_playing()) {
+                player_input.set_paused(true);
+                active = false;
+            }
+        }
         let controls_open = player_input.controls_open();
         let confirm = player_input.pressed("confirm");
         let rebuild = player_input.pressed("restart") || !controls_open && clicked(layout.rebuild);
@@ -957,12 +1156,14 @@ async fn game() {
             foundry.rebuild();
             player_input.set_paused(false);
             sound.reset();
+            results = hud::Results::default();
         } else if started {
-            foundry.session.start();
+            foundry.start();
             player_input.set_paused(false);
         } else {
             foundry.set_paused(!active);
         }
+        let aim_before = (foundry.range.yaw, foundry.range.elevation);
         if foundry.session.is_playing() && active && !restarted && !started {
             let game = &mut foundry.range;
             let pointer = Vec2::from(mouse_position());
@@ -976,6 +1177,16 @@ async fn game() {
                 foundry.queue_fire();
             }
         }
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        if demo.autoplay
+            && foundry.scripted_aim.is_none()
+            && let Some(aim) = capture.aim(foundry.range.tally.shots)
+        {
+            foundry.scripted_aim = Some(match aim {
+                capture::Aim::Bell => BELL_AIM,
+                capture::Aim::Miss => (0.5, 0.13),
+            });
+        }
         let events = foundry.advance_input(
             if restarted || started {
                 0.0
@@ -988,11 +1199,36 @@ async fn game() {
                 aim: player_input.movement(),
             },
         );
+        let aimed = (foundry.range.yaw, foundry.range.elevation) != aim_before;
+        coach.aimed |= aimed && !demo.autoplay || events.fired && demo.autoplay;
+        coach.fired |= events.fired;
+        coach.knocked |= events.destroyed > 0 || events.loosened > 0;
         if events.fired {
             sound.cue(Cue::Fire, 0.8);
         }
+        if events.impacts > 0 {
+            sound.cue(Cue::Impact(Surface::Stone), 0.45);
+        }
+        if events.loosened > 0 {
+            sound.cue(Cue::Impact(Surface::Wood), 0.5);
+        }
         if events.destroyed > 0 {
             sound.cue(Cue::Impact(Surface::Metal), 0.6);
+        }
+        if events.wobbled {
+            sound.cue(Cue::Footstep(Surface::Wood), 0.4);
+        }
+        match events.callout {
+            Some(Callout::Bell) => {
+                sound.cue(Cue::Pickup, 0.8);
+            }
+            Some(Callout::Domino | Callout::OneShotWonder | Callout::Overkill) => {
+                sound.cue(Cue::Pickup, 0.55);
+            }
+            Some(Callout::Chain(_) | Callout::Timber | Callout::Delayed) => {
+                sound.cue(Cue::Reload, 0.45);
+            }
+            Some(Callout::Spare(_)) | None => {}
         }
         if let Some(outcome) = events.outcome {
             sound.cue(
@@ -1003,25 +1239,58 @@ async fn game() {
                 },
                 0.65,
             );
+            results = finish_run(records.as_mut(), &foundry, fake_best);
+        }
+        if matches!(
+            foundry.session.state(),
+            SessionState::Won | SessionState::Lost
+        ) {
+            foundry.juice.result_time(dt);
         }
         clear_background(SKY);
+        let camera = RangeCamera::new(w, h).shifted(w, h, foundry.juice.camera_offset());
         art.draw(
             &foundry.range,
             events.alpha,
             foundry.feedback.barrel_offset(),
+            &foundry.juice,
+            &camera,
             &material,
         );
-        draw_hud(&foundry, &layout, &player_input);
+        let best = stored_best(records.as_ref());
+        hud::draw(&hud::View {
+            foundry: &foundry,
+            layout: &layout,
+            camera: &camera,
+            w,
+            h,
+            controls_open,
+            hints: &hints,
+            results: &results,
+            best,
+            coach: &coach,
+        });
         // The range supplies its own pause panel; retain the shared editor.
         if !player_input.paused() || controls_open {
             player_input.draw_settings();
         }
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        capture.end_frame();
         if demo.finish_frame() {
             break;
         }
         next_frame().await;
     }
 }
+
+/// Yaw and elevation that send a ball over the centre tower and through the
+/// secret lunch bell. Used by debug captures; kept honest by a regression test
+/// that fires it through real physics.
+#[cfg_attr(
+    not(any(test, all(debug_assertions, not(target_arch = "wasm32")))),
+    allow(dead_code)
+)]
+const BELL_AIM: (f32, f32) = (0.0, 0.335);
 
 #[cfg(test)]
 mod journey200_tests;
@@ -1530,5 +1799,126 @@ mod tests {
             assert_eq!(foundry.range.ammo, AMMO);
             assert_eq!(foundry.range.score(), 0);
         }
+    }
+
+    fn started(autoplay: bool) -> Foundry {
+        let mut foundry = Foundry::new(autoplay);
+        // Autoplay sessions start themselves; interactive ones need Start.
+        assert_eq!(foundry.start(), !autoplay);
+        assert!(foundry.session.is_playing());
+        foundry
+    }
+
+    #[test]
+    fn bell_aim_rings_the_secret_bell_once_without_touching_physics() {
+        let mut foundry = started(false);
+        let bodies = foundry.range.physics.bodies.len();
+        (foundry.range.yaw, foundry.range.elevation) = BELL_AIM;
+        foundry.queue_fire();
+        let mut callouts = Vec::new();
+        for _ in 0..360 {
+            callouts.extend(foundry.advance(1.0 / 120.0, false).callout);
+        }
+        let tally = &foundry.range.tally;
+        assert!(tally.bell);
+        assert_eq!(callouts, [Callout::Bell]);
+        assert_eq!(tally.points, score::BELL_BONUS, "clean over the tower");
+        assert_eq!(foundry.range.score(), 0);
+        assert_eq!(
+            foundry.range.physics.bodies.len(),
+            bodies + 1,
+            "sensor only"
+        );
+        assert_eq!(tally.misses, 0, "ringing the bell is not a miss");
+        assert_eq!(foundry.juice.bubble.unwrap().mood, Mood::Bell);
+        assert!(quips::rank(foundry.summary()).title.contains("BELL"));
+    }
+
+    #[test]
+    fn autoplay_score_events_and_stars_match_across_frame_rates() {
+        let mut reference = None;
+        for fps in [30, 60, 144] {
+            let mut foundry = started(true);
+            let mut timbers = 0;
+            for _ in 0..20 * fps {
+                let events = foundry.advance(1.0 / f64::from(fps), true);
+                timbers += usize::from(events.callout == Some(Callout::Timber));
+                assert!(foundry.range.events.as_slice().is_empty(), "drained");
+            }
+            assert_eq!(foundry.session.state(), SessionState::Won);
+            let tally = foundry.range.tally.clone();
+            assert_eq!(usize::from(tally.shots), foundry.range.shots.len());
+            assert_eq!(tally.targets, GOAL as u32);
+            assert_eq!(tally.spare, foundry.range.ammo);
+            assert!(timbers >= 1, "{fps}: a tower fell with a TIMBER call");
+            let summary = foundry.summary();
+            assert!(summary.won && summary.stars >= 2, "{summary:?}");
+            // Targets pay at least 100 each, and spare shells pay a bonus.
+            assert!(
+                tally.points
+                    >= 6 * score::TARGET_POINTS + u32::from(tally.spare) * score::SPARE_BONUS
+            );
+            if let Some(reference) = &reference {
+                assert_eq!(&tally, reference, "{fps} Hz score diverged");
+            }
+            reference = Some(tally);
+        }
+    }
+
+    #[test]
+    fn a_wide_shot_is_a_miss_that_gus_comments_on_and_pause_freezes_juice() {
+        let mut foundry = started(false);
+        foundry.range.yaw = 0.5;
+        foundry.queue_fire();
+        assert!(foundry.advance(1.0 / 120.0, false).fired);
+        for _ in 0..40 {
+            foundry.advance(0.1, false);
+        }
+        assert_eq!(foundry.range.tally.misses, 1);
+        assert_eq!(foundry.range.tally.points, 0);
+        let bubble = foundry.juice.bubble.expect("Gus reacts to the miss");
+        assert_eq!(bubble.mood, Mood::Miss);
+        foundry.set_paused(true);
+        let age = bubble.age;
+        let time = foundry.juice.time;
+        foundry.advance(30.0, false);
+        assert_eq!(foundry.juice.bubble.unwrap().age, age);
+        assert_eq!(foundry.juice.time, time);
+        // Rebuild resets the run's score but keeps Gus's line counters moving.
+        foundry.rebuild();
+        assert_eq!(foundry.range.tally, Tally::default());
+        assert_eq!(foundry.juice.bubble.unwrap().mood, Mood::Retry);
+    }
+
+    #[test]
+    fn camera_kick_is_presentation_only_and_keeps_eye_and_depth() {
+        let base = RangeCamera::new(1280.0, 800.0);
+        let shifted = RangeCamera::new(1280.0, 800.0).shifted(1280.0, 800.0, vec2(6.0, -4.0));
+        assert_eq!(shifted.eye, base.eye);
+        let a = base.project(1280.0, 800.0, PIVOT).unwrap();
+        let b = shifted.project(1280.0, 800.0, PIVOT).unwrap();
+        assert!((b - a - vec2(6.0, -4.0)).length() < 0.01, "{a:?} -> {b:?}");
+        let clip = |camera: &RangeCamera| camera.matrix * PIVOT.extend(1.0);
+        assert_eq!(clip(&base).z, clip(&shifted).z);
+        assert_eq!(clip(&base).w, clip(&shifted).w);
+        let same = RangeCamera::new(1280.0, 800.0).shifted(1280.0, 800.0, Vec2::ZERO);
+        assert_eq!(same.matrix, base.matrix);
+    }
+
+    #[test]
+    fn reticle_identifies_targets_and_supports_under_the_preview() {
+        let mut game = Range::new();
+        let support = game.blocks[5].home + vec3(0.0, 0.0, 0.96);
+        assert!(!game.block_at(support).unwrap().target);
+        let target = game.blocks[6].home + vec3(0.0, 0.1, 0.96);
+        assert!(game.block_at(target).unwrap().target);
+        assert!(game.block_at(vec3(0.0, 0.0, 10.0)).is_none());
+        game.aim_at(vec3(0.0, 1.8, -4.0));
+        game.refresh_preview(false);
+        let hit = game.preview_hit.unwrap();
+        assert!(
+            !game.block_at(hit).unwrap().target,
+            "autoplay aims at supports"
+        );
     }
 }

@@ -92,13 +92,27 @@ enum Interactable {
     Crystal(usize),
     Altar(u8),
     Gate,
+    /// Optional bonus crystal tucked behind the spawn point. Outside the graph.
+    Shy,
+    /// The lost miner's note. Re-readable, never part of the objective graph.
+    Note,
 }
 impl Interactable {
-    fn objective(self) -> usize {
+    fn objective(self) -> Option<usize> {
         match self {
-            Self::Crystal(i) => i,
-            Self::Altar(i) => 3 + usize::from(i),
-            Self::Gate => 5,
+            Self::Crystal(i) => Some(i),
+            Self::Altar(i) => Some(3 + usize::from(i)),
+            Self::Gate => Some(5),
+            Self::Shy | Self::Note => None,
+        }
+    }
+    fn id(self) -> u64 {
+        match self {
+            Self::Crystal(i) => i as u64 + 1,
+            Self::Altar(i) => 4 + u64::from(i),
+            Self::Gate => 6,
+            Self::Shy => 7,
+            Self::Note => 8,
         }
     }
     fn from_id(id: u64) -> Option<Self> {
@@ -106,9 +120,49 @@ impl Interactable {
             1..=3 => Some(Self::Crystal(id as usize - 1)),
             4..=5 => Some(Self::Altar(id as u8 - 4)),
             6 => Some(Self::Gate),
+            7 => Some(Self::Shy),
+            8 => Some(Self::Note),
             _ => None,
         }
     }
+}
+
+/// Steve, the shy bonus crystal, hides in the corner behind the spawn point.
+fn shy_position() -> Vec2 {
+    center(7, 13) + vec2(0.85, 0.85)
+}
+/// Wendell's lost note (and hat) sit in the Echoing Grotto's far corner.
+fn note_position() -> Vec2 {
+    center(1, 8) + vec2(-0.7, -0.7)
+}
+/// Index into [`quips::ZONES`] for a walkable position.
+fn zone_at(p: Vec2) -> usize {
+    let x = (p.x / TILE).round() as i32;
+    let z = (p.y / TILE).round() as i32;
+    match (x, z) {
+        (_, 12..) => 0,
+        (_, 11) => 1,
+        (..=4, 8..=10) => 3,
+        (8.., 8..=10) => 4,
+        (_, 7..=10) => 2,
+        _ => 5,
+    }
+}
+/// Seconds without objective progress before each whispered hint level.
+const HINT_AFTER: [f32; 3] = [30., 55., 85.];
+/// Crystals start humming within this many metres.
+const RESONANCE_RANGE: f32 = 11.;
+
+/// Presentation-facing facts from one simulation step. Reset every step and
+/// merged into [`Progress`]; nothing here feeds back into the rules.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Events {
+    bonk: bool,
+    rejected: Option<Interactable>,
+    shy: bool,
+    note: Option<u32>,
+    zone: Option<usize>,
+    hint: bool,
 }
 
 fn objectives() -> ferravex_play::objective::ObjectiveGraph<6> {
@@ -148,6 +202,19 @@ struct Game {
     elapsed: f32,
     notice: String,
     notice_time: f32,
+    shy_found: bool,
+    note_reads: u32,
+    bonks: u32,
+    bump_cooldown: f32,
+    rejected: u32,
+    zone: usize,
+    zones_seen: u8,
+    /// Expedition seconds since the last accepted objective.
+    stuck: f32,
+    hint_level: u8,
+    hints_used: u32,
+    walked: f32,
+    events: Events,
 }
 impl Game {
     fn new() -> Self {
@@ -182,7 +249,69 @@ impl Game {
             elapsed: 0.0,
             notice: "Recover three crystals. Wake the numbered altars.".into(),
             notice_time: 8.0,
+            shy_found: false,
+            note_reads: 0,
+            bonks: 0,
+            bump_cooldown: 0.,
+            rejected: 0,
+            zone: 0,
+            zones_seen: 1,
+            stuck: 0.,
+            hint_level: 0,
+            hints_used: 0,
+            walked: 0.,
+            events: Events::default(),
         }
+    }
+    /// Index of the first incomplete objective, or 6 once complete.
+    fn stage(&self) -> usize {
+        self.objectives
+            .iter()
+            .find(|view| view.state != ObjectiveState::Complete)
+            .map_or(6, |view| view.index)
+    }
+    fn nearest_crystal(&self) -> Option<Vec2> {
+        self.crystals
+            .iter()
+            .zip(self.collected)
+            .filter(|(_, collected)| !collected)
+            .map(|(p, _)| *p)
+            .min_by(|a, b| {
+                a.distance_squared(self.position)
+                    .total_cmp(&b.distance_squared(self.position))
+            })
+    }
+    /// The crystal a hint should point at: a visible one first, then the
+    /// nearest through rock. Read-only, like every other inspection here.
+    fn hint_crystal(&self) -> Option<Vec2> {
+        self.crystals
+            .iter()
+            .zip(self.collected)
+            .filter(|(_, collected)| !collected)
+            .map(|(p, _)| (!self.visible(*p), p.distance_squared(self.position), *p))
+            .min_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)))
+            .map(|(_, _, p)| p)
+    }
+    /// Where the current objective is, for the hint marker.
+    fn hint_target(&self) -> Option<Vec2> {
+        match self.stage() {
+            0..=2 => self.hint_crystal(),
+            3 => Some(at(b'A')),
+            4 => Some(at(b'B')),
+            5 => Some(at(b'X')),
+            _ => None,
+        }
+    }
+    fn hint_text(&self) -> String {
+        let zone = self.hint_crystal().map_or(0, zone_at);
+        quips::hint(self.stage(), self.hint_level, zone)
+    }
+    /// 0 far away (or done) to 1 standing on the nearest missing crystal.
+    /// Steve does not hum. Steve is shy.
+    fn resonance(&self) -> f32 {
+        self.nearest_crystal().map_or(0., |p| {
+            (1. - p.distance(self.position) / RESONANCE_RANGE).clamp(0., 1.)
+        })
     }
     fn count(&self) -> usize {
         self.collected.iter().filter(|&&c| c).count()
@@ -232,6 +361,9 @@ impl Game {
             .event(index as u16 + 1, 1, self.objectives.last_event_serial() + 1)
             .unwrap();
         self.sync_objectives();
+        // Progress resets the whisper schedule for the next objective.
+        self.stuck = 0.;
+        self.hint_level = 0;
     }
     fn sync_objectives(&mut self) {
         for (i, collected) in self.collected.iter_mut().enumerate() {
@@ -252,12 +384,18 @@ impl Game {
             Interactable::Altar(i) => at(if i == 0 { b'A' } else { b'B' }),
             // Query the near face, not the center of the solid closed gate.
             Interactable::Gate => at(b'G') + vec2(0., 0.22),
+            Interactable::Shy => shy_position(),
+            Interactable::Note => note_position(),
         }
     }
     fn target_ready(&self, target: Interactable) -> bool {
-        self.objectives
-            .inspect(target.objective())
-            .is_some_and(|view| view.state == ObjectiveState::Ready)
+        match target.objective() {
+            Some(index) => self
+                .objectives
+                .inspect(index)
+                .is_some_and(|view| view.state == ObjectiveState::Ready),
+            None => target != Interactable::Shy || !self.shy_found,
+        }
     }
     // The prompt, world highlight and accepted interaction share one target.
     fn target(&self) -> Option<Interactable> {
@@ -276,10 +414,12 @@ impl Game {
             .filter(|(i, _)| !self.collected[*i])
             .map(|(i, _)| Interactable::Crystal(i))
             .chain((self.switches..2).map(Interactable::Altar))
-            .chain(std::iter::once(Interactable::Gate));
+            .chain(std::iter::once(Interactable::Gate))
+            .chain((!self.shy_found).then_some(Interactable::Shy))
+            .chain(std::iter::once(Interactable::Note));
         let candidates = candidates
             .map(|target| Candidate {
-                id: target.objective() as u64 + 1,
+                id: target.id(),
                 position: world(self.target_position(target), 0.),
                 groups: 1,
             })
@@ -298,14 +438,14 @@ impl Game {
                     forward: Vec3::Z,
                 },
                 Sight::new(1.7, std::f32::consts::TAU, 1).expect("cave interaction range"),
-                &mut WorkBudget::new(6, 6, 0),
+                &mut WorkBudget::new(8, 8, 0),
                 &mut CaveVisibility(self),
                 |candidate| -candidate.position.distance(world(self.position, 0.)),
             )
             .expect("finite authored cave candidates");
         debug_assert!(
             !report.incomplete,
-            "all six cave objects fit the focus budget"
+            "all eight cave objects fit the focus budget"
         );
         (
             selector,
@@ -316,12 +456,7 @@ impl Game {
     }
     fn objective_hint(&self) -> String {
         let (count, required) = self.crystal_progress();
-        match self
-            .objectives
-            .iter()
-            .find(|view| view.state != ObjectiveState::Complete)
-            .map(|view| view.index)
-        {
+        match Some(self.stage()).filter(|&stage| stage < 6) {
             Some(0..=2) => format!(
                 "Search the side chambers: {} / {required} crystals remain",
                 required - count
@@ -333,10 +468,9 @@ impl Game {
         }
     }
     fn blocker(&self, target: Interactable) -> String {
-        let view = self
-            .objectives
-            .inspect(target.objective())
-            .expect("authored objective");
+        let Some(view) = target.objective().and_then(|i| self.objectives.inspect(i)) else {
+            return String::new();
+        };
         let missing = view.blockers.missing_all;
         let (count, required) = self.crystal_progress();
         if missing & 7 != 0 {
@@ -357,27 +491,42 @@ impl Game {
             return;
         };
         if !self.target_ready(target) {
+            self.rejected += 1;
+            self.events.rejected = Some(target);
             self.message(self.blocker(target));
             return;
         }
         match target {
             Interactable::Crystal(i) => {
                 self.objective_event(i);
+                // The pop already shows the count; the notice only says where next.
                 self.message(match self.count() {
-                    1 => "Crystal 1 / 3 recovered. Two remain in the side chambers.",
-                    2 => "Crystal 2 / 3 recovered. One more to find.",
-                    _ => "All three recovered. Find altar I, then altar II.",
+                    1 => "Two more hum somewhere in the side chambers.",
+                    2 => "Last one. Follow the hum.",
+                    _ => "Now wake altar I in the Hall of Altars.",
                 });
             }
             Interactable::Altar(0) => {
                 self.objective_event(3);
-                self.message("Altar I awakened. The second altar is ready.");
+                self.message("Altar II is ready on the east side of the hall.");
             }
             Interactable::Altar(_) => {
                 self.objective_event(4);
-                self.message("The seal is open. Walk through to the daylight.");
+                self.message("Head north through the seal, into the daylight.");
             }
             Interactable::Gate => self.message(self.objective_hint()),
+            Interactable::Shy => {
+                self.shy_found = true;
+                self.events.shy = true;
+                self.message("Secret found: Steve, the shy crystal. He's blushing.");
+            }
+            Interactable::Note => {
+                self.events.note = Some(self.note_reads);
+                self.message(quips::note(self.note_reads));
+                // Handwriting takes longer to read than a status line.
+                self.notice_time = 6.;
+                self.note_reads += 1;
+            }
         }
     }
     fn prompt(&self, interact_hint: &str) -> Option<String> {
@@ -390,15 +539,33 @@ impl Game {
                 Interactable::Altar(0) => format!("{interact_hint} - Awaken altar I"),
                 Interactable::Altar(_) => format!("{interact_hint} - Awaken altar II"),
                 Interactable::Gate => "Seal open / Walk through to daylight".into(),
+                Interactable::Shy => format!("{interact_hint} - Coax the shy crystal"),
+                Interactable::Note if self.note_reads == 0 => {
+                    format!("{interact_hint} - Read the lost note")
+                }
+                Interactable::Note => {
+                    format!("{interact_hint} - Read page {}", self.note_reads % 4 + 1)
+                }
             }
         })
     }
     fn step(&mut self, input: Input, dt: f32) {
+        self.events = Events::default();
         if self.won {
             return;
         }
         self.notice_time = (self.notice_time - dt).max(0.0);
         self.elapsed += dt;
+        self.stuck += dt;
+        let level = HINT_AFTER
+            .iter()
+            .filter(|&&after| self.stuck >= after)
+            .count() as u8;
+        if level > self.hint_level {
+            self.hints_used += u32::from(level - self.hint_level);
+            self.hint_level = level;
+            self.events.hint = true;
+        }
         self.yaw += input.turn * dt;
         let front = forward(self.yaw);
         let right = vec2(-front.y, front.x);
@@ -413,6 +580,7 @@ impl Game {
             dt,
         );
         self.velocity = self.velocity.lerp(desired, weight);
+        let intended = self.velocity.length();
         let delta = self.velocity * dt;
         let motion = move_and_slide(
             &CaveTerrain(self),
@@ -431,11 +599,31 @@ impl Game {
         )
         .expect("authored cave character terrain");
         let next = vec2(motion.position.x, motion.position.z);
+        self.bump_cooldown = (self.bump_cooldown - dt).max(0.);
         if dt > 0. {
             // Wall sliding must not retain hidden velocity into a blocked wall.
             self.velocity = (next - self.position) / dt;
+            // A brisk walk that stops dead is a bonk; glancing slides are not.
+            if intended > SPEED * 0.6
+                && self.velocity.length() < intended * 0.35
+                && movement.length_squared() > 0.25
+                && self.bump_cooldown == 0.
+            {
+                self.bonks += 1;
+                self.bump_cooldown = 0.9;
+                self.events.bonk = true;
+            }
         }
+        self.walked += next.distance(self.position);
         self.position = next;
+        let zone = zone_at(self.position);
+        if zone != self.zone {
+            self.zone = zone;
+            if self.zones_seen & (1 << zone) == 0 {
+                self.zones_seen |= 1 << zone;
+                self.events.zone = Some(zone);
+            }
+        }
         self.focus = self.select_focus().0;
         if input.interact {
             self.interact();
@@ -453,6 +641,23 @@ struct Progress {
     pickups: usize,
     altars: u8,
     won: bool,
+    /// Presentation facts merged from every executed step this frame.
+    bonks: u32,
+    rejected: Option<Interactable>,
+    shy: bool,
+    note: Option<u32>,
+    zone: Option<usize>,
+    hint: bool,
+}
+impl Progress {
+    fn absorb(&mut self, events: Events) {
+        self.bonks += u32::from(events.bonk);
+        self.rejected = events.rejected.or(self.rejected);
+        self.shy |= events.shy;
+        self.note = events.note.or(self.note);
+        self.zone = events.zone.or(self.zone);
+        self.hint |= events.hint;
+    }
 }
 
 // Host lifecycle stays testable without a window, audio device or renderer.
@@ -462,6 +667,8 @@ struct Expedition {
     pilot: Pilot,
     autoplay: bool,
     discard_frame: bool,
+    /// Expeditions restarted this session; varies a few quips between runs.
+    runs: u32,
 }
 impl Expedition {
     fn new(autoplay: bool) -> Self {
@@ -471,6 +678,7 @@ impl Expedition {
             pilot: Pilot::default(),
             autoplay,
             discard_frame: false,
+            runs: 0,
         }
     }
     fn start(&mut self) {
@@ -485,6 +693,7 @@ impl Expedition {
         self.session.restart();
         self.pilot = Pilot::default();
         self.discard_frame = true;
+        self.runs = self.runs.wrapping_add(1);
     }
     fn set_paused(&mut self, paused: bool) {
         if self.session.set_paused(paused) {
@@ -524,6 +733,7 @@ impl Expedition {
             let collected = self.game.count();
             let switches = self.game.switches;
             self.game.step(command, frame.dt);
+            progress.absorb(self.game.events);
             progress.pickups += self.game.count() - collected;
             progress.altars += self.game.switches - switches;
             if self.game.won {
@@ -794,8 +1004,28 @@ struct Scene {
     tip: Mesh3d,
     pedestal: Mesh3d,
     rune: Mesh3d,
+    rune_dark: Mesh3d,
     gate: Mesh3d,
     daylight: Mesh3d,
+    shy: Mesh3d,
+    shy_tip: Mesh3d,
+    paper: Mesh3d,
+    hat: Mesh3d,
+    brim: Mesh3d,
+    lantern: Mesh3d,
+    lantern_cap: Mesh3d,
+    shard: [Mesh3d; 2],
+    /// Faintly glowing mineral seams at wall bases: (position, rotation, violet).
+    shards: Vec<(Vec3, Quat, usize)>,
+}
+
+/// Lantern props: Base Camp, Wendell's abandoned camp and the Hall of Altars.
+fn lantern_positions() -> [Vec2; 3] {
+    [
+        center(5, 12) + vec2(-0.95, -0.4),
+        center(1, 8) + vec2(0.35, -0.95),
+        center(9, 4) + vec2(0.95, -0.95),
+    ]
 }
 impl Scene {
     fn new() -> Self {
@@ -925,6 +1155,31 @@ impl Scene {
                 wall_sides: None,
             })
             .collect();
+        // Deterministic seams of tiny crystals where floor meets wall.
+        let mut shards = Vec::new();
+        for (z, row) in MAP.iter().enumerate() {
+            for (x, tile) in row.bytes().enumerate() {
+                if tile == b'#' || (x * 7 + z * 13) % 4 != 0 {
+                    continue;
+                }
+                for (dx, dz) in [(1i32, 0i32), (-1, 0), (0, 1), (0, -1)] {
+                    let (nx, nz) = (x as i32 + dx, z as i32 + dz);
+                    if MAP[nz as usize].as_bytes()[nx as usize] != b'#' {
+                        continue;
+                    }
+                    let dir = vec2(dx as f32, dz as f32);
+                    let side = vec2(-dir.y, dir.x);
+                    for k in 0..3 {
+                        let offset = (k as f32 - 1.) * 0.22 + ((x + z) % 3) as f32 * 0.1;
+                        let p = center(x, z) + dir * (TILE * 0.5 - 0.1) + side * offset;
+                        let lean = Quat::from_rotation_z(-dir.x * 0.5 + k as f32 * 0.15)
+                            * Quat::from_rotation_x(dir.y * 0.5);
+                        shards.push((world(p, 0.1 + k as f32 * 0.03), lean, (x + k) % 5 / 4));
+                    }
+                    break;
+                }
+            }
+        }
         let pulse = ShaderMaterial::new(
             ShaderSource::fragment(include_str!("../shaders/crystal.frag")),
             MaterialOptions {
@@ -946,8 +1201,24 @@ impl Scene {
             tip: Mesh3d::cone(0.25, 0.55, Color::from_rgba(160, 250, 235, 255), 6),
             pedestal: Mesh3d::cylinder(0.7, 0.65, Color::from_rgba(112, 99, 79, 255), 8),
             rune: Mesh3d::cuboid(vec3(0.075, 0.025, 0.4), MINT),
+            rune_dark: Mesh3d::cuboid(vec3(0.075, 0.025, 0.4), Color::from_rgba(28, 52, 52, 255)),
             gate: Mesh3d::cuboid(vec3(TILE, 3.9, 0.35), Color::from_rgba(56, 102, 101, 255)),
             daylight: Mesh3d::cuboid(vec3(2.4, 3.5, 0.08), Color::from_rgba(225, 235, 182, 255)),
+            shy: Mesh3d::frustum(0.15, 0.11, 0.36, Color::from_rgba(168, 120, 236, 255), 6),
+            shy_tip: Mesh3d::cone(0.12, 0.26, Color::from_rgba(214, 180, 255, 255), 6),
+            paper: Mesh3d::cuboid(
+                vec3(0.34, 0.012, 0.44),
+                Color::from_rgba(214, 204, 176, 255),
+            ),
+            hat: Mesh3d::cylinder(0.15, 0.16, Color::from_rgba(96, 64, 40, 255), 8),
+            brim: Mesh3d::cylinder(0.26, 0.025, Color::from_rgba(84, 56, 36, 255), 10),
+            lantern: Mesh3d::cuboid(vec3(0.17, 0.24, 0.17), Color::from_rgba(255, 192, 110, 255)),
+            lantern_cap: Mesh3d::cuboid(vec3(0.22, 0.05, 0.22), Color::from_rgba(52, 46, 40, 255)),
+            shard: [
+                Mesh3d::cone(0.07, 0.3, Color::from_rgba(70, 150, 138, 255), 4),
+                Mesh3d::cone(0.07, 0.3, Color::from_rgba(132, 98, 178, 255), 4),
+            ],
+            shards,
         }
     }
     fn draw(
@@ -974,7 +1245,11 @@ impl Scene {
         let mut count = 0;
         for (i, &p) in game.crystals.iter().enumerate() {
             if !game.collected[i] {
+                // Warmer/colder: each crystal brightens as the explorer approaches.
+                let near = (1. - p.distance(game.position) / RESONANCE_RANGE).clamp(0., 1.);
                 lights[count].position = world(p, 1.35);
+                lights[count].intensity = 1.5 + 1.8 * near;
+                lights[count].radius = 4.8 + 1.4 * near;
                 count += 1;
             }
         }
@@ -997,6 +1272,21 @@ impl Scene {
         if !game.open() {
             self.gate.draw(world(at(b'G'), 1.95), Quat::IDENTITY);
         }
+        for p in lantern_positions() {
+            self.lantern_cap.draw(world(p, 0.27), Quat::IDENTITY);
+        }
+        // Wendell's note and hat. The note stays; it is always worth a re-read.
+        let note = note_position();
+        self.paper
+            .draw(world(note, 0.02), Quat::from_rotation_y(0.4));
+        self.hat.draw(
+            world(note + vec2(0.45, 0.2), 0.1),
+            Quat::from_rotation_z(0.12),
+        );
+        self.brim.draw(
+            world(note + vec2(0.45, 0.2), 0.02),
+            Quat::from_rotation_z(0.12),
+        );
         // Full ambient keeps crystal facets luminous without adding a texture or post-process.
         material.begin(LitSettings {
             ambient: 1.0,
@@ -1030,6 +1320,20 @@ impl Scene {
         if presentation.pulse {
             self.pulse.end();
         }
+        if !game.shy_found {
+            // Steve wobbles shyly in his corner; motionless under reduced motion.
+            let p = shy_position();
+            let wobble = Quat::from_rotation_y(time * 0.4)
+                * Quat::from_rotation_z((time * 2.3).sin() * 0.12);
+            self.shy.draw(world(p, 0.2), wobble);
+            self.shy_tip.draw(world(p, 0.5), wobble);
+        }
+        for p in lantern_positions() {
+            self.lantern.draw(world(p, 0.12), Quat::IDENTITY);
+        }
+        for (position, rotation, kind) in &self.shards {
+            self.shard[*kind].draw(*position, *rotation);
+        }
         for (index, marker) in b"AB".iter().enumerate() {
             let p = at(*marker);
             for bar in 0..=index {
@@ -1047,8 +1351,14 @@ impl Scene {
             }
         }
         if !game.open() {
+            // The seal's three sockets light as their crystals are recovered.
             for i in 0..3 {
-                self.rune.draw(
+                let rune = if game.collected[i] {
+                    &self.rune
+                } else {
+                    &self.rune_dark
+                };
+                rune.draw(
                     world(at(b'G') + vec2((i as f32 - 1.0) * 0.35, 0.22), 1.65),
                     Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
                 );
@@ -1119,13 +1429,28 @@ fn wrapped_text(ui: &mut ferravex_render::ui::Ui, text: &str, top: f32, height: 
     .expect("bounded expedition overlay");
 }
 fn window_conf() -> Conf {
-    ferravex_render::window_conf("Ferravex / Crystal Cavern")
+    #[allow(unused_mut)]
+    let mut conf = ferravex_render::window_conf("Ferravex / Crystal Cavern");
+    #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+    capture::window(&mut conf);
+    conf
 }
+
+/// Records context for this map, objective graph and secret count.
+const RECORD_RULES: u64 = 0x4343_4156_0001;
+const RECORD_ID: &str = "expedition";
+
+/// (fastest seconds, most secrets) from optional local records.
+fn best_record(records: Option<&ferravex_render::storage::Records>) -> Option<(f32, u64)> {
+    let record = records?.get(RECORD_ID, RECORD_RULES)?;
+    Some((record.fastest_us? as f32 / 1_000_000., record.score))
+}
+
 ferravex_render::game!(window_conf, game);
 async fn game() {
     let font = get_default_font();
     let characters: Vec<char> = (' '..='~').collect();
-    for size in [17, 20, 22, 23, 24, 38] {
+    for size in [14, 17, 20, 22, 23, 24, 26, 30, 38] {
         font.populate_font_cache(&characters, size);
     }
     let mut demo = Demo::new();
@@ -1145,6 +1470,15 @@ async fn game() {
     ferravex_render::set_quality(ferravex_render::lighting::Quality::Medium);
     let mut expedition = Expedition::new(demo.autoplay);
     let mut presentation = Presentation::default();
+    let mut juice = Juice::new();
+    let mut particles = ferravex_render::effects::ParticleRenderer::new(320)
+        .expect("bounded presentation particles");
+    // Personal bests are optional: a storage failure still leaves a playable game.
+    let mut records = ferravex_render::storage::Records::new("crystal-cavern").ok();
+    let mut results = hud::Results::default();
+    let mut pauses = 0_u32;
+    #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+    let mut capture = capture::Capture::from_env();
     let mut overlay_text = ferravex_render::ui::Ui::new();
     let mut view_rig = Rig3::new(Settings3 {
         position_half_life: 0.,
@@ -1201,7 +1535,8 @@ async fn game() {
         // Read on every presentation frame, before accepted feedback and draws,
         // including Ready, Controls, paused and frames with no fixed update.
         let policy = ferravex_render::preferences::feedback_policy();
-        ferravex_render::ui::warm_up_font_sizes(&[17, 20, 22, 23, 24, 38]);
+        juice.apply_policy(policy);
+        ferravex_render::ui::warm_up_font_sizes(&[14, 17, 20, 22, 23, 24, 26, 30, 38]);
         let w = screen_width();
         let h = screen_height();
         overlay_text.begin(
@@ -1241,11 +1576,22 @@ async fn game() {
         if restarted {
             expedition.restart();
             presentation = Presentation::default();
+            juice.reset();
+            results = hud::Results::default();
             sound.reset();
             view_rig.cut();
             pitch = -0.03;
+            juice.call(
+                "BACK TO BASE CAMP",
+                quips::retry(expedition.runs),
+                juice::STONE,
+                3.,
+                juice::Priority::Event,
+            );
         } else if confirm && expedition.session.state() == SessionState::Ready {
             expedition.start();
+            let (name, sub) = quips::ZONES[0];
+            juice.call(name, sub, juice::STONE, 3.2, juice::Priority::Zone);
         }
         if restarted || activate {
             // Suppress keys held across start/retry/resume, then restore the
@@ -1254,7 +1600,20 @@ async fn game() {
             player_input.set_paused(false);
             player_input.sample(true);
         }
-        expedition.set_paused(!demo.autoplay && !player_input.gameplay_active());
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        let force_pause = {
+            if let Some(secrets) = capture.before_frame(&mut expedition) {
+                juice.on_progress(&secrets, &expedition.game, expedition.runs);
+            }
+            capture.paused()
+        };
+        #[cfg(not(all(debug_assertions, not(target_arch = "wasm32"))))]
+        let force_pause = false;
+        let was_playing = expedition.session.is_playing();
+        expedition.set_paused(force_pause || !demo.autoplay && !player_input.gameplay_active());
+        if was_playing && expedition.session.state() == SessionState::Paused {
+            pauses = pauses.wrapping_add(1);
+        }
         if player_input.pressed("help") {
             help = !help;
         }
@@ -1270,13 +1629,23 @@ async fn game() {
             expedition.game.yaw += look.x;
             pitch = (pitch - look.y).clamp(-0.8, 0.8);
         }
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        let staged_use = capture.use_now();
+        #[cfg(not(all(debug_assertions, not(target_arch = "wasm32"))))]
+        let staged_use = false;
         let previous_elapsed = expedition.game.elapsed;
         let progress = expedition.advance(elapsed as f64, || Input {
             movement,
-            interact: player_input.pressed("interact"),
+            interact: player_input.pressed("interact") || staged_use,
             ..Default::default()
         });
-        presentation.advance(expedition.game.elapsed - previous_elapsed, policy);
+        let played = expedition.game.elapsed - previous_elapsed;
+        presentation.advance(played, policy);
+        juice.on_progress(&progress, &expedition.game, expedition.runs);
+        let pings = juice.advance(played, &expedition.game);
+        if expedition.session.state() == SessionState::Won {
+            juice.advance_celebration(elapsed);
+        }
         for index in 0..6 {
             if progress.completed & (1 << index) != 0 {
                 ferravex_render::performance::event(
@@ -1291,8 +1660,58 @@ async fn game() {
         if progress.altars > 0 {
             sound.cue(Cue::Impact(Surface::Metal), 0.4);
         }
+        if progress.completed & (1 << 4) != 0 {
+            // The seal grinds open under the second altar's chime.
+            sound.cue(Cue::Impact(Surface::Stone), 0.6);
+        }
         if progress.won {
             sound.cue(Cue::Success, 0.65);
+        }
+        if progress.shy {
+            sound.cue(Cue::Pickup, 0.5);
+            sound.cue(Cue::Success, 0.3);
+        }
+        if progress.note.is_some() || progress.hint {
+            sound.cue(Cue::Click, 0.3);
+        }
+        if progress.rejected.is_some() {
+            sound.cue(Cue::Impact(Surface::Wood), 0.25);
+        }
+        if progress.bonks > 0 {
+            sound.cue(Cue::Impact(Surface::Stone), 0.35);
+        }
+        if pings > 0 {
+            sound.cue(Cue::Click, 0.05 + 0.15 * expedition.game.resonance());
+        }
+        if progress.won {
+            let game = &expedition.game;
+            // Compare against the stored best before recording this clear.
+            results = hud::Results {
+                summary: quips::RunSummary {
+                    seconds: game.elapsed,
+                    hints: game.hints_used,
+                    bonks: game.bonks,
+                    shy: game.shy_found,
+                    note: game.note_reads > 0,
+                },
+                previous_best: best_record(records.as_ref()).map(|best| best.0),
+                recorded: !demo.autoplay,
+            };
+            #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+            if let Some(best) = capture.fake_best() {
+                results.previous_best = Some(best);
+                results.recorded = true;
+            }
+            if !demo.autoplay
+                && let Some(records) = records.as_mut()
+            {
+                let _ = records.attempt(
+                    RECORD_ID,
+                    RECORD_RULES,
+                    u64::from(game.shy_found) + u64::from(game.note_reads > 0),
+                    ferravex_render::storage::run_micros(game.elapsed),
+                );
+            }
         }
         let game = &expedition.game;
         sound.set_acoustics(acoustics.sample(world(game.position, 0.), false).unwrap());
@@ -1305,6 +1724,7 @@ async fn game() {
             1.45,
         );
         clear_background(INK);
+        let (shake_yaw, shake_pitch) = juice.shake();
         let view = view_rig
             .update(
                 dt,
@@ -1312,10 +1732,10 @@ async fn game() {
                     target: Target3::at(world(game.position, 0.)),
                     mode: Mode3::FirstPerson {
                         eye_offset: Vec3::Y * 1.55,
-                        yaw: game.yaw,
-                        pitch,
+                        yaw: game.yaw + shake_yaw,
+                        pitch: (pitch + shake_pitch).clamp(-0.85, 0.85),
                     },
-                    fov_y: 67_f32.to_radians(),
+                    fov_y: (67. + juice.fov_punch()).to_radians(),
                 },
                 &NoObstructions,
             )
@@ -1338,6 +1758,27 @@ async fn game() {
             &presentation,
             expedition.session.is_playing(),
         );
+        // Bursts are drawn only during play; menus keep a clean overlay stream.
+        if expedition.session.is_playing()
+            && !juice.particles.is_empty()
+            && let Ok(billboard) = ferravex_render::effects::BillboardView::new(
+                eye,
+                (view.target - eye).cross(view.up),
+                view.up,
+            )
+        {
+            let _ = particles.draw_3d(
+                &juice.particles,
+                billboard,
+                ferravex_render::effects::ParticleStyle {
+                    draw: ferravex_render::effects::EffectStyle {
+                        blend: ferravex_render::effects::EffectBlend::Additive,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            );
+        }
         set_default_camera();
         let use_hint = action_hint(&player_input, "interact");
         let confirm_hint = action_hint(&player_input, "confirm");
@@ -1345,30 +1786,10 @@ async fn game() {
         let pause_hint = action_hint(&player_input, "pause");
         let help_hint = action_hint(&player_input, "help");
         if expedition.session.is_playing() {
-            draw_rectangle(0., 0., w - 64., 43., Color::new(0.03, 0.08, 0.08, 0.8));
-            draw_text(
-                &format!("GEMS {}/3  ALTARS {}/2", game.count(), game.switches),
-                16.,
-                28.,
-                14.,
-                MINT,
-            );
-            // A steady six-part bar includes walking into daylight, not just opening
-            // the seal. It reads accepted graph completion without mutating it.
-            let bar_width = (w - 96.).max(1.);
-            for view in game.objectives.iter() {
-                draw_rectangle(
-                    16. + view.index as f32 * bar_width / 6.,
-                    40.,
-                    (bar_width / 6. - 2.).max(1.),
-                    3.,
-                    if view.state == ObjectiveState::Complete {
-                        MINT
-                    } else {
-                        Color::new(0.2, 0.3, 0.3, 1.)
-                    },
-                );
-            }
+            hud::edge_glow(&juice, w, h);
+            hud::top_bar(game, &juice, w);
+            let marker = hud::hint_marker(game, game.yaw, w);
+            hud::pops(&juice, w, h);
             let target_color = game
                 .target()
                 .map_or(Color::new(0.8, 0.9, 0.85, 0.6), |target| {
@@ -1379,15 +1800,16 @@ async fn game() {
                     }
                 });
             draw_circle(
-                screen_width() * 0.5,
+                screen_width() * 0.5 + juice.nope_offset(),
                 screen_height() * 0.5,
                 if game.target().is_some() { 3. } else { 1.7 },
                 target_color,
             );
-            if let Some(prompt) = game.prompt(&use_hint) {
-                // Locked altar copy occupies four lines at 320px. Keep it
-                // above the notice and preserve a gap before the help rows.
-                let prompt_top = (h * 0.55).min(h - 230.).max(114.);
+            // Locked altar copy occupies four lines at 320px. Keep it
+            // above the notice and preserve a gap before the help rows.
+            let prompt_top = (h * 0.55).min(h - 230.).max(114.);
+            let prompt = game.prompt(&use_hint);
+            if let Some(prompt) = &prompt {
                 draw_rectangle(
                     0.,
                     prompt_top - 8.,
@@ -1395,8 +1817,29 @@ async fn game() {
                     88.,
                     Color::new(0.03, 0.08, 0.08, 0.85),
                 );
-                wrapped_text(&mut overlay_text, &prompt, prompt_top, 72., target_color);
+                wrapped_text(&mut overlay_text, prompt, prompt_top, 72., target_color);
             }
+            // Milestones, zone names and the cave's echo sit between the bar
+            // and the prompt, never in the warm notice slot below.
+            let callout_top = (if marker {
+                hud::MARKER_Y + 42.
+            } else {
+                hud::BAR + 12.
+            })
+            .max(h * 0.13);
+            let callout_bottom = if prompt.is_some() {
+                prompt_top - 16.
+            } else {
+                // Room for a head line plus its whisper/echo on short screens.
+                (h * 0.5 - 40.).max(callout_top + 48.)
+            };
+            hud::callout(
+                &mut overlay_text,
+                &juice,
+                w,
+                callout_top,
+                (callout_bottom - callout_top).clamp(0., 96.),
+            );
             if game.notice_time > 0.0
                 && game.notice != "Recover three crystals. Wake the numbered altars."
             {
@@ -1416,43 +1859,28 @@ async fn game() {
                     WHITE,
                 );
                 text_center("Move / look bindings: Controls (F2)", h - 12., 17, WHITE);
+            } else if !player_input.touch_seen() {
+                let move_hint = ["move_forward", "move_left", "move_back", "move_right"]
+                    .map(|name| action_hint(&player_input, name))
+                    .join("");
+                hud::onboarding(game, &move_hint, w, h);
             }
         } else {
-            let top = ((h - 172.) * 0.5).max(8.);
-            draw_rectangle(
-                0.0,
-                top,
-                screen_width(),
-                172.0,
-                Color::new(0.03, 0.08, 0.08, 0.94),
-            );
-            let (title, detail, action) = match expedition.session.state() {
-                SessionState::Ready => (
-                    "THE EXPEDITION",
-                    "3 CRYSTALS / 2 ALTARS".to_owned(),
-                    "Begin expedition",
-                ),
-                SessionState::Paused => ("EXPEDITION PAUSED", String::new(), "Resume expedition"),
-                _ => (
-                    "DAYLIGHT",
-                    format!("TIME {:.1}s", game.elapsed),
-                    "Explore again",
-                ),
-            };
-            text_center(title, top + 45., 38, MINT);
-            wrapped_text(&mut overlay_text, &detail, top + 62., 60., WARM);
-            confirm_requested |= ferravex_render::ui::button_with_options(
-                Rect::new(
-                    (w - (w - 32.).clamp(1., 320.)) * 0.5,
-                    top + 116.,
-                    (w - 32.).clamp(1., 320.),
-                    44.,
-                ),
-                &format!("{confirm_hint} / {action}"),
-                ferravex_render::ui::ButtonOptions {
-                    enabled: !player_input.controls_open(),
-                    selected: true,
+            confirm_requested |= hud::card(
+                &mut overlay_text,
+                hud::Card {
+                    state: expedition.session.state(),
+                    confirm_hint: &confirm_hint,
+                    retry_hint: &retry_hint,
+                    results: &results,
+                    best: best_record(records.as_ref()),
+                    pauses,
+                    controls_open: player_input.controls_open(),
                 },
+                game,
+                &juice,
+                w,
+                h,
             );
         }
         if player_input.touch_seen()
@@ -1478,6 +1906,8 @@ async fn game() {
         // notices need an explicit paint before the Controls overlay.
         overlay_text.paint();
         player_input.draw_controls();
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        capture.end_frame();
         if demo.finish_frame() {
             break;
         }
@@ -1486,14 +1916,23 @@ async fn game() {
     if demo.autoplay {
         let game = &expedition.game;
         println!(
-            "Crystal Cavern: crystals={}, altars={}, won={}, elapsed={:.2}",
+            "Crystal Cavern: crystals={}, altars={}, won={}, elapsed={:.2}, hints={}, bonks={}",
             game.count(),
             game.switches,
             game.won,
-            game.elapsed
+            game.elapsed,
+            game.hints_used,
+            game.bonks
         );
     }
 }
+
+#[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+mod capture;
+mod hud;
+mod juice;
+mod quips;
+use juice::Juice;
 
 #[cfg(test)]
 mod journey200_138;
@@ -1503,6 +1942,9 @@ mod journey200_tests;
 
 #[cfg(test)]
 mod journey200_193;
+
+#[cfg(test)]
+mod polish_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1654,7 +2096,9 @@ mod tests {
         game.interact();
         assert!(!game.collected[0]);
         assert!(game.collected[1]);
-        assert!(game.notice.contains("1 / 3"));
+        // The count lives in the pickup pop; the notice adds where to go next.
+        assert!(game.notice.contains("side chambers"));
+        assert!(!game.notice.contains("1 / 3"));
         let corner = center(5, 8);
         game.position = corner + vec2(-1.65, 1.);
         game.crystals[0] = corner + vec2(-1., 1.65);

@@ -1,12 +1,18 @@
 //! Playable first-party reference scene. Platform code consumes the same Rust state on native/Web.
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(all(debug_assertions, target_arch = "wasm32"))]
+mod capture;
 mod hud;
 #[cfg(any(target_arch = "wasm32", test))]
 mod interactive;
 #[cfg(test)]
 mod journey200_tests;
+mod juice;
 mod orientation;
 mod peer;
+mod qualifier;
+#[cfg(test)]
+mod qualifier_tests;
+mod quips;
 mod scene_edit;
 mod training;
 use ferravex_core::session::{GameSession, SessionState};
@@ -27,6 +33,7 @@ use ferravex_graphics::{
     Camera, ClipDepth, Color, Mat4, Mesh, MeshCache, MeshId, RenderItem, SoftwareRenderer, Vec3,
     vec3,
 };
+pub use qualifier::{Grade, QualifierPhase, QualifierResult, QualifierStatus};
 pub use scene_edit::SceneEditError;
 use std::cell::RefCell;
 #[derive(Clone)]
@@ -86,12 +93,19 @@ pub struct Lab {
     last_reload: u16,
     pub audio: Vec<[f32; 2]>,
     replay: Replay,
-    player_mesh: MeshId,
-    head_mesh: MeshId,
     pub kills: u32,
     recording: bool,
     export: Vec<u8>,
     particles: ParticlePool,
+    /// Gold, coral, teal and cream particle meshes.
+    confetti: [MeshId; 4],
+    qualifier: qualifier::Qualifier,
+    bests: qualifier::Bests,
+    juice: juice::Juice,
+    /// Earlier "cold streak" nudges this run, so lines rotate.
+    cold_nudges: u32,
+    /// Personal best before the most recent finished run, for its results card.
+    previous_best: Option<u32>,
     peer: peer::Peer,
     network_out: Vec<u8>,
     network_in: Vec<u8>,
@@ -117,7 +131,6 @@ impl Lab {
                     .unwrap()
             })
             .collect();
-        let player_mesh = meshes[8];
         let head_mesh = cache
             .insert(Mesh::sphere(0.5, 4, 6, Color::from_hex(0xc5ad8b)))
             .unwrap();
@@ -126,6 +139,20 @@ impl Lab {
             .insert(Mesh::sphere(1., 5, 8, Color::from_hex(0xd3b56b)))
             .unwrap();
         meshes.push(round);
+        // Confetti for eliminations: gold reuses the spark mesh.
+        let confetti = [
+            meshes[9],
+            cache
+                .insert(Mesh::cuboid(Vec3::ONE, Color::from_hex(0xe0604a)))
+                .unwrap(),
+            cache
+                .insert(Mesh::cuboid(Vec3::ONE, Color::from_hex(0x3fb3a5)))
+                .unwrap(),
+            cache
+                .insert(Mesh::cuboid(Vec3::ONE, Color::from_hex(0xf4ead6)))
+                .unwrap(),
+        ];
+        meshes.extend_from_slice(&confetti[1..]);
         let mut objects = Vec::new();
         let mut scene = Scene::new();
         let root = scene
@@ -298,12 +325,16 @@ impl Lab {
             last_reload: 0,
             audio: Vec::new(),
             replay: Replay::default(),
-            player_mesh,
-            head_mesh,
             kills: 0,
             recording: false,
             export: Vec::new(),
-            particles: ParticlePool::new(96),
+            particles: ParticlePool::new(192),
+            confetti,
+            qualifier: qualifier::Qualifier::default(),
+            bests: qualifier::Bests::default(),
+            juice: juice::Juice::default(),
+            cold_nudges: 0,
+            previous_best: None,
             peer: peer::Peer::default(),
             network_out: Vec::new(),
             network_in: vec![0; 1200],
@@ -332,6 +363,7 @@ impl Lab {
         let mut lab = Self::new();
         lab.session.reset();
         lab.sound.pause();
+        lab.bests = qualifier::Bests::open();
         lab
     }
     /// Simulation lifecycle; a connected peer remains Playing with local controls released.
@@ -361,7 +393,13 @@ impl Lab {
             return false;
         }
         self.sound.reset();
-        *self = Self::new_interactive();
+        // Personal bests belong to the player, not the scene: keep them.
+        let bests = std::mem::take(&mut self.bests);
+        let mut next = Self::new();
+        next.session.reset();
+        next.sound.pause();
+        next.bests = bests;
+        *self = next;
         true
     }
     /// Advance the interactive host. Inactive offline frames pause without accumulating time.
@@ -423,6 +461,7 @@ impl Lab {
         self.hit_marker = (self.hit_marker - presentation_dt).max(0.);
         self.drill_notice = (self.drill_notice - presentation_dt).max(0.);
         self.particles.update(presentation_dt).unwrap();
+        self.juice.advance(presentation_dt, policy);
         if self.session.is_playing() {
             self.sound.resume();
         } else {
@@ -477,12 +516,19 @@ impl Lab {
                 ) {
                     let origin = self.game.player(0).unwrap().eye_position();
                     self.accept_feedback(FeedbackKind::Fire, origin);
+                    self.juice.fire(policy);
                 }
                 self.game.tick = self.game.tick.wrapping_add(1);
                 Vec::new()
             } else {
                 self.game.step(&inputs)
             };
+            let offline = self.peer.mode == 0;
+            let mut actions = qualifier::TickActions::default();
+            let mut eliminated = false;
+            if offline && self.game.tick == 1 {
+                self.juice.radio(quips::WELCOME);
+            }
             for event in events {
                 match event {
                     GameEvent::Shot {
@@ -490,8 +536,12 @@ impl Lab {
                         origin,
                         end,
                     } => {
-                        if self.peer.mode == 0 && player == 0 {
+                        if offline && player == 0 {
                             self.training.shots = self.training.shots.saturating_add(1);
+                            actions.shot = Some((origin, end));
+                        }
+                        if player == 0 {
+                            self.juice.fire(policy);
                         }
                         let particles = self.accept_feedback(FeedbackKind::Fire, origin);
                         for i in 0..particles.saturating_mul(3).min(6) {
@@ -508,21 +558,57 @@ impl Lab {
                         }
                     }
                     GameEvent::Hit {
-                        attacker: 0,
+                        attacker,
                         victim,
+                        headshot,
                         ..
                     } => {
-                        if self.peer.mode == 0 {
-                            self.training.hits = self.training.hits.saturating_add(1);
-                        }
+                        let from = self
+                            .game
+                            .player(attacker)
+                            .map_or(Vec3::ZERO, |p| p.position);
                         let position = self.game.player(victim).unwrap().position;
+                        self.juice.hit(victim, headshot, from, position, policy);
+                        if attacker != 0 {
+                            continue;
+                        }
+                        if offline {
+                            self.training.hits = self.training.hits.saturating_add(1);
+                            actions.hit = Some(headshot);
+                        }
                         self.accept_feedback(FeedbackKind::Hit, position);
                         if !self.feedback.policy().reduced_flash() {
                             self.hit_marker = 0.18;
+                            self.juice.marker = if headshot {
+                                juice::Marker::Headshot
+                            } else {
+                                juice::Marker::Hit
+                            };
                         }
                     }
-                    GameEvent::Killed { attacker: 0, .. } => self.kills += 1,
-                    _ => {}
+                    GameEvent::Killed { attacker, victim } => {
+                        let from = self
+                            .game
+                            .player(attacker)
+                            .map_or(Vec3::ZERO, |p| p.position);
+                        if let Some(target) = self.game.player(victim) {
+                            let (position, yaw) = (target.position, target.yaw);
+                            self.juice.eliminate(victim, position, yaw, from, policy);
+                            self.confetti(position + vec3(0., 1.2, 0.));
+                        }
+                        if attacker == 0 {
+                            self.kills += 1;
+                            if offline {
+                                actions.eliminations += 1;
+                            }
+                            if self.hit_marker > 0. {
+                                self.hit_marker = 0.32;
+                                self.juice.marker = juice::Marker::Elimination;
+                            }
+                            eliminated = true;
+                        }
+                    }
+                    GameEvent::Respawned { player } => self.juice.respawned(player),
                 }
             }
             if self.peer.mode == 0 {
@@ -540,6 +626,14 @@ impl Lab {
                 }
             }
             self.sync_training(progress_before);
+            if offline {
+                actions.drills_complete = self.training_mask() == 15;
+                self.step_qualifier(actions, step.dt);
+            }
+            // Score first, then the elimination callout under it.
+            if eliminated {
+                self.juice.pop(juice::Pop::Eliminated);
+            }
             self.update_orientation();
             self.physics.step(step.dt).unwrap();
             if !policy.reduced_motion() {
@@ -650,6 +744,12 @@ impl Lab {
                 ),
             ));
         }
+        let policy = self.feedback.policy();
+        let intensity = if policy.reduced_motion() {
+            0.
+        } else {
+            policy.intensity()
+        };
         for p in self
             .game
             .players
@@ -657,59 +757,147 @@ impl Lab {
             .filter(|p| p.is_alive() && (view != 1 || p.id != 0))
         {
             let rot = ferravex_graphics::Quat::from_rotation_y(-p.yaw);
-            let sway = if self.feedback.policy().reduced_motion() {
+            let sway = if policy.reduced_motion() {
                 0.
             } else {
                 (self.time * 8. + p.id as f32).sin() * 0.06
             };
-            for (offset, size, mesh) in [
-                (vec3(0., 1., 0.), vec3(0.56, 0.72, 0.32), self.player_mesh),
-                (vec3(0., 1.65, 0.), Vec3::splat(0.35), self.head_mesh),
-                (
-                    vec3(-0.17, 0.34 + sway, 0.),
-                    vec3(0.19, 0.68, 0.22),
-                    self.meshes[4],
-                ),
-                (
-                    vec3(0.17, 0.34 - sway, 0.),
-                    vec3(0.19, 0.68, 0.22),
-                    self.meshes[4],
-                ),
-                (
-                    vec3(0.34, 1.12, -0.2),
-                    vec3(0.12, 0.16, 0.65),
-                    self.meshes[4],
-                ),
-            ] {
+            let tilt = self.juice.tilt(p.id, intensity);
+            let head = self.juice.head_scale(p.id, intensity);
+            let target = p.id != 0 && self.peer.mode == 0;
+            for (index, (offset, size, mesh)) in
+                operator_parts(sway, head, target, &self.meshes).enumerate()
+            {
+                // The local player wears teal so overview and orbit views can find them.
+                let mesh = if index == 0 && p.id == 0 {
+                    self.meshes[13]
+                } else {
+                    mesh
+                };
+                let rotation = tilt * rot;
                 self.items.push(RenderItem::new(
                     mesh,
-                    Mat4::from_scale_rotation_translation(size, rot, p.position + rot * offset),
+                    Mat4::from_scale_rotation_translation(
+                        size,
+                        rotation,
+                        p.position + rotation * offset,
+                    ),
+                ));
+            }
+        }
+        // Eliminated operators tip over like cardboard cutouts until they respawn.
+        for (id, fallen) in self.juice.fallen_iter() {
+            if self.game.player(id).is_none_or(|p| p.is_alive()) || (view == 1 && id == 0) {
+                continue;
+            }
+            let (fall, sink) = juice::Juice::fall_pose(fallen);
+            let rotation = fall * ferravex_graphics::Quat::from_rotation_y(-fallen.yaw);
+            let base = fallen.position - vec3(0., sink, 0.);
+            let target = id != 0 && self.peer.mode == 0;
+            for (offset, size, mesh) in operator_parts(0., 1., target, &self.meshes) {
+                self.items.push(RenderItem::new(
+                    mesh,
+                    Mat4::from_scale_rotation_translation(size, rotation, base + rotation * offset),
+                ));
+            }
+        }
+        // The qualifier bell sits on the central cover once the basic drills are done.
+        if self.qualifier.bell_active() && self.peer.mode == 0 {
+            let swing = ferravex_graphics::Quat::from_rotation_x(self.juice.bell_swing(intensity));
+            let pivot = qualifier::BELL + vec3(0., 0.74, 0.);
+            for (position, size, mesh, swings) in [
+                (
+                    vec3(-0.7, 3.28, -1.),
+                    vec3(0.14, 1.56, 0.14),
+                    self.meshes[3],
+                    false,
+                ),
+                (
+                    vec3(0.7, 3.28, -1.),
+                    vec3(0.14, 1.56, 0.14),
+                    self.meshes[3],
+                    false,
+                ),
+                (
+                    vec3(0., 4.1, -1.),
+                    vec3(1.6, 0.14, 0.18),
+                    self.meshes[3],
+                    false,
+                ),
+                (
+                    vec3(0., 3.94, -1.),
+                    vec3(0.06, 0.2, 0.06),
+                    self.meshes[4],
+                    true,
+                ),
+                (
+                    qualifier::BELL,
+                    vec3(0.44, 0.52, 0.44),
+                    self.meshes[11],
+                    true,
+                ),
+                (
+                    qualifier::BELL - vec3(0., 0.48, 0.),
+                    vec3(0.11, 0.11, 0.11),
+                    self.meshes[4],
+                    true,
+                ),
+            ] {
+                let (rotation, position) = if swings {
+                    (swing, pivot + swing * (position - pivot))
+                } else {
+                    (ferravex_graphics::Quat::IDENTITY, position)
+                };
+                self.items.push(RenderItem::new(
+                    mesh,
+                    Mat4::from_scale_rotation_translation(size, rotation, position),
                 ));
             }
         }
         for p in self.particles.iter() {
+            let confetti = confetti_index(p.color);
+            let (scale, rotation) = if confetti == 0 {
+                (Vec3::splat(p.size), ferravex_graphics::Quat::IDENTITY)
+            } else {
+                // Flat paper squares that flutter as they fall.
+                let spin = p.normalized_age * 14. + p.velocity[0];
+                (
+                    vec3(p.size, p.size * 0.18, p.size),
+                    ferravex_graphics::Quat::from_rotation_x(spin)
+                        * ferravex_graphics::Quat::from_rotation_y(p.velocity[2]),
+                )
+            };
             self.items.push(RenderItem::new(
-                self.meshes[9],
-                Mat4::from_scale_rotation_translation(
-                    Vec3::splat(p.size),
-                    ferravex_graphics::Quat::IDENTITY,
-                    p.position.into(),
-                ),
+                self.confetti[confetti],
+                Mat4::from_scale_rotation_translation(scale, rotation, p.position.into()),
             ));
         }
         if view == 1 {
             let rot = ferravex_graphics::Quat::from_rotation_y(-player.yaw)
                 * ferravex_graphics::Quat::from_rotation_x(player.pitch);
-            let bob = if self.feedback.policy().reduced_motion() {
+            let bob = if policy.reduced_motion() {
                 0.
             } else {
                 (self.time * 10.).sin() * player.velocity.length().min(7.) * 0.0008
             };
+            let kick = self.juice.recoil(intensity);
             let eye = player.eye_position();
             for (offset, size, material) in [
-                (vec3(0.22, -0.22 + bob, -0.43), vec3(0.12, 0.15, 0.35), 4),
-                (vec3(0.22, -0.18 + bob, -0.68), vec3(0.045, 0.045, 0.32), 4),
-                (vec3(0.22, -0.32 + bob, -0.37), vec3(0.08, 0.16, 0.09), 3),
+                (
+                    vec3(0.22, -0.22 + bob, -0.43 + kick),
+                    vec3(0.12, 0.15, 0.35),
+                    4,
+                ),
+                (
+                    vec3(0.22, -0.18 + bob, -0.68 + kick),
+                    vec3(0.045, 0.045, 0.32),
+                    4,
+                ),
+                (
+                    vec3(0.22, -0.32 + bob, -0.37 + kick),
+                    vec3(0.08, 0.16, 0.09),
+                    3,
+                ),
             ] {
                 self.items.push(RenderItem::new(
                     self.meshes[material],
@@ -769,6 +957,49 @@ impl Lab {
         self.replay.encode()
     }
 }
+/// Operator body parts in local space: torso, head, legs, rifle and, for
+/// offline training targets, a cream-and-coral bullseye on the chest.
+fn operator_parts(
+    sway: f32,
+    head: f32,
+    target: bool,
+    meshes: &[MeshId],
+) -> impl Iterator<Item = (Vec3, Vec3, MeshId)> {
+    let parts = [
+        (vec3(0., 1., 0.), vec3(0.56, 0.72, 0.32), meshes[8]),
+        (vec3(0., 1.65, 0.), Vec3::splat(0.35 * head), meshes[10]),
+        (
+            vec3(-0.17, 0.34 + sway, 0.),
+            vec3(0.19, 0.68, 0.22),
+            meshes[4],
+        ),
+        (
+            vec3(0.17, 0.34 - sway, 0.),
+            vec3(0.19, 0.68, 0.22),
+            meshes[4],
+        ),
+        (vec3(0.34, 1.12, -0.2), vec3(0.12, 0.16, 0.65), meshes[4]),
+    ];
+    let bullseye = [
+        (vec3(0., 1.08, -0.165), vec3(0.3, 0.3, 0.02), meshes[14]),
+        (vec3(0., 1.08, -0.18), vec3(0.12, 0.12, 0.02), meshes[12]),
+    ];
+    parts
+        .into_iter()
+        .chain(bullseye.into_iter().take(if target { 2 } else { 0 }))
+}
+
+/// Particle tint to mesh: white sparks stay gold; confetti keeps its color.
+fn confetti_index(color: [f32; 4]) -> usize {
+    match color {
+        [r, g, b, _] if r > 0.99 && g > 0.99 && b > 0.99 => 0,
+        [r, g, _, _] if r > 0.86 && g < 0.5 => 1,
+        [r, g, _, _] if r < 0.5 && g > 0.6 => 2,
+        [r, _, _, _] if r > 0.9 => 3,
+        _ => 0,
+    }
+}
+
 // The renderer, input and GameAudio runtime all belong to the calling thread.
 // Returned ABI pointers borrow this thread's Lab storage until its next mutation,
 // initialization/reset or thread exit; callers must not transfer them across threads.
@@ -846,6 +1077,66 @@ pub extern "C" fn ferravex_training_state() -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn ferravex_training_progress() -> u32 {
     LAB.with(|cell| cell.borrow().as_ref().map_or(0, Lab::training_mask))
+}
+/// Qualifier phase for hosts: 0 locked, 1 countdown, 2 running, 3 results/free practice.
+/// Additive query; it never consumes input or changes the simulation.
+///
+/// ```
+/// owned_lab::ferravex_training_init();
+/// assert_eq!(owned_lab::ferravex_qualifier_phase(), 0);
+/// assert_eq!(owned_lab::ferravex_qualifier_score(), 0);
+/// assert_eq!(owned_lab::ferravex_qualifier_grade(0), 0);
+/// ```
+#[unsafe(no_mangle)]
+pub extern "C" fn ferravex_qualifier_phase() -> u32 {
+    LAB.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .map_or(0, |lab| match lab.qualifier_status().phase {
+                QualifierPhase::Locked => 0,
+                QualifierPhase::Countdown(_) => 1,
+                QualifierPhase::Running(_) => 2,
+                QualifierPhase::Debrief(_) => 3,
+            })
+    })
+}
+/// Score of the running qualifier, or of the last finished run during results.
+#[unsafe(no_mangle)]
+pub extern "C" fn ferravex_qualifier_score() -> u32 {
+    LAB.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .map_or(0, |lab| match lab.qualifier_status().phase {
+                QualifierPhase::Debrief(_) => lab.qualifier_result().map_or(0, |r| r.score),
+                _ => lab.qualifier_status().score,
+            })
+    })
+}
+/// Personal-best qualifier score, or 0 before the first finished run.
+#[unsafe(no_mangle)]
+pub extern "C" fn ferravex_qualifier_best() -> u32 {
+    LAB.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .and_then(Lab::qualifier_best)
+            .unwrap_or(0)
+    })
+}
+/// Grade of the last run (`which` 0) or the personal best (`which` 1):
+/// 1 S, 2 A, 3 B, 4 C, 5 D, or 0 when there is none.
+#[unsafe(no_mangle)]
+pub extern "C" fn ferravex_qualifier_grade(which: u32) -> u32 {
+    LAB.with(|cell| {
+        let lab = cell.borrow();
+        let score = lab.as_ref().and_then(|lab| {
+            if which == 0 {
+                lab.qualifier_result().map(|r| r.score)
+            } else {
+                lab.qualifier_best()
+            }
+        });
+        score.map_or(0, |score| Grade::from_score(score) as u32 + 1)
+    })
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn ferravex_step(

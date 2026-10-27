@@ -22,7 +22,7 @@ class Handler(SimpleHTTPRequestHandler):
             if not urlsplit(self.path).path.endswith('/'):
                 self.send_response(308);parts=urlsplit(self.path);self.send_header('Location',parts.path+'/'+('?' + parts.query if parts.query else ''));self.send_header('Content-Length','0');self.end_headers();return None
             original=original/'index.html'
-        if not original.is_file():self.send_error(404);return None
+        if not original.is_file():return self.not_found()
         use_gzip='gzip' in self.headers.get('Accept-Encoding','') and not self.headers.get('Range') and original.with_name(original.name+'.gz').is_file()
         path=original.with_name(original.name+'.gz') if use_gzip else original
         stat=path.stat();etag='"'+hashlib.sha256((str(stat.st_mtime_ns)+':'+str(stat.st_size)).encode()).hexdigest()[:24]+'"'
@@ -45,6 +45,14 @@ class Handler(SimpleHTTPRequestHandler):
         if use_gzip:self.send_header('Content-Encoding','gzip')
         if partial:self.send_header('Content-Range',f'bytes {start}-{end}/{stat.st_size}')
         self.end_headers();return stream
+    def not_found(self):
+        # Missing paths keep their 404 status but show the site's own recovery page.
+        page=Path(self.directory)/'404.html'
+        if not page.is_file():self.send_error(404);return None
+        body=page.read_bytes();self.send_response(404);self.send_header('Content-Type','text/html; charset=utf-8')
+        self.send_header('Content-Length',str(len(body)));self.send_header('Cache-Control','no-cache')
+        self.send_header('X-Content-Type-Options','nosniff');self.send_header('Referrer-Policy','strict-origin-when-cross-origin')
+        self.end_headers();return io.BytesIO(body)
     def range_error(self,size):
         self.send_response(416);self.send_header('Content-Range',f'bytes */{size}');self.send_header('Content-Length','0');self.end_headers()
     def copyfile(self,source,outputfile):

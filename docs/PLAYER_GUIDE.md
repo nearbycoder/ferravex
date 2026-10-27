@@ -1,29 +1,44 @@
 # The browser player guide
 
-All seventeen games and labs share browser tools for controls, presentation and recovery. Open **Game menu → Settings**, then scroll to **Player tools**. These tools run in the browser adapter; native hosts and simulation rules retain their documented behavior. See the [game catalog](../examples/catalog.json) and [Copper Greens guide](../examples/shared/mini-golf/README.md).
+Every game on this site shares the same player: one menu for controls, settings,
+sound and help, plus tools for screenshots, performance and accessibility. Browse
+the [games](../examples/catalog.json), or start with the
+[Copper Greens course guide](../examples/shared/mini-golf/README.md).
 
-## A game-first screen
+## Quick reference
+
+| I want to... | Do this |
+| --- | --- |
+| Start playing | Click the game, or Tab to it, so it has keyboard focus. |
+| Change a key or button | **Game menu → Controls** |
+| Play fullscreen | **Game menu → Fullscreen**; **Game menu → Exit fullscreen** returns to the page. |
+| Reduce motion or flashes | **Game menu → Settings → Player tools** |
+| Use larger text or higher contrast | **Game menu → Settings → Player tools** |
+| Save a screenshot or share a link | **Save screenshot** or **Copy game link** in Player tools |
+| Fix a game that will not load | Press **Retry game**, then use **Copy support details** if it still fails. |
+
+These tools live in the browser player. They never change a game's rules, and
+native desktop builds keep their own documented behavior.
+
+## The game menu
 
 The small **Game menu** button opens Controls, Settings, Sound and How to play.
-Instructions and diagnostics are available on demand instead of filling the
-playfield. Games retain their scores, objectives and actionable touch controls.
-Ready and pause screens show their main action and relevant results, without
-repeating the key list or explaining that time is paused. Evergreen mechanics
-and display notes live in **How to play**. The regular page also uses the single
-menu, so Fullscreen is available there without a second toolbar button.
+Help and diagnostics wait until you ask for them, so the playfield stays clear
+apart from scores, objectives and any touch controls you need. Ready and pause
+screens show only their main action and your results. Mechanics and display
+notes live in **How to play**. The same single menu appears when a game is
+embedded in a page, so Fullscreen is always in one place.
 
-**Fullscreen** gives the app the entire browser viewport: website navigation,
-guides and scroll rails stay outside it. The menu button remains in the top
-corner; **Game menu → Exit fullscreen** returns to the page. Browsers that deny
-native fullscreen use the same app layout in an expanded player; browser chrome
-may remain visible. Orbit Breaker's portrait playfield is centered without
-stretching its physics or pointer coordinates.
+**Fullscreen** gives the game the entire browser viewport, leaving site navigation
+and guides outside. The menu button stays in the top corner. If your browser
+denies native fullscreen, the game expands to fill the window instead, and some
+browser chrome may remain visible. Orbit Breaker's tall playfield stays centered
+without stretching its physics or pointer coordinates.
 
-While fullscreen, Shift+Tab from the canvas reaches the game menu instead of hidden
-page controls. The Controls editor retains its own internal Tab navigation.
-Opening the game menu suppresses local gameplay input; connected matches and
-replays retain their existing progression rules. Closing it preserves an
-independent manual pause.
+While fullscreen, Shift+Tab from the game reaches the game menu rather than hidden
+page controls. The Controls editor keeps its own Tab navigation. Opening the
+menu stops local gameplay input; online matches and replays keep running by
+their own rules. Closing the menu keeps any pause you chose yourself.
 
 ## Controls and focus
 
@@ -81,8 +96,15 @@ All games compile downloaded Wasm as a stream when supported. If MIME policy pre
 
 **Copy support details** copies game ID, viewport, framebuffer, frame counters and player settings. It excludes full URLs, peer addresses and saved progress. **Download diagnostics JSON** provides a bounded runtime report without clipboard access; **Export playtest CSV** provides engine diagnostics. Share the artifact that is relevant to the problem.
 
-## Implementation and validation
+## For developers
 
-The shared adapter is [player.js](../web/player.js), initialized by [details.js](../web/details.js). Input fixes live in [input.js](../web/input.js); startup recovery lives in [loader.js](../web/loader.js). The renderer, Courtyard and Orbit Breaker call the same player frame hooks after drawing.
+The shared player is [player.js](../web/player.js), started by
+[details.js](../web/details.js). Input handling lives in [input.js](../web/input.js)
+and startup recovery in [loader.js](../web/loader.js). The shared renderer,
+Courtyard and Orbit Breaker all call the same player frame hooks after drawing.
 
-The [player release catalog](../website/releases/player30.json) records the earlier implementation series. The [current engine workflow](ENGINE_WORKFLOWS.md) covers the shipped API additions; [release status](STOPPING_POINT.md) separates completed work from deferred plans. See the [validation guide](GAME_TESTS.md) for native, Wasm and browser checks. Platform support claims remain governed by [Platforms](PLATFORMS.md).
+The [player release catalog](../website/releases/player30.json) lists how these
+tools were introduced. [Tour the engine](ENGINE_WORKFLOWS.md) covers the matching
+engine APIs, and the [release scope](STOPPING_POINT.md) separates shipped work
+from plans. See the [validation guide](GAME_TESTS.md) for native, WebAssembly and
+browser checks, and [Platforms](PLATFORMS.md) for platform support.

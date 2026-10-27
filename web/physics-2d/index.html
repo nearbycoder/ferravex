@@ -84,7 +84,7 @@
     </div>
     <section class="lab-guide" id="lab-instructions" tabindex="-1" aria-labelledby="lab-guide-title" data-host-ui>
       <h2 id="lab-guide-title">Lab instructions</h2>
-      <p id="lab-summary">The sandbox starts running immediately: balls, crates and jointed mechanisms move inside fixed boundaries. Place shapes, pause to inspect them, or advance one 120 Hz tick at a time. There is no win condition. The scene and its changing diagnostics are drawn visually in the canvas.</p>
+      <p id="lab-summary">The sandbox starts running immediately: balls, crates and jointed mechanisms move inside fixed boundaries. Place shapes, pulse them, throw in a CHAOS burst or swap to the domino run; pause to inspect them, or advance one 120 Hz tick at a time. There is no win condition, just four optional goals (LIFTOFF, SKYSCRAPER, DEMOLITION and DOMINO RUN), a lab rank and personal bests. The scene and its changing diagnostics are drawn visually in the canvas.</p>
       <p id="lab-keyboard">Focus the canvas to use game keys. With Controls closed, <kbd>Tab</kbd> or <kbd>Shift + Tab</kbd> leaves the canvas for page navigation. Use <kbd>F2</kbd> or the Controls button to view bindings. In Controls, <kbd>Tab</kbd> or the up/down arrows select items and <kbd>Enter</kbd> activates them. <kbd>Escape</kbd> cancels a binding capture first; press it again to close Controls. Escape also closes Details. Use the pause action to freeze the lab.</p>
       <h2>Default keyboard and mouse controls</h2>
       <p id="lab-remapping">These are the default bindings. Saved or remapped controls may differ; Controls shows your current bindings and lets you change them. Tab is reserved for page navigation while Controls is closed.</p>
@@ -97,9 +97,12 @@
         <dt><kbd>N</kbd></dt><dd>Advance one tick while paused. Each press steps once; holding does not repeat.</dd>
         <dt><kbd>F</kbd></dt><dd>Pulse nearby bodies while running. Wait for the pulse cooldown before pulsing again.</dd>
         <dt><kbd>I</kbd></dt><dd>Inspect the body at the cursor without waking it. A miss clears body selection.</dd>
-        <dt><kbd>R</kbd></dt><dd>Restore the original scene, keeping the selected shape and pause state.</dd>
+        <dt><kbd>3</kbd></dt><dd>CHAOS: throw fourteen mixed shapes in from above. While paused they appear frozen.</dd>
+        <dt><kbd>4</kbd></dt><dd>Swap between the workshop and the domino run (a rebuild, like reset).</dd>
+        <dt><kbd>G</kbd></dt><dd>Show or hide the engine stats panel.</dd>
+        <dt><kbd>R</kbd></dt><dd>Rebuild the current scene, keeping the selected shape and pause state.</dd>
       </dl>
-      <p>The lab has a 240-body limit. The canvas shows awake/asleep counts, last-tick contacts, bounded cursor-query hits and selected-body diagnostics, along with the tick and pulse readiness. A successful drop selects the new body. Reset clears body inspection while retaining the drop shape and pause state. The BALL, CRATE, DROP, PULSE, PAUSE / RESUME, STEP and RESET buttons also operate the lab. On narrow screens, the diagnostics wrap at a fixed readable size. Use the Scene, Lab controls and Guide links to move around the taller canvas; the section-link bar also provides a page scrolling surface.</p>
+      <p>The lab has a 240-body limit. The footer shows the running state, body count and selected-body diagnostics; <kbd>G</kbd> opens an engine stats panel with the tick, awake/asleep counts, last-tick contacts, bounded cursor-query hits, pulse readiness and bonks per second. A successful drop selects the new body. Reset clears body inspection while retaining the drop shape and pause state. The BALL, CRATE, DROP, PULSE, CHAOS, DOMINO, PAUSE / RESUME, STEP and RESET buttons also operate the lab; hovering one explains it. The top bar shows the current goal and its progress, and completing all four earns a LAB CERTIFIED card. Big pile-ups get a cinematic camera beat; reduced motion or reduced flashes in Player tools turn the moving and flashing effects off. Use the Scene, Lab controls and Guide links to move around the taller canvas; the section-link bar also provides a page scrolling surface.</p>
       <p>Opening Controls or Details, or switching away from the browser, suspends this local lab. Closing the panel or returning preserves a manually paused scene. Details → Player tools contains presentation and accessibility preferences, screenshots and settings backups.</p>
       <a href="#lab-canvas">Return to the lab canvas</a>
     </section>

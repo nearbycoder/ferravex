@@ -188,6 +188,16 @@ pub extern "C" fn ferravex_controls_step(
         })
     });
 }
+/// Debug-build screenshot hook: point the controls' aim; see `capture.rs`.
+#[cfg(all(debug_assertions, target_arch = "wasm32"))]
+pub(super) fn debug_aim(yaw: f32, pitch: f32) {
+    CONTROLS.with(|cell| {
+        if let Some(controls) = cell.borrow_mut().as_mut() {
+            controls.yaw = yaw.rem_euclid(std::f32::consts::TAU);
+            controls.pitch = pitch.clamp(-1.5, 1.5);
+        }
+    });
+}
 #[unsafe(no_mangle)]
 pub extern "C" fn ferravex_menu_requested() -> u32 {
     CONTROLS.with(|cell| cell.borrow().as_ref().map_or(0, |c| c.menu))

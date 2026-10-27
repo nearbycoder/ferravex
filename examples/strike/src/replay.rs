@@ -162,6 +162,7 @@ impl SaveData for Clip {
         }))
     }
 }
+const FRESH: &str = "Fresh practice - recording tools ready";
 #[derive(Default)]
 pub struct Session {
     capture: Option<Capture>,
@@ -230,7 +231,14 @@ impl Session {
         self.show_ghost = false;
         self.ghost_age = 0;
         self.diagnostic_id = None;
-        self.message = "Fresh practice - recording tools ready".into();
+        self.message = FRESH.into();
+    }
+    /// Whether the in-game status footer is painted. The routine "fresh
+    /// practice" notice stays in the optional browser panel only, so retrying
+    /// a match does not leave a permanent banner over the yard.
+    pub fn footer_visible(&self, diagnostics: bool) -> bool {
+        let routine = self.message == FRESH && !self.recording() && !self.playing();
+        diagnostics || !(self.message.is_empty() || routine)
     }
     pub fn start_record(&mut self, game: &Match) {
         if self.playing() {
@@ -474,7 +482,7 @@ impl Session {
             prelude::*,
             ui::{TextStyle, UiRect},
         };
-        if self.message.is_empty() && !diagnostics {
+        if !self.footer_visible(diagnostics) {
             return;
         }
         let mode = self.mode_label();

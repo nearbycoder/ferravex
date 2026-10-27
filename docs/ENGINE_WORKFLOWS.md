@@ -1,15 +1,16 @@
-# Build with the current engine
+# Tour the engine
 
 Start with a small loop, then add the systems that give your game its identity.
-Ferravex shares its Rust simulation, input and presentation helpers across seventeen
-playable examples. The facade is `ferravex`; use its qualified modules when you
-need a specific system. The [quickstart](QUICKSTART.md) and
-[project generator](../website/content/getting-started.md) get you to running code.
+Every recipe below uses the same Rust simulation, input and presentation helpers
+as the seventeen playable games. The `ferravex` facade re-exports them; reach for
+its qualified modules when you need a specific system. New here? The
+[project generator](../website/content/getting-started.md) and the
+[quickstart](QUICKSTART.md) get you to running code first.
 
-The current release includes 83 Journey400 implementations. These APIs are
-available in source; adoption varies by demo. The other 117 planned tasks remain
-[deferred](STOPPING_POINT.md). A checked API reports invalid input or exhausted
-capacity; it does not remove the caller's responsibility to choose a policy.
+Everything here is available in source today, though not every game uses every
+system yet. Planned work that has not shipped is listed separately in the
+[release scope](STOPPING_POINT.md). Checked APIs report invalid input or full
+capacity as an error you handle; deciding what to do next stays with your game.
 
 ## Run rules on fixed ticks
 

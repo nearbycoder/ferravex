@@ -47,6 +47,54 @@ impl std::fmt::Display for ActionError {
 }
 pub const MAX_PESTS: usize = 32;
 pub const MAX_SHOTS: usize = 96;
+/// Bounded per-frame event log. Presentation drains it; unattended tests may not.
+pub const MAX_FEED: usize = 128;
+/// Every eighth projectile fired anywhere in the orchard is a lucky shot that
+/// deals double damage. It is derived from the saved `fired` counter, so
+/// restored checkpoints continue the same cadence without a save change.
+pub const LUCKY_EVERY: u32 = 8;
+/// The secret royal pest: the final beetle of wave three wears a tiny crown.
+pub const ROYAL_ID: u32 = 42;
+
+/// Accepted simulation events, recorded for presentation (juice, audio, quips).
+/// Recording never feeds back into combat, timing or the economy.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Feed {
+    Fired {
+        plot: usize,
+        lucky: bool,
+    },
+    Hit {
+        at: Vec2,
+        kind: Kind,
+        lucky: bool,
+    },
+    Stopped {
+        at: Vec2,
+        id: u32,
+        fast: bool,
+        lucky: bool,
+    },
+    Escaped {
+        id: u32,
+    },
+    Planted {
+        plot: usize,
+        kind: Kind,
+    },
+    Grown {
+        plot: usize,
+        level: u8,
+    },
+    Launched {
+        wave: u8,
+    },
+    Cleared {
+        wave: u8,
+        perfect: bool,
+        reward: u32,
+    },
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Seed,
@@ -115,6 +163,8 @@ pub struct Pest {
     pub fast: bool,
     /// Accepted direct/splash impacts, consumed only by presentation.
     pub impacts: u32,
+    /// Whether the latest direct hit was a lucky shot (credited on the kill).
+    pub lucky: bool,
     cursor: PathCursor,
     effects: EffectSet<4>,
 }
@@ -136,6 +186,8 @@ pub struct Shot {
     pub target: u32,
     pub damage: f32,
     pub kind: Kind,
+    /// A lucky shot already includes its doubled damage.
+    pub lucky: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
@@ -159,6 +211,15 @@ pub struct Game {
     pub outcome: Outcome,
     pub selected: usize,
     pub time: f32,
+    /// Lucky shots that connected this run.
+    pub lucky_hits: u32,
+    /// Waves cleared without losing a heart.
+    pub perfect_waves: u8,
+    /// The royal pest was stopped this run.
+    pub royal_stopped: bool,
+    /// Presentation event log; see [`Feed`].
+    pub feed: Vec<Feed>,
+    leaks_at_launch: u32,
     spawn_timer: f32,
     next_id: u32,
     route: Route3,
@@ -190,10 +251,27 @@ impl Game {
             outcome: Outcome::Playing,
             selected: 0,
             time: 0.,
+            lucky_hits: 0,
+            perfect_waves: 0,
+            royal_stopped: false,
+            feed: Vec::with_capacity(MAX_FEED),
+            leaks_at_launch: 0,
             spawn_timer: 0.,
             next_id: 0,
             route,
             targets: [TargetSelector::new(0.).unwrap(); 8],
+        }
+    }
+    /// Record a presentation event. Frequent combat events leave headroom for
+    /// rarer milestones; once full, new events are dropped, never reallocated.
+    fn emit(&mut self, event: Feed) {
+        let limit = if matches!(event, Feed::Fired { .. } | Feed::Hit { .. }) {
+            MAX_FEED - 32
+        } else {
+            MAX_FEED
+        };
+        if self.feed.len() < limit {
+            self.feed.push(event);
         }
     }
     /// Read authored arrivals without starting the wave or spending spawn IDs.
@@ -251,6 +329,7 @@ impl Game {
         }
         self.money -= kind.price();
         self.towers[plot] = Some(Tower::planted(kind));
+        self.emit(Feed::Planted { plot, kind });
         true
     }
     /// Check the selected tower's next level without changing it.
@@ -273,6 +352,8 @@ impl Game {
         let tower = self.towers[plot].as_mut().unwrap();
         self.money -= tower.upgrade_cost();
         tower.level += 1;
+        let level = tower.level;
+        self.emit(Feed::Grown { plot, level });
         true
     }
     pub(super) fn wave_status(&self) -> Result<(), ActionError> {
@@ -293,11 +374,16 @@ impl Game {
         self.remaining = self.level.waves[usize::from(self.wave) - 1].count;
         self.active = true;
         self.spawn_timer = 0.;
+        self.leaks_at_launch = self.escaped;
+        self.emit(Feed::Launched { wave: self.wave });
         true
     }
     /// Reconstruct spawn identity at a safe between-wave checkpoint.
+    /// Perfect waves are not saved; a leak-free checkpoint implies every
+    /// completed wave was perfect, otherwise counting resumes from here.
     pub(super) fn restore_spawn_sequence(&mut self) {
         self.next_id = self.kills + self.escaped;
+        self.perfect_waves = if self.escaped == 0 { self.wave } else { 0 };
     }
     /// Uses the same economy/actions as human input. No currency, health or combat cheats.
     pub fn autoplay(&mut self) {
@@ -344,6 +430,7 @@ impl Game {
                     hp,
                     max_hp: hp,
                     impacts: 0,
+                    lucky: false,
                     fast,
                     cursor: PathCursor::default(),
                     effects: EffectSet::new().unwrap(),
@@ -369,20 +456,23 @@ impl Game {
             pest.segment = sample.segment;
             pest.distance = sample.distance as f32;
         }
-        self.pests.retain(|p| {
-            if p.segment == self.level.path.len() - 1 {
+        let mut index = 0;
+        while index < self.pests.len() {
+            if self.pests[index].segment == self.level.path.len() - 1 {
+                let pest = self.pests.remove(index);
                 self.lives = self.lives.saturating_sub(1);
                 self.escaped += 1;
-                false
+                self.emit(Feed::Escaped { id: pest.id });
             } else {
-                true
+                index += 1;
             }
-        });
+        }
         if self.lives == 0 {
             self.outcome = Outcome::Lost;
             self.shots.clear();
             return;
         }
+        let mut fired = [None; 8];
         for (plot, tower) in self.towers.iter_mut().enumerate() {
             let Some(tower) = tower else {
                 continue;
@@ -420,15 +510,27 @@ impl Game {
                     continue;
                 }
                 self.fired = self.fired.saturating_add(1);
+                let lucky = self.fired.is_multiple_of(LUCKY_EVERY);
                 self.shots.push(Shot {
                     pos: self.level.plots[plot] + tower.aim * 18.,
                     target: pest.id,
-                    damage: tower.damage(),
+                    damage: tower.damage() * if lucky { 2. } else { 1. },
                     kind: tower.kind,
+                    lucky,
                 });
                 tower.cooldown = tower.reload();
+                if let Some(slot) = fired.get_mut(plot) {
+                    *slot = Some(lucky);
+                }
             }
         }
+        for (plot, lucky) in fired.into_iter().enumerate() {
+            if let Some(lucky) = lucky {
+                self.emit(Feed::Fired { plot, lucky });
+            }
+        }
+        let mut hits = [None; MAX_SHOTS];
+        let mut hit_count = 0;
         let mut frost_impacts = [Vec2::ZERO; MAX_SHOTS];
         let mut frost_count = 0;
         self.shots.retain_mut(|shot| {
@@ -444,6 +546,9 @@ impl Game {
             if delta.length_squared() <= (travel + 9.).powi(2) {
                 target.hp -= shot.damage;
                 target.impacts = target.impacts.saturating_add(1);
+                target.lucky = shot.lucky;
+                hits[hit_count] = Some((target.pos, shot.kind, shot.lucky));
+                hit_count += 1;
                 if shot.kind == Kind::Frost {
                     target
                         .effects
@@ -465,6 +570,10 @@ impl Game {
                 true
             }
         });
+        for (at, kind, lucky) in hits[..hit_count].iter().flatten().copied() {
+            self.lucky_hits += u32::from(lucky);
+            self.emit(Feed::Hit { at, kind, lucky });
+        }
         for center in &frost_impacts[..frost_count] {
             for pest in &mut self.pests {
                 if pest.hp > 0. && pest.pos.distance_squared(*center) < 46. * 46. {
@@ -475,15 +584,23 @@ impl Game {
                 }
             }
         }
-        self.pests.retain(|p| {
-            if p.hp <= 0. {
+        let mut index = 0;
+        while index < self.pests.len() {
+            if self.pests[index].hp <= 0. {
+                let pest = self.pests.remove(index);
                 self.money += self.level.kill_reward;
                 self.kills += 1;
-                false
+                self.royal_stopped |= pest.id == ROYAL_ID;
+                self.emit(Feed::Stopped {
+                    at: pest.pos,
+                    id: pest.id,
+                    fast: pest.fast,
+                    lucky: pest.lucky,
+                });
             } else {
-                true
+                index += 1;
             }
-        });
+        }
         if self.active && self.remaining == 0 && self.pests.is_empty() {
             self.active = false;
             self.shots.clear();
@@ -491,6 +608,13 @@ impl Game {
                 target.reset();
             }
             self.money += wave.reward;
+            let perfect = self.escaped == self.leaks_at_launch;
+            self.perfect_waves += u8::from(perfect);
+            self.emit(Feed::Cleared {
+                wave: self.wave,
+                perfect,
+                reward: wave.reward,
+            });
             if usize::from(self.wave) == self.level.waves.len() {
                 self.outcome = Outcome::Won;
             }
@@ -693,6 +817,7 @@ mod tests {
             target: target.id,
             damage: 8.,
             kind: Kind::Frost,
+            lucky: false,
         });
         let neighbor_hp = game.pests[1].hp;
         game.step(1. / 120.);
@@ -754,5 +879,122 @@ mod tests {
         assert!(game.towers.iter().flatten().any(|t| t.kind == Kind::Frost));
         assert!(game.towers.iter().flatten().any(|t| t.level > 0));
         assert!(!game.launch());
+    }
+
+    #[test]
+    fn lucky_shots_follow_the_saved_fired_cadence_with_double_damage() {
+        let mut game = Game::new();
+        game.money = 1000;
+        assert!(game.build(0, Kind::Seed));
+        game.launch();
+        game.step(0.);
+        game.pests[0].hp = 1.0e6;
+        game.pests[0].max_hp = 1.0e6;
+        game.pests[0]
+            .cursor
+            .advance(&game.route, 600., 0.25)
+            .unwrap();
+        let base = game.towers[0].unwrap().damage();
+        for shot in 1..=(LUCKY_EVERY * 2) {
+            game.towers[0].as_mut().unwrap().cooldown = 0.;
+            game.step(0.);
+            let last = game.shots.last().unwrap();
+            let lucky = shot % LUCKY_EVERY == 0;
+            assert_eq!(game.fired, shot);
+            assert_eq!(last.lucky, lucky, "shot {shot}");
+            assert_eq!(last.damage, if lucky { base * 2. } else { base });
+        }
+        // Land every projectile: lucky hits are counted exactly once.
+        for _ in 0..240 {
+            game.towers[0].as_mut().unwrap().cooldown = 1.;
+            game.step(1. / 60.);
+        }
+        assert_eq!(game.lucky_hits, 2);
+        assert!(
+            game.feed
+                .iter()
+                .any(|e| matches!(e, Feed::Hit { lucky: true, .. }))
+        );
+    }
+
+    #[test]
+    fn feed_records_accepted_milestones_once_and_stays_bounded() {
+        let mut game = Game::new();
+        let mut undrained = Game::new();
+        let (mut launched, mut cleared, mut perfect, mut stopped, mut escaped) = (0, 0, 0, 0, 0);
+        let (mut planted, mut grown, mut royal) = (0, 0, false);
+        for _ in 0..24000 {
+            game.autoplay();
+            game.step(1. / 60.);
+            undrained.autoplay();
+            undrained.step(1. / 60.);
+            assert!(undrained.feed.len() <= MAX_FEED);
+            assert!(undrained.feed.capacity() <= MAX_FEED, "never reallocates");
+            for event in game.feed.drain(..) {
+                match event {
+                    Feed::Launched { .. } => launched += 1,
+                    Feed::Cleared { perfect: p, .. } => {
+                        cleared += 1;
+                        perfect += u8::from(p);
+                    }
+                    Feed::Stopped { id, .. } => {
+                        stopped += 1;
+                        royal |= id == ROYAL_ID;
+                    }
+                    Feed::Escaped { .. } => escaped += 1,
+                    Feed::Planted { .. } => planted += 1,
+                    Feed::Grown { .. } => grown += 1,
+                    Feed::Fired { .. } | Feed::Hit { .. } => {}
+                }
+            }
+            if game.outcome != Outcome::Playing {
+                break;
+            }
+        }
+        assert_eq!(game.outcome, Outcome::Won);
+        assert_eq!((launched, cleared), (4, 4));
+        assert_eq!((stopped, escaped), (game.kills, game.escaped));
+        assert_eq!(perfect, game.perfect_waves);
+        assert_eq!(royal, game.royal_stopped);
+        assert_eq!(planted, game.towers.iter().flatten().count());
+        assert_eq!(
+            grown,
+            game.towers
+                .iter()
+                .flatten()
+                .map(|t| usize::from(t.level))
+                .sum::<usize>()
+        );
+        // Presentation bookkeeping never changes the simulation itself.
+        assert_eq!(
+            (undrained.money, undrained.kills, undrained.time),
+            (game.money, game.kills, game.time)
+        );
+    }
+
+    #[test]
+    fn a_leak_spoils_only_its_own_wave_and_restores_count_perfect_waves() {
+        let mut game = Game::new();
+        assert!(game.launch());
+        for _ in 0..7200 {
+            game.step(1. / 60.);
+            if !game.active {
+                break;
+            }
+        }
+        assert!(game.escaped > 0);
+        assert_eq!(game.perfect_waves, 0);
+        assert!(game.feed.contains(&Feed::Cleared {
+            wave: 1,
+            perfect: false,
+            reward: game.level.waves[0].reward,
+        }));
+        let mut clean = Game::new();
+        clean.wave = 2;
+        clean.kills = 24;
+        clean.restore_spawn_sequence();
+        assert_eq!(clean.perfect_waves, 2);
+        game.restore_spawn_sequence();
+        assert_eq!(game.perfect_waves, 0);
     }
 }

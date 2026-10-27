@@ -11,6 +11,18 @@ pub struct PinballFeedback {
     pub drains: u32,
     pub saves: u32,
     pub flipper_presses: [bool; 2],
+    /// Magnet-crane catches, each awarding a jackpot and raising the multiplier.
+    pub jackpots: u32,
+    /// Launches whose first bumper contact was the lit skill-shot bumper.
+    pub skill_shots: u32,
+    /// Completed bumper-lamp sets that armed the crane.
+    pub crane_arms: u32,
+    /// Hidden awards collected (currently the one-per-game overtime bonus).
+    pub secrets: u32,
+    /// Crane drops: a caught ball was released back into play.
+    pub crane_drops: u32,
+    /// Longest chain count reached by a bumper hit in this frame, or zero.
+    pub chain: u32,
 }
 
 /// Host edges and final levels are distinct: a release/repress can end held,
@@ -129,6 +141,9 @@ pub struct PinballGame {
     session: GameSession,
     input: BufferedControls,
     autoplay: bool,
+    /// Debug capture only: the autoplay bot keeps launching but stops flipping,
+    /// so screenshots can reach drains and the results card quickly.
+    pub(crate) lazy_bot: bool,
 }
 
 impl PinballGame {
@@ -139,6 +154,7 @@ impl PinballGame {
             session: GameSession::new(120., 16, autoplay),
             input: BufferedControls::default(),
             autoplay,
+            lazy_bot: false,
         }
     }
 
@@ -222,17 +238,32 @@ impl PinballGame {
             self.table.drains,
             self.table.saves,
         );
+        let rules = (
+            self.table.jackpots,
+            self.table.skill_shots,
+            self.table.crane_arms,
+            self.table.secrets,
+        );
         let mut feedback = PinballFeedback::default();
         for _ in 0..frame.steps {
             let controls = if self.autoplay {
-                self.table.autoplay()
+                let mut bot = self.table.autoplay();
+                if self.lazy_bot {
+                    (bot.left, bot.right) = (false, false);
+                }
+                bot
             } else {
                 self.input.take()
             };
+            let (held, hits) = (self.table.crane_hold > 0., self.table.hits);
             for (i, pressed) in [controls.left, controls.right].into_iter().enumerate() {
                 feedback.flipper_presses[i] |= pressed && !self.table.flipper_pressed[i];
             }
             self.table.step(frame.dt, controls);
+            feedback.crane_drops += u32::from(held && self.table.crane_hold == 0.);
+            if self.table.hits > hits {
+                feedback.chain = feedback.chain.max(self.table.chain);
+            }
             if self.table.over() {
                 self.session.finish(false);
                 self.input.clear();
@@ -245,6 +276,10 @@ impl PinballGame {
         feedback.launches = self.table.launches - before.2;
         feedback.drains = self.table.drains - before.3;
         feedback.saves = self.table.saves - before.4;
+        feedback.jackpots = self.table.jackpots - rules.0;
+        feedback.skill_shots = self.table.skill_shots - rules.1;
+        feedback.crane_arms = self.table.crane_arms - rules.2;
+        feedback.secrets = self.table.secrets - rules.3;
         feedback
     }
 }
@@ -423,6 +458,39 @@ mod tests {
             "buffered launch must not survive retry"
         );
         assert_eq!(game.table.flipper_pressed, [false; 2]);
+    }
+
+    #[test]
+    fn crane_feedback_reports_one_jackpot_then_one_drop_and_pauses_the_hold() {
+        let mut game = PinballGame::new(false);
+        game.start();
+        game.table.waiting = false;
+        game.table.crane_armed = true;
+        game.table.world.bodies[game.table.ball]
+            .set_translation(Vector::from_array(crate::CRANE), true);
+        let caught = game.advance(DT, Controls::default());
+        assert_eq!((caught.jackpots, caught.crane_drops), (1, 0));
+        assert_eq!(caught.points, crate::JACKPOT_POINTS);
+        let hold = game.table.crane_hold;
+        game.set_paused(true);
+        assert_eq!(
+            game.advance(10., Controls::default()),
+            PinballFeedback::default()
+        );
+        assert_eq!(game.table.crane_hold, hold, "pause freezes the magnet");
+        game.set_paused(false);
+        let mut drops = 0;
+        // Frames are capped at 16 ticks, so the hold spans several frames.
+        for _ in 0..30 {
+            let events = game.advance(16. * DT, Controls::default());
+            assert_eq!(events.jackpots, 0);
+            drops += events.crane_drops;
+        }
+        assert_eq!(drops, 1);
+        assert_eq!(game.table.crane_hold, 0.);
+        game.restart();
+        assert_eq!((game.table.multiplier, game.table.jackpots), (1, 0));
+        assert!(!game.table.crane_armed);
     }
 
     #[test]

@@ -2,7 +2,8 @@
 //! No input sampling, preference storage, simulation updates or bitmap changes.
 use crate::{
     game::{Feedback, Game, Phase},
-    presentation::ControlHints,
+    presentation::{ControlHints, Presentation},
+    quips,
 };
 use std::fmt::{self, Write};
 
@@ -38,28 +39,18 @@ impl ReadableStatus {
         std::str::from_utf8(&self.bytes[..self.len]).expect("complete UTF-8 writes")
     }
 
-    pub fn refresh(
-        &mut self,
-        game: &Game,
-        paused: bool,
-        hints: &ControlHints,
-        notice: Option<(&str, u32)>,
-    ) {
+    pub fn refresh(&mut self, game: &Game, paused: bool, presentation: &Presentation) {
         self.len = 0;
-        if self.compose(game, paused, hints, notice).is_err() {
+        if self.compose(game, paused, presentation).is_err() {
             self.len = 0;
             // Never publish partial instructions, stale bindings or broken UTF-8.
             let _ = self.write_str("Status text unavailable. Open Controls for current bindings.");
         }
     }
 
-    fn compose(
-        &mut self,
-        g: &Game,
-        paused: bool,
-        hints: &ControlHints,
-        notice: Option<(&str, u32)>,
-    ) -> fmt::Result {
+    fn compose(&mut self, g: &Game, paused: bool, presentation: &Presentation) -> fmt::Result {
+        let hints: &ControlHints = &presentation.hints;
+        let notice = presentation.notice;
         if paused {
             self.write_str("Paused. Resume to continue. ")?;
         }
@@ -108,6 +99,17 @@ impl ReadableStatus {
                     "Serve charge: {:.0}%. Full charge pierces armor until the first paddle return.",
                     g.serve_charge.power() * 100.
                 )?;
+                let (name, tagline) = quips::sector(g.sector);
+                writeln!(
+                    self,
+                    "Sector {}: {}. {}",
+                    g.sector,
+                    title_case(name),
+                    prose(tagline)
+                )?;
+                if g.feedback() == Some(Feedback::LifeLost) {
+                    writeln!(self, "Ball lost: {}", prose(quips::drain(g.lives_lost)))?;
+                }
             }
             Phase::Playing => {
                 if g.armor_piercing() {
@@ -122,6 +124,20 @@ impl ReadableStatus {
                 if g.feedback() == Some(Feedback::BallSaved) {
                     self.write_str("Ball saved. ")?;
                 }
+                if g.volley >= 2 {
+                    write!(self, "Volley: {} hits. ", g.volley)?;
+                }
+                if !g.extra_balls.is_empty() {
+                    write!(self, "Multi-ball: {} extra. ", g.extra_balls.len())?;
+                }
+                if g.held.is_some() {
+                    self.write_str("Ball caught: press launch to fire. ")?;
+                } else if g.sticky > 0 {
+                    write!(self, "Sticky paddle: {} catches. ", g.sticky)?;
+                }
+                if g.satellite().is_some() {
+                    self.write_str("A satellite is drifting above the panels. ")?;
+                }
                 if let Some((label, points)) = notice {
                     write!(self, "{label} +{points}. ")?;
                 }
@@ -134,6 +150,39 @@ impl ReadableStatus {
             )?,
             Phase::Won | Phase::Lost => {
                 writeln!(self, "Run time: {:.0}s.", g.time)?;
+                writeln!(
+                    self,
+                    "Best volley: {}. Satellites bonked: {}. Flawless sectors: {}.",
+                    g.best_volley, g.satellites, g.flawless_sectors
+                )?;
+                if let Some(results) = &presentation.results {
+                    writeln!(
+                        self,
+                        "Rank: {}. {}",
+                        title_case(results.rank.title),
+                        prose(results.rank.quip)
+                    )?;
+                    match (results.new_best, results.previous_best) {
+                        (true, Some(previous)) => {
+                            writeln!(self, "New personal best! Previous best: {previous}.")?
+                        }
+                        (true, None) => writeln!(self, "New personal best!")?,
+                        (false, Some(best)) => writeln!(
+                            self,
+                            "Personal best: {best}. {} more points to beat it.",
+                            best.saturating_sub(g.score).saturating_add(1)
+                        )?,
+                        (false, None) => {}
+                    }
+                    if let Some((amount, unit, title)) = quips::next_goal(results.summary) {
+                        writeln!(
+                            self,
+                            "Next title: {} in {amount} more {}.",
+                            title_case(title),
+                            unit.to_ascii_lowercase()
+                        )?;
+                    }
+                }
             }
         }
         if !matches!(g.phase, Phase::Won | Phase::Lost) {
@@ -151,6 +200,44 @@ impl ReadableStatus {
     }
 }
 
+/// "THE ORBIT BREAKER" -> "The Orbit Breaker" for readable prose.
+fn title_case(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut start = true;
+    for c in text.chars() {
+        out.push(if start {
+            c.to_ascii_uppercase()
+        } else {
+            c.to_ascii_lowercase()
+        });
+        start = c == ' ' || c == '-';
+    }
+    out
+}
+
+/// "NOT ONE WOBBLE. THE PADDLE" -> "Not one wobble. The paddle." for readable prose.
+fn prose(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut start = true;
+    let mut previous = ' ';
+    for c in text.chars() {
+        if start && c.is_ascii_alphabetic() {
+            out.push(c.to_ascii_uppercase());
+            start = false;
+        } else {
+            out.push(c.to_ascii_lowercase());
+        }
+        if c == ' ' && matches!(previous, '.' | '!' | '?') {
+            start = true;
+        }
+        previous = c;
+    }
+    if !out.ends_with(['.', '!', '?']) {
+        out.push('.');
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,15 +249,48 @@ mod tests {
         assert_eq!(text.as_str(), "é→");
         assert!(text.write_str(&"x".repeat(STATUS_TEXT_CAPACITY)).is_err());
         assert_eq!(text.as_str(), "é→");
-        let hints = ControlHints {
+        let mut presentation = Presentation::default();
+        presentation.hints = ControlHints {
             launch: "é".repeat(STATUS_TEXT_CAPACITY),
             ..ControlHints::default()
         };
-        text.refresh(&Game::new(), false, &hints, None);
+        text.refresh(&Game::new(), false, &presentation);
         assert_eq!(
             text.as_str(),
             "Status text unavailable. Open Controls for current bindings."
         );
+    }
+
+    #[test]
+    fn bitmap_copy_becomes_sentence_case_prose() {
+        assert_eq!(
+            prose("NOT ONE WOBBLE. THE PADDLE IS BLUSHING."),
+            "Not one wobble. The paddle is blushing."
+        );
+        assert_eq!(prose("GRAVITY 1, PADDLE 0"), "Gravity 1, paddle 0.");
+        assert_eq!(
+            prose("IT'S FINE. SPACE IS BIG."),
+            "It's fine. Space is big."
+        );
+        assert_eq!(title_case("THE ORBIT BREAKER"), "The Orbit Breaker");
+    }
+
+    #[test]
+    fn finished_runs_explain_rank_best_and_the_next_title() {
+        let mut app = crate::Orbit::new();
+        app.set_personal_best(Some(5000));
+        app.game.phase = Phase::Playing;
+        app.game.lives = 1;
+        app.game.clears = 12;
+        app.game.score = 1200;
+        app.game.ball = [100., 676.];
+        app.game.velocity = [0., 325.];
+        app.advance(1. / 120., 0., 0);
+        let text = app.status_text_v1();
+        assert!(text.starts_with("Run ended."));
+        assert!(text.contains("Rank: Orbit Intern. Coffee runs count as training.\n"));
+        assert!(text.contains("Personal best: 5000. 3801 more points to beat it."));
+        assert!(text.contains("Next title: Junk Juggler in 13 more panels."));
     }
 
     #[test]

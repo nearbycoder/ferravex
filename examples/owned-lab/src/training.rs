@@ -65,7 +65,112 @@ impl Lab {
             if frame.completed != 0 {
                 self.drill_notice = 2.5;
                 self.sound.cue(Cue::Pickup, 0.4);
+                self.juice.radio(quips::drill(index));
             }
+        }
+    }
+
+    /// Advance the qualifier on an offline fixed tick and present what it accepted.
+    pub(super) fn step_qualifier(&mut self, actions: qualifier::TickActions, dt: f32) {
+        use juice::Pop;
+        let out = self.qualifier.tick(actions, dt);
+        let policy = self.feedback.policy();
+        if out.armed {
+            self.cold_nudges = 0;
+            let status = self.qualifier.status();
+            self.juice.radio(if out.bell_rung {
+                quips::rearmed(status.runs)
+            } else {
+                quips::ARMED
+            });
+            self.juice.big("3");
+            self.sound.cue(Cue::Click, 0.5);
+        }
+        if out.bell_rung {
+            self.juice.ring(policy);
+            self.sound
+                .at(Cue::Impact(Surface::Metal), qualifier::BELL, 0.9);
+        }
+        if let Some(seconds) = out.countdown {
+            self.juice.big(if seconds == 2 { "2" } else { "1" });
+            self.sound.cue(Cue::Click, 0.5);
+        }
+        if out.started {
+            self.juice.big(quips::GO);
+            self.sound.cue(Cue::Success, 0.45);
+        }
+        if out.bell_bonus {
+            self.juice.pop(Pop::Bell);
+            self.juice.radio(quips::BELL_SECRET);
+        } else if let Some((points, multiplier)) = out.points {
+            let headshot = actions.hit == Some(true);
+            self.juice.pop(if headshot {
+                Pop::Headshot { points, multiplier }
+            } else {
+                Pop::Points { points, multiplier }
+            });
+        }
+        if let Some(count) = out.headshot_streak {
+            self.juice.pop(Pop::HeadshotStreak(count));
+        }
+        if let Some(streak) = out.streak_milestone {
+            self.juice.radio(quips::streak(streak));
+            self.sound.cue(Cue::Pickup, 0.5);
+        } else if out.first_headshot {
+            self.juice.radio(quips::FIRST_HEADSHOT);
+        } else if out.cold {
+            self.juice.radio(quips::cold(self.cold_nudges));
+            self.cold_nudges += 1;
+        }
+        if out.finished {
+            let result = self.qualifier.last().expect("finished run has results");
+            let previous = self.bests.record(result.score);
+            // The results card carries the sergeant's verdict; keep the radio clear.
+            self.juice.clear_radio();
+            self.juice.big("TIME!");
+            self.sound.cue(
+                match result.grade() {
+                    Grade::S | Grade::A | Grade::B => Cue::Success,
+                    Grade::C => Cue::Pickup,
+                    // A comic trombone for "Danger to Pigeons".
+                    Grade::D => Cue::Failure,
+                },
+                0.6,
+            );
+            self.previous_best = previous;
+        }
+    }
+
+    /// A celebratory burst for an elimination; motion reduction clears it.
+    pub(super) fn confetti(&mut self, at: Vec3) {
+        if self.feedback.policy().reduced_motion() {
+            return;
+        }
+        let colors = [
+            [0.83, 0.71, 0.42, 1.],
+            [0.88, 0.38, 0.29, 1.],
+            [0.25, 0.70, 0.65, 1.],
+            [0.96, 0.92, 0.84, 1.],
+        ];
+        // A fixed fan, phased by simulation time; presentation only.
+        for i in 0..16 {
+            let angle = i as f32 * 2.399 + self.time * 3.;
+            let speed = 2.2 + (i % 4) as f32 * 0.6;
+            let color = colors[i % colors.len()];
+            let _ = self.particles.spawn(ParticleDesc {
+                position: at.to_array(),
+                velocity: [
+                    angle.cos() * speed,
+                    3.6 + (i % 3) as f32,
+                    angle.sin() * speed,
+                ],
+                acceleration: [0., -7.5, 0.],
+                lifetime: 1.1,
+                start_color: color,
+                end_color: [color[0], color[1], color[2], 0.],
+                start_size: 0.11,
+                end_size: 0.06,
+            });
         }
     }
 
