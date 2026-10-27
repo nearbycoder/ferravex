@@ -142,8 +142,45 @@ GAME_GUIDES = {'picnic-panic': ('Cross pranks off the to-do list without getting
  'physics-3d': ('Bowl a heavy ball into a 30-crate stack, drop CHAOS piles and complete four optional goals. Orbit the camera, single-step the simulation, and press G for engine stats.',
                 'joints-and-compounds',
                 'Mechanisms and world joint frames')}
+# One-line hooks for cards and heroes; the catalog description stays in titles and search.
+TAGLINES={'picnic-panic':'A raccoon, a picnic and a very long to-do list.',
+ 'glowtide':'A little light against the whole tide.',
+ 'owned-lab':'Drills, headshots and a sergeant with opinions.',
+ 'owned-orbit':'Break the panels. Keep the ball in orbit.',
+ 'emberline':'Carry the lantern. Mind the furnace.',
+ 'neon-swarm':'Dash, chain kills, outlast the hive.',
+ 'pocket-rally':'Three laps. Hold the handbrake.',
+ 'salvage-pinball':'Light the bumpers. Drop the crane.',
+ 'orchard-guard':'Slings, frost hives and very hungry pests.',
+ 'marble-run':'Roll, brake and grab every crystal.',
+ 'dune-skimmer':'Hover racing through desert gates.',
+ 'crystal-cavern':'Follow the hum back to daylight.',
+ 'siege-foundry':'Topple the towers in three shots.',
+ 'sky-courier':'Thread the gates. Deliver the parcel.',
+ 'strike':'Two minutes against the dock crew.',
+ 'physics-2d':'Drop, pulse and unleash CHAOS.',
+ 'physics-3d':'Bowl a heavy ball into thirty crates.',
+ 'mini-golf-2d':'Twelve holes, seen from above.',
+ 'mini-golf-3d':'The same twelve holes, now in 3D.'}
 FEATURES=json.loads((ROOT/'website/features.json').read_text())
 SEARCH=[]
+# Gameplay media committed by scripts/capture-media.mjs; the site only copies it.
+MEDIA=ROOT/'docs/media'
+def media_for(game_id):
+ """Loop, poster and stills for one game from docs/media/<id>/media.json (empty when absent)."""
+ path=MEDIA/game_id/'media.json'
+ if not path.is_file():return {'loop':'','poster':'','stills':[]}
+ data=json.loads(path.read_text())
+ url=lambda name:f'/media/{game_id}/{name}' if name and (MEDIA/game_id/name).is_file() else ''
+ return {'loop':url(data.get('loop')),'poster':url(data.get('poster')),'alt':data.get('alt',''),'stills':[dict(src=url(s['file']),alt=s.get('alt','')) for s in data.get('stills',[]) if url(s['file'])]}
+def tagline(game):return TAGLINES.get(game['id'],game['description'].split('. ')[0].rstrip('.')+'.')
+def poster(game):return media_for(game['id'])['poster'] or '/assets/'+game['image']
+def loop_media(game,alt='',play='hover',loading='lazy',cls='',priority=False):
+ """Poster image with an optional muted gameplay loop that site.js streams only when allowed."""
+ media=media_for(game['id'])
+ data=f' data-loop="{esc(media["loop"])}" data-play="{play}"' if media['loop'] else ''
+ extra=' fetchpriority="high"' if priority else ''
+ return f'<span class="loop{" "+cls if cls else ""}"{data}><img src="{esc(poster(game))}" alt="{esc(alt)}" width="960" height="600" loading="{loading}" decoding="async"{extra}></span>'
 
 def validate_docs(docs=None,root=None):
  """Reject missing/ambiguous guide registrations before replacing build output."""
@@ -272,68 +309,95 @@ def sidebar(current):
    out.append(f'<a href="/docs/{slug}/"'+(' aria-current="page"' if current==slug else '')+'>'+esc(title)+'</a>')
   out.append('</details>')
  return ''.join(out)+'</aside>'
+# A gameplay thumbnail for each documentation group on the docs landing page.
+GROUP_MEDIA={'Start here':'picnic-panic','Core':'crystal-cavern','Physics':'physics-3d','Rendering':'glowtide','Gameplay':'orchard-guard','Recipes':'siege-foundry','Examples':'mini-golf-3d','Multiplayer':'strike','Shipping':'dune-skimmer','Project':'physics-2d'}
+def group_thumb(group):
+ game=next((g for g in GAMES if g['id']==GROUP_MEDIA.get(group)),None)
+ return f'<img src="{esc(poster(game))}" alt="" width="960" height="600" loading="lazy" decoding="async">' if game else ''
 def documentation_index():
  sections=[]
  for group,guides in doc_groups().items():
   items='<ul>'+''.join(f'<li><a href="/docs/{slug}/">{esc(title)}</a></li>' for slug,title in guides)+'</ul>'
   if group=='Project history':
    sections.append(f'<details class="docs-history"><summary><span class="eyebrow">For contributors</span><strong>{esc(group)}</strong><span>{esc(GROUPS[group])}</span></summary>{items}</details>')
-  else:sections.append(f'<section><h2>{esc(group)}</h2><p>{esc(GROUPS.get(group,""))}</p>{items}</section>')
+  else:sections.append(f'<section class="doc-card"><div class="doc-card-media">{group_thumb(group)}<span class="doc-count">{len(guides)}</span></div><div class="doc-card-body"><h2>{esc(group)}</h2><p>{esc(GROUPS.get(group,""))}</p>{items}</div></section>')
  history=next((s for s in sections if s.startswith('<details')),'');sections=[s for s in sections if s!=history]
- paths=''.join(f'<a class="path-card" href="{url}"><span class="eyebrow">{label}</span><h2>{title}</h2><p>{detail}</p><span class="card-arrow" aria-hidden="true">↗</span></a>' for url,label,title,detail in [('/docs/getting-started/','01 / Start','Run your first game','Check your setup, generate a small game and find the one function you edit first.'),('/docs/engine-workflows/','02 / Compose','Tour the engine','Fixed ticks, entities, physics, responsive UI and multiplayer, with checked examples.'),('/docs/agent-guide/','03 / Collaborate','Bring a coding agent','Point an agent at real symbols and boundaries, then verify what it changed.')])
- return '<main id="main" class="container docs-index"><div class="page-heading"><div class="eyebrow">Documentation</div><h1>From first tick<br>to finished game.</h1><p>Short guides, runnable examples and the source behind every system. Start with a working loop, then add only what your game needs.</p><div class="button-row"><button class="button secondary search-inline" type="button" data-qikbar-open>Search the docs <kbd data-command-key>Ctrl K</kbd></button><a class="text-link" href="/api/ferravex/index.html">Rust API reference ↗</a></div></div><div class="path-grid">'+paths+'</div><div class="docs-directory">'+''.join(sections)+'</div>'+history+'</main>'
+ paths=''.join(f'<a class="path-card visual" href="{url}">{loop_media(by_id(game),cls="path-media") if any(g["id"]==game for g in GAMES) else ""}<span class="path-copy"><span class="eyebrow">{label}</span><h2>{title}</h2><p>{detail}</p></span><span class="card-arrow" aria-hidden="true">↗</span></a>' for url,label,title,detail,game in [('/docs/getting-started/','01 / Start','Run your first game','Setup to first change.','sky-courier'),('/docs/engine-workflows/','02 / Compose','Tour the engine','Ticks, physics, UI, netcode.','marble-run'),('/docs/agent-guide/','03 / Collaborate','Bring a coding agent','Real symbols. Verified changes.','neon-swarm')])
+ return '<main id="main" class="docs-index"><section class="docs-hero"><div class="container"><div class="eyebrow">Documentation</div><h1>From first tick<br>to finished game.</h1><div class="button-row"><button class="button search-inline" type="button" data-qikbar-open>Search the docs <kbd data-command-key>Ctrl K</kbd></button><a class="button ghost" href="/api/ferravex/index.html">Rust API ↗</a></div></div></section><div class="container"><div class="path-grid">'+paths+'</div><div class="docs-directory">'+''.join(sections)+'</div>'+history+'</div></main>'
 NAV=[('games','/examples/','Games'),('features','/features/','Features'),('docs','/docs/','Docs'),('api','/api/ferravex/index.html','API')]
-def layout(title,body,url='/',description='An original Rust engine for small 2D and 3D games you can play in the browser.',section=''):
+def layout(title,body,url='/',description='An original Rust engine for small 2D and 3D games you can play in the browser.',section='',image='picnic-panic.png'):
  nav=''.join(f'<a href="{href}"'+(' aria-current="page"' if section==key else '')+f'>{label}</a>' for key,href,label in NAV)
- footer=(f'<footer class="footer"><div class="container footer-grid"><div class="footer-brand"><a class="brand" href="/" translate="no"><img class="brand-mark" src="/favicon-32.png" alt="" width="28" height="28">ferravex</a><p>An original Rust engine for small 2D and 3D games. Every system and every game is first-party and open source.</p></div>'
-  '<nav class="footer-links" aria-label="Footer"><div><strong>Play</strong><a href="/examples/">All games</a><a href="/examples/mini-golf-3d/">Copper Greens</a><a href="/examples/marble-run/">Marble Run</a></div>'
+ footer=(f'<footer class="footer"><div class="container footer-grid"><div class="footer-brand"><a class="brand" href="/" translate="no"><img class="brand-mark" src="/favicon-32.png" alt="" width="28" height="28">ferravex</a><p>Rust games, built from scratch.</p></div>'
+  '<nav class="footer-links" aria-label="Footer"><div><strong>Play</strong><a href="/examples/">All games</a><a href="/examples/picnic-panic/">Picnic Panic</a><a href="/examples/glowtide/">Glowtide</a></div>'
   '<div><strong>Learn</strong><a href="/docs/getting-started/">Getting started</a><a href="/docs/">Documentation</a><a href="/api/ferravex/index.html">Rust API</a></div>'
   f'<div><strong>Project</strong><a href="{REPO}">GitHub</a><a href="{REPO}/blob/main/LICENSE">MIT license</a><a href="/docs/release-status/">Release scope</a><a href="/docs/status/">Implementation status</a></div></nav></div></footer>')
- return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="theme-color" content="#f6f5ef"><script>try{{const t=localStorage.getItem("ferravex-theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}}catch{{}}</script><title>{esc(title)} · Ferravex</title><meta name="description" content="{esc(description)}"><link rel="canonical" href="{BASE}{url}"><meta property="og:title" content="{esc(title)} · Ferravex"><meta property="og:description" content="{esc(description)}"><meta property="og:image" content="{BASE}/assets/owned-courtyard.png"><meta property="og:type" content="website"><link rel="icon" href="/favicon.ico"><link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png"><link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png"><link rel="stylesheet" href="/site.css"><link rel="stylesheet" href="/search.css"><script src="/site.js" defer></script><script type="module" src="/site-search.js"></script></head><body><a class="skip" href="#main">Skip to content</a><header class="header"><div class="header-inner"><a class="brand" href="/" translate="no" aria-label="Ferravex home"><img class="brand-mark" src="/favicon-32.png" alt="" width="28" height="28" aria-hidden="true">ferravex</a><nav class="main-nav" aria-label="Main navigation">{nav}</nav><div class="header-actions"><button class="search-trigger" type="button" data-qikbar-open aria-label="Search Ferravex"><svg class="icon" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m13 13 4.5 4.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg><span class="search-label">Search</span><kbd data-command-key>Ctrl K</kbd></button><button class="theme-toggle" type="button" id="theme-toggle" aria-label="Switch color theme" title="Switch color theme">{ICON_THEME}</button><a class="github-link" href="{REPO}">GitHub</a></div></div></header>{body}{footer}</body></html>'''
-def meta(game):return f'<div class="meta"><span>{esc(game["dimension"])} / {esc(game["genre"])}</span><span class="owned">First-party engine</span></div>'
-def tile(game,heading='h2',eager=False,describe=True):
- """Gallery card: whole thumbnail/title is one link; filters read data-* attributes."""
- search=' '.join(game[key] for key in ('title','genre','description','controls'))+' '+GENRES[genre(game)]
- kind=game.get('kind','game');kicker=esc(game['dimension'])+' · '+(esc(KINDS.get(kind,kind.title()))+' · ' if kind!='game' else '')+esc(game['genre'])
- loading='eager' if eager else 'lazy'
- text=f'<p>{esc(game["description"])}</p>' if describe else ''
- return (f'<article class="example-tile" data-dimension="{esc(game["dimension"])}" data-genre="{genre(game)}" data-search="{esc(search)}"><a class="tile-link" href="/examples/{game["id"]}/">'
-  f'<span class="thumb"><img src="/assets/{game["image"]}" alt="" width="960" height="600" loading="{loading}" decoding="async"><span class="thumb-play" aria-hidden="true">{ICON_PLAY}Play</span></span>'
-  f'<span class="tile-kicker">{kicker}</span><{heading}>{esc(game["title"])}</{heading}></a>{text}</article>')
+ return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="theme-color" content="#f6f5ef"><script>try{{const t=localStorage.getItem("ferravex-theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}}catch{{}}</script><title>{esc(title)} · Ferravex</title><meta name="description" content="{esc(description)}"><link rel="canonical" href="{BASE}{url}"><meta property="og:title" content="{esc(title)} · Ferravex"><meta property="og:description" content="{esc(description)}"><meta property="og:image" content="{BASE}/assets/{esc(image)}"><meta name="twitter:card" content="summary_large_image"><meta property="og:type" content="website"><link rel="icon" href="/favicon.ico"><link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png"><link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png"><link rel="stylesheet" href="/site.css"><link rel="stylesheet" href="/search.css"><script src="/site.js" defer></script><script type="module" src="/site-search.js"></script></head><body><a class="skip" href="#main">Skip to content</a><header class="header"><div class="header-inner"><a class="brand" href="/" translate="no" aria-label="Ferravex home"><img class="brand-mark" src="/favicon-32.png" alt="" width="28" height="28" aria-hidden="true">ferravex</a><nav class="main-nav" aria-label="Main navigation">{nav}</nav><div class="header-actions"><button class="search-trigger" type="button" data-qikbar-open aria-label="Search Ferravex"><svg class="icon" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m13 13 4.5 4.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg><span class="search-label">Search</span><kbd data-command-key>Ctrl K</kbd></button><button class="theme-toggle" type="button" id="theme-toggle" aria-label="Switch color theme" title="Switch color theme">{ICON_THEME}</button><a class="github-link" href="{REPO}">GitHub</a></div></div></header>{body}{footer}</body></html>'''
 def by_id(key):return next(g for g in GAMES if g['id']==key)
+def present(keys):return [by_id(k) for k in keys if any(g['id']==k for g in GAMES)]
+def objective_line(game):
+ """First sentence of the objective, trimmed before any colon-led list."""
+ first=re.split(r'(?<=[.!?])\s+',guide_for(game)[0],maxsplit=1)[0]
+ return first.split(':')[0].rstrip('.')+'.' if ':' in first else first
+def tile(game,heading='h2',eager=False):
+ """Gallery card: poster plus hover loop, title and a dimension/genre chip; filters read data-*."""
+ search=' '.join(game[key] for key in ('title','genre','description','controls'))+' '+GENRES[genre(game)]
+ kind=game.get('kind','game');label=GENRES[genre(game)]+(' · '+KINDS.get(kind,kind.title()) if kind!='game' else '')
+ return (f'<article class="example-tile" data-dimension="{esc(game["dimension"])}" data-genre="{genre(game)}" data-search="{esc(search)}"><a class="tile-link" href="/examples/{game["id"]}/" title="{esc(game["description"])}">'
+  f'<span class="thumb">{loop_media(game,loading="eager" if eager else "lazy")}<span class="thumb-play" aria-hidden="true">{ICON_PLAY}</span></span>'
+  f'<span class="tile-meta"><{heading}>{esc(game["title"])}</{heading}><span class="tile-chip"><b>{esc(game["dimension"])}</b>{esc(label)}</span></span></a></article>')
+HERO_SLIDES=['glowtide','dune-skimmer','neon-swarm','sky-courier','physics-3d','picnic-panic']
+HERO_SIDE=['marble-run','pocket-rally','physics-2d']
+MOTION_TOGGLE='<button class="motion-toggle" type="button" data-motion-toggle aria-pressed="false"><svg class="icon icon-pause" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 3h3v10H4zM9 3h3v10H9z" fill="currentColor"/></svg>'+ICON_PLAY.replace('class="icon"','class="icon icon-resume"')+'<span>Pause motion</span></button>'
 def home():
- shelf=[g for g in ['glowtide','mini-golf-3d','pocket-rally','emberline','neon-swarm','sky-courier','salvage-pinball','crystal-cavern'] if any(x['id']==g for x in GAMES)]
- cards=''.join(tile(by_id(key),'h3',eager=i<4,describe=False) for i,key in enumerate(shelf))
- counts={k:sum(genre(g)==k for g in GAMES) for k in GENRES}
- genre_links=''.join(f'<a href="/examples/?genre={k}">{esc(label)} <span>{counts[k]}</span></a>' for k,label in GENRES.items() if counts[k])
- capabilities=[('01','A steady foundation','Fixed ticks, interpolation and typed resources keep your rules independent of frame rate.','/docs/engine-workflows/#run-rules-on-fixed-ticks'),('02','A world that pushes back','Rigid bodies, joints, characters and impact reports, with checked changes that never corrupt the world.','/docs/rigid-bodies/'),('03','UI with room to breathe','Measured text, wrapped rows and layouts that adapt from phone to ultrawide.','/docs/responsive-games/'),('04','Multiplayer you can follow','Server and client drivers you step yourself, with explicit replication outcomes.','/docs/networking/'),('05','Feedback with intent','Sound, camera and effects driven by accepted game events, with motion and flash preferences built in.','/docs/journey-200-presentation/'),('06','Friendly to coding agents','Local API search, runnable guide examples, clear diagnostics and zero third-party crates.','/docs/agent-guide/')]
- features=''.join(f'<a class="capability-card" href="{url}"><span class="upgrade-number">{n}</span><h3>{title}</h3><p>{detail}</p><span class="card-arrow" aria-hidden="true">↗</span></a>' for n,title,detail,url in capabilities)
  n=len(GAMES)
- body=f'''<main id="main" class="release-home">
- <div class="container">
- <section class="hero"><div class="hero-copy"><div class="eyebrow">A first-party Rust game engine</div><h1>Make something <span>worth playing.</span></h1><p class="hero-lead">{n} small games, one engine you can read end to end, and nothing to install. Press play, then open the source and see exactly how it works.</p><div class="button-row"><a class="button" href="/examples/">{ICON_PLAY}Play a game</a><a class="button secondary" href="/docs/getting-started/">Start building <span aria-hidden="true">↗</span></a></div><div class="hero-tags"><span>Rust + std only</span><span>2D &amp; 3D</span><span>Runs in your browser</span><span>MIT licensed</span></div></div><div class="showcase"><div class="showcase-bar"><span><i aria-hidden="true"></i> Now playing</span><span>Glowtide · 2D</span></div><a class="showcase-image" href="/examples/glowtide/" aria-label="Play Glowtide"><img src="/assets/glowtide.png" alt="Glowtide: a golden lantern spirit surrounded by glowing sea creatures and orbiting weapons" width="960" height="600" fetchpriority="high"><span class="showcase-play" aria-hidden="true">{ICON_PLAY}</span></a><div class="showcase-caption"><div><span class="eyebrow">Survive / evolve / shine</span><h2>A little light. A whole ocean.</h2><p>Build your glow. Make it to dawn.</p></div><a href="/examples/glowtide/" class="button small">{ICON_PLAY}Play</a></div><div class="showcase-code"><span>The whole loop, one tick at a time</span><code>for tick in session.advance_batch(dt).ticks() {{<br>&nbsp; update_world(tick.dt);<br>}}</code></div></div></section>
- </div>
- <section class="arcade" aria-labelledby="arcade-title"><div class="container"><div class="section-heading"><div><div class="eyebrow">The arcade is open</div><h2 id="arcade-title">No install. No account. <span>Just press play.</span></h2></div><p>Racing, golf, pinball, platforming and a pair of physics sandboxes, all built on the same engine.</p></div><div class="example-grid shelf">{cards}</div><div class="genre-row"><span class="mono">Browse by genre</span>{genre_links}<a class="button small" href="/examples/">All {n} games ↗</a></div></div></section>
- <div class="container">
- <div class="release-strip" aria-label="Engine at a glance"><span><strong>{n}</strong> games and labs</span><span><strong>0</strong> third-party crates</span><span><strong>2D + 3D</strong> one toolkit</span><a href="/features/">What's inside ↗</a></div>
- <section class="section"><div class="section-heading"><div><div class="eyebrow">Build / learn / play</div><h2>A good place to start.</h2></div><p>Three ways in. Same foundation underneath.</p></div><div class="path-grid"><a class="path-card" href="/docs/getting-started/"><span class="eyebrow">For the builder</span><h3>Your first game.</h3><p>Generate a project, run it, and make your first change in minutes.</p><span class="card-arrow" aria-hidden="true">↗</span></a><a class="path-card" href="/docs/agent-guide/"><span class="eyebrow">For you and your agent</span><h3>Less guesswork.</h3><p>Real APIs, checked recipes and a clear way to verify what you ship.</p><span class="card-arrow" aria-hidden="true">↗</span></a><a class="path-card" href="/examples/"><span class="eyebrow">For the curious</span><h3>Play first. Read later.</h3><p>Every game links straight to the code and the guide behind it.</p><span class="card-arrow" aria-hidden="true">↗</span></a></div></section>
- <section class="section"><div class="section-heading"><div><div class="eyebrow">Inside the engine</div><h2>Useful parts. <br>Better together.</h2></div><a class="text-link" href="/docs/engine-workflows/">Tour the engine ↗</a></div><div class="capability-grid">{features}</div></section>
- <section class="section docs-paths"><div><div class="eyebrow">From idea to implementation</div><h2>Take the next step.</h2><p>Start with a small working loop and add only the systems your game needs. Every guide connects public APIs to real game code.</p><a class="button" href="/docs/">Open the docs ↗</a></div><div class="docs-link-grid"><a href="/docs/responsive-games/"><strong>Design for different screens</strong><span>Keep the world fitted and the controls readable.</span></a><a href="/docs/journey-200-debugging/"><strong>Understand what happened</strong><span>Inspect game events, saves and replay mismatches.</span></a><a href="/docs/player-guide/"><strong>Make the player yours</strong><span>Remap controls, tune visuals and recover from errors.</span></a><a href="/api/ferravex/index.html"><strong>Go straight to the API</strong><span>Types, signatures, examples and source.</span></a></div></section>
- <aside class="roadmap-note"><div><strong>Built in the open. Honest about what ships.</strong><p>Everything on this site runs from source in the repository. Platform support and known limits are documented next to the code, and planned work is never presented as finished.</p></div><a class="text-link" href="/docs/release-status/">Release scope ↗</a></aside>
- </div></main>'''
+ slides=[];rail=[]
+ for i,g in enumerate(present(HERO_SLIDES)):
+  first=i==0;media=loop_media(g,g['title']+' gameplay',play='hero',loading='eager' if first else 'lazy',priority=first)
+  slides.append(f'<a class="slide{" is-active" if first else ""}" href="/examples/{g["id"]}/" data-slide="{i}"{"" if first else " hidden"}>{media}</a>')
+  rail.append(f'<button type="button" class="rail-item" data-go="{i}" aria-pressed="{str(first).lower()}"><span>{esc(g["title"])}</span><i aria-hidden="true"></i></button>')
+ side=''.join(f'<a class="wall-tile" href="/examples/{g["id"]}/">{loop_media(g,g["title"]+" gameplay",play="hero",loading="eager")}<span class="wall-label">{esc(g["title"])}</span></a>' for g in present(HERO_SIDE))
+ spotlights=''.join(f'<a class="spotlight" href="/examples/{g["id"]}/">{loop_media(g,g["title"]+" gameplay",play="visible")}<span class="spotlight-copy"><span class="badge">New</span><strong>{esc(g["title"])}</strong><span class="spotlight-tag">{esc(tagline(g))}</span><span class="button small">{ICON_PLAY}Play</span></span></a>' for g in present(['picnic-panic','glowtide']))
+ cards=''.join(tile(g,'h3') for g in GAMES)+f'<a class="more-tile" href="/examples/"><strong>{n}</strong><span>Filter by genre ↗</span></a>'
+ slider=''
+ if (MEDIA/'post/off.webp').is_file() and (MEDIA/'post/neon.webp').is_file():
+  slider=('<figure class="bento-tile compare-tile"><div class="compare" data-compare><img src="/media/post/neon.webp" alt="Glowtide with bloom and the neon color grade" width="1200" height="750" loading="lazy" decoding="async">'
+   '<img class="compare-before" src="/media/post/off.webp" alt="The same Glowtide frame with post-processing off" width="1200" height="750" loading="lazy" decoding="async">'
+   '<span class="compare-handle" aria-hidden="true"></span><span class="compare-tag off">Post off</span><span class="compare-tag on">Neon</span>'
+   '<input type="range" min="0" max="100" value="50" aria-label="Drag to compare post-processing off and on"></div>'
+   '<figcaption class="bento-cap"><strong>Bloom, grade, glow.</strong><a href="/docs/visuals/">Post-processing ↗</a></figcaption></figure>')
+ def media_tile(key,href,caption):
+  return f'<a class="bento-tile" href="{href}">{loop_media(by_id(key),caption,play="visible")}<span class="bento-cap"><strong>{esc(caption)}</strong></span></a>' if any(g['id']==key for g in GAMES) else ''
+ ui=('<a class="bento-tile ui-tile" href="/docs/responsive-games/"><span class="loop"><img src="/media/engine/ui-kit.webp" alt="Ferravex UI kit: pixel fonts, menus, meters and glow effects" width="1600" height="1000" loading="lazy" decoding="async"></span><span class="bento-cap"><strong>A UI kit made for games.</strong></span></a>') if (MEDIA/'engine/ui-kit.webp').is_file() else ''
+ stat=lambda big,small:f'<div class="stat"><strong>{big}</strong><span>{small}</span></div>'
+ engine=(f'<div class="bento">{slider}{media_tile("physics-3d","/docs/rigid-bodies/","Physics that pushes back.")}</div>'
+  f'<div class="stats">{stat(n,"games to play")}{stat(0,"dependencies")}{stat("2D+3D","one toolkit")}{stat("100%","Rust + std")}</div>'
+  f'<div class="bento">{ui}{media_tile("neon-swarm","/docs/effects/","Particles, trails, juice.")}</div>')
+ body=f'''<main id="main" class="home">
+ <section class="hero-wall" aria-label="Featured gameplay"><div class="wall"><div class="wall-main" data-rotator>{"".join(slides)}<div class="hero-copy"><p class="hero-kicker">A from-scratch Rust game engine</p><h1>Built from scratch.<span>Ready to play.</span></h1><div class="button-row"><a class="button" href="/examples/">{ICON_PLAY}Play</a><a class="button ghost" href="/docs/getting-started/">Build <span aria-hidden="true">↗</span></a></div></div><div class="hero-rail" aria-label="Featured games">{"".join(rail)}</div>{MOTION_TOGGLE}</div><div class="wall-side">{side}</div></div></section>
+ <section class="band featured" aria-labelledby="featured-title"><div class="container"><div class="band-head"><h2 id="featured-title">Fresh from the forge</h2></div><div class="spotlights">{spotlights}</div></div></section>
+ <section class="band games" aria-labelledby="games-title"><div class="container"><div class="band-head"><h2 id="games-title">{n} games. All playable.</h2><a class="text-link" href="/examples/">Browse all ↗</a></div><div class="example-grid dense">{cards}</div></div></section>
+ <section class="band engine" aria-labelledby="engine-title"><div class="container"><div class="band-head"><h2 id="engine-title">Inside the engine</h2><a class="text-link" href="/docs/engine-workflows/">Tour the engine ↗</a></div>{engine}</div></section>
+ <section class="cta"><div class="container cta-inner"><h2>Your game next.</h2><code class="cta-code">cargo run --release -p picnic-panic</code><div class="button-row"><a class="button" href="/docs/getting-started/">Start building ↗</a><a class="button ghost" href="/docs/">Read the docs</a></div></div></section>
+ </main>'''
  write(OUT/'index.html',layout('Make something worth playing',body))
+def feature_visual(feature):
+ key=feature.get('media',feature['example'])
+ if key.startswith('/'):return f'<span class="loop"><img src="{esc(key)}" alt="{esc(feature["title"])}" width="1600" height="1000" loading="lazy" decoding="async"></span>',feature['example']
+ game=by_id(key) if any(g['id']==key for g in GAMES) else by_id(feature['example'])
+ return loop_media(game,game['title']+' gameplay'),game['id']
 def features():
- cards=[]
- for feature in FEATURES:
-  items=''.join('<li>'+esc(item)+'</li>' for item in feature['items'])
+ tiles=[]
+ for i,feature in enumerate(FEATURES):
   game=next((g for g in GAMES if g['id']==feature['example']),None)
   play=f'Play {esc(game["title"])} ↗' if game else 'See it in a game ↗'
-  cards.append(f'<article class="feature-card" id="{feature["id"]}"><span class="eyebrow">{esc(feature["label"])}</span><h2>{esc(feature["title"])}</h2><p>{esc(feature["detail"])}</p><ul>{items}</ul><div class="button-row"><a class="text-link" href="/docs/{feature["guide"]}/">Read the guide ↗</a><a class="text-link" href="/examples/{feature["example"]}/">{play}</a></div></article>')
- body='<main id="main" class="container"><div class="page-heading"><div class="eyebrow">Inside Ferravex</div><h1>Good games.<br>Useful building blocks.</h1><p>From the first fixed tick to a finished scorecard. Here is what the engine does today, each with a guide to read and a game to play.</p><div class="button-row"><a class="button" href="/docs/getting-started/">Start building ↗</a><a class="button secondary" href="/examples/">'+ICON_PLAY+'Play the games</a></div></div><section class="golf-feature"><div><span class="eyebrow">Copper Greens / 12 holes / 2 views</span><h2>Find your next line.</h2><p>Bank around stone, cross the canal, read a raised green and time the windmill. One course and one scorecard, in two dimensions and three.</p><div class="button-row"><a class="button" href="/examples/mini-golf-2d/">'+ICON_PLAY+'Play 2D</a><a class="button secondary" href="/examples/mini-golf-3d/">'+ICON_PLAY+'Play 3D</a></div></div><img src="/assets/mini-golf-3d.png" alt="Copper Greens: a miniature golf course in three dimensions" width="960" height="600"></section><div class="features-grid">'+''.join(cards)+'</div><aside class="roadmap-note"><p>Platform support and known limits are documented alongside the code. Planned work is never presented as a shipped feature.</p><a class="text-link" href="/docs/release-status/">Release scope ↗</a></aside></main>'
- write(OUT/'features/index.html',layout('Features',body,'/features/',section='features'))
+  visual,target=feature_visual(feature)
+  tiles.append(f'<article class="feature-tile{" wide" if i<2 else ""}" id="{feature["id"]}"><a class="feature-media" href="/examples/{target}/" tabindex="-1" aria-hidden="true">{visual}</a><div class="feature-copy"><span class="eyebrow">{esc(feature["label"])}</span><h2>{esc(feature["title"])}</h2><p>{esc(feature.get("caption",feature["detail"]))}</p><div class="feature-links"><a class="text-link" href="/docs/{feature["guide"]}/">Guide ↗</a><a class="text-link" href="/examples/{feature["example"]}/">{play}</a></div></div></article>')
+ golf=by_id('mini-golf-3d') if any(g['id']=='mini-golf-3d' for g in GAMES) else GAMES[0]
+ body=(f'<main id="main" class="features-page"><section class="page-hero"><div class="page-hero-media">{loop_media(golf,"Copper Greens mini golf in 3D",play="hero",loading="eager",priority=True)}</div><div class="container page-hero-copy"><div class="eyebrow">Inside Ferravex</div><h1>Every system,<br>playable.</h1><div class="button-row"><a class="button" href="/examples/">{ICON_PLAY}Play the games</a><a class="button ghost" href="/docs/getting-started/">Start building ↗</a></div></div>{MOTION_TOGGLE}</section>'
+  '<div class="container"><div class="feature-tiles">'+''.join(tiles)+'</div><p class="fine-print">Known limits live next to the code. <a class="text-link" href="/docs/release-status/">Release scope ↗</a></p></div></main>')
+ write(OUT/'features/index.html',layout('Features',body,'/features/',section='features',image='mini-golf-3d.png'))
  # Retain old inbound links without publishing a second navigation section.
  write(OUT/'updates/index.html','<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/features/"><title>Features · Ferravex</title><link rel="canonical" href="'+BASE+'/features/"></head><body><p><a href="/features/">Explore Ferravex features</a></p></body></html>')
-
 def doc_page(slug,title,group,source):
  """One guide: breadcrumb, prose, optional on-page TOC and previous/next links."""
  body,toc=markdown((ROOT/source).read_text(encoding="utf-8"),source)
@@ -346,24 +410,33 @@ def doc_page(slug,title,group,source):
  return f'<main id="main" class="docs-layout"><button class="menu-toggle" type="button" aria-controls="docs-navigation" aria-expanded="false"><span aria-hidden="true">☰</span> {esc(group)} <span class="menu-current">/ {esc(title)}</span></button>{sidebar(slug)}<article class="prose">{crumbs}{note}{body}{pager}<div class="edit-source"><a href="{REPO}/blob/main/{source}">View or edit this page on GitHub ↗</a></div></article>{toc_html}</main>'
 def example_page(g):
  objective,guide_slug,guide_title=guide_for(g)
+ media=media_for(g['id'])
  src=f"/api/src/{g['id'].replace('-', '_')}/lib.rs.html"
  related=[x for x in GAMES if x['id']!=g['id'] and genre(x)==genre(g)]
  related+=[x for x in GAMES[GAMES.index(g)+1:]+GAMES[:GAMES.index(g)] if x['id']!=g['id'] and x not in related]
- more=''.join(tile(x,'h3',describe=False) for x in related[:4])
- chips=f'<span class="chip">{esc(g["dimension"])}</span><span class="chip">{esc(g["genre"])}</span><span class="chip">{esc(KINDS.get(g.get("kind"),"Game"))}</span>'
- return f'''<main id="main" class="container example-page"><a class="example-back" href="/examples/"><span aria-hidden="true">←</span> All games</a>
-<div class="example-title"><div><div class="chips">{chips}</div><h1>{esc(g['title'])}</h1><p class="example-lead">{esc(g['description'])}</p></div><div class="button-row"><a class="button secondary" href="{g['play']}">Open full player ↗</a><a class="text-link" href="{src}">View source</a></div></div>
-<div class="example-stage"><aside class="how-to-play" aria-label="How to play"><section class="play-brief"><span class="eyebrow">Your objective</span><p>{esc(objective)}</p></section><section class="default-controls"><h2>Default controls</h2>{controls_html(g['controls'])}<p class="hint">Remap anything from <strong>Game menu → Controls</strong>.</p></section><a class="text-link" href="/docs/{guide_slug}/">Explore: {esc(guide_title)} ↗</a></aside>
-<div class="player" data-game="{g['play']}" data-title="{esc(g['title'])}"><img src="/assets/{g['image']}" alt="{esc(g['title'])} gameplay preview" width="960" height="600"><div class="launch"><button class="button play-button" data-launch>{ICON_PLAY}Play {esc(g['title'])}</button><p>Runs right here in your browser. Nothing to install.</p></div></div></div>
-<aside class="player-features"><div><strong>Make it yours.</strong><p>Open the <strong>Game menu</strong> in the corner of the game to remap controls, go fullscreen, change the look or reduce motion and flashes. Your choices are saved for next time.</p></div><div class="player-links"><a class="text-link" href="/docs/player-guide/">Player guide ↗</a><a class="text-link" href="/features/">Engine features ↗</a></div></aside>
-<section class="example-info"><div><h2>Under the hood</h2><p>{esc(g['title'])} is built entirely on Ferravex: the same first-party Rust engine as every other game here, running in your browser with no third-party packages.</p><p>Read <a class="inline-link" href="/docs/{guide_slug}/">{esc(guide_title)}</a> to see the systems it uses, or open <a class="inline-link" href="{src}">its source</a>.</p><p class="looks">Try another look: <a href="{g['play']}?look=warm" target="_blank" rel="noopener">Warm</a><a href="{g['play']}?look=cool" target="_blank" rel="noopener">Cool</a><a href="{g['play']}?look=ink" target="_blank" rel="noopener">Ink</a><a class="inline-link" href="/docs/visuals/">About looks</a></p></div><div><h2>Run it locally</h2><div class="code-wrap" data-lang="Shell"><pre><code class="language-sh">cargo run --release -p {esc(g['id'])}</code></pre><button class="copy" type="button" aria-label="Copy code">Copy</button></div><p>Native windows need a supported desktop graphics setup; see <a class="inline-link" href="/docs/platforms/">Platforms</a>. New to the engine? <a class="inline-link" href="/docs/getting-started/">Getting started</a> walks through setup.</p></div></section>
-<section class="more-games" aria-labelledby="more-title"><div class="section-heading"><h2 id="more-title">Keep playing</h2><a class="text-link" href="/examples/">All {len(GAMES)} games ↗</a></div><div class="example-grid compact">{more}</div></section></main>'''
+ more=''.join(tile(x,'h3') for x in related[:4])
+ chips=f'<span class="chip">{esc(g["dimension"])}</span><span class="chip">{esc(GENRES[genre(g)])}</span>'+(f'<span class="chip">{esc(KINDS.get(g.get("kind"),"Game"))}</span>' if g.get('kind','game')!='game' else '')
+ shots=''.join(f'<a class="shot" href="{esc(s["src"])}" data-lightbox><img src="{esc(s["src"])}" alt="{esc(s["alt"] or g["title"]+" gameplay")}" width="1600" height="1000" loading="lazy" decoding="async"></a>' for s in media['stills'])
+ gallery_html=f'<section class="shots" aria-label="{esc(g["title"])} gameplay stills">{shots}</section>' if shots else ''
+ hero_alt=media.get('alt') or g['title']+' gameplay'
+ return f'''<main id="main" class="example-page"><section class="game-hero"><div class="container"><a class="example-back" href="/examples/"><span aria-hidden="true">←</span> All games</a>
+<div class="game-head"><div><div class="chips">{chips}</div><h1>{esc(g['title'])}</h1><p class="play-brief"><span class="eyebrow">Your objective</span>{esc(objective_line(g))}</p></div><div class="button-row"><a class="button ghost" href="{g['play']}">Open full player ↗</a><a class="button ghost" href="{src}">Source</a></div></div>
+<div class="player" data-game="{g['play']}" data-title="{esc(g['title'])}">{loop_media(g,hero_alt,play="hero",loading="eager",priority=True)}<div class="launch"><button class="button play-button" data-launch>{ICON_PLAY}Play {esc(g['title'])}</button><p>Instant. In your browser.</p></div></div>
+</div></section>
+<div class="container">{gallery_html}
+<section class="default-controls" aria-labelledby="controls-title"><h2 id="controls-title">Default controls</h2>{controls_html(g['controls'])}<p class="hint">Remap in <strong>Game menu → Controls</strong></p></section>
+<section class="more-games" aria-labelledby="more-title"><div class="band-head"><h2 id="more-title">More games</h2><a class="text-link" href="/examples/">All {len(GAMES)} ↗</a></div><div class="example-grid compact">{more}</div></section>
+<details class="under-hood"><summary><strong>Under the hood</strong><span>Objective · run locally · source · looks</span></summary><div class="hood-grid"><div><p>{esc(objective)}</p><p class="hood-links"><a class="text-link" href="/docs/{guide_slug}/">Explore: {esc(guide_title)} ↗</a><a class="text-link" href="/docs/player-guide/">Player guide ↗</a><a class="text-link" href="/features/">Engine features ↗</a></p></div>
+<div><div class="code-wrap" data-lang="Shell"><pre><code class="language-sh">cargo run --release -p {esc(g['id'])}</code></pre><button class="copy" type="button" aria-label="Copy code">Copy</button></div><p class="looks">Looks: <a href="{g['play']}?look=warm" target="_blank" rel="noopener">Warm</a><a href="{g['play']}?look=cool" target="_blank" rel="noopener">Cool</a><a href="{g['play']}?look=ink" target="_blank" rel="noopener">Ink</a><a class="inline-link" href="/docs/platforms/">Platforms</a></p></div></div></details></div></main>'''
 def gallery():
  dims=''.join(f'<button type="button" data-filter="{key}" aria-pressed="{str(key=="all").lower()}">{label}</button>' for key,label in [('all','All'),('2D','2D'),('3D','3D')])
  counts={k:sum(genre(g)==k for g in GAMES) for k in GENRES}
  genres='<button type="button" data-genre="all" aria-pressed="true">All genres</button>'+''.join(f'<button type="button" data-genre="{k}" aria-pressed="false">{esc(label)} <span>{counts[k]}</span></button>' for k,label in GENRES.items() if counts[k])
  n=len(GAMES)
- return f'<main id="main" class="container gallery"><div class="page-heading"><div class="eyebrow">{n} games and labs · free · in your browser</div><h1>Pick a game. Press play.</h1><p>Every game here runs instantly in your browser, no install and no account. Each one is built on the same open-source Rust engine, with its source and the guide behind it a click away.</p></div><div class="gallery-tools"><label class="game-search"><span class="visually-hidden">Find a game</span><svg class="icon" viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m13 13 4.5 4.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg><input id="game-query" name="q" type="search" autocomplete="off" placeholder="Find a game by title, genre or key…"></label><div class="filters segmented" role="group" aria-label="Filter by dimension">{dims}</div></div><div class="filters genre-filters" role="group" aria-label="Filter by genre">{genres}</div><p id="filter-status" class="mono" role="status">{n} games</p><div class="example-grid">'+''.join(tile(g,eager=i<6) for i,g in enumerate(GAMES))+'</div><div id="games-empty" class="empty-state" hidden><strong>No games match.</strong><p>Try a different word, or clear the filters.</p><button class="button secondary" type="button" data-clear-filters>Clear filters</button></div></main>'
+ strip=''.join(f'<img src="{esc(poster(g))}" alt="" width="960" height="600" decoding="async">' for g in GAMES)
+ search='<label class="game-search"><span class="visually-hidden">Find a game</span><svg class="icon" viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m13 13 4.5 4.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg><input id="game-query" name="q" type="search" autocomplete="off" placeholder="Find a game…"></label>'
+ return (f'<main id="main" class="gallery"><div class="strip" aria-hidden="true"><div class="strip-track">{strip}{strip}</div></div><div class="container"><div class="gallery-head"><div><div class="eyebrow">{n} games · free · in your browser</div><h1>Pick a game. Press play.</h1></div>{search}</div>'
+  f'<div class="gallery-tools"><div class="filters segmented" role="group" aria-label="Filter by dimension">{dims}</div><div class="filters genre-filters" role="group" aria-label="Filter by genre">{genres}</div></div><p id="filter-status" class="mono" role="status">{n} games</p><div class="example-grid">'+''.join(tile(g,eager=i<8) for i,g in enumerate(GAMES))+'</div><div id="games-empty" class="empty-state" hidden><strong>No games match.</strong><p>Try another word.</p><button class="button secondary" type="button" data-clear-filters>Clear filters</button></div></div></main>')
 def pages(docs=None):
  """Render guides and catalog pages; a subset supports isolated content checks."""
  for slug,title,group,source in DOCS if docs is None else docs:
@@ -375,10 +448,10 @@ def pages(docs=None):
  # Relative All games links from standalone hosts land on the branded gallery.
  write(OUT/'play/index.html',layout('Games',body,'/examples/','Play 2D and 3D games built on Ferravex, right in your browser.',section='games'))
  for g in GAMES:
-  write(OUT/f'examples/{g["id"]}/index.html',layout(g['title'],example_page(g),f'/examples/{g["id"]}/',g['description'],'games'));SEARCH.append(dict(title=g['title'],url=f'/examples/{g["id"]}/',type='Example',text=g['description']+' '+g['genre']+' '+g['controls']))
+  write(OUT/f'examples/{g["id"]}/index.html',layout(g['title'],example_page(g),f'/examples/{g["id"]}/',g['description'],'games',g['image']));SEARCH.append(dict(title=g['title'],url=f'/examples/{g["id"]}/',type='Example',text=g['description']+' '+g['genre']+' '+g['controls']))
 def not_found():
- picks=''.join(tile(by_id(k),'h3',describe=False) for k in ['mini-golf-2d','pocket-rally','salvage-pinball','marble-run'] if any(x['id']==k for x in GAMES))
- return f'<main id="main" class="container not-found"><div class="page-heading"><div class="eyebrow">404 · Out of bounds</div><h1>This path is uncharted.</h1><p>The page you were after has moved or never existed. Search for it, head back to familiar ground, or take a quick break with a game.</p><div class="button-row"><a class="button" href="/">Back home</a><button class="button secondary" type="button" data-qikbar-open>Search the site <kbd data-command-key>Ctrl K</kbd></button><a class="text-link" href="/docs/">Browse the docs ↗</a></div></div><div class="example-grid compact">{picks}</div></main>'
+ picks=''.join(tile(g,'h3') for g in present(['picnic-panic','glowtide','pocket-rally','salvage-pinball']))
+ return f'<main id="main" class="container not-found"><div class="page-heading"><div class="eyebrow">404 · Out of bounds</div><h1>This path is uncharted.</h1><div class="button-row"><a class="button" href="/">Back home</a><button class="button secondary" type="button" data-qikbar-open>Search <kbd data-command-key>Ctrl K</kbd></button></div></div><div class="example-grid compact">{picks}</div></main>'
 
 def self_test():
  """Source-only navigation regressions; no Cargo, dist or staged API inputs."""
@@ -442,6 +515,19 @@ def self_test():
    self.assertIn('<details class="nav-group nav-history" open',sidebar('journey-400'))
    self.assertNotIn('Journey',''.join(title for _,title,group,_ in DOCS if group in ('Start here','Core','Physics','Rendering','Gameplay','Recipes')))
 
+  def test_every_game_has_lean_committed_gameplay_media(self):
+   total=sum(p.stat().st_size for p in MEDIA.rglob('*') if p.is_file())
+   self.assertLessEqual(total,12*1024*1024)
+   for game in GAMES:
+    media=media_for(game['id'])
+    self.assertTrue(media['loop'] and media['poster'],game['id'])
+    self.assertGreaterEqual(len(media['stills']),3,game['id'])
+    self.assertTrue(all(s['alt'] for s in media['stills']),game['id'])
+    self.assertLessEqual((MEDIA/game['id']/'loop.mp4').stat().st_size,450*1024,game['id'])
+   card=tile(GAMES[0])
+   self.assertIn('data-loop="/media/'+GAMES[0]['id']+'/loop.mp4" data-play="hover"',card)
+   self.assertIn('loading="lazy"',card);self.assertNotIn('<video',card)
+
   def test_missing_guide_stops_before_build_or_output_replacement(self):
    with patch(__name__+'.validate_docs',side_effect=ValueError('Missing guide source: pending.md')), patch.object(subprocess,'run') as run, patch.object(shutil,'rmtree') as remove, patch('sys.argv',['build-site.py','--skip-build']):
     with self.assertRaisesRegex(SystemExit,'Missing guide source: pending.md'):main()
@@ -491,6 +577,8 @@ def main():
   for path in folder.glob('*.png'):shutil.copy2(path,assets/path.name)
  for game in GAMES:
   if not (assets/game['image']).is_file():raise SystemExit('Missing screenshot: '+game['image'])
+ # Committed gameplay loops, posters and stills (see scripts/capture-media.mjs); copied, never generated.
+ if MEDIA.is_dir():shutil.copytree(MEDIA,OUT/'media',dirs_exist_ok=True)
  for name in ['site.css','site.js','site-search.js','search-index.mjs','search.css','favicon.ico','favicon-16.png','favicon-32.png','apple-touch-icon.png']:shutil.copy2(ROOT/'website/static'/name,OUT/name)
  write(OUT/'search-index.mjs',browser_search_module())
 

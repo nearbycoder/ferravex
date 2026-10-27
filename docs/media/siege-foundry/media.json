@@ -1,0 +1,23 @@
+{
+ "game": "siege-foundry",
+ "loop": "loop.mp4",
+ "poster": "poster.webp",
+ "alt": "Siege Foundry: cannon shells topple target towers in a glowing foundry",
+ "width": 960,
+ "height": 600,
+ "seconds": 5.8,
+ "stills": [
+  {
+   "file": "still-1.webp",
+   "alt": "Six marked targets wait at the end of the firing lane"
+  },
+  {
+   "file": "still-2.webp",
+   "alt": "A shell hits the first support"
+  },
+  {
+   "file": "still-3.webp",
+   "alt": "The tower collapses for spare shells"
+  }
+ ]
+}

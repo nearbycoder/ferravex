@@ -1,0 +1,23 @@
+{
+ "game": "picnic-panic",
+ "loop": "loop.mp4",
+ "poster": "poster.webp",
+ "alt": "Picnic Panic: the bandleader and his dog chase a raccoon across the park",
+ "width": 960,
+ "height": 600,
+ "seconds": 6,
+ "stills": [
+  {
+   "file": "still-1.webp",
+   "alt": "Hiding in a bush beside the seesaw"
+  },
+  {
+   "file": "still-2.webp",
+   "alt": "Ringing the village bell"
+  },
+  {
+   "file": "still-3.webp",
+   "alt": "The bandleader and his dog search for the raccoon"
+  }
+ ]
+}

@@ -1,0 +1,23 @@
+{
+ "game": "dune-skimmer",
+ "loop": "loop.mp4",
+ "poster": "poster.webp",
+ "alt": "Dune Skimmer: a hover racer boosts through desert gates",
+ "width": 960,
+ "height": 600,
+ "seconds": 6,
+ "stills": [
+  {
+   "file": "still-1.webp",
+   "alt": "Banking through a bend after a rocket start"
+  },
+  {
+   "file": "still-2.webp",
+   "alt": "Lap one done under a gate"
+  },
+  {
+   "file": "still-3.webp",
+   "alt": "Final lap with boost trails blazing"
+  }
+ ]
+}

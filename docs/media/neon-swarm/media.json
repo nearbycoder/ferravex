@@ -1,0 +1,23 @@
+{
+ "game": "neon-swarm",
+ "loop": "loop.mp4",
+ "poster": "poster.webp",
+ "alt": "Neon Swarm: dashing and firing through drone waves in a neon arena",
+ "width": 960,
+ "height": 600,
+ "seconds": 6,
+ "stills": [
+  {
+   "file": "still-1.webp",
+   "alt": "A three-kill chain sets the multiplier on fire"
+  },
+  {
+   "file": "still-2.webp",
+   "alt": "Dodging drones beside a repair pickup"
+  },
+  {
+   "file": "still-3.webp",
+   "alt": "The Overseer arrives for the final wave"
+  }
+ ]
+}

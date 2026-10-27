@@ -1,0 +1,23 @@
+{
+ "game": "crystal-cavern",
+ "loop": "loop.mp4",
+ "poster": "poster.webp",
+ "alt": "Crystal Cavern: waking the altar and opening the sealed door to daylight",
+ "width": 960,
+ "height": 600,
+ "seconds": 5.8,
+ "stills": [
+  {
+   "file": "still-1.webp",
+   "alt": "A glowing crystal in the Echoing Grotto"
+  },
+  {
+   "file": "still-2.webp",
+   "alt": "A crystal floating in the Glitter Pocket"
+  },
+  {
+   "file": "still-3.webp",
+   "alt": "The great seal opens to daylight"
+  }
+ ]
+}

@@ -1,0 +1,23 @@
+{
+ "game": "emberline",
+ "loop": "loop.mp4",
+ "poster": "poster.webp",
+ "alt": "Emberline: a lantern bearer runs and jumps through a dusk forest",
+ "width": 960,
+ "height": 600,
+ "seconds": 6,
+ "stills": [
+  {
+   "file": "still-1.webp",
+   "alt": "Crossing into the Old Mill with the split timer running"
+  },
+  {
+   "file": "still-2.webp",
+   "alt": "Lighting the first lantern save point"
+  },
+  {
+   "file": "still-3.webp",
+   "alt": "Racing toward the furnace lift with two lanterns lit"
+  }
+ ]
+}

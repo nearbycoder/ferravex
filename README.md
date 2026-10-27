@@ -17,27 +17,41 @@ latest source by a revision or two.
 Nineteen games and labs run in the browser with nothing to install. Each one is
 built on the same engine, and its source is a click away.
 
-| Game | What it is | View |
-| --- | --- | --- |
-| [Glowtide](https://ferravex.com/examples/glowtide/) | Bioluminescent roguelite: evolving weapons, four spirits and a tide to survive | 2D |
-| [Picnic Panic](https://ferravex.com/examples/picnic-panic/) | A raccoon's to-do list of pranks at the village picnic: sneak, steal, hide and launch the melon | 3D |
-| [Copper Greens 2D](https://ferravex.com/examples/mini-golf-2d/) | Twelve holes of top-down mini golf: bank shots, lip-outs, ace confetti | 2D |
-| [Copper Greens 3D](https://ferravex.com/examples/mini-golf-3d/) | The same course on raised greens with moving copper gates | 3D |
-| [Emberline](https://ferravex.com/examples/emberline/) | Precision platformer with lanterns, medals and a secret moth | 2D |
-| [Neon Swarm](https://ferravex.com/examples/neon-swarm/) | Arena shooter: chain kills, dash, topple the Overseer | 2D |
-| [Pocket Rally](https://ferravex.com/examples/pocket-rally/) | Top-down rally: drift scoring, ghost splits, unhappy ducks | 2D |
-| [Salvage Pinball](https://ferravex.com/examples/salvage-pinball/) | Pinball with a magnet-crane jackpot and a grumpy foreman | 2D |
-| [Orchard Guard](https://ferravex.com/examples/orchard-guard/) | Tower defense against googly-eyed beetles (and royalty) | 2D |
-| [Orbit Breaker](https://ferravex.com/examples/owned-orbit/) | Brick breaker with multi-ball, sticky paddles and volley combos | 2D |
-| [Marble Run](https://ferravex.com/examples/marble-run/) | Four sky courses, medal clocks and hidden moonstones | 3D |
-| [Dune Skimmer](https://ferravex.com/examples/dune-skimmer/) | Hover racing: thread gates for boost, beat Dusty the demo bot | 3D |
-| [Crystal Cavern](https://ferravex.com/examples/crystal-cavern/) | First-person crystal hunt in a sarcastic cave | 3D |
-| [Siege Foundry](https://ferravex.com/examples/siege-foundry/) | Cannon demolition with chain collapses and three-star runs | 3D |
-| [Sky Courier](https://ferravex.com/examples/sky-courier/) | Flight deliveries with tip streaks and golden rings | 3D |
-| [Courtyard](https://ferravex.com/examples/owned-lab/) | FPS drills, a 30-second graded qualifier and browser peer sessions | 3D |
-| [Strike](https://ferravex.com/examples/strike/) | Two-minute practice gauntlet vs. chatty bots; native UDP multiplayer | 3D |
-| [2D Physics Lab](https://ferravex.com/examples/physics-2d/) | Physics workshop: CHAOS, a domino run and optional goals | 2D |
-| [3D Physics Lab](https://ferravex.com/examples/physics-3d/) | Bowl into a 30-crate stack, drop CHAOS piles, earn titles | 3D |
+<table>
+<tr>
+<td width="33%" valign="top"><a href="https://ferravex.com/examples/glowtide/"><img src="docs/media/glowtide/poster.webp" alt="Glowtide: a lantern spirit&#x27;s weapons carve through a glowing ocean horde" width="100%"></a><br><b><a href="https://ferravex.com/examples/glowtide/">Glowtide</a></b> · 2D<br><sub>Bioluminescent roguelite: evolving weapons, four spirits and a tide to survive</sub></td>
+<td width="33%" valign="top"><a href="https://ferravex.com/examples/picnic-panic/"><img src="docs/media/picnic-panic/poster.webp" alt="Picnic Panic: the bandleader and his dog chase a raccoon across the park" width="100%"></a><br><b><a href="https://ferravex.com/examples/picnic-panic/">Picnic Panic</a></b> · 3D<br><sub>A raccoon&#x27;s to-do list of pranks at the village picnic: sneak, steal, hide and launch the melon</sub></td>
+<td width="33%" valign="top"><a href="https://ferravex.com/examples/mini-golf-2d/"><img src="docs/media/mini-golf-2d/poster.webp" alt="Copper Greens 2D: a putt crosses the canal for a hole in one" width="100%"></a><br><b><a href="https://ferravex.com/examples/mini-golf-2d/">Copper Greens 2D</a></b> · 2D<br><sub>Twelve holes of top-down mini golf: bank shots, lip-outs, ace confetti</sub></td>
+</tr>
+<tr>
+<td width="33%" valign="top"><a href="https://ferravex.com/examples/mini-golf-3d/"><img src="docs/media/mini-golf-3d/poster.webp" alt="Copper Greens 3D: a long putt on the raised High Road green" width="100%"></a><br><b><a href="https://ferravex.com/examples/mini-golf-3d/">Copper Greens 3D</a></b> · 3D<br><sub>The same course on raised greens with moving copper gates</sub></td>
+<td width="33%" valign="top"><a href="https://ferravex.com/examples/emberline/"><img src="docs/media/emberline/poster.webp" alt="Emberline: a lantern bearer runs and jumps through a dusk forest" width="100%"></a><br><b><a href="https://ferravex.com/examples/emberline/">Emberline</a></b> · 2D<br><sub>Precision platformer with lanterns, medals and a secret moth</sub></td>
+<td width="33%" valign="top"><a href="https://ferravex.com/examples/neon-swarm/"><img src="docs/media/neon-swarm/poster.webp" alt="Neon Swarm: dashing and firing through drone waves in a neon arena" width="100%"></a><br><b><a href="https://ferravex.com/examples/neon-swarm/">Neon Swarm</a></b> · 2D<br><sub>Arena shooter: chain kills, dash, topple the Overseer</sub></td>
+</tr>
+<tr>
+<td width="33%" valign="top"><a href="https://ferravex.com/examples/pocket-rally/"><img src="docs/media/pocket-rally/poster.webp" alt="Pocket Rally: a tiny rally car drifts through countryside bends" width="100%"></a><br><b><a href="https://ferravex.com/examples/pocket-rally/">Pocket Rally</a></b> · 2D<br><sub>Top-down rally: drift scoring, ghost splits, unhappy ducks</sub></td>
+<td width="33%" valign="top"><a href="https://ferravex.com/examples/salvage-pinball/"><img src="docs/media/salvage-pinball/poster.webp" alt="Salvage Pinball: the ball pinballs between glowing bumpers under the crane" width="100%"></a><br><b><a href="https://ferravex.com/examples/salvage-pinball/">Salvage Pinball</a></b> · 2D<br><sub>Pinball with a magnet-crane jackpot and a grumpy foreman</sub></td>
+<td width="33%" valign="top"><a href="https://ferravex.com/examples/orchard-guard/"><img src="docs/media/orchard-guard/poster.webp" alt="Orchard Guard: slings and frost hives fend off a pest wave" width="100%"></a><br><b><a href="https://ferravex.com/examples/orchard-guard/">Orchard Guard</a></b> · 2D<br><sub>Tower defense against googly-eyed beetles (and royalty)</sub></td>
+</tr>
+<tr>
+<td width="33%" valign="top"><a href="https://ferravex.com/examples/owned-orbit/"><img src="docs/media/owned-orbit/poster.webp" alt="Orbit Breaker: a comet-trailed ball smashes panels above the paddle" width="100%"></a><br><b><a href="https://ferravex.com/examples/owned-orbit/">Orbit Breaker</a></b> · 2D<br><sub>Brick breaker with multi-ball, sticky paddles and volley combos</sub></td>
+<td width="33%" valign="top"><a href="https://ferravex.com/examples/marble-run/"><img src="docs/media/marble-run/poster.webp" alt="Marble Run: a marble rolls across floating stone platforms" width="100%"></a><br><b><a href="https://ferravex.com/examples/marble-run/">Marble Run</a></b> · 3D<br><sub>Four sky courses, medal clocks and hidden moonstones</sub></td>
+<td width="33%" valign="top"><a href="https://ferravex.com/examples/dune-skimmer/"><img src="docs/media/dune-skimmer/poster.webp" alt="Dune Skimmer: a hover racer boosts through desert gates" width="100%"></a><br><b><a href="https://ferravex.com/examples/dune-skimmer/">Dune Skimmer</a></b> · 3D<br><sub>Hover racing: thread gates for boost, beat Dusty the demo bot</sub></td>
+</tr>
+<tr>
+<td width="33%" valign="top"><a href="https://ferravex.com/examples/crystal-cavern/"><img src="docs/media/crystal-cavern/poster.webp" alt="Crystal Cavern: waking the altar and opening the sealed door to daylight" width="100%"></a><br><b><a href="https://ferravex.com/examples/crystal-cavern/">Crystal Cavern</a></b> · 3D<br><sub>First-person crystal hunt in a sarcastic cave</sub></td>
+<td width="33%" valign="top"><a href="https://ferravex.com/examples/siege-foundry/"><img src="docs/media/siege-foundry/poster.webp" alt="Siege Foundry: cannon shells topple target towers in a glowing foundry" width="100%"></a><br><b><a href="https://ferravex.com/examples/siege-foundry/">Siege Foundry</a></b> · 3D<br><sub>Cannon demolition with chain collapses and three-star runs</sub></td>
+<td width="33%" valign="top"><a href="https://ferravex.com/examples/sky-courier/"><img src="docs/media/sky-courier/poster.webp" alt="Sky Courier: a little plane threads golden rings between floating islands" width="100%"></a><br><b><a href="https://ferravex.com/examples/sky-courier/">Sky Courier</a></b> · 3D<br><sub>Flight deliveries with tip streaks and golden rings</sub></td>
+</tr>
+<tr>
+<td width="33%" valign="top"><a href="https://ferravex.com/examples/owned-lab/"><img src="docs/media/owned-lab/poster.webp" alt="First-person training in Courtyard, firing at a row of brass targets" width="100%"></a><br><b><a href="https://ferravex.com/examples/owned-lab/">Courtyard</a></b> · 3D<br><sub>FPS drills, a 30-second graded qualifier and browser peer sessions</sub></td>
+<td width="33%" valign="top"><a href="https://ferravex.com/examples/strike/"><img src="docs/media/strike/poster.webp" alt="Strike: a first-person rifle faces dockworker bots between shipping containers" width="100%"></a><br><b><a href="https://ferravex.com/examples/strike/">Strike</a></b> · 3D<br><sub>Two-minute practice gauntlet vs. chatty bots; native UDP multiplayer</sub></td>
+<td width="33%" valign="top"><a href="https://ferravex.com/examples/physics-2d/"><img src="docs/media/physics-2d/poster.webp" alt="2D Physics Lab: a CHAOS burst crashes into a crate pyramid" width="100%"></a><br><b><a href="https://ferravex.com/examples/physics-2d/">2D Physics Lab</a></b> · 2D<br><sub>Physics workshop: CHAOS, a domino run and optional goals</sub></td>
+</tr>
+<tr>
+<td width="33%" valign="top"><a href="https://ferravex.com/examples/physics-3d/"><img src="docs/media/physics-3d/poster.webp" alt="3D Physics Lab: a heavy ball smashes a thirty-crate tower" width="100%"></a><br><b><a href="https://ferravex.com/examples/physics-3d/">3D Physics Lab</a></b> · 3D<br><sub>Bowl into a 30-crate stack, drop CHAOS piles, earn titles</sub></td>
+</tr>
+</table>
 
 The [catalog](examples/catalog.json) is the source of truth for IDs, controls and
 hosts. Seventeen games use the shared `ferravex-render` runtime; Courtyard keeps its

@@ -133,6 +133,27 @@ class SiteTests(unittest.TestCase):
                 self.assertLess(page.index('Your objective'), page.index('data-launch'))
                 self.assertRegex(page, r'href="/docs/[a-z-]+/">Explore:')
 
+    def test_every_game_page_has_gameplay_loop_poster_and_stills(self):
+        root = ROOT / 'dist/site'
+        for game in json.loads((ROOT / 'examples/catalog.json').read_text()):
+            with self.subTest(game=game['id']):
+                page = (root / 'examples' / game['id'] / 'index.html').read_text()
+                loop, poster = f"/media/{game['id']}/loop.mp4", f"/media/{game['id']}/poster.webp"
+                self.assertIn(f'data-loop="{loop}"', page)
+                self.assertIn(f'src="{poster}"', page)
+                for url in (loop, poster):
+                    self.assertTrue((root / url.lstrip('/')).is_file(), url)
+                self.assertGreaterEqual(page.count('data-lightbox'), 3)
+                # Loops are created by site.js only when allowed; markup never autoplays or preloads video.
+                self.assertNotIn('<video', page)
+                self.assertLess(page.index(loop), page.index('data-launch'))
+        home = (root / 'index.html').read_text()
+        self.assertIn('fetchpriority="high"', home)
+        self.assertIn('data-motion-toggle', home)
+        self.assertNotIn('<video', home)
+        # Video and image media are served as-is: never gzip-compressed.
+        self.assertFalse([p for p in (root / 'media').rglob('*.gz') if not p.name.endswith('.json.gz')])
+
     def test_current_workflows_are_in_navigation_and_search(self):
         root = ROOT / 'dist/site'
         gallery = (root / 'play/index.html').read_text()

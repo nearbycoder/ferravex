@@ -1,0 +1,23 @@
+{
+ "game": "owned-orbit",
+ "loop": "loop.mp4",
+ "poster": "poster.webp",
+ "alt": "Orbit Breaker: a comet-trailed ball smashes panels above the paddle",
+ "width": 960,
+ "height": 600,
+ "seconds": 4.2,
+ "stills": [
+  {
+   "file": "still-1.webp",
+   "alt": "A panel breaks for +100 as the ball streaks upward"
+  },
+  {
+   "file": "still-2.webp",
+   "alt": "The ball ricochets off the panel wall"
+  },
+  {
+   "file": "still-3.webp",
+   "alt": "Ball saved just above the glowing paddle"
+  }
+ ]
+}

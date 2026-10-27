@@ -1,0 +1,23 @@
+{
+ "game": "mini-golf-3d",
+ "loop": "loop.mp4",
+ "poster": "poster.webp",
+ "alt": "Copper Greens 3D: a long putt on the raised High Road green",
+ "width": 960,
+ "height": 600,
+ "seconds": 6,
+ "stills": [
+  {
+   "file": "still-1.webp",
+   "alt": "The ball crossing the canal in 3D"
+  },
+  {
+   "file": "still-2.webp",
+   "alt": "The windmill hole from above"
+  },
+  {
+   "file": "still-3.webp",
+   "alt": "Hole in one with confetti on the High Road"
+  }
+ ]
+}

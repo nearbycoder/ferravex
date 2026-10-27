@@ -1,0 +1,23 @@
+{
+ "game": "mini-golf-2d",
+ "loop": "loop.mp4",
+ "poster": "poster.webp",
+ "alt": "Copper Greens 2D: a putt crosses the canal for a hole in one",
+ "width": 960,
+ "height": 600,
+ "seconds": 5,
+ "stills": [
+  {
+   "file": "still-1.webp",
+   "alt": "The ball crossing the canal"
+  },
+  {
+   "file": "still-2.webp",
+   "alt": "Timing the windmill blade"
+  },
+  {
+   "file": "still-3.webp",
+   "alt": "Hole in one on Canal Crossing"
+  }
+ ]
+}

@@ -1,0 +1,23 @@
+{
+ "game": "physics-3d",
+ "loop": "loop.mp4",
+ "poster": "poster.webp",
+ "alt": "3D Physics Lab: a heavy ball smashes a thirty-crate tower",
+ "width": 960,
+ "height": 600,
+ "seconds": 6,
+ "stills": [
+  {
+   "file": "still-1.webp",
+   "alt": "The crate tower tips after a strike"
+  },
+  {
+   "file": "still-2.webp",
+   "alt": "Sixteen shapes fall into the yard at once"
+  },
+  {
+   "file": "still-3.webp",
+   "alt": "The loading yard littered with crates and balls"
+  }
+ ]
+}

@@ -1,0 +1,23 @@
+{
+ "game": "orchard-guard",
+ "loop": "loop.mp4",
+ "poster": "poster.webp",
+ "alt": "Orchard Guard: slings and frost hives fend off a pest wave",
+ "width": 960,
+ "height": 600,
+ "seconds": 6,
+ "stills": [
+  {
+   "file": "still-1.webp",
+   "alt": "Wave one beetles march toward the orchard"
+  },
+  {
+   "file": "still-2.webp",
+   "alt": "A zoomie gets bonked by a seed sling"
+  },
+  {
+   "file": "still-3.webp",
+   "alt": "Lucky bonk in the final wave"
+  }
+ ]
+}

@@ -1,0 +1,23 @@
+{
+ "game": "pocket-rally",
+ "loop": "loop.mp4",
+ "poster": "poster.webp",
+ "alt": "Pocket Rally: a tiny rally car drifts through countryside bends",
+ "width": 960,
+ "height": 600,
+ "seconds": 6,
+ "stills": [
+  {
+   "file": "still-1.webp",
+   "alt": "Threading the S-bends past the duck pond"
+  },
+  {
+   "file": "still-2.webp",
+   "alt": "Final lap banner over a fresh best split"
+  },
+  {
+   "file": "still-3.webp",
+   "alt": "Sliding wide through a hairpin"
+  }
+ ]
+}

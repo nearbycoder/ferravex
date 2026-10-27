@@ -1,0 +1,23 @@
+{
+ "game": "marble-run",
+ "loop": "loop.mp4",
+ "poster": "poster.webp",
+ "alt": "Marble Run: a marble rolls across floating stone platforms",
+ "width": 960,
+ "height": 600,
+ "seconds": 6,
+ "stills": [
+  {
+   "file": "still-1.webp",
+   "alt": "The marble weaves between posts on the aqueduct"
+  },
+  {
+   "file": "still-2.webp",
+   "alt": "Rolling past a checkpoint pad"
+  },
+  {
+   "file": "still-3.webp",
+   "alt": "Approaching the finish arch"
+  }
+ ]
+}

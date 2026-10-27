@@ -1,0 +1,23 @@
+{
+ "game": "strike",
+ "loop": "loop.mp4",
+ "poster": "poster.webp",
+ "alt": "Strike: a first-person rifle faces dockworker bots between shipping containers",
+ "width": 960,
+ "height": 600,
+ "seconds": 6,
+ "stills": [
+  {
+   "file": "still-1.webp",
+   "alt": "Dock crew bots spread between the containers"
+  },
+  {
+   "file": "still-2.webp",
+   "alt": "A bot crosses the open dock"
+  },
+  {
+   "file": "still-3.webp",
+   "alt": "A dockworker walks right into the sights"
+  }
+ ]
+}

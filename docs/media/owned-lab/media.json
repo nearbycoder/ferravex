@@ -1,0 +1,23 @@
+{
+ "game": "owned-lab",
+ "loop": "loop.mp4",
+ "poster": "poster.webp",
+ "alt": "First-person training in Courtyard, firing at a row of brass targets",
+ "width": 960,
+ "height": 600,
+ "seconds": 6,
+ "stills": [
+  {
+   "file": "still-1.webp",
+   "alt": "Brass training targets lined up beyond the cover blocks"
+  },
+  {
+   "file": "still-2.webp",
+   "alt": "Aiming across the sunlit courtyard at the target row"
+  },
+  {
+   "file": "still-3.webp",
+   "alt": "A hit marker on a training dummy at close range"
+  }
+ ]
+}

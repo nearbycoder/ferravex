@@ -1,0 +1,23 @@
+{
+ "game": "sky-courier",
+ "loop": "loop.mp4",
+ "poster": "poster.webp",
+ "alt": "Sky Courier: a little plane threads golden rings between floating islands",
+ "width": 960,
+ "height": 600,
+ "seconds": 6,
+ "stills": [
+  {
+   "file": "still-1.webp",
+   "alt": "Lining up an amber ring over the sea"
+  },
+  {
+   "file": "still-2.webp",
+   "alt": "Threading a gate in a burst of debris"
+  },
+  {
+   "file": "still-3.webp",
+   "alt": "Coming in to land at the glowing delivery beam"
+  }
+ ]
+}

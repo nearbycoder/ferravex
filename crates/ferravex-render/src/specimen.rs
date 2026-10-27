@@ -18,7 +18,7 @@ pub(crate) fn rasterize(w: usize, h: usize, clear: [f32; 3]) -> Vec<[f32; 3]> {
         (s.vertices.clone(), ranges)
     });
     let mut image = vec![clear; w * h];
-    for (t, tri) in vertices.chunks_exact(3).enumerate() {
+    for (t, tri) in vertices.as_chunks::<3>().0.iter().enumerate() {
         let index = (t * 3) as u32;
         let add = additive.iter().any(|&(a, b)| index >= a && index < b);
         let p: Vec<(f32, f32)> = tri

@@ -1,0 +1,23 @@
+{
+ "game": "physics-2d",
+ "loop": "loop.mp4",
+ "poster": "poster.webp",
+ "alt": "2D Physics Lab: a CHAOS burst crashes into a crate pyramid",
+ "width": 960,
+ "height": 600,
+ "seconds": 6,
+ "stills": [
+  {
+   "file": "still-1.webp",
+   "alt": "Fourteen shapes rain onto the crate pyramid"
+  },
+  {
+   "file": "still-2.webp",
+   "alt": "The domino run waits for the kicker ball"
+  },
+  {
+   "file": "still-3.webp",
+   "alt": "Shapes tumble onto the fallen dominoes"
+  }
+ ]
+}

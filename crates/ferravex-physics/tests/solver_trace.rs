@@ -94,8 +94,18 @@ fn ccd_scene_matches_recorded_trace() {
         three.1 > 20 && two.1 > 20,
         "scene must exercise CCD corrections"
     );
-    assert_eq!(three, (15_030_636_209_541_905_975, 2476));
-    assert_eq!(two, (3_342_039_139_537_784_618, 1566));
+    // Rotating bodies go through platform libm `sin_cos`/`atan2`, whose last
+    // bits differ on some C runtimes (Windows diverges after many CCD
+    // corrections). The engine promises per-platform determinism, so the
+    // recorded bits are pinned where CI verifies them; elsewhere the same
+    // scene must still replay bit-for-bit within the platform.
+    if cfg!(any(target_os = "linux", target_os = "macos")) {
+        assert_eq!(three, (15_030_636_209_541_905_975, 2476));
+        assert_eq!(two, (3_342_039_139_537_784_618, 1566));
+    } else {
+        assert_eq!(trace_3d(), three, "3D CCD trace must be reproducible");
+        assert_eq!(trace_2d(), two, "2D CCD trace must be reproducible");
+    }
 }
 
 /// Rotating box stacks, rolling balls, friction and joints: pins the contact

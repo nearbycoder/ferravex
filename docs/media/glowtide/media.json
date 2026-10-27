@@ -1,0 +1,23 @@
+{
+ "game": "glowtide",
+ "loop": "loop.mp4",
+ "poster": "poster.webp",
+ "alt": "Glowtide: a lantern spirit's weapons carve through a glowing ocean horde",
+ "width": 960,
+ "height": 600,
+ "seconds": 6,
+ "stills": [
+  {
+   "file": "still-1.webp",
+   "alt": "Orange pufferfish swarm as green eels sweep the field"
+  },
+  {
+   "file": "still-2.webp",
+   "alt": "A shoal circles overhead in Moonlit Kelp"
+  },
+  {
+   "file": "still-3.webp",
+   "alt": "Every weapon firing at once in the deep"
+  }
+ ]
+}

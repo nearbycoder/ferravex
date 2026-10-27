@@ -1,0 +1,23 @@
+{
+ "game": "salvage-pinball",
+ "loop": "loop.mp4",
+ "poster": "poster.webp",
+ "alt": "Salvage Pinball: the ball pinballs between glowing bumpers under the crane",
+ "width": 960,
+ "height": 600,
+ "seconds": 6,
+ "stills": [
+  {
+   "file": "still-1.webp",
+   "alt": "The magnet crane armed over the bumpers"
+  },
+  {
+   "file": "still-2.webp",
+   "alt": "Lining up a shot under the jackpot crane"
+  },
+  {
+   "file": "still-3.webp",
+   "alt": "Scrap storm multiball with bonus scores everywhere"
+  }
+ ]
+}
