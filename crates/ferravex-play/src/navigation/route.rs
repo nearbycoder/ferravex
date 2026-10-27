@@ -222,51 +222,65 @@ impl Route3 {
             return Ok(None);
         };
         let query = position.to_array().map(f64::from);
-        let mut best = None;
+        // (segment, fraction, squared length, projection, delta). The projection
+        // record is built once for the winner instead of per improvement.
+        type Candidate = (usize, f64, f64, [f64; 3], [f64; 3]);
+        let mut best: Option<Candidate> = None;
         let mut best_squared = f64::INFINITY;
         let segment_count = self.points.len() - 1 + usize::from(self.closed);
+        let mut a = first.to_array().map(f64::from);
         for segment in 0..segment_count {
-            let a = self.points[segment].to_array().map(f64::from);
-            let b = self.points[(segment + 1) % self.points.len()]
-                .to_array()
-                .map(f64::from);
-            let delta: [f64; 3] = std::array::from_fn(|i| b[i] - a[i]);
+            let next = if segment + 1 == self.points.len() {
+                0
+            } else {
+                segment + 1
+            };
+            let b = self.points[next].to_array().map(f64::from);
+            let start = std::mem::replace(&mut a, b);
+            let delta: [f64; 3] = std::array::from_fn(|i| b[i] - start[i]);
             let squared_length = delta.iter().map(|v| v * v).sum::<f64>();
             if squared_length == 0. {
                 continue;
             }
-            let fraction = ((0..3).map(|i| (query[i] - a[i]) * delta[i]).sum::<f64>()
+            let fraction = ((0..3)
+                .map(|i| (query[i] - start[i]) * delta[i])
+                .sum::<f64>()
                 / squared_length)
                 .clamp(0., 1.);
             let projected: [f64; 3] =
-                std::array::from_fn(|i| a[i] * (1. - fraction) + b[i] * fraction);
+                std::array::from_fn(|i| start[i] * (1. - fraction) + b[i] * fraction);
             let squared = (0..3)
                 .map(|i| (query[i] - projected[i]).powi(2))
                 .sum::<f64>();
             if squared < best_squared {
+                best = Some((segment, fraction, squared_length, projected, delta));
+                best_squared = squared;
+            }
+        }
+        Ok(Some(best.map_or_else(
+            || RouteProjection {
+                position: first,
+                direction: Vec3::ZERO,
+                segment: 0,
+                segment_fraction: 0.,
+                distance: 0.,
+                progress: 0.,
+                distance_to_route: distance(position, first),
+            },
+            |(segment, fraction, squared_length, projected, delta)| {
                 let length = squared_length.sqrt();
                 let along = self.canonical_distance(self.lengths[segment] + length * fraction);
-                best = Some(RouteProjection {
+                RouteProjection {
                     position: Vec3::from_array(projected.map(|v| v as f32)),
                     direction: Vec3::from_array(delta.map(|v| (v / length) as f32)),
                     segment,
                     segment_fraction: fraction,
                     distance: along,
                     progress: along / self.length(),
-                    distance_to_route: squared.sqrt(),
-                });
-                best_squared = squared;
-            }
-        }
-        Ok(Some(best.unwrap_or_else(|| RouteProjection {
-            position: first,
-            direction: Vec3::ZERO,
-            segment: 0,
-            segment_fraction: 0.,
-            distance: 0.,
-            progress: 0.,
-            distance_to_route: distance(position, first),
-        })))
+                    distance_to_route: best_squared.sqrt(),
+                }
+            },
+        )))
     }
 
     fn canonical_distance(&self, travel: f64) -> f64 {

@@ -39,7 +39,32 @@ use std::cell::RefCell;
 pub use std::cell::{Ref, RefMut};
 use std::collections::HashMap;
 use std::fmt;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::marker::PhantomData;
+
+/// Component storages keyed by `TypeId`. Every fetch and presence check looks
+/// a storage up; `TypeId` is already a well-distributed hash, so it is used
+/// directly instead of being rehashed with SipHash on each lookup.
+type StorageMap = HashMap<TypeId, Box<dyn ErasedStorage>, BuildHasherDefault<TypeIdHasher>>;
+#[derive(Default)]
+struct TypeIdHasher(u64);
+impl Hasher for TypeIdHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        // Fallback for a `TypeId` representation that hashes as bytes.
+        for &byte in bytes {
+            self.0 = (self.0 ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    fn write_u64(&mut self, value: u64) {
+        self.0 ^= value;
+    }
+    fn write_u128(&mut self, value: u128) {
+        self.0 ^= value as u64 ^ (value >> 64) as u64;
+    }
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
 
 /// Opaque slot identity. A despawned entity never becomes valid again in its world.
 /// Handles are world-local; two separate worlds may issue the same identity.
@@ -284,7 +309,7 @@ impl<T: 'static> ErasedStorage for Storage<T> {
 pub struct World {
     slots: Vec<Slot>,
     free: Vec<u32>,
-    storages: HashMap<TypeId, Box<dyn ErasedStorage>>,
+    storages: StorageMap,
     len: usize,
     prepared_entities: usize,
 }
@@ -1017,9 +1042,14 @@ impl World {
         Ok(())
     }
 
+    /// One shared, out-of-line lookup for every component type's fetches.
+    #[inline(never)]
+    fn erased_storage(&self, id: TypeId) -> Option<&dyn ErasedStorage> {
+        self.storages.get(&id).map(|storage| &**storage)
+    }
+
     fn cell<T: 'static>(&self, index: usize) -> Option<&RefCell<T>> {
-        self.storages
-            .get(&TypeId::of::<T>())
+        self.erased_storage(TypeId::of::<T>())
             .and_then(|s| s.as_any().downcast_ref::<Storage<T>>())
             .and_then(|storage| storage.slots.get(index))
             .and_then(Option::as_ref)

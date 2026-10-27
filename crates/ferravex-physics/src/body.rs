@@ -647,12 +647,20 @@ impl Core {
         if self.sleeping { 0. } else { self.inv_mass }
     }
     pub(crate) fn point_velocity(&self, p: Vec3) -> Vec3 {
-        self.velocity + self.angular_velocity.cross(p - self.world_com())
+        self.offset_velocity(p - self.world_com())
+    }
+    /// Velocity at offset `r` from the world center of mass.
+    pub(crate) fn offset_velocity(&self, r: Vec3) -> Vec3 {
+        self.velocity + self.angular_velocity.cross(r)
     }
     pub(crate) fn impulse(&mut self, j: Vec3, p: Vec3) {
+        self.offset_impulse(j, p - self.world_com());
+    }
+    /// [`Self::impulse`] at offset `r` from the world center of mass.
+    pub(crate) fn offset_impulse(&mut self, j: Vec3, r: Vec3) {
         if self.kind == Kind::Dynamic && !self.sleeping {
             self.velocity += j * self.inv_mass;
-            self.angular_velocity += self.inverse_inertia((p - self.world_com()).cross(j));
+            self.angular_velocity += self.inverse_inertia(r.cross(j));
         }
     }
     pub(crate) fn world_com(&self) -> Vec3 {

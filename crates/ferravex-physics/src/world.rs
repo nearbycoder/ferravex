@@ -162,6 +162,10 @@ struct Constraint {
     local_b: Vec3,
     normal_impulse: f32,
     normal_denominator: f32,
+    /// Contact point minus each body's world center of mass. Poses are fixed
+    /// during velocity iterations, so these are computed once per solve.
+    ra: Vec3,
+    rb: Vec3,
     impact_baseline: f32,
     impact_peak: f32,
     impact_approach: f32,
@@ -174,6 +178,32 @@ struct Constraint {
     key: (ColliderHandle, ColliderHandle),
     feature: u64,
     cache: Option<(usize, usize)>,
+}
+/// One collider's current pose, bounds, substep start position and filter
+/// data, cached once per substep for the all-pairs continuous sweep.
+#[derive(Clone, Copy)]
+struct CcdTarget {
+    pose: geometry::Pose,
+    start: Vec3,
+    bounds: Bounds,
+    shape: Shape,
+    sensor: bool,
+    membership: u32,
+    filter: u32,
+}
+impl CcdTarget {
+    fn new(collider: &Collider, body: &crate::body::Core, origin: Vec3, rotation: Quat) -> Self {
+        let pose = collider.pose(body);
+        Self {
+            pose,
+            start: origin + rotation * collider.local_translation,
+            bounds: geometry::bounds(collider.shape, pose.position, pose.rotation),
+            shape: collider.shape,
+            sensor: collider.sensor,
+            membership: collider.membership,
+            filter: collider.filter,
+        }
+    }
 }
 #[derive(Clone, Copy)]
 struct Proxy {
@@ -206,6 +236,10 @@ pub struct World<B> {
     islands: Islands,
     last_gravity: Vec3,
     old_positions: Vec<(RigidBodyHandle, Vec3, Quat)>,
+    /// Reused sweep scratch: per-collider targets and each `old_positions`
+    /// entry's first target index, followed by the total count.
+    ccd_targets: Vec<CcdTarget>,
+    ccd_first: Vec<usize>,
     mass_updates: Vec<(RigidBodyHandle, Option<crate::mass::Mass>)>,
     events: Vec<ContactEvent>,
     constraints: Vec<Constraint>,
@@ -239,6 +273,8 @@ impl<B: Access> World<B> {
             islands: Default::default(),
             last_gravity: gravity,
             old_positions: Vec::new(),
+            ccd_targets: Vec::new(),
+            ccd_first: Vec::new(),
             mass_updates: Vec::new(),
             events: Vec::new(),
             constraints: Vec::new(),
@@ -644,47 +680,67 @@ impl<B: Access> World<B> {
         }
     }
     fn sweep_fast_bodies(&mut self) -> usize {
-        let mut hits = 0;
-        for &(id, start_origin, start_rotation) in &self.old_positions {
+        let swept_body = |b: &crate::body::Core| b.ccd && b.kind == Kind::Dynamic;
+        if !self
+            .old_positions
+            .iter()
+            .any(|&(id, _, _)| swept_body(self.bodies[id].core()))
+        {
+            return 0;
+        }
+        // Each target collider's pose, start, bounds and filter data are
+        // pair-independent: gather them once per substep instead of once per
+        // swept collider. `ccd_first[i]..ccd_first[i + 1]` are body i's colliders.
+        let mut targets = std::mem::take(&mut self.ccd_targets);
+        let mut first = std::mem::take(&mut self.ccd_first);
+        targets.clear();
+        first.clear();
+        for &(id, origin, rotation) in &self.old_positions {
             let body = self.bodies[id].core();
-            if !body.ccd || body.kind != Kind::Dynamic {
+            first.push(targets.len());
+            targets.extend(
+                body.colliders
+                    .iter()
+                    .map(|&child| CcdTarget::new(&self.colliders[child], body, origin, rotation)),
+            );
+        }
+        first.push(targets.len());
+        let mut hits = 0;
+        for (index, &(id, start_origin, start_rotation)) in self.old_positions.iter().enumerate() {
+            if !swept_body(self.bodies[id].core()) {
                 continue;
             }
             let mut closest = 1.;
             let mut correction = None;
-            for &child in &body.colliders {
-                let collider = &self.colliders[child];
-                if collider.sensor {
+            for own in &targets[first[index]..first[index + 1]] {
+                if own.sensor {
                     continue;
                 }
-                let radius = match collider.shape {
+                let radius = match own.shape {
                     Shape::Ball(r) => r,
                     Shape::Box(h) => h.length(),
                     _ => continue,
                 };
-                let start = start_origin + start_rotation * collider.local_translation;
-                let end = collider.pose(body).position;
-                for &(other, old_origin, old_rotation) in &self.old_positions {
+                let start = own.start;
+                let end = own.pose.position;
+                let minimum_motion = if matches!(own.shape, Shape::Ball(_)) {
+                    radius * radius * 0.04
+                } else {
+                    1e-12
+                };
+                for (other_index, &(other, _, _)) in self.old_positions.iter().enumerate() {
                     if other == id || self.joint_contacts_disabled(id, other) {
                         continue;
                     }
-                    let target = self.bodies[other].core();
-                    for &target_child in &target.colliders {
-                        let tc = &self.colliders[target_child];
-                        if tc.sensor
-                            || collider.membership & tc.filter == 0
-                            || tc.membership & collider.filter == 0
+                    for target in &targets[first[other_index]..first[other_index + 1]] {
+                        if target.sensor
+                            || own.membership & target.filter == 0
+                            || target.membership & own.filter == 0
                         {
                             continue;
                         }
-                        let target_pose = tc.pose(target);
-                        let target_start = old_origin + old_rotation * tc.local_translation;
-                        let relative_start = start - target_start + target_pose.position;
-                        let minimum_motion = if matches!(collider.shape, Shape::Ball(_)) {
-                            radius * radius * 0.04
-                        } else {
-                            1e-12
-                        };
+                        let target_pose = target.pose;
+                        let relative_start = start - target.start + target_pose.position;
                         if relative_start.distance_squared(end) < minimum_motion {
                             continue;
                         }
@@ -692,14 +748,10 @@ impl<B: Access> World<B> {
                             min: relative_start.min(end) - Vec3::splat(radius),
                             max: relative_start.max(end) + Vec3::splat(radius),
                         };
-                        if !swept.intersects(geometry::bounds(
-                            tc.shape,
-                            target_pose.position,
-                            target_pose.rotation,
-                        )) {
+                        if !swept.intersects(target.bounds) {
                             continue;
                         }
-                        let impact = match (collider.shape, tc.shape) {
+                        let impact = match (own.shape, target.shape) {
                             (Shape::Ball(r), shape) => geometry::sweep_ball(
                                 relative_start,
                                 end,
@@ -713,7 +765,7 @@ impl<B: Access> World<B> {
                                 relative_start,
                                 end,
                                 h,
-                                collider.pose(body).rotation,
+                                own.pose.rotation,
                                 target_half,
                                 &target_pose,
                             ),
@@ -733,9 +785,20 @@ impl<B: Access> World<B> {
             }
             if let Some(delta) = correction {
                 self.bodies[id].core_mut().position += delta;
+                // Later swept bodies observe this corrected pose as their target.
+                let body = self.bodies[id].core();
+                for (cached, &child) in targets[first[index]..first[index + 1]]
+                    .iter_mut()
+                    .zip(&body.colliders)
+                {
+                    *cached =
+                        CcdTarget::new(&self.colliders[child], body, start_origin, start_rotation);
+                }
                 hits += 1;
             }
         }
+        self.ccd_targets = targets;
+        self.ccd_first = first;
         hits
     }
     fn solve_velocities(&mut self, stats: &mut StepStats) {
@@ -745,16 +808,12 @@ impl<B: Access> World<B> {
         for c in &mut self.constraints {
             let a = self.bodies[c.a].core();
             let b = self.bodies[c.b].core();
+            c.ra = c.point - a.world_com();
+            c.rb = c.point - b.world_com();
             c.normal_denominator = if a.contact_inv_mass() + b.contact_inv_mass() == 0. {
                 0.
             } else {
-                effective_mass(
-                    a,
-                    b,
-                    c.point - a.world_com(),
-                    c.point - b.world_com(),
-                    c.normal,
-                )
+                effective_mass(a, b, c.ra, c.rb, c.normal)
             };
         }
         for _ in 0..self.settings.velocity_iterations {
@@ -768,13 +827,12 @@ impl<B: Access> World<B> {
                     continue;
                 }
                 stats.velocity_constraints += 1;
-                let ra = c.point - a.world_com();
-                let rb = c.point - b.world_com();
+                let (ra, rb) = (c.ra, c.rb);
                 let denom = c.normal_denominator;
                 if denom <= 1e-10 {
                     continue;
                 }
-                let relative = b.point_velocity(c.point) - a.point_velocity(c.point);
+                let relative = b.offset_velocity(rb) - a.offset_velocity(ra);
                 let change = (c.bounce - relative.dot(c.normal)) / denom;
                 let accumulated = (c.normal_impulse + change).max(0.);
                 let j = c.normal * (accumulated - c.normal_impulse);
@@ -782,9 +840,9 @@ impl<B: Access> World<B> {
                 if c.impact_approach > 0. {
                     c.impact_peak = c.impact_peak.max((accumulated - c.impact_baseline).max(0.));
                 }
-                a.impulse(-j, c.point);
-                b.impulse(j, c.point);
-                let relative = b.point_velocity(c.point) - a.point_velocity(c.point);
+                a.offset_impulse(-j, ra);
+                b.offset_impulse(j, rb);
+                let relative = b.offset_velocity(rb) - a.offset_velocity(ra);
                 let tangent = relative - c.normal * relative.dot(c.normal);
                 let mut candidate = c.tangent_impulse;
                 if let Some(t) = tangent.try_normalize() {
@@ -802,8 +860,8 @@ impl<B: Access> World<B> {
                 };
                 let j = new - c.tangent_impulse;
                 c.tangent_impulse = new;
-                a.impulse(-j, c.point);
-                b.impulse(j, c.point);
+                a.offset_impulse(-j, ra);
+                b.offset_impulse(j, rb);
                 if c.rolling_resistance > 0. {
                     let relative = b.angular_velocity - a.angular_velocity;
                     if let Some(axis) = relative.try_normalize() {

@@ -507,6 +507,77 @@ impl State {
         }
         self.record_immediate(start, count, self.depth);
     }
+    /// Records identity-model geometry such as 2D shapes, HUD text and 3D lines.
+    ///
+    /// Produces the same vertices as `push(.., Mat4::IDENTITY)` without the
+    /// per-vertex model/normal transforms or inverse; an unlit color is graded once.
+    #[inline(never)]
+    fn push_flat(
+        &mut self,
+        points: impl ExactSizeIterator<Item = Vec3>,
+        normal: Vec3,
+        color: Color,
+    ) {
+        if points.len() == 0 {
+            return;
+        }
+        self.reserve_vertices(points.len());
+        let start = self.vertices.len() as u32;
+        let look = self.world_look();
+        let matrix = self.matrix;
+        let vertex = |p: Vec3, c: Color| {
+            let v = matrix * p.extend(1.);
+            [v.x, v.y, v.z, v.w, c.r, c.g, c.b, c.a]
+        };
+        match self.lighting {
+            None => {
+                let c = look.map_or(color, |look| look.shade(color));
+                self.vertices.extend(points.map(|p| vertex(p, c)));
+            }
+            Some(l) => self.vertices.extend(points.map(|p| {
+                let c = l.shade_vertex(p, normal, color);
+                vertex(p, look.map_or(c, |look| look.shade(c)))
+            })),
+        }
+        let count = self.vertices.len() as u32 - start;
+        self.record_immediate(start, count, self.depth);
+    }
+    /// Grows vertex storage to a power-of-two capacity, the same sequence as
+    /// per-vertex pushes, so frame-to-frame peaks rarely reallocate.
+    fn reserve_vertices(&mut self, count: usize) {
+        let needed = self.vertices.len() + count;
+        if needed > self.vertices.capacity() {
+            self.vertices
+                .reserve_exact(needed.next_power_of_two() - self.vertices.len());
+        }
+    }
+    /// The world palette applied to immediate colors, if any.
+    fn world_look(&self) -> Option<Look> {
+        self.world_colors
+            .then(|| self.look_override.unwrap_or(self.look))
+    }
+    /// [`State::push_flat`] for screen-plane points with a +Z normal. Kept out of
+    /// line: every 2D primitive shares one copy of the vertex loop.
+    #[inline(never)]
+    fn push_flat_2d(&mut self, points: &[Vec2], color: Color) {
+        if self.lighting.is_some() {
+            return self.push_flat(points.iter().map(|p| p.extend(0.)), Vec3::Z, color);
+        }
+        if points.is_empty() {
+            return;
+        }
+        self.reserve_vertices(points.len());
+        let start = self.vertices.len() as u32;
+        let c = self.world_look().map_or(color, |look| look.shade(color));
+        // `matrix * (x, y, 0, 1)` without the zero z column. Only the sign of
+        // an exactly zero coordinate can differ from the general product.
+        let (x, y, w) = (self.matrix.x_axis, self.matrix.y_axis, self.matrix.w_axis);
+        self.vertices.extend(points.iter().map(|p| {
+            let v = x * p.x + y * p.y + w;
+            [v.x, v.y, v.z, v.w, c.r, c.g, c.b, c.a]
+        }));
+        self.record_immediate(start, points.len() as u32, self.depth);
+    }
     fn record_immediate(&mut self, start: u32, count: u32, depth: bool) {
         if let Some(last) = self.batches.last_mut().filter(|b| {
             b.depth == depth && self.retained.commands.last().is_some_and(|c| c.kind == 0)
@@ -828,82 +899,119 @@ pub fn draw_mesh_transformed(m: &Mesh, model: Mat4) {
     })
 }
 pub fn draw_triangle(a: Vec2, b: Vec2, c: Vec2, color: Color) {
-    edit(|s| {
-        s.push(
-            [a, b, c].map(|p| (p.extend(0.), Vec3::Z, color)),
-            Mat4::IDENTITY,
-        )
-    })
+    edit(|s| s.push_flat_2d(&[a, b, c], color))
 }
-pub fn draw_rectangle(x: f32, y: f32, w: f32, h: f32, c: Color) {
+/// Two triangles `(a, b, d)` and `(d, b, e)`, as drawn by [`draw_rectangle`].
+fn rectangle_vertices(x: f32, y: f32, w: f32, h: f32) -> [Vec2; 6] {
     let a = vec2(x, y);
     let b = vec2(x + w, y);
     let d = vec2(x, y + h);
     let e = vec2(x + w, y + h);
-    draw_triangle(a, b, d, c);
-    draw_triangle(d, b, e, c);
+    [a, b, d, d, b, e]
 }
-pub fn draw_line(x1: f32, y1: f32, x2: f32, y2: f32, width: f32, c: Color) {
+pub fn draw_rectangle(x: f32, y: f32, w: f32, h: f32, c: Color) {
+    edit(|s| s.push_flat_2d(&rectangle_vertices(x, y, w, h), c))
+}
+/// Two triangles covering a segment of the given width, as drawn by [`draw_line`].
+fn line_vertices(x1: f32, y1: f32, x2: f32, y2: f32, width: f32) -> [Vec2; 6] {
     let a = vec2(x1, y1);
     let b = vec2(x2, y2);
     let d = (b - a).normalize_or_zero();
     let n = vec2(-d.y, d.x) * width * 0.5;
-    draw_triangle(a + n, a - n, b + n, c);
-    draw_triangle(b + n, a - n, b - n, c);
+    [a + n, a - n, b + n, b + n, a - n, b - n]
+}
+pub fn draw_line(x1: f32, y1: f32, x2: f32, y2: f32, width: f32, c: Color) {
+    edit(|s| s.push_flat_2d(&line_vertices(x1, y1, x2, y2, width), c))
 }
 pub fn draw_rectangle_lines(x: f32, y: f32, w: f32, h: f32, t: f32, c: Color) {
-    draw_line(x, y, x + w, y, t, c);
-    draw_line(x + w, y, x + w, y + h, t, c);
-    draw_line(x + w, y + h, x, y + h, t, c);
-    draw_line(x, y + h, x, y, t, c);
+    let mut points = [Vec2::ZERO; 24];
+    for (chunk, line) in points.as_chunks_mut::<6>().0.iter_mut().zip([
+        line_vertices(x, y, x + w, y, t),
+        line_vertices(x + w, y, x + w, y + h, t),
+        line_vertices(x + w, y + h, x, y + h, t),
+        line_vertices(x, y + h, x, y, t),
+    ]) {
+        *chunk = line;
+    }
+    edit(|s| s.push_flat_2d(&points, c))
+}
+/// Unit `(cos, sin)` pairs for the start and end angle of each [`draw_circle`]
+/// wedge, computed once with exactly the expressions [`draw_poly`] uses.
+fn circle_ring() -> &'static [[Vec2; 2]; 32] {
+    static RING: std::sync::OnceLock<[[Vec2; 2]; 32]> = std::sync::OnceLock::new();
+    RING.get_or_init(|| {
+        std::array::from_fn(|i| {
+            let (a, b) = poly_angles(0., i as u8, 32);
+            [vec2(a.cos(), a.sin()), vec2(b.cos(), b.sin())]
+        })
+    })
+}
+fn poly_angles(rotation: f32, i: u8, sides: u8) -> (f32, f32) {
+    let a = rotation.to_radians() + i as f32 * std::f32::consts::TAU / sides as f32;
+    (a, a + std::f32::consts::TAU / sides as f32)
 }
 pub fn draw_poly(x: f32, y: f32, sides: u8, r: f32, rotation: f32, c: Color) {
+    const CHUNK: usize = 32;
     let sides = sides.max(3);
-    for i in 0..sides {
-        let a = rotation.to_radians() + i as f32 * std::f32::consts::TAU / sides as f32;
-        let b = a + std::f32::consts::TAU / sides as f32;
-        draw_triangle(
-            vec2(x, y),
-            vec2(x + r * a.cos(), y + r * a.sin()),
-            vec2(x + r * b.cos(), y + r * b.sin()),
-            c,
-        );
-    }
+    let center = vec2(x, y);
+    let ring = (sides == 32 && rotation == 0.).then(circle_ring);
+    let mut points = [Vec2::ZERO; CHUNK * 3];
+    edit(|s| {
+        for first in (0..sides).step_by(CHUNK) {
+            let last = sides.min(first.saturating_add(CHUNK as u8));
+            for (i, chunk) in (first..last).zip(points.as_chunks_mut::<3>().0) {
+                let [a, b] = ring.map_or_else(
+                    || {
+                        let (a, b) = poly_angles(rotation, i, sides);
+                        [vec2(a.cos(), a.sin()), vec2(b.cos(), b.sin())]
+                    },
+                    |ring| ring[i as usize],
+                );
+                *chunk = [
+                    center,
+                    vec2(x + r * a.x, y + r * a.y),
+                    vec2(x + r * b.x, y + r * b.y),
+                ];
+            }
+            s.push_flat_2d(&points[..(last - first) as usize * 3], c);
+        }
+    })
 }
 pub fn draw_circle(x: f32, y: f32, r: f32, c: Color) {
     draw_poly(x, y, 32, r, 0., c)
 }
+/// Unit points at `i * TAU / 40` for `i` in `0..=40`, shared by every outline.
+fn outline_ring() -> &'static [Vec2; 41] {
+    static RING: std::sync::OnceLock<[Vec2; 41]> = std::sync::OnceLock::new();
+    RING.get_or_init(|| {
+        std::array::from_fn(|i| {
+            let a = i as f32 * std::f32::consts::TAU / 40.;
+            vec2(a.cos(), a.sin())
+        })
+    })
+}
 pub fn draw_circle_lines(x: f32, y: f32, r: f32, t: f32, c: Color) {
-    for i in 0..40 {
-        let a = i as f32 * std::f32::consts::TAU / 40.;
-        let b = (i + 1) as f32 * std::f32::consts::TAU / 40.;
-        draw_line(
-            x + r * a.cos(),
-            y + r * a.sin(),
-            x + r * b.cos(),
-            y + r * b.sin(),
-            t,
-            c,
-        );
+    let ring = outline_ring();
+    let mut points = [Vec2::ZERO; 40 * 6];
+    for (i, chunk) in points.as_chunks_mut::<6>().0.iter_mut().enumerate() {
+        let (a, b) = (ring[i], ring[i + 1]);
+        *chunk = line_vertices(x + r * a.x, y + r * a.y, x + r * b.x, y + r * b.y, t);
     }
+    edit(|s| s.push_flat_2d(&points, c))
 }
 pub fn draw_ellipse(x: f32, y: f32, rx: f32, ry: f32, rotation: f32, c: Color) {
     let angle = rotation.to_radians();
+    let (sin, cos) = (angle.sin(), angle.cos());
     let point = |a: f32| {
         let p = vec2(rx * a.cos(), ry * a.sin());
-        vec2(
-            x + p.x * angle.cos() - p.y * angle.sin(),
-            y + p.x * angle.sin() + p.y * angle.cos(),
-        )
+        vec2(x + p.x * cos - p.y * sin, y + p.x * sin + p.y * cos)
     };
-    for i in 0..32 {
-        draw_triangle(
-            vec2(x, y),
-            point(i as f32 * std::f32::consts::TAU / 32.),
-            point((i + 1) as f32 * std::f32::consts::TAU / 32.),
-            c,
-        );
+    let rim: [Vec2; 33] = std::array::from_fn(|i| point(i as f32 * std::f32::consts::TAU / 32.));
+    let mut points = [Vec2::ZERO; 32 * 3];
+    for (i, chunk) in points.as_chunks_mut::<3>().0.iter_mut().enumerate() {
+        *chunk = [vec2(x, y), rim[i], rim[i + 1]];
     }
+    edit(|s| s.push_flat_2d(&points, c))
 }
 pub fn draw_line_3d(a: Vec3, b: Vec3, c: Color) {
     let d = (b - a).normalize_or_zero();
@@ -912,14 +1020,54 @@ pub fn draw_line_3d(a: Vec3, b: Vec3, c: Color) {
         .normalize_or_zero()
         * 0.015;
     edit(|s| {
-        s.push(
-            [a + n, a - n, b + n, b + n, a - n, b - n].map(|p| (p, Vec3::Y, c)),
-            Mat4::IDENTITY,
+        s.push_flat(
+            [a + n, a - n, b + n, b + n, a - n, b - n].into_iter(),
+            Vec3::Y,
+            c,
         )
     });
 }
+/// Distinct `(size, color)` cuboids [`draw_cube`] keeps resident between calls.
+const CUBE_CACHE: usize = 64;
+/// Draws an axis-aligned resident cuboid.
+///
+/// Recently used size/color combinations reuse one resident mesh, so a steady
+/// scene neither allocates nor re-uploads geometry each frame. At most 64
+/// combinations stay cached (oldest replaced first); continuously varying sizes
+/// still work, at the cost of a fresh mesh per new combination.
+///
+/// ```
+/// use ferravex_render::{draw_cube, vec3, WHITE};
+/// draw_cube(vec3(0., 1., 0.), vec3(1., 2., 1.), None, WHITE);
+/// ```
 pub fn draw_cube(position: Vec3, size: Vec3, _texture: Option<()>, color: Color) {
-    mesh::Mesh3d::cuboid(size, color).draw(position, Quat::IDENTITY);
+    type Key = [u32; 7];
+    thread_local! {
+        static CUBES: RefCell<(usize, Vec<(Key, mesh::Mesh3d)>)> =
+            const { RefCell::new((0, Vec::new())) };
+    }
+    let key: Key = [size.x, size.y, size.z, color.r, color.g, color.b, color.a].map(f32::to_bits);
+    let model = Mat4::from_rotation_translation(Quat::IDENTITY, position);
+    CUBES.with(|cubes| {
+        let mut cubes = cubes.borrow_mut();
+        let (next, entries) = &mut *cubes;
+        let index = match entries.iter().position(|(k, _)| *k == key) {
+            Some(index) => index,
+            None => {
+                let entry = (key, mesh::Mesh3d::cuboid(size, color));
+                if entries.len() < CUBE_CACHE {
+                    entries.push(entry);
+                    entries.len() - 1
+                } else {
+                    let index = *next;
+                    *next = (index + 1) % CUBE_CACHE;
+                    entries[index] = entry;
+                    index
+                }
+            }
+        };
+        entries[index].1.draw_transformed(model);
+    });
 }
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Font;
@@ -1939,5 +2087,175 @@ mod tests {
         read(|s| {
             assert!(s.vertices[0][4] > 0.99);
         });
+    }
+    /// The original per-triangle primitive formulas through the generic
+    /// `push(.., Mat4::IDENTITY)` path; the batched fast path must match them.
+    mod reference {
+        use super::*;
+        pub fn triangle(a: Vec2, b: Vec2, c: Vec2, color: Color) {
+            edit(|s| {
+                s.push(
+                    [a, b, c].map(|p| (p.extend(0.), Vec3::Z, color)),
+                    Mat4::IDENTITY,
+                )
+            })
+        }
+        pub fn rectangle(x: f32, y: f32, w: f32, h: f32, c: Color) {
+            let (a, b, d, e) = (
+                vec2(x, y),
+                vec2(x + w, y),
+                vec2(x, y + h),
+                vec2(x + w, y + h),
+            );
+            triangle(a, b, d, c);
+            triangle(d, b, e, c);
+        }
+        pub fn line(x1: f32, y1: f32, x2: f32, y2: f32, width: f32, c: Color) {
+            let a = vec2(x1, y1);
+            let b = vec2(x2, y2);
+            let d = (b - a).normalize_or_zero();
+            let n = vec2(-d.y, d.x) * width * 0.5;
+            triangle(a + n, a - n, b + n, c);
+            triangle(b + n, a - n, b - n, c);
+        }
+        pub fn rectangle_lines(x: f32, y: f32, w: f32, h: f32, t: f32, c: Color) {
+            line(x, y, x + w, y, t, c);
+            line(x + w, y, x + w, y + h, t, c);
+            line(x + w, y + h, x, y + h, t, c);
+            line(x, y + h, x, y, t, c);
+        }
+        pub fn poly(x: f32, y: f32, sides: u8, r: f32, rotation: f32, c: Color) {
+            let sides = sides.max(3);
+            for i in 0..sides {
+                let a = rotation.to_radians() + i as f32 * std::f32::consts::TAU / sides as f32;
+                let b = a + std::f32::consts::TAU / sides as f32;
+                triangle(
+                    vec2(x, y),
+                    vec2(x + r * a.cos(), y + r * a.sin()),
+                    vec2(x + r * b.cos(), y + r * b.sin()),
+                    c,
+                );
+            }
+        }
+        pub fn circle_lines(x: f32, y: f32, r: f32, t: f32, c: Color) {
+            for i in 0..40 {
+                let a = i as f32 * std::f32::consts::TAU / 40.;
+                let b = (i + 1) as f32 * std::f32::consts::TAU / 40.;
+                line(
+                    x + r * a.cos(),
+                    y + r * a.sin(),
+                    x + r * b.cos(),
+                    y + r * b.sin(),
+                    t,
+                    c,
+                );
+            }
+        }
+        pub fn ellipse(x: f32, y: f32, rx: f32, ry: f32, rotation: f32, c: Color) {
+            let angle = rotation.to_radians();
+            let point = |a: f32| {
+                let p = vec2(rx * a.cos(), ry * a.sin());
+                vec2(
+                    x + p.x * angle.cos() - p.y * angle.sin(),
+                    y + p.x * angle.sin() + p.y * angle.cos(),
+                )
+            };
+            for i in 0..32 {
+                triangle(
+                    vec2(x, y),
+                    point(i as f32 * std::f32::consts::TAU / 32.),
+                    point((i + 1) as f32 * std::f32::consts::TAU / 32.),
+                    c,
+                );
+            }
+        }
+        pub fn line_3d(a: Vec3, b: Vec3, c: Color) {
+            let d = (b - a).normalize_or_zero();
+            let n = d
+                .cross(if d.y.abs() < 0.9 { Vec3::Y } else { Vec3::X })
+                .normalize_or_zero()
+                * 0.015;
+            edit(|s| {
+                s.push(
+                    [a + n, a - n, b + n, b + n, a - n, b - n].map(|p| (p, Vec3::Y, c)),
+                    Mat4::IDENTITY,
+                )
+            });
+        }
+    }
+    /// Recorded immediate vertices and `(start, count, depth)` batches.
+    type Recorded = (Vec<[f32; 8]>, Vec<(u32, u32, bool)>);
+    fn primitive_scene(fast: bool) -> Recorded {
+        reset();
+        let c = Color::new(0.8, 0.45, 0.2, 0.9);
+        let scene = |configure: &dyn Fn()| {
+            configure();
+            if fast {
+                draw_triangle(vec2(1., 2.), vec2(30.5, 4.), vec2(9., 17.25), c);
+                draw_rectangle(10.5, 20.25, 33., 7.75, c);
+                draw_line(3., 4., 90., 41.5, 2.5, c);
+                draw_line(5., 5., 5., 5., 1., c);
+                draw_rectangle_lines(4., 8., 50., 30., 1.5, c);
+                draw_circle(100.3, 60.7, 12.9, c);
+                draw_poly(40., 40., 6, 9., 30., c);
+                draw_poly(40., 40., 200, 9., 0., c);
+                draw_poly(40., 40., 2, 9., 0., c);
+                draw_poly(40., 40., 32, 9., 12., c);
+                draw_circle_lines(70., 30., 15.5, 1.25, c);
+                draw_ellipse(55., 66., 20., 9., 33., c);
+                draw_line_3d(vec3(0., 0., 0.), vec3(1., 2., 3.), c);
+                draw_line_3d(vec3(0., 0., 0.), vec3(0., 4., 0.), c);
+            } else {
+                reference::triangle(vec2(1., 2.), vec2(30.5, 4.), vec2(9., 17.25), c);
+                reference::rectangle(10.5, 20.25, 33., 7.75, c);
+                reference::line(3., 4., 90., 41.5, 2.5, c);
+                reference::line(5., 5., 5., 5., 1., c);
+                reference::rectangle_lines(4., 8., 50., 30., 1.5, c);
+                reference::poly(100.3, 60.7, 32, 12.9, 0., c);
+                reference::poly(40., 40., 6, 9., 30., c);
+                reference::poly(40., 40., 200, 9., 0., c);
+                reference::poly(40., 40., 2, 9., 0., c);
+                reference::poly(40., 40., 32, 9., 12., c);
+                reference::circle_lines(70., 30., 15.5, 1.25, c);
+                reference::ellipse(55., 66., 20., 9., 33., c);
+                reference::line_3d(vec3(0., 0., 0.), vec3(1., 2., 3.), c);
+                reference::line_3d(vec3(0., 0., 0.), vec3(0., 4., 0.), c);
+            }
+        };
+        scene(&|| set_default_camera());
+        scene(&|| {
+            set_camera(&Camera3D::default());
+            set_look(Look::Ink);
+            set_world_colors(true);
+        });
+        scene(&|| {
+            set_camera(&Camera3D::default());
+            set_lighting(Some(shaders::LitSettings::default()));
+        });
+        scene(&|| {
+            set_world_colors(false);
+            set_lighting(None);
+            set_default_camera();
+        });
+        read(|s| {
+            (
+                s.vertices.clone(),
+                s.batches
+                    .iter()
+                    .map(|b| (b.start, b.count, b.depth))
+                    .collect(),
+            )
+        })
+    }
+    #[test]
+    fn batched_primitives_match_the_per_triangle_reference_exactly() {
+        let (fast, fast_batches) = primitive_scene(true);
+        let (slow, slow_batches) = primitive_scene(false);
+        assert_eq!(fast.len(), slow.len());
+        assert_eq!(fast_batches, slow_batches);
+        for (i, (a, b)) in fast.iter().zip(&slow).enumerate() {
+            // `==` also equates the +0/-0 an identity product can introduce.
+            assert_eq!(a, b, "vertex {i}");
+        }
     }
 }
