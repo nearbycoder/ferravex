@@ -16,6 +16,7 @@ pub mod content;
 pub mod demo;
 pub mod effects;
 mod font;
+mod font_modern;
 pub use font::{BitmapFontMetrics, BitmapTextMetrics, FontMeasureError};
 pub mod input;
 pub mod lighting;
@@ -26,9 +27,13 @@ pub mod native;
 pub mod preferences;
 pub mod retained;
 pub mod shaders;
+pub mod shapes;
 pub mod skinning;
+#[cfg(test)]
+mod specimen;
 pub mod status;
 pub mod storage;
+pub mod text;
 pub mod ui;
 pub mod visibility;
 pub use ferravex_core::telemetry;
@@ -971,24 +976,41 @@ pub fn draw_text(t: &str, x: f32, y: f32, size: f32, c: Color) -> TextDimensions
         },
     )
 }
+/// Draws classic 5×7 bitmap text with its baseline at `y`.
+///
+/// Each horizontal run of lit pixels in a glyph row is one quad (6 vertices)
+/// whose outer edges are exactly those of the per-pixel cells it replaces, so
+/// coverage is unchanged while vertex counts drop. Rows stay `size / 8` tall.
+/// For mixed-case text, shadows and outlines see [`text::draw_text_styled`].
 pub fn draw_text_ex(t: &str, mut x: f32, y: f32, p: TextParams) -> TextDimensions {
     let px = p.font_size as f32 * p.font_scale / 8.;
-    for c in t.chars() {
-        for (row, bits) in font::glyph(c.to_ascii_uppercase()).into_iter().enumerate() {
-            for col in 0..5 {
-                if bits & (1 << (4 - col)) != 0 {
-                    draw_rectangle(
-                        x + col as f32 * px,
-                        y - 7. * px + row as f32 * px,
-                        px,
-                        px,
+    edit(|s| {
+        let mut sink = shapes::Sink::new(s);
+        for c in t.chars() {
+            for (row, bits) in font::glyph(c.to_ascii_uppercase()).into_iter().enumerate() {
+                let top = y - 7. * px + row as f32 * px;
+                let mut col = 0;
+                while col < 5 {
+                    if bits & (1 << (4 - col)) == 0 {
+                        col += 1;
+                        continue;
+                    }
+                    let start = col;
+                    while col < 5 && bits & (1 << (4 - col)) != 0 {
+                        col += 1;
+                    }
+                    sink.rect_edges(
+                        x + start as f32 * px,
+                        top,
+                        x + (col - 1) as f32 * px + px,
+                        top + px,
                         p.color,
                     );
                 }
             }
+            x += 6. * px;
         }
-        x += 6. * px;
-    }
+    });
     measure_text(t, None, p.font_size, p.font_scale)
 }
 pub fn screen_width() -> f32 {

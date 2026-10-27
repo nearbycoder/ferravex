@@ -842,6 +842,15 @@ impl Ui {
     pub fn focused(&self) -> Option<WidgetId> {
         self.state.focused()
     }
+    /// Enabled widget under the pointer as of the last finished frame (the
+    /// same hover that [`Self::paint`] highlights). Used by `ui::kit` visuals.
+    pub fn hovered(&self) -> Option<WidgetId> {
+        self.hovered
+    }
+    /// Viewport passed to the most recent [`Self::begin`].
+    pub fn viewport(&self) -> Viewport {
+        self.viewport
+    }
     pub fn activated(&self, id: WidgetId) -> bool {
         self.active == Some(id)
     }
