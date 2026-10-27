@@ -329,16 +329,6 @@ impl<'a> Sink<'a> {
         self.tri(a, c, b, c, d, c);
         self.tri(d, c, b, c, e, c);
     }
-    /// Axis-aligned rectangle from its edges, with `rect`'s triangle order.
-    #[inline]
-    pub(crate) fn rect_edges(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, c: Color) {
-        let a = vec2(x0, y0);
-        let b = vec2(x1, y0);
-        let d = vec2(x0, y1);
-        let e = vec2(x1, y1);
-        self.tri(a, c, b, c, d, c);
-        self.tri(d, c, b, c, e, c);
-    }
     /// Quad `p0 p1 p2 p3` in winding order.
     #[inline]
     fn quad(&mut self, p: [Vec2; 4], c: [Color; 4]) {
@@ -897,10 +887,17 @@ fn additive(count: usize, triangle: impl Fn(usize) -> [(Vec2, Color); 3]) {
     );
 }
 
+/// Rings for a glow spanning `extent` device pixels: enough that the
+/// piecewise-linear falloff shows no visible banding on large glows.
+fn glow_rings(extent_px: f32) -> usize {
+    ((extent_px / 14.).ceil() as usize).clamp(4, 12)
+}
+
 /// Additive soft glow disc for particles, pickups and highlights. Brightness
-/// falls off as `(1 - r/radius)²`; `color.a` scales intensity. Additive light
-/// brightens what is underneath and never darkens. Emits at most 1,296 vertices
-/// through [`crate::effects::draw_triangles`] (its per-frame budget applies).
+/// falls off as `(1 - r/radius)²` over up to 12 rings; `color.a` scales
+/// intensity. Additive light brightens what is underneath and never darkens.
+/// Emits at most 3,312 vertices through [`crate::effects::draw_triangles`]
+/// (its per-frame budget applies); a 24-unit particle glow uses 4 rings.
 ///
 /// ```
 /// use ferravex_render::{Color, vec2, shapes};
@@ -911,19 +908,19 @@ pub fn glow_disc(center: Vec2, radius: f32, color: Color) {
     {
         return;
     }
-    const RINGS: [f32; 6] = [0., 0.1, 0.25, 0.45, 0.7, 1.];
     let px = crate::read(Sink::device_pixel_of);
     let n = glow_segments(radius, px);
+    let rings = glow_rings(radius / px);
     let point = |ring: usize, i: usize| {
         let a = (i % n) as f32 * TAU / n as f32;
-        let t = RINGS[ring];
+        let t = ring as f32 / rings as f32;
         (
             center + vec2(a.cos(), a.sin()) * radius * t,
             fade(color, (1. - t) * (1. - t)),
         )
     };
     // One fan to the first ring, then two triangles per segment per ring gap.
-    additive(n + (RINGS.len() - 2) * n * 2, |k| {
+    additive(n + (rings - 1) * n * 2, |k| {
         if k < n {
             return [point(0, 0), point(1, k), point(1, k + 1)];
         }
@@ -939,8 +936,9 @@ pub fn glow_disc(center: Vec2, radius: f32, color: Color) {
 }
 
 /// Additive soft glow ring (shockwaves, selection halos, portals) of total
-/// `width` centered on `radius`, brightest on the center line.
-/// Emits at most 1,728 vertices through [`crate::effects::draw_triangles`].
+/// `width` centered on `radius`, brightest on the center line and fading as
+/// `(1 - |offset|)²` toward both edges. Emits at most 6,912 vertices through
+/// [`crate::effects::draw_triangles`]; a 16-unit-wide ring uses 4 bands.
 ///
 /// ```
 /// use ferravex_render::{Color, vec2, shapes};
@@ -956,12 +954,14 @@ pub fn glow_ring(center: Vec2, radius: f32, width: f32, color: Color) {
     {
         return;
     }
-    const BANDS: [f32; 7] = [-1., -0.55, -0.2, 0., 0.2, 0.55, 1.];
     let px = crate::read(Sink::device_pixel_of);
     let n = glow_segments(radius + width * 0.5, px);
+    // Bands per side of the center line.
+    let side = glow_rings(width * 0.5 / px);
+    let bands = 2 * side;
     let point = |band: usize, i: usize| {
         let a = (i % n) as f32 * TAU / n as f32;
-        let u = BANDS[band];
+        let u = band as f32 / side as f32 - 1.;
         let r = (radius + u * width * 0.5).max(0.);
         let falloff = 1. - u.abs();
         (
@@ -969,7 +969,7 @@ pub fn glow_ring(center: Vec2, radius: f32, width: f32, color: Color) {
             fade(color, falloff * falloff),
         )
     };
-    additive((BANDS.len() - 1) * n * 2, |k| {
+    additive(bands * n * 2, |k| {
         let band = k / (2 * n);
         let i = (k % (2 * n)) / 2;
         if k.is_multiple_of(2) {
@@ -1104,13 +1104,13 @@ pub(crate) mod tests {
             ),
             (
                 "glow",
-                1296,
+                3312,
                 Box::new(|| glow_disc(vec2(0., 0.), 2000., Color::new(1., 1., 1., 1.))),
             ),
             (
                 "ring",
-                1728,
-                Box::new(|| glow_ring(vec2(0., 0.), 2000., 50., Color::new(1., 1., 1., 1.))),
+                6912,
+                Box::new(|| glow_ring(vec2(0., 0.), 2000., 400., Color::new(1., 1., 1., 1.))),
             ),
             (
                 "nan",

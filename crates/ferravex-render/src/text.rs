@@ -903,7 +903,7 @@ mod tests {
     ];
 
     #[test]
-    fn legacy_draw_text_ex_runs_keep_coverage_and_row_height_and_save_vertices() {
+    fn legacy_draw_text_ex_is_unchanged_and_styled_text_saves_vertices() {
         use crate::{TextParams, draw_text_ex};
         let (w, h) = (420, 240);
         let v = capture(w as u32, h as u32, || {
@@ -942,13 +942,27 @@ mod tests {
             }
         }
         assert_eq!(coverage(&v, w, h), expected);
-        for quad in v.chunks(6) {
-            let ys = quad.iter().map(|v| (1. - v[1]) * h as f32 * 0.5);
-            let (lo, hi) = ys.fold((f32::MAX, f32::MIN), |(a, b), y| (a.min(y), b.max(y)));
-            assert!((hi - lo - 2.).abs() < 1e-3, "rows stay one font pixel tall");
-        }
-        let per_pixel = lit * 6;
-        let merged = v.len();
+        // Legacy contract: exactly one 6-vertex quad per lit font pixel,
+        // identical to per-pixel draw_rectangle calls.
+        assert_eq!(v.len(), lit * 6);
+        let reference = capture(w as u32, h as u32, || {
+            for (i, line) in HUD.iter().enumerate() {
+                let mut x = 4.;
+                for c in line.chars() {
+                    for (row, bits) in font::glyph(c).into_iter().enumerate() {
+                        for col in 0..5 {
+                            if bits & (1 << (4 - col)) != 0 {
+                                let y = 20. + i as f32 * 22. - 14. + row as f32 * 2.;
+                                crate::draw_rectangle(x + col as f32 * 2., y, 2., 2., WHITE);
+                            }
+                        }
+                    }
+                    x += 12.;
+                }
+            }
+        });
+        assert_eq!(v, reference);
+        let per_pixel = v.len();
         let modern = capture(w as u32, h as u32, || {
             for (i, line) in HUD.iter().enumerate() {
                 draw_text_styled(
@@ -972,13 +986,12 @@ mod tests {
         })
         .len();
         println!(
-            "HUD vertices: classic per-pixel {per_pixel}, classic runs {merged} ({:.0}% fewer), \
-             classic styled {classic_styled} ({:.0}% fewer), modern styled {modern}",
-            100. * (1. - merged as f32 / per_pixel as f32),
+            "HUD vertices: classic draw_text_ex {per_pixel}, classic styled {classic_styled} \
+             ({:.0}% fewer), modern styled {modern} ({:.0}% fewer)",
             100. * (1. - classic_styled as f32 / per_pixel as f32),
+            100. * (1. - modern as f32 / per_pixel as f32),
         );
-        assert!(merged * 10 < per_pixel * 8, "{merged} vs {per_pixel}");
-        assert!(classic_styled < merged);
+        assert!(classic_styled * 2 < per_pixel && modern * 2 < per_pixel);
     }
 
     #[test]

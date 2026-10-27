@@ -60,17 +60,24 @@ pub(crate) fn rasterize(w: usize, h: usize, clear: [f32; 3]) -> Vec<[f32; 3]> {
             .min(h as f32) as usize;
         for y in y0..y1 {
             for x in x0..x1 {
-                // A tiny offset breaks ties on shared edges consistently.
-                let (cx, cy) = (x as f32 + 0.5 + 1e-4, y as f32 + 0.5 + 2e-4);
-                let e = |a: (f32, f32), b: (f32, f32)| {
-                    (b.0 - a.0) * (cy - a.1) - (b.1 - a.1) * (cx - a.0)
+                let (cx, cy) = (x as f32 + 0.5, y as f32 + 0.5);
+                // Edge functions with a consistent tie rule: a shared edge is
+                // traversed in opposite directions by its two triangles, so
+                // exactly one of them owns samples lying on it.
+                let sign = area.signum();
+                let inside = |a: (f32, f32), b: (f32, f32)| {
+                    let e = ((b.0 - a.0) * (cy - a.1) - (b.1 - a.1) * (cx - a.0)) * sign;
+                    let (dx, dy) = ((b.0 - a.0) * sign, (b.1 - a.1) * sign);
+                    (e > 0. || e == 0. && (dy > 0. || dy == 0. && dx < 0.), e)
                 };
-                let w0 = e(p[1], p[2]) / area;
-                let w1 = e(p[2], p[0]) / area;
-                let w2 = e(p[0], p[1]) / area;
-                if w0 < 0. || w1 < 0. || w2 < 0. {
+                let (i0, e0) = inside(p[1], p[2]);
+                let (i1, e1) = inside(p[2], p[0]);
+                let (i2, e2) = inside(p[0], p[1]);
+                if !(i0 && i1 && i2) {
                     continue;
                 }
+                let total = area.abs();
+                let (w0, w1, w2) = (e0 / total, e1 / total, e2 / total);
                 let c = |k: usize| w0 * tri[0][k] + w1 * tri[1][k] + w2 * tri[2][k];
                 let a = c(7).clamp(0., 1.);
                 let dst = &mut image[y * w + x];

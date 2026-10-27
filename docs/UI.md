@@ -92,3 +92,91 @@ canvas text does not automatically become a screen-reader interface. Use the
 [responsive-screen guide](RESPONSIVE_GAMES.md) and
 [current workflows](ENGINE_WORKFLOWS.md#keep-the-hud-readable) for a small runnable
 layout and the correct world/HUD/input boundaries.
+
+## Modern UI kit
+
+![Modern UI specimen: the mixed-case face, kit card, buttons, meters, key caps, toast, anti-aliased shapes and additive glows](screenshots/modern-ui-specimen.png)
+
+Every piece below is opt-in and additive. The legacy font, `draw_text_ex` and
+`Ui` paint emit exactly the same geometry as before (`draw_text_ex` keeps one
+quad per lit pixel because browser tests count those quads; it now records them
+with one stream borrow per string). Drawing the same classic letters through
+`draw_text_styled` with `FontFace::Classic` uses about 64% fewer vertices on a
+text-heavy HUD (10,038 → 3,588 vertices for ten typical HUD lines); the modern
+face is similar (3,780).
+
+**Text** — `ferravex_render::text`. `FontFace::Modern` is a hand-authored,
+mixed-case, proportional pixel face: 8-pixel capitals, 6-pixel x-height,
+2-pixel descenders, tabular 5-pixel digits, kerning for awkward pairs (`To`,
+`LT`, `r.`), punctuation, UI symbols (`• · × → ← ↑ ↓ ★ ♥ ♦ ♠ ♣ … ✓ ▲ ▶ ●`) and
+Latin-1 accents. `FontFace::Classic` draws the original 5×7 letters through the
+same API. As with the legacy face, one font pixel is `size / 8`, so sizes that
+are multiples of 8 stay crisp, and `y` is the baseline.
+
+```rust
+// Excerpt: `button_center_y` is a caller value. Rustdoc examples are runnable.
+use ferravex_render::{Color, text::{TextAlign, TextStyle, draw_text_styled, draw_text_wrapped, measure_text_styled}};
+let hud = TextStyle::modern(16., Color::from_hex(0xf2ede3))
+    .with_shadow(Color::new(0., 0., 0., 0.55));            // 1 font-pixel drop shadow
+let title = TextStyle::modern(32., Color::from_hex(0xffe9a8))
+    .with_outline(Color::from_hex(0x1a0f08))                // 1 font-pixel outline
+    .with_align(TextAlign::Center);
+draw_text_styled("Score 12,480 ★", 24., 40., hud);
+draw_text_styled("Level complete!", 640., 120., title);
+let size = measure_text_styled("Level complete!", title);   // same advances as drawing
+draw_text_wrapped("Collect every gem before the lava rises.", 24., 200., 280., hud);
+let centered = hud.centered_baseline(button_center_y);       // optical centering on caps
+```
+
+`measure_text_styled`, `text_width` and the allocation-free `wrap_text`
+iterator use exactly the advances that drawing uses. Text geometry merges each
+glyph's identical row runs into rectangles (stems become one quad); outlines
+merge across neighbouring glyphs so translucent outlines never double-blend.
+
+**Shapes** — `ferravex_render::shapes`. Anti-aliased by a one-device-pixel
+transparent fringe (no textures or shader changes), written straight into the
+frame's vertex stream with no allocation: `fill_rounded_rect`,
+`stroke_rounded_rect`, `fill_circle`, `stroke_circle`, `stroke_arc` (meters and
+cooldowns), `fill_capsule`, `polyline` (miter/bevel/round joins, butt/square/round
+caps), `drop_shadow` (smoothstep falloff), and additive `glow_disc`/`glow_ring`
+for particles. Fills accept `Fill::Solid`, `Fill::linear`/`vertical`/`horizontal`
+and `Fill::radial` gradients evaluated per vertex. Each function documents its
+maximum vertex count (for example 612 for a filled rounded rectangle).
+
+**Motion** — `ferravex_play::tween`. `Ease` (linear, sine, quad, cubic, quart,
+expo, back, elastic and bounce, each in/out/in-out, with exact endpoints),
+`Tween`, analytic `Spring` (critical, underdamped, overdamped), staggered
+`Entrance` (fade/slide/scale), `RollCounter` for score roll-ups and
+`ScreenTransition` (fade, wipe, iris with cover → swap → reveal events). All are
+`Copy`, advanced by a caller `dt` and take a `Motion` argument; pass
+`Motion::from(feedback_policy)` so reduced motion snaps tweens/springs, keeps
+fades without movement and turns wipes/irises into fades.
+
+**Kit** — `ferravex_render::ui::kit`, visual only: `panel`, `card` (header
+band), `button` with `ButtonMotion` eased hover/press/focus, `meter` with a
+trailing "ghost" value, `toast`, `keycap`/`key_prompt` and
+`draw_screen_transition`. Keep input in `Ui`: submit buttons with
+`kit::INVISIBLE_BUTTON`, then paint with `kit::ui_button_state(&ui, id, enabled)`
+and `kit::ui_rect(ui.viewport(), rect)`. `KitTheme::from_ui_theme` adopts a
+contrast-checked `UiTheme` palette (including high contrast).
+
+```rust
+// Excerpt: `feedback_policy`, `menu_time`, `card_rect`, `ui`, `RESUME`,
+// `resume_rect`, `resume_motion` and `dt` come from the game.
+use ferravex_play::tween::{Entrance, Motion};
+use ferravex_render::ui::kit::{self, ButtonKind, KitTheme};
+let theme = KitTheme::default();
+let motion = Motion::from(feedback_policy);
+let look = Entrance::fade_up(12.).sample(menu_time, 0, motion);
+let inner = kit::card(kit::appear(card_rect, look), Some("Paused"), &theme.faded(look.alpha));
+resume_motion.update(kit::ui_button_state(&ui, RESUME, true), dt, motion);
+kit::button(kit::ui_rect(ui.viewport(), resume_rect), "Resume", ButtonKind::Primary, &resume_motion, &theme);
+```
+
+Recommended style: spacing `kit::SPACE` = 4, 8, 12, 16, 24, 32; radii 6 (chips,
+key caps), 10 (buttons, toasts), 16 (cards); modern type 8 caption, 16 body,
+24 title, 32 display. Keep the retro identity by pairing the modern face for
+copy with the classic face (or a game's own art) for big numerals and titles,
+and by keeping colors flat with only a subtle top-lit gradient on surfaces.
+Regenerate the specimen with
+`FERRAVEX_SPECIMEN=/tmp/specimen.png cargo test -p ferravex-render --lib specimen`.

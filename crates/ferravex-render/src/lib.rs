@@ -976,36 +976,28 @@ pub fn draw_text(t: &str, x: f32, y: f32, size: f32, c: Color) -> TextDimensions
         },
     )
 }
-/// Draws classic 5×7 bitmap text with its baseline at `y`.
-///
-/// Each horizontal run of lit pixels in a glyph row is one quad (6 vertices)
-/// whose outer edges are exactly those of the per-pixel cells it replaces, so
-/// coverage is unchanged while vertex counts drop. Rows stay `size / 8` tall.
-/// For mixed-case text, shadows and outlines see [`text::draw_text_styled`].
+/// Draws classic 5×7 bitmap text with its baseline at `y`: one quad per lit
+/// font pixel, exactly as before (browser tests count these quads). Use
+/// [`text::draw_text_styled`] with [`text::FontFace::Classic`] for the same
+/// letters with merged geometry, shadows and outlines.
 pub fn draw_text_ex(t: &str, mut x: f32, y: f32, p: TextParams) -> TextDimensions {
     let px = p.font_size as f32 * p.font_scale / 8.;
+    // One stream borrow and batch record per string instead of two per pixel;
+    // the vertices are identical to per-pixel `draw_rectangle` calls.
     edit(|s| {
         let mut sink = shapes::Sink::new(s);
         for c in t.chars() {
             for (row, bits) in font::glyph(c.to_ascii_uppercase()).into_iter().enumerate() {
-                let top = y - 7. * px + row as f32 * px;
-                let mut col = 0;
-                while col < 5 {
-                    if bits & (1 << (4 - col)) == 0 {
-                        col += 1;
-                        continue;
+                for col in 0..5 {
+                    if bits & (1 << (4 - col)) != 0 {
+                        sink.rect(
+                            x + col as f32 * px,
+                            y - 7. * px + row as f32 * px,
+                            px,
+                            px,
+                            p.color,
+                        );
                     }
-                    let start = col;
-                    while col < 5 && bits & (1 << (4 - col)) != 0 {
-                        col += 1;
-                    }
-                    sink.rect_edges(
-                        x + start as f32 * px,
-                        top,
-                        x + (col - 1) as f32 * px + px,
-                        top + px,
-                        p.color,
-                    );
                 }
             }
             x += 6. * px;
