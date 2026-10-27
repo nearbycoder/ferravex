@@ -586,6 +586,8 @@ impl<B: Access> World<B> {
                         local_b,
                         normal_impulse,
                         normal_denominator: 0.,
+                        ra: Vec3::ZERO,
+                        rb: Vec3::ZERO,
                         impact_baseline: normal_impulse,
                         impact_peak: 0.,
                         impact_approach: self.impact_settings.map_or(0., |settings| {

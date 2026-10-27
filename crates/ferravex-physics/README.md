@@ -52,7 +52,7 @@ Solid dynamic contacts now form islands that sleep and wake together. Independen
 
 `cargo test -p ferravex-physics` exercises inertia, real frictional rolling, restitution, fast ball sweeps against thin rotated geometry, layers/sensors/removal, cylinder geometry, raycasts, box edge landing, stable stacks, and impact wake/toppling. The recovered games retain their original gameplay tests: checkpoint/finish/rolling, flipper/bumper/scoring, and ballistic destruction. The laboratories also check finite simulation, floor containment, spawning caps, and reset.
 
-Run `cargo run --release -p ferravex-physics --example rigid_bench` for a local 128-box workload. Measurements are machine-specific and do not imply a platform-wide performance guarantee. All dependency source is local to this workspace.
+Run `cargo run --release -p ferravex-physics --example rigid_bench` for a local 128-box workload. `--example ccd_bench -- BODIES` measures an all-CCD scene like the physics labs, where every substep sweeps each fast body against all others. Measurements are machine-specific and do not imply a platform-wide performance guarantee. All dependency source is local to this workspace.
 
 
 ## Character motors

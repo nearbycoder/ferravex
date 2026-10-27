@@ -49,6 +49,7 @@ gpuTimer=new GpuTimer(gl,canvas,new URLSearchParams(location.search).has('profil
  allocated=0;post=null;postFailed=false;
 }
 let exports,playing=false,allocated=0,frames=0,last=0,restores=0;
+const diagnostic=(key,value)=>{const text=String(value);if(canvas.dataset[key]!==text)canvas.dataset[key]=text;};
 initializeGraphics();
 const game=canvas.dataset.game;
 const inputPlatform=bindInput(canvas,game,()=>exports,()=>playing);
@@ -181,7 +182,7 @@ try {
   const running=exports.ferravex_frame(dt,Math.round(r.width),Math.round(r.height));
   details.ready();const controlsOpen=inputPlatform.syncPanel();audio.sync();details.update();
   refreshVisuals(); // Queued renderer presets are processed inside ferravex_frame.
-  controlsButton?.setAttribute('aria-pressed',String(controlsOpen));
+  if(controlsButton&&controlsButton.getAttribute?.('aria-pressed')!==String(controlsOpen))controlsButton.setAttribute('aria-pressed',String(controlsOpen));
   const count=exports.ferravex_vertex_count(),ptr=exports.ferravex_vertices();
   const vertices=new Float32Array(exports.memory.buffer,ptr,count*8);
   gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
@@ -225,13 +226,13 @@ try {
   const measured=gpuTimer.latest,gpuMs=measured&&measured.frame>lastGpuFrame&&frames+1-measured.frame<8?measured.us/1000:-1;
   if(measured)lastGpuFrame=measured.frame;
   exports.ferravex_performance_sample?.(dt*1000,performance.now()-cpuStarted,gpuMs);
-  canvas.dataset.frames=String(++frames);canvas.dataset.vertices=String(count+retained.vertices+retained.shadowVertices+spriteEffects.vertices);
-  canvas.dataset.culled=String(exports.ferravex_culled_count());canvas.dataset.visible=String(exports.ferravex_visible_count());
-  canvas.dataset.drawCalls=String(immediateDraws+retained.drawCalls+retained.shadowDrawCalls+spriteEffects.drawCalls+postDraws);
-  canvas.dataset.post=postDraws?(postView[0]>1?'high':'medium'):'off';canvas.dataset.shadowDrawCalls=String(retained.shadowDrawCalls);canvas.dataset.quality=String(retained.environment.quality);canvas.dataset.look=String(exports.ferravex_visual_look());canvas.dataset.renderScale=String(dpr);canvas.dataset.lightingError=retained.lightingError;canvas.dataset.residentMeshes=String(retained.meshes.size);canvas.dataset.uploadBytes=String(count*32+retained.uploadBytes+spriteEffects.uploadBytes);
-  canvas.dataset.effectVertices=String(exports.ferravex_effect_vertex_count?.()||0);
-  canvas.dataset.skinnedDrawCalls=String(retained.skinnedDrawCalls);canvas.dataset.skinJoints=String(exports.ferravex_skin_joint_count?.()||0);
-  canvas.dataset.materialError=retained.lastError;materialTools?.update();contentTools?.update();replayTools?.update();multiplayerTools?.update();
+  // Diagnostics are attributes: write only changed values to avoid per-frame DOM mutations.
+  diagnostic('frames',++frames);diagnostic('vertices',count+retained.vertices+retained.shadowVertices+spriteEffects.vertices);
+  diagnostic('culled',exports.ferravex_culled_count());diagnostic('visible',exports.ferravex_visible_count());
+  diagnostic('drawCalls',immediateDraws+retained.drawCalls+retained.shadowDrawCalls+spriteEffects.drawCalls+postDraws);diagnostic('post',postDraws?(postView[0]>1?'high':'medium'):'off');diagnostic('shadowDrawCalls',retained.shadowDrawCalls);diagnostic('quality',retained.environment.quality);diagnostic('look',exports.ferravex_visual_look());diagnostic('renderScale',dpr);diagnostic('lightingError',retained.lightingError);diagnostic('residentMeshes',retained.meshes.size);diagnostic('uploadBytes',count*32+retained.uploadBytes+spriteEffects.uploadBytes);
+  diagnostic('effectVertices',exports.ferravex_effect_vertex_count?.()||0);
+  diagnostic('skinnedDrawCalls',retained.skinnedDrawCalls);diagnostic('skinJoints',exports.ferravex_skin_joint_count?.()||0);
+  diagnostic('materialError',retained.lastError);materialTools?.update();contentTools?.update();replayTools?.update();multiplayerTools?.update();
   details.player?.frame(time);
   if(exports.ferravex_take_graphics_reset?.()){const extension=recoveryExtension;if(extension){autoRestore=true;recoveryExtension?.loseContext();}}
   if(running)graphics.schedule(loop);else teardown();

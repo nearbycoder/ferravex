@@ -1348,3 +1348,142 @@ where supplied. Use Details > Export playtest CSV in the browser, or
 `FERRAVEX_PLAYTEST=target/playtest.csv` for the shared native GPU host. These recent
 event traces supplement the detailed performance harness above; they do not
 replace controlled measurements or durable replay files.
+
+## Framework performance pass, 2026-10-27
+
+This pass compares the engine changes against `d4e74a2` with the same original
+17 game sources. It excludes the later game modernization, new font/UI toolkit,
+post-processing and Glowtide. Measurements describe this machine and workload;
+they are not a frame-rate guarantee for the combined release.
+
+Machine: AMD Ryzen AI MAX+ 395, 32 logical CPUs, Linux x86_64
+7.2.8-2-cachyos, rustc 1.96.1 / LLVM 22.1.2, release profile. Native OpenGL
+used Radeon 8060S / Mesa 26.2.4, DISPLAY=:0. Default authored quality and each
+game's existing dimensions were retained. Shared native games mostly used
+1280×800; Courtyard, Orbit, Orchard Guard and Strike used their authored sizes.
+
+Changes:
+
+- Immediate primitives collect their triangles in a stack buffer and record one
+  batch instead of reacquiring renderer state for each triangle. Unlit colors
+  are graded once per batch. Circle trigonometry is cached; the vertex order
+  and coordinates remain the same.
+- `draw_cube` reuses a bounded cache of 64 resident size/color combinations.
+  Equal adjacent cuboids can instance together; steadily changing styles still
+  allocate, and meshes retained by the current frame live until that frame ends.
+- Rigid CCD caches collider poses, bounds and filters once per substep, updates
+  corrected target poses for later sweeps, and reuses its scratch buffers.
+  Velocity constraints reuse contact lever arms while body poses are fixed.
+- ECS typed storage lookups use the already hashed `TypeId` directly and share
+  the erased lookup. Route projection constructs only the winning result.
+- Browser diagnostic attributes and the controls button's `aria-pressed` are
+  written only when their values change. Linux avoids an idle cursor XFlush;
+  cursor changes, pointer grabs and warps still flush their requests.
+
+### Native game A/B results
+
+Three alternating baseline/modified rounds each ran two fresh game processes,
+with 60 warmup and 180 measured fixed-step autoplay frames per process. The
+values below are medians of the three round means; arrows show before → after,
+a single number means equal at the displayed precision. Work counts are means
+per measured frame. A dash is an unsupported metric. The original raw recordings
+were retained locally in `/tmp/a2/ab/{base,new}-0..2/`, with schema-2 reports and
+per-frame JSON. Commands, executable hashes and GPU coverage are in those reports.
+
+Concurrent development workloads and changing driver load caused substantial
+timing spread. For example, baseline Pocket Rally CPU round means ranged from
+810.6 to 1113.7 µs, modified from 343.1 to 467.0 µs. GPU/submit increases in some
+rows prevent a general GPU speedup claim. Courtyard and Orbit do not exercise
+the optimized shared renderer. Full combined-release timings must be measured
+after game and post-processing integration; these data must not replace an
+idle-machine regression baseline automatically.
+
+| Game | CPU µs | Submit µs | GPU µs | Alloc calls | Alloc bytes | Draw calls | Vertices | Upload bytes |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| owned-lab | 29.4 → 47.6 | — | — | 3.02 | 367 | — | — | — |
+| owned-orbit | 0.8 → 1.4 | — | — | 5.00 | 86 | — | — | — |
+| emberline | 112.6 → 78.0 | 43.5 → 120.9 | 19.1 → 76.9 | 6.01 | 48 | 1.0 | 16289 | 521257 |
+| neon-swarm | 149.8 → 112.6 | 47.7 → 119.2 | 27.8 → 114.5 | 14.09 | 492 | 1.0 | 23430 | 749767 |
+| pocket-rally | 859.7 → 445.3 | 91.0 → 176.1 | 101.0 → 436.0 | 15.67 | 478 | 1.0 | 78472 | 2511111 |
+| salvage-pinball | 239.2 → 152.3 | 56.8 → 86.2 | 22.4 → 78.1 | 12.28 | 139 | 1.0 | 35182 | 1125825 |
+| orchard-guard | 371.6 → 176.9 | 67.4 → 124.2 | 31.2 → 122.8 | 25.61 | 346 | 2.3 | 50569 | 1617466 |
+| marble-run | 107.9 → 85.2 | 160.5 → 187.4 | 26.2 → 62.1 | 7.41 → 7.46 | 217 → 258 | 117.0 | 18661 | 366827 |
+| dune-skimmer | 211.9 → 155.8 | 164.6 → 164.8 | 56.7 → 54.8 | 15.57 | 402 | 61.9 | 48718 | 1000765 |
+| crystal-cavern | 75.9 → 51.5 | 81.3 → 69.1 | 49.0 → 55.5 | 11.69 | 75 | 21.4 | 14390 | 260391 |
+| siege-foundry | 342.3 → 219.6 | 113.5 → 99.3 | 25.2 → 26.5 | 8.11 | 566 → 571 | 30.4 | 29902 | 842403 |
+| sky-courier | 90.0 → 78.7 | 93.4 → 88.4 | 29.0 → 28.4 | 2.19 | 1374 | 40.5 | 23663 | 238514 |
+| strike | 89.5 → 86.9 | 81.2 → 79.0 | 58.5 → 58.8 | 2.82 | 2991 | 14.5 | 32800 | 288585 |
+| physics-2d | 576.0 → 440.1 | 57.2 → 66.2 | 21.1 → 21.2 | 16.01 | 485 | 1.0 | 30095 | 963044 |
+| physics-3d | 566.8 → 400.2 | 104.2 → 96.4 | 33.2 → 30.8 | 15.17 | 597 | 20.6 | 28923 | 733516 |
+| mini-golf-2d | 112.0 → 29.2 | 99.5 → 40.9 | 22.6 → 18.1 | 19.11 | 6352 | 1.0 | 11331 | 362603 |
+| mini-golf-3d | 65.9 → 31.0 | 147.3 → 58.0 | 24.9 → 24.0 | 206.11 → 19.13 | 120463 → 3454 | 48.9 → 11.9 | 7526 | 222595 → 157803 |
+
+### Focused workloads and correctness guards
+
+Three fresh process runs, median of mean CPU times:
+
+| Workload | Before µs | After µs |
+|---|---:|---:|
+| ECS: 4096 entities, mutable position + velocity, 2000 query passes | 112.15 | 57.21 |
+| ECS: entity + position + enemy, 2000 query passes | 79.08 | 40.35 |
+| ECS: position filtered with pickup, 2000 query passes | 47.56 | 22.99 |
+| Rotational physics: 96 CCD bodies, 600 ticks | 2623.3 | 1857.3 |
+| Rotational physics: 128-box stack, 1200 ticks | 317.244 | 308.173 |
+
+CCD executed exactly 3682 substeps and 47833 impacts in both binaries. The stack
+executed the same 620592 constraint visits and finished with 128 sleeping bodies.
+Golden CCD and contact/joint traces, randomized route projection comparisons and
+immediate primitive/reference comparisons pass on this Linux host. Native
+captures at frame 300 for all 17 original games were pixel-identical to baseline;
+that is evidence for those frames, not a gameplay or cross-platform proof.
+
+`ferravex-render/tests/immediate_allocations.rs` guards zero successful Rust
+allocations after warmup for a HUD/primitive/resident-cuboid frame, stable mesh
+reuse, and the 64-style cuboid cache bound under churn. Whole-game allocation
+counts above include existing HUD/game allocations and are not zero in general.
+No external packages, new public APIs or wire-format changes were introduced.
+
+Reproduce the focused workloads with:
+
+```sh
+cargo run --release -p ferravex-ecs --example query_bench --offline --locked -j 2
+cargo run --release -p ferravex-physics --example ccd_bench --offline --locked -j 2 -- 96
+cargo run --release -p ferravex-physics --example rigid_bench --offline --locked -j 2
+cargo test -p ferravex-render --test immediate_allocations --offline --locked -j 2
+cargo test -p ferravex-physics --test solver_trace --offline --locked -j 2
+cargo test -p ferravex-play --test route_projection_reference --offline --locked -j 2
+```
+
+The unaffected translational/FPS workloads also ran: 4096 measured ticks after
+256 warmup ticks gave mean 22.19 µs for 16-player FPS, 61.46 µs for 256 2D bodies
+and 68.25 µs for 256 3D bodies. The separate 513-body dynamics example measured
+0.156 ms/step over 1200 steps. These are current-run observations, not claimed
+improvements; neither dynamics nor audio was changed in this pass.
+
+### Wasm size cost
+
+Release Wasm module sizes against the same baseline; deterministic gzip level 9
+is a transfer estimate. These exclude shared host files and later release work.
+The optimization pass increases total raw Wasm from 9,602,837 to 9,659,312 bytes
+(+0.59%), and gzip from 3,672,332 to 3,690,459 bytes (+0.49%). There is no size
+reduction claim. No profile or manifest settings were changed.
+
+| Module | Raw bytes before → after | Gzip-9 bytes before → after |
+|---|---:|---:|
+| crystal_cavern.wasm | 574563 → 578896 | 221567 → 223100 |
+| dune_skimmer.wasm | 496369 → 500223 | 188272 → 189706 |
+| emberline.wasm | 449828 → 451016 | 171616 → 171834 |
+| marble_run.wasm | 873181 → 877355 | 332166 → 333815 |
+| mini_golf_2d.wasm | 467063 → 472246 | 178398 → 180385 |
+| mini_golf_3d.wasm | 467063 → 472246 | 178398 → 180384 |
+| neon_swarm.wasm | 550927 → 560130 | 208062 → 210259 |
+| orchard_guard.wasm | 663645 → 664843 | 258250 → 258431 |
+| owned_lab.wasm | 553825 → 554778 | 210931 → 211083 |
+| owned_orbit.wasm | 409111 → 409707 | 154117 → 154281 |
+| physics_2d.wasm | 552178 → 553676 | 210431 → 210777 |
+| physics_3d.wasm | 608444 → 613012 | 232884 → 234576 |
+| pocket_rally.wasm | 464660 → 465459 | 179122 → 179026 |
+| salvage_pinball.wasm | 514406 → 515694 | 195351 → 195610 |
+| siege_foundry.wasm | 569047 → 573351 | 219286 → 220862 |
+| sky_courier.wasm | 498744 → 502690 | 188813 → 190210 |
+| strike.wasm | 889783 → 893990 | 344668 → 346120 |

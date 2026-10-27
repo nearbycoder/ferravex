@@ -453,7 +453,11 @@ impl Host {
         // SAFETY: Cursor/window handles belong to this connection. The one-bit empty
         // bitmap creates a transparent cursor; the temporary pixmap is released immediately.
         unsafe {
+            // Flush only after issuing requests: an unconditional XFlush polls the
+            // connection (a syscall and Xlib allocation) on every frame.
+            let mut requested = false;
             if visible != self.cursor_visible {
+                requested = true;
                 if visible {
                     XUndefineCursor(self.display, self.window);
                 } else {
@@ -498,6 +502,7 @@ impl Host {
             }
             let desired = grab && self.focused;
             if !desired && self.grabbed {
+                requested = true;
                 XUngrabPointer(self.display, 0);
                 self.grabbed = false;
                 self.warp_pending = false;
@@ -519,7 +524,10 @@ impl Host {
                 self.relative_position = self.center();
                 self.warp_to_center();
             }
-            XFlush(self.display);
+            if requested || desired && !self.grabbed {
+                // A failed grab attempt is retried (and flushed) every frame, as before.
+                XFlush(self.display);
+            }
         }
     }
     fn center(&self) -> (i32, i32) {
