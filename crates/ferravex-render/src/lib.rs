@@ -16,6 +16,7 @@ pub mod content;
 pub mod demo;
 pub mod effects;
 mod font;
+mod font_modern;
 pub use font::{BitmapFontMetrics, BitmapTextMetrics, FontMeasureError};
 pub mod input;
 pub mod lighting;
@@ -27,9 +28,13 @@ pub mod post;
 pub mod preferences;
 pub mod retained;
 pub mod shaders;
+pub mod shapes;
 pub mod skinning;
+#[cfg(test)]
+mod specimen;
 pub mod status;
 pub mod storage;
+pub mod text;
 pub mod ui;
 pub mod visibility;
 pub use ferravex_core::telemetry;
@@ -1047,24 +1052,33 @@ pub fn draw_text(t: &str, x: f32, y: f32, size: f32, c: Color) -> TextDimensions
         },
     )
 }
+/// Draws classic 5×7 bitmap text with its baseline at `y`: one quad per lit
+/// font pixel, exactly as before (browser tests count these quads). Use
+/// [`text::draw_text_styled`] with [`text::FontFace::Classic`] for the same
+/// letters with merged geometry, shadows and outlines.
 pub fn draw_text_ex(t: &str, mut x: f32, y: f32, p: TextParams) -> TextDimensions {
     let px = p.font_size as f32 * p.font_scale / 8.;
-    for c in t.chars() {
-        for (row, bits) in font::glyph(c.to_ascii_uppercase()).into_iter().enumerate() {
-            for col in 0..5 {
-                if bits & (1 << (4 - col)) != 0 {
-                    draw_rectangle(
-                        x + col as f32 * px,
-                        y - 7. * px + row as f32 * px,
-                        px,
-                        px,
-                        p.color,
-                    );
+    // One stream borrow and batch record per string instead of two per pixel;
+    // the vertices are identical to per-pixel `draw_rectangle` calls.
+    edit(|s| {
+        let mut sink = shapes::Sink::new(s);
+        for c in t.chars() {
+            for (row, bits) in font::glyph(c.to_ascii_uppercase()).into_iter().enumerate() {
+                for col in 0..5 {
+                    if bits & (1 << (4 - col)) != 0 {
+                        sink.rect(
+                            x + col as f32 * px,
+                            y - 7. * px + row as f32 * px,
+                            px,
+                            px,
+                            p.color,
+                        );
+                    }
                 }
             }
+            x += 6. * px;
         }
-        x += 6. * px;
-    }
+    });
     measure_text(t, None, p.font_size, p.font_scale)
 }
 pub fn screen_width() -> f32 {

@@ -126,6 +126,7 @@ mod shared;
 pub use shared::*;
 pub mod cards;
 pub mod inspector;
+pub mod kit;
 pub mod meters;
 pub mod scroll;
 pub mod stats;

@@ -20,6 +20,7 @@ pub mod replay;
 pub mod rounds;
 pub mod scene;
 pub mod tuning;
+pub mod tween;
 pub mod ui;
 
 pub mod encounter;

@@ -21,6 +21,11 @@ For windowed native games, set `FERRAVEX_LOOK` and `FERRAVEX_QUALITY` to the sam
 names. Courtyard and Orbit Breaker's headless exporters accept `FERRAVEX_LOOK`;
 quality changes do not accelerate those CPU reference renderers.
 
+For crisp-but-modern overlays, the opt-in [modern UI kit](UI.md#modern-ui-kit)
+adds a mixed-case pixel face, anti-aliased rounded shapes, gradients, soft
+shadows, additive glows and eased transitions that honor reduced motion. Games
+keep their current look until they adopt it.
+
 ## Mobile fullscreen and touch
 
 Every browser game has a Fullscreen button alongside Details. It requests native

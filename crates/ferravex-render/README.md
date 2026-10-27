@@ -21,6 +21,14 @@ async fn game() {
 }
 ```
 
+Opt-in modern UI building blocks share the same immediate stream: `text`
+(a hand-authored mixed-case pixel face plus the classic 5×7 face, with shadows,
+outlines, alignment, measurement and wrapping), `shapes` (anti-aliased rounded
+rectangles, circles, rings, arcs, capsules, polylines, gradients, soft shadows
+and additive glows, with no textures) and `ui::kit` (cards, eased buttons,
+meters, toasts, key caps and screen transitions). See the
+[modern UI kit](../../docs/UI.md#modern-ui-kit).
+
 A native binary calls the library's `run()`. A Wasm library exports `ferravex_init` from the entry macro and the frame/input/geometry ABI from this crate. Set `crate-type = ["rlib", "cdylib"]` to build both.
 
 `Demo` provides `--autoplay --smoke-frames N --screenshot path.png`. Simulation still uses `FixedClock`; an automated run supplies a reproducible 1/60-second render interval. Screenshots capture queued draws after GPU presentation, including the final frame. `?autoplay` enables each game's original pilot in the browser.
