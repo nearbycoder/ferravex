@@ -383,6 +383,7 @@ for (const game of Object.values(info.games)) {
   for (const [name, keys] of [
     ['retained-shader.js', ['vertexBody', 'fragmentBody', 'defaultVertexHook', 'defaultFragmentHook']],
     ['effects-shader.js', ['spriteVertexBody', 'spriteFragmentBody']],
+    ['post-shader.js', ['postVertexBody', 'postDownFragmentBody', 'postUpFragmentBody', 'postCompositeFragmentBody']],
   ]) {
     const data = fs.readFileSync(path.join(root, name));
     const module = await import('data:text/javascript;base64,' + data.toString('base64'));

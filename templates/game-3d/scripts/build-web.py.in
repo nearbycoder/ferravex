@@ -25,6 +25,12 @@ def stage_host(engine: Path, output: Path, wasm: Path) -> None:
             ("effects.rs", "SPRITE_VERTEX_BODY", "spriteVertexBody"),
             ("effects.rs", "SPRITE_FRAGMENT_BODY", "spriteFragmentBody"),
         )),
+        ("post-shader.js", (
+            ("post.rs", "POST_VERTEX_BODY", "postVertexBody"),
+            ("post.rs", "POST_DOWN_FRAGMENT_BODY", "postDownFragmentBody"),
+            ("post.rs", "POST_UP_FRAGMENT_BODY", "postUpFragmentBody"),
+            ("post.rs", "POST_COMPOSITE_FRAGMENT_BODY", "postCompositeFragmentBody"),
+        )),
     ):
         parts = []
         for filename, constant, export in specs:

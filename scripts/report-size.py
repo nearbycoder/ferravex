@@ -55,8 +55,8 @@ SHARED_WEB = (
     "runtime.js", "lifecycle.js", "visuals.js", "details.js", "fullscreen.js",
     "audio.js", "audio-worklet.js", "audio-ring.js", "input.js", "storage.js",
     "input-overlay.js", "retained.js", "retained-shader.js", "effects.js",
-    "effects-shader.js", "material-tools.js", "content-tools.js", "replay-tools.js",
-    "multiplayer-tools.js",
+    "effects-shader.js", "post.js", "post-shader.js", "material-tools.js",
+    "content-tools.js", "replay-tools.js", "multiplayer-tools.js",
 )
 
 

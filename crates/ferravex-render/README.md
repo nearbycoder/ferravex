@@ -37,6 +37,16 @@ Retained 3D draws use conservative camera-frustum culling by default. Optional d
 
 [Low-poly lighting](../../docs/LIGHTING.md) covers quality settings, local lights, shadow volumes, AO baking and driver GPU timing.
 
+Opt-in [post-processing](../../docs/VISUALS.md#post-processing) (`post::set_post_fx(PostFx::neon())`)
+renders the world offscreen, then applies a dual-filter bloom chain, tonemap,
+grade and vignette before drawing the HUD crisp on top. The world/HUD boundary
+is `post_fx_hud_begin()`, `set_default_camera()` after a world camera or
+`set_world_colors(false)`. Player Low quality turns it off and reduced flash
+caps it; `post::glow_circle` and `post::with_glow` make additive emissive draws
+that feed the bloom. Browser and native hosts share the GLSL and fall back to
+the direct path when framebuffer support is missing. Run
+`cargo run -p ferravex-render --example post_fx` for a live comparison.
+
 [Unified input](../../docs/INPUT.md) covers action contexts, buffered fixed-tick
 edges, touch capture, gamepad response, local rebinding profiles and the F2
 controls panel. All fifteen browser games use that core; custom renderer hosts

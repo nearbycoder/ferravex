@@ -36,6 +36,11 @@ impl Runner {
                 .ok_or("FERRAVEX_LOOK must be authored, warm, cool or ink")?;
             edit(|s| s.look_override = Some(look));
         }
+        if let Ok(value) = std::env::var("FERRAVEX_POST") {
+            let fx = post::PostFx::from_name(&value)
+                .ok_or("FERRAVEX_POST must be off, subtle, neon, warm-film or crt")?;
+            edit(|s| s.post_override = Some(fx));
+        }
         let fixed = std::env::args().any(|s| s == "--smoke-frames");
         let mut performance = telemetry::Session::from_env();
         if fixed || performance.is_some() {

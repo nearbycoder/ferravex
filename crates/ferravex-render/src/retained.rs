@@ -811,7 +811,9 @@ pub(crate) fn is_live(id: u32) -> bool {
             .is_ok_and(|index| r.meshes[index].1.strong_count() > 0)
     })
 }
-/// ABI: kind 0 = immediate, kind 1 = retained, kind 2 = flagged triangles, kind 3 = instanced sprites. Preserves transparency/UI order.
+/// ABI: kind 0 = immediate, kind 1 = retained, kind 2 = flagged triangles, kind 3 = instanced sprites,
+/// kind 4 = post-processing world/HUD boundary (index 0; see `post`). Preserves transparency/UI order.
+/// Hosts skip unknown kinds.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct Command {
@@ -846,6 +848,8 @@ pub(crate) struct Frame {
     pub skin_matrices: Vec<[f32; 16]>,
     pub skin_normals: Vec<[f32; 9]>,
     pub environment: crate::lighting::Environment,
+    /// Resolved post-processing host block for this frame; index 0 is the tier.
+    pub post: [f32; crate::post::POST_FRAME_FLOATS],
     scratch_instances: Vec<[f32; 28]>,
     scratch_batches: Vec<RetainedBatch>,
     keep_alive: Vec<ResidentMesh>,

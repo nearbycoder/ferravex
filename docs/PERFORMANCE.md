@@ -31,6 +31,18 @@ Courtyard retains its own persistent mesh/instancing renderer and scene tools fo
 
 Orbit renders into an original Rust RGBA framebuffer presented through Canvas2D. Courtyard and Orbit's native PNG paths include software rendering and file writes. Restored-game screenshots read back a native GPU frame. Neither screenshot path is an interactive frame-rate benchmark.
 
+Opt-in [post-processing](VISUALS.md#post-processing) is off by default and then
+costs nothing. When enabled it adds 8 (Medium) or 10 (High) full-screen-triangle
+passes: about 0.17–0.2 ms of extra native GPU time and 0.25–0.3 ms in Chrome
+WebGL2 at 1280×800 on the measured Radeon 8060S, with no per-frame allocations.
+Compare presets without editing a game:
+
+```sh
+FERRAVEX_DPI_SCALE=1 FERRAVEX_QUALITY=medium FERRAVEX_POST=neon \
+  FERRAVEX_PERF_OUTPUT=target/post-neon.json \
+  cargo run -p neon-swarm --release -- --autoplay --smoke-frames 900
+```
+
 ## Verification
 
 ```sh
