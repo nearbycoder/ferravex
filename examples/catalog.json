@@ -775,5 +775,142 @@
         }
       }
     }
+  },
+  {
+    "id": "picnic-panic",
+    "title": "Picnic Panic",
+    "dimension": "3D",
+    "kind": "game",
+    "host": "picnic-panic",
+    "genre": "Stealth mischief sandbox",
+    "description": "A raccoon with a to-do list crashes the village picnic: steal the pie, ring the bell, launch the melon.",
+    "controls": "WASD / Arrows move \u00b7 Mouse drag / Z X camera \u00b7 Space jump \u00b7 E grab, drop, hold to use \u00b7 F throw \u00b7 C chitter \u00b7 Shift belly-slide \u00b7 N to-do list \u00b7 Escape pause",
+    "image": "picnic-panic.png",
+    "source": "examples/picnic-panic/src/lib.rs",
+    "capabilities": {
+      "schema_version": 1,
+      "controls": {
+        "action_map": {
+          "evidence": [
+            {
+              "path": "examples/picnic-panic/src/lib.rs",
+              "snippet": "let mut input = PlayerInput::preset("
+            }
+          ]
+        },
+        "keyboard": {
+          "evidence": [
+            {
+              "path": "examples/picnic-panic/src/lib.rs",
+              "snippet": "let key = |k: KeyCode| Binding::digital(InputCode::Key(k as u16));"
+            }
+          ]
+        },
+        "pointer": {
+          "evidence": [
+            {
+              "path": "examples/picnic-panic/src/lib.rs",
+              "snippet": "input.set_mouse_look_button(Some(1));"
+            }
+          ]
+        },
+        "gamepad": {
+          "evidence": [
+            {
+              "path": "examples/picnic-panic/src/lib.rs",
+              "snippet": "b(InputCode::PadButton(0))"
+            }
+          ]
+        },
+        "touch": {
+          "evidence": [
+            {
+              "path": "examples/picnic-panic/src/lib.rs",
+              "snippet": "input.touch_stick(0, 1)"
+            }
+          ]
+        }
+      },
+      "pause": {
+        "simulation": {
+          "evidence": [
+            {
+              "path": "examples/picnic-panic/src/run.rs",
+              "snippet": "self.session.set_paused(true)"
+            }
+          ]
+        }
+      },
+      "replay": {
+        "record": {
+          "evidence": [
+            {
+              "path": "examples/picnic-panic/src/run.rs",
+              "snippet": "self.ghost.push(p, yaw);"
+            }
+          ]
+        },
+        "ghost": {
+          "evidence": [
+            {
+              "path": "examples/picnic-panic/src/meta.rs",
+              "snippet": "let mut track = GhostTrack::new(RECORD_RULES, 60, self.len().max(1)).ok()?;"
+            }
+          ]
+        }
+      },
+      "content": {
+        "authored_scene": {
+          "evidence": [
+            {
+              "path": "examples/picnic-panic/src/sim/park.rs",
+              "snippet": "let data = Document::load(source, &schema())?;"
+            }
+          ]
+        }
+      },
+      "presentation": {
+        "feedback": {
+          "evidence": [
+            {
+              "path": "examples/picnic-panic/src/fx.rs",
+              "snippet": "matches!(self.feedback.emit(id, event), Ok(Some(_)))"
+            }
+          ]
+        },
+        "audio": {
+          "evidence": [
+            {
+              "path": "examples/picnic-panic/src/sfx.rs",
+              "snippet": "audio::play_sound(&self.sounds[i], params)"
+            }
+          ]
+        },
+        "interpolation": {
+          "evidence": [
+            {
+              "path": "examples/picnic-panic/src/sim/mod.rs",
+              "snippet": "self.coon.prev_pos.lerp(self.coon.motor.position, a)"
+            }
+          ]
+        },
+        "reduced_motion": {
+          "evidence": [
+            {
+              "path": "examples/picnic-panic/src/fx.rs",
+              "snippet": "self.policy().reduced_motion()"
+            }
+          ]
+        },
+        "reduced_flash": {
+          "evidence": [
+            {
+              "path": "examples/picnic-panic/src/fx.rs",
+              "snippet": "self.policy().reduced_flash()"
+            }
+          ]
+        }
+      }
+    }
   }
 ]

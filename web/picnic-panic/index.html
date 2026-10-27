@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Picnic Panic · Ferravex</title>
+<style>
+* { box-sizing: border-box; }
+html { background: #1d1a14; color: #f3ead6; font: 16px/1.5 system-ui, sans-serif; }
+body { margin: 0; min-height: 100vh; }
+nav#game-toolbar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .5rem;
+  /* Shared Details styles assume a single row. Keep wrapped tools above the arena. */
+  height: auto; min-height: 48px;
+  padding: .5rem max(.75rem, env(safe-area-inset-right)) .5rem max(.75rem, env(safe-area-inset-left));
+  border-bottom: 1px solid #5a4a36;
+}
+#game-toolbar > a { display: inline-flex; align-items: center; min-height: 44px; padding: .25rem .5rem; }
+#game-toolbar .game-name { flex: 1 1 16rem; }
+a { color: #f2c98a; text-underline-offset: .2em; }
+#game-toolbar > button {
+  flex: 0 1 auto; min-height: 44px; max-width: 100%; padding: .4rem .65rem;
+  font: inherit; color: #f3ead6; background: #2b241a;
+  border: 1px solid #8a7356; border-radius: 4px; cursor: pointer;
+}
+#game-toolbar > button:disabled { color: #b9ab94; cursor: wait; }
+#game-toolbar > button:hover:not(:disabled) { background: #3d3324; }
+a:focus-visible, button:focus-visible, [tabindex]:focus-visible { outline: 3px solid #ffdc91; outline-offset: 3px; }
+.arena { position: relative; }
+canvas {
+  display: block; width: 100%; height: 72vh; height: 72svh; min-height: 324px;
+  background: #2a3a1c; touch-action: none;
+}
+canvas:focus-visible { outline: 3px solid #ffdc91; outline-offset: -4px; }
+#game-status {
+  position: absolute; inset: 1rem 1rem auto; margin: 0; padding: .75rem;
+  background: #1d1a14; text-align: center; overflow-wrap: anywhere; pointer-events: none;
+}
+#game-status:empty { display: none; }
+#game-instructions {
+  max-width: 72rem; margin: 0 auto;
+  padding: 1rem max(1rem, env(safe-area-inset-right)) max(2rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+  overflow-wrap: anywhere; -webkit-user-select: text; user-select: text;
+}
+#game-instructions h1 { margin: 0 0 .5rem; font-size: 1.5rem; }
+#game-instructions h2 { font-size: 1.125rem; }
+#game-instructions p { margin: .75rem 0; }
+.guide-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2rem; }
+#game-instructions dl { margin: 0; }
+#game-instructions dt { font-weight: 650; margin-top: .75rem; }
+#game-instructions dd { margin: .15rem 0 .75rem; }
+#game-instructions kbd { font: inherit; font-weight: 600; }
+@media (max-width: 42rem) {
+  .guide-columns { grid-template-columns: minmax(0, 1fr); gap: .5rem; }
+  #game-toolbar .game-name { flex-basis: 100%; }
+}
+@media (forced-colors: active) {
+  a:focus-visible, button:focus-visible, [tabindex]:focus-visible { outline-color: Highlight; }
+}
+</style>
+</head>
+<body>
+<nav id="game-toolbar" aria-label="Game and player tools">
+  <a class="game-name" href="../">FERRAVEX / Picnic Panic — all games</a>
+  <a href="#game-instructions">How to play</a>
+  <button type="button" data-controls title="View or change controls (F2)" aria-pressed="false" disabled>Controls</button>
+  <button type="button" data-audio title="Enable sound" aria-pressed="false" disabled>Sound off</button>
+</nav>
+<main>
+  <div class="arena">
+    <canvas tabindex="0" data-game="picnic-panic" aria-label="Picnic Panic game canvas" aria-describedby="game-description game-keyboard-help">
+      Picnic Panic is a visual third-person mischief game set at a village picnic. Read the instructions below for its goal and controls. Playing requires JavaScript, WebAssembly and WebGL2.
+    </canvas>
+    <p id="game-status" role="status" aria-live="polite" aria-atomic="true">Loading original Rust engine…</p>
+  </div>
+  <section id="game-instructions" tabindex="-1" aria-labelledby="game-heading">
+    <h1 id="game-heading">Picnic Panic: how to play</h1>
+    <p id="game-description">You are a small, very determined raccoon at the annual village picnic. Five picnickers go about their afternoon in a sunny park; each has a vision cone that turns yellow with a question mark when they notice something and red with an exclamation mark when they give chase.</p>
+    <p id="game-goals">Cross off the hand-written to-do list in the top-left corner: steal a whole pie and carry it to your den by the south-west hedge, swap the prize marrow for a pinecone, walk off with the band's sheet music, sled a picnic blanket down the hill on the tea tray, ring the bell by the gate, get someone to sit on a whoopee cushion, and launch a watermelon off the seesaw. Finishing all seven reveals a secret finale; then escape home. Hide in bushes, under tablecloths or in the picnic basket to break line of sight. If a grown-up catches you, they carry you to your newest burrow: press jump six times to wriggle free. Bottle caps and hidden bonus tasks unlock hats, and your best day is saved on this device with a speedrun ghost.</p>
+    <p id="game-keyboard-help">Focus the game to use its controls. Pause before leaving the game, then use <kbd>Shift</kbd> + <kbd>Tab</kbd> to move to the toolbar. From there, use <strong>How to play</strong> to reach these instructions. <strong>Controls</strong> shows your current bindings.</p>
+    <div class="guide-columns">
+      <div>
+        <h2>Default keyboard and mouse controls</h2>
+        <p id="binding-help">These are defaults. Saved bindings may differ: open <strong>Controls</strong> or press <kbd>F2</kbd> in the game to inspect or remap them.</p>
+        <dl aria-describedby="binding-help">
+          <dt>Move and sneak</dt><dd><kbd>W A S D</kbd> or the arrow keys. A gentle half press on a stick sneaks, which shrinks every vision cone.</dd>
+          <dt>Camera</dt><dd>Drag with the left mouse button, or hold <kbd>Z</kbd> / <kbd>X</kbd>. The mouse wheel zooms.</dd>
+          <dt>Jump</dt><dd><kbd>Space</kbd>. Jump repeatedly to wriggle free when carried.</dd>
+          <dt>Grab, drop, place or use</dt><dd><kbd>E</kbd>. Items are set on whatever surface is in front of you. Hold <kbd>E</kbd> at the bell rope (and for the finale).</dd>
+          <dt>Throw</dt><dd><kbd>F</kbd> or the right mouse button.</dd>
+          <dt>Chitter</dt><dd><kbd>C</kbd> makes a noise that lures nearby picnickers to investigate.</dd>
+          <dt>Belly-slide</dt><dd><kbd>Shift</kbd> while running; in mid-air it becomes a belly-flop, handy on the seesaw.</dd>
+          <dt>To-do list and pause</dt><dd><kbd>N</kbd> shows or hides the list. <kbd>Escape</kbd> pauses; the pause menu restarts the day or saves and leaves.</dd>
+        </dl>
+      </div>
+      <div>
+        <h2>Menus, touch and gamepad</h2>
+        <p>In the game menu, use <kbd>Tab</kbd> or the arrow keys to select a button and <kbd>Enter</kbd> to choose it. Choose <strong>Start the day</strong> to begin, or <strong>Continue</strong> to resume a saved to-do list. <strong>Wardrobe</strong> lists hats and how to unlock them.</p>
+        <p>On touchscreens, drag on the left side to move, drag on the right side to turn the camera, and use the Jump, Grab, Throw, Chitter and Slide buttons. Tap the list to open it and the pause button to pause. On a gamepad, use the left stick to move, the right stick for the camera, A to jump, X to grab, B to throw, Y to chitter, RB to slide, LB for the list and Start to pause.</p>
+        <p>Opening Controls or switching away from the browser window or tab pauses the day. Closing Controls does not resume it; choose <strong>Resume</strong>. Reduced motion and reduced flash preferences calm camera shake, swaying and flashes. Vision cones and the best-run ghost can be turned off in the pause menu.</p>
+        <p>Use <strong>Details → Player tools</strong> for presentation preferences, screenshots and settings backups. Enable audio with <strong>Sound</strong> in the toolbar.</p>
+      </div>
+    </div>
+    <noscript><p>JavaScript is disabled. Enable it to load the game; these instructions and the all-games link remain available.</p></noscript>
+  </section>
+</main>
+<script type="module">
+const canvas = document.querySelector('canvas');
+// The shared player adds its own help during boot. Keep both descriptions,
+// including after later player initialization, without replacing its hooks.
+function describeGame() {
+  const current = canvas.getAttribute('aria-describedby') || '';
+  const ids = new Set(['game-description', 'game-keyboard-help', ...current.split(/\s+/).filter(Boolean)]);
+  const next = [...ids].join(' ');
+  if (next !== current) canvas.setAttribute('aria-describedby', next);
+}
+const descriptionObserver = new MutationObserver(describeGame);
+descriptionObserver.observe(canvas, {attributes: true, attributeFilter: ['aria-describedby']});
+describeGame();
+
+// The shared bridge handles keyboard input on window. Page navigation must
+// retain native link/scroll behavior; keyup still reaches it to release any
+// gameplay key held when focus moved. Game/menu keys keep their normal path.
+for (const id of ['game-toolbar', 'game-instructions']) {
+  document.getElementById(id).addEventListener('keydown', event => event.stopPropagation());
+}
+canvas.addEventListener('keydown', event => {
+  if (event.key === 'Tab' && event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey && !event.isComposing) {
+    event.stopPropagation(); // Native backward tab leaves the canvas; no game action is synthesized.
+  }
+});
+</script>
+<script type="module" src="../runtime.js"></script>
+</body>
+</html>

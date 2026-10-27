@@ -28,6 +28,7 @@ members = [
     "examples/owned-orbit",
     "examples/physics-2d",
     "examples/physics-3d",
+    "examples/picnic-panic",
     "examples/pocket-rally",
     "examples/salvage-pinball",
     "examples/siege-foundry",

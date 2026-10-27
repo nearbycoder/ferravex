@@ -233,6 +233,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "picnic-panic"
+version = "0.1.0"
+dependencies = [
+ "ferravex-core",
+ "ferravex-physics",
+ "ferravex-play",
+ "ferravex-render",
+]
+
+[[package]]
 name = "pocket-rally"
 version = "0.1.0"
 dependencies = [

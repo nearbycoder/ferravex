@@ -1,0 +1,185 @@
+ferravex_scene 1;
+# Thistledown Green: the annual village picnic. Every collider, hiding place,
+# routine stop, prank prop and decoration below is authored data; the game
+# validates the domain rules (roles, counts, bounds) before building a park.
+# Units are meters; +Y is up; the park is fenced by hedges at +/-30.
+
+prefab picnic_table {
+ node root {component table {size vec3 2.4 0.08 1.2; height number 0.78; cloth rgba 214 86 76 255; trim rgba 250 238 220 255;}}
+}
+prefab oak {
+ node root {component tree {kind text oak; scale number 1;}}
+}
+prefab pine {
+ node root {component tree {kind text pine; scale number 1;}}
+}
+prefab birch {
+ node root {component tree {kind text birch; scale number 1;}}
+}
+prefab shrub {
+ node root {component bush {radius number 1.05;}}
+}
+prefab den_hole {
+ node root {component den {order int 0;}}
+}
+
+# --- The hedge that keeps the picnic in (and the raccoons, theoretically, out).
+node hedge_n {transform 0 0.8 -30.5 0 0 0 1 1 1 1; component solid {size vec3 62 1.6 1; color rgba 72 120 64 255; occlude bool true; look text hedge;}}
+node hedge_s {transform 0 0.8 30.5 0 0 0 1 1 1 1; component solid {size vec3 62 1.6 1; color rgba 72 120 64 255; occlude bool true; look text hedge;}}
+node hedge_w {transform -30.5 0.8 0 0 0 0 1 1 1 1; component solid {size vec3 1 1.6 60; color rgba 72 120 64 255; occlude bool true; look text hedge;}}
+node hedge_e {transform 30.5 0.8 0 0 0 0 1 1 1 1; component solid {size vec3 1 1.6 60; color rgba 72 120 64 255; occlude bool true; look text hedge;}}
+
+# --- Raccoon business.
+node spawn {transform -24.2 0 23.4 0 0 0 1 1 1 1; component spawn {}}
+node den_home {use den_hole; transform -25.8 0 25.8 0 0 0 1 1 1 1; component den {order int 0;}}
+node den_east {use den_hole; transform 26 0 24.5 0 0 0 1 1 1 1; component den {order int 1;}}
+node den_west {use den_hole; transform -26.4 0 -8 0 0 0 1 1 1 1; component den {order int 2;}}
+
+# --- Picnic lawn.
+node table_pie {use picnic_table; transform -7 0 6 0 0 0 1 1 1 1;}
+node table_blue {use picnic_table; transform -1 0 10.5 0 0 0 1 1 1 1; override root {component table {cloth rgba 86 138 204 255;}}}
+node table_sun {use picnic_table; transform 5 0 7 0 0 0 1 1 1 1; override root {component table {cloth rgba 238 190 72 255;}}}
+node banquet {transform 7 0 -4 0 0 0 1 1 1 1; component table {size vec3 5.2 0.08 1.4; height number 0.8; cloth rgba 246 242 232 255; trim rgba 226 160 176 255;}}
+node bench_nana {transform -10.6 0.42 7 0 0 0 1 1 1 1; component solid {size vec3 0.55 0.1 1.7; color rgba 158 108 70 255; look text bench;}}
+node bench_back {transform -10.95 0.75 7 0 0 0 1 1 1 1; component solid {size vec3 0.08 0.6 1.7; color rgba 146 98 62 255; nav bool false;}}
+node seat_nana {transform -10.6 0.47 7 0 0 0 1 1 1 1; component zone {role text seat; radius number 0.55; index int 0;}}
+node stool_pumble {transform 16.8 0.25 0.6 0 0 0 1 1 1 1; component solid {size vec3 0.5 0.5 0.5; color rgba 124 92 66 255; look text stool;}}
+node seat_pumble {transform 16.8 0.52 0.6 0 0 0 1 1 1 1; component zone {role text seat; radius number 0.45; index int 1;}}
+node basket {transform -2.8 0 12.2 0 0 0 1 1 1 1; component zone {role text basket; radius number 0.85;}}
+node cloth_pull {transform 4.05 0 -4 0 0 0 1 1 1 1; component zone {role text cloth; radius number 1.1;}}
+
+# --- Bandstand (Maestro Trumble's domain).
+node bandstand {transform -18 0.11 -3 0 0 0 1 1 1 1; component solid {size vec3 6.2 0.22 6.2; color rgba 238 228 206 255; nav bool false; look text bandstand;}}
+node bandstand_rot {transform -18 0.11 -3 0 0.38268 0 0.92388 1 1 1; component solid {size vec3 6.2 0.22 6.2; color rgba 238 228 206 255; nav bool false; look text hidden;}}
+node music_stand {transform -18 1.12 -1.3 0 0 0 1 1 1 1; component solid {size vec3 0.62 0.05 0.3; color rgba 52 48 56 255; nav bool false; look text music_stand;}}
+node stand_zone {transform -18 1.2 -1.3 0 0 0 1 1 1 1; component zone {role text stand; radius number 0.7;}}
+
+# --- The Prize Vegetable tent.
+node show_table {transform 14 0 -3 0 0 0 1 1 1 1; component table {size vec3 3.2 0.08 1.1; height number 0.84; cloth rgba 128 72 150 255; trim rgba 248 214 92 255;}}
+node plinth {transform 14 0.9 -3 0 0 0 1 1 1 1; component zone {role text plinth; radius number 0.62;}}
+
+# --- Fruit stall, playground and the noble seesaw.
+node fruit_stall {transform 20 0 12 0 0 0 1 1 1 1; component table {size vec3 2.4 0.08 1.1; height number 0.82; cloth rgba 92 162 96 255; trim rgba 250 244 230 255;}}
+node seesaw {transform 13 0 19 0 0 0 1 1 1 1; component deco {kind text seesaw;}}
+node bale_low {transform 17.0 0.3 19 0 0 0 1 1 1 1; component solid {size vec3 1.0 0.6 1.3; color rgba 226 190 104 255; look text hay;}}
+node bale_high {transform 15.95 0.6 19 0 0 0 1 1 1 1; component solid {size vec3 0.9 1.2 1.3; color rgba 232 198 112 255; look text hay;}}
+node toybox {transform 6 0.22 20 0 0 0 1 1 1 1; component solid {size vec3 1.1 0.44 0.7; color rgba 92 150 206 255; look text toybox;}}
+node sandbox {transform 8.5 0.08 24.5 0 0 0 1 1 1 1; component solid {size vec3 3.4 0.16 3.4; color rgba 232 206 150 255; nav bool false; look text sandbox;}}
+
+# --- The hill, the tea table at the top, and the duck pond.
+node plateau {transform 1 1.5 -25 0 0 0 1 1 1 1; component solid {size vec3 14 3 6; color rgba 112 168 84 255; occlude bool true; look text grass;}}
+node hill {transform 1 0.0529 -16.895 0.13273 0 0 0.99115 1 1 1; component ramp {size vec3 14 3 11.4024;}}
+node tea_table {transform -2 3 -24 0 0 0 1 1 1 1; component table {size vec3 1.4 0.07 0.9; height number 0.7; cloth rgba 196 222 236 255; trim rgba 255 255 255 255;}}
+node sled_end {transform 1 0 -9.6 0 0 0 1 1 1 1; component zone {role text sled_end; radius number 7.5;}}
+node pond {transform -15 0 -17 0 0 0 1 1 1 1; component zone {role text pond; radius number 4.3;}}
+
+# --- The village bell and the sign by the gate.
+node bell_arch {transform 0 0 27 0 0 0 1 1 1 1; component deco {kind text bell_arch;}}
+node bell_rope {transform 1.05 0 26.4 0 0 0 1 1 1 1; component zone {role text rope; radius number 1.0;}}
+node sign {transform -5.5 0 26.6 0 0 0 1 1 1 1; component deco {kind text sign;}}
+
+# --- Bunting poles; links are simulated with distance joints at runtime.
+node pole_a {transform -13 0 2 0 0 0 1 1 1 1; component pole {height number 4.2;}}
+node pole_b {transform -1 0 2.6 0 0 0 1 1 1 1; component pole {height number 4.2;}}
+node pole_c {transform 11 0 1.8 0 0 0 1 1 1 1; component pole {height number 4.2;}}
+node bunting_1 {component bunting {from ref /pole_a; to ref /pole_b; flags int 9;}}
+node bunting_2 {component bunting {from ref /pole_b; to ref /pole_c; flags int 9;}}
+
+# --- Prank props, each authored at its home.
+node pie {transform -7.3 0.9 6 0 0 0 1 1 1 1; component prop {kind text pie; owner text nana;}}
+node marrow {transform 14 0.98 -3 0 0.70711 0 0.70711 1 1 1; component prop {kind text marrow; owner text pumble;}}
+node pinecone {transform 20.3 0.16 -7.6 0 0 0 1 1 1 1; component prop {kind text pinecone;}}
+node sheet {transform -18 1.2 -1.3 0 0 0 1 1 1 1; component prop {kind text sheet; owner text trumble;}}
+node tray {transform -2 3.82 -24 0 0 0 1 1 1 1; component prop {kind text tray; owner text nana;}}
+node blanket {transform 3.2 3.1 -25.2 0 0 0 1 1 1 1; component prop {kind text blanket;}}
+node melon {transform 20.2 1.2 12 0 0 0 1 1 1 1; component prop {kind text melon;}}
+node cushion {transform 6 0.5 20 0 0 0 1 1 1 1; component prop {kind text cushion;}}
+node crate_0 {transform 22.4 0.36 15.0 0 0 0 1 1 1 1; component prop {kind text crate;}}
+node crate_1 {transform 23.16 0.36 15.0 0 0 0 1 1 1 1; component prop {kind text crate;}}
+node crate_2 {transform 22.78 1.08 15.0 0 0 0 1 1 1 1; component prop {kind text crate;}}
+node crate_3 {transform 22.78 0.36 15.8 0 0 0 1 1 1 1; component prop {kind text crate;}}
+node cake {transform 7 0.98 -4 0 0 0 1 1 1 1; component prop {kind text cake;}}
+node dish_0 {transform 5.2 0.86 -4.3 0 0 0 1 1 1 1; component prop {kind text dish;}}
+node dish_1 {transform 6.0 0.86 -3.6 0 0 0 1 1 1 1; component prop {kind text dish;}}
+node dish_2 {transform 8.1 0.86 -4.35 0 0 0 1 1 1 1; component prop {kind text dish;}}
+node dish_3 {transform 8.9 0.86 -3.7 0 0 0 1 1 1 1; component prop {kind text dish;}}
+node teapot {transform 4.6 0.95 -3.9 0 0 0 1 1 1 1; component prop {kind text teapot;}}
+node jelly {transform 9.4 0.92 -4.1 0 0 0 1 1 1 1; component prop {kind text jelly;}}
+node apple_0 {transform 19.6 0.95 11.7 0 0 0 1 1 1 1; component prop {kind text apple;}}
+node apple_1 {transform 19.8 0.95 12.4 0 0 0 1 1 1 1; component prop {kind text apple;}}
+node apple_2 {transform 20.8 0.95 12.3 0 0 0 1 1 1 1; component prop {kind text apple;}}
+
+# --- Shiny bottle caps. A raccoon has priorities.
+node cap_0 {transform -20 0.3 18 0 0 0 1 1 1 1; component shiny {}}
+node cap_1 {transform -9 0.3 14 0 0 0 1 1 1 1; component shiny {}}
+node cap_2 {transform -18 0.55 -3.6 0 0 0 1 1 1 1; component shiny {}}
+node cap_3 {transform 3.6 3.3 -26.4 0 0 0 1 1 1 1; component shiny {}}
+node cap_4 {transform 14.6 1.2 -3.3 0 0 0 1 1 1 1; component shiny {}}
+node cap_5 {transform 22 0.3 -12 0 0 0 1 1 1 1; component shiny {}}
+node cap_6 {transform 9 0.5 24.4 0 0 0 1 1 1 1; component shiny {}}
+node cap_7 {transform 24 0.3 16 0 0 0 1 1 1 1; component shiny {}}
+node cap_8 {transform -11 0.3 -13 0 0 0 1 1 1 1; component shiny {}}
+node cap_9 {transform 1.5 0.3 25.6 0 0 0 1 1 1 1; component shiny {}}
+
+# --- Trees: oaks for shade, pines for pinecones, birches for elegance.
+node oak_0 {use oak; transform -20 0 13 0 0 0 1 1 1 1;}
+node oak_1 {use oak; transform -14 0 21 0 0 0 1 1 1 1; override root {component tree {scale number 1.15;}}}
+node oak_2 {use oak; transform -4 0 21 0 0 0 1 1 1 1; override root {component tree {scale number 0.9;}}}
+node oak_3 {use oak; transform 24 0 7 0 0 0 1 1 1 1;}
+node oak_4 {use oak; transform -24 0 3 0 0 0 1 1 1 1; override root {component tree {scale number 1.2;}}}
+node oak_5 {use oak; transform -22 0 -15 0 0 0 1 1 1 1;}
+node oak_6 {use oak; transform 14 0 -16 0 0 0 1 1 1 1; override root {component tree {scale number 1.1;}}}
+node oak_7 {use oak; transform 22 0 25 0 0 0 1 1 1 1; override root {component tree {scale number 0.95;}}}
+node oak_8 {use oak; transform -8 0 -12 0 0 0 1 1 1 1; override root {component tree {scale number 0.85;}}}
+node pine_0 {use pine; transform 21 0 -9 0 0 0 1 1 1 1;}
+node pine_1 {use pine; transform 24.5 0 -4 0 0 0 1 1 1 1; override root {component tree {scale number 1.2;}}}
+node pine_2 {use pine; transform 18.5 0 -12.5 0 0 0 1 1 1 1; override root {component tree {scale number 0.9;}}}
+node pine_3 {use pine; transform 26 0 -14 0 0 0 1 1 1 1; override root {component tree {scale number 1.1;}}}
+node pine_4 {use pine; transform -26 0 -24 0 0 0 1 1 1 1; override root {component tree {scale number 1.3;}}}
+node pine_5 {use pine; transform 12 0 -26 0 0 0 1 1 1 1; override root {component tree {scale number 1.15;}}}
+node birch_0 {use birch; transform 2 0 24 0 0 0 1 1 1 1;}
+node birch_1 {use birch; transform -16 0 9.5 0 0 0 1 1 1 1; override root {component tree {scale number 1.1;}}}
+node birch_2 {use birch; transform 26 0 -24 0 0 0 1 1 1 1;}
+
+# --- Bushes are hiding places. They are not, as far as anyone knows, raccoons.
+node bush_0 {use shrub; transform -12.8 0 10.2 0 0 0 1 1 1 1;}
+node bush_1 {use shrub; transform -14.6 0 -0.4 0 0 0 1 1 1 1;}
+node bush_2 {use shrub; transform 10.6 0 -6.8 0 0 0 1 1 1 1;}
+node bush_3 {use shrub; transform 10 0 15 0 0 0 1 1 1 1;}
+node bush_4 {use shrub; transform -5 0 15.5 0 0 0 1 1 1 1;}
+node bush_5 {use shrub; transform 18.4 0 6.8 0 0 0 1 1 1 1;}
+node bush_6 {use shrub; transform -21 0 21 0 0 0 1 1 1 1;}
+node bush_7 {use shrub; transform -2.5 0 -8.6 0 0 0 1 1 1 1;}
+node bush_8 {use shrub; transform 22.4 0 20.6 0 0 0 1 1 1 1;}
+node bush_9 {use shrub; transform -21.6 0 -6 0 0 0 1 1 1 1;}
+
+# --- Decorations (visual only).
+node flowers_0 {transform 18.6 0 3.6 0 0 0 1 1 1 1; component deco {kind text flowers; size vec3 3.2 0.4 1.6;}}
+node flowers_1 {transform -24 0 -1.5 0 0 0 1 1 1 1; component deco {kind text flowers; size vec3 1.6 0.4 4.2;}}
+node flowers_2 {transform 4 0 26.6 0 0 0 1 1 1 1; component deco {kind text flowers; size vec3 3.4 0.4 1.2;}}
+node tent {transform 14 0 -3 0 0 0 1 1 1 1; component deco {kind text tent; size vec3 4.4 2.7 2.6;}}
+node awning {transform 20 0 12 0 0 0 1 1 1 1; component deco {kind text awning; size vec3 3 2.3 1.6;}}
+node path_main {transform 0 0.012 18 0 0 0 1 1 1 1; component deco {kind text path; size vec3 2.4 0.02 18;}}
+node path_cross {transform -3 0.013 1 0 0 0 1 1 1 1; component deco {kind text path; size vec3 34 0.02 2.2;}}
+
+# --- Picnic folk and their very important routines.
+node nana_0 {transform -10.0 0 7.0 0 0 0 1 1 1 1; component spot {folk text nana; order int 0; act text sit; wait number 11;}}
+node nana_1 {transform -7.0 0 7.25 0 0 0 1 1 1 1; component spot {folk text nana; order int 1; act text fuss; wait number 4;}}
+node nana_2 {transform 5.2 0 -2.3 0 0 0 1 1 1 1; component spot {folk text nana; order int 2; act text chat; wait number 5;}}
+node nana_3 {transform -10.5 0 -12.0 0 0 0 1 1 1 1; component spot {folk text nana; order int 3; act text feed; wait number 6;}}
+node nana_4 {transform -7.0 0 4.75 0 0 0 1 1 1 1; component spot {folk text nana; order int 4; act text fuss; wait number 3;}}
+node pumble_0 {transform 14 0 -1.7 0 0 0 1 1 1 1; component spot {folk text pumble; order int 0; act text inspect; wait number 6;}}
+node pumble_1 {transform 18.6 0 2.4 0 0 0 1 1 1 1; component spot {folk text pumble; order int 1; act text water; wait number 6;}}
+node pumble_2 {transform 16.2 0 0.6 0 0 0 1 1 1 1; component spot {folk text pumble; order int 2; act text sit; wait number 9;}}
+node pumble_3 {transform 19.2 0 -10.2 0 0 0 1 1 1 1; component spot {folk text pumble; order int 3; act text rake; wait number 5;}}
+node trumble_0 {transform -18 0.22 -2.5 0 0 0 1 1 1 1; component spot {folk text trumble; order int 0; act text conduct; wait number 15;}}
+node trumble_1 {transform -16.1 0.22 -4.4 0 0 0 1 1 1 1; component spot {folk text trumble; order int 1; act text bow; wait number 3;}}
+node trumble_2 {transform 9.6 0 -2.3 0 0 0 1 1 1 1; component spot {folk text trumble; order int 2; act text snack; wait number 4;}}
+node pip_0 {transform 8.5 0 22.6 0 0 0 1 1 1 1; component spot {folk text pip; order int 0; act text play; wait number 6;}}
+node pip_1 {transform 11.2 0 20.6 0 0 0 1 1 1 1; component spot {folk text pip; order int 1; act text play; wait number 5;}}
+node pip_2 {transform 6.8 0 21.4 0 0 0 1 1 1 1; component spot {folk text pip; order int 2; act text play; wait number 4;}}
+node pip_3 {transform -12.5 0 1.0 0 0 0 1 1 1 1; component spot {folk text pip; order int 3; act text dance; wait number 7;}}
+node biscuit_0 {transform 9.5 0 20.4 0 0 0 1 1 1 1; component spot {folk text biscuit; order int 0; act text sniff; wait number 4;}}
+node biscuit_1 {transform -10 0 -11.8 0 0 0 1 1 1 1; component spot {folk text biscuit; order int 1; act text sniff; wait number 4;}}
+node biscuit_2 {transform -8.6 0 9.2 0 0 0 1 1 1 1; component spot {folk text biscuit; order int 2; act text beg; wait number 5;}}
+node biscuit_3 {transform 2 0 16.5 0 0 0 1 1 1 1; component spot {folk text biscuit; order int 3; act text sniff; wait number 3;}}
