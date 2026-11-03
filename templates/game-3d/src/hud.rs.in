@@ -1,0 +1,163 @@
+//! Presentation only: the win celebration, motion trail and screen-space HUD.
+//! Nothing here changes the rules; it watches [`Game`] and draws.
+//!
+//! Restyle the whole UI through [`theme`]. The HUD uses Ferravex's UI kit
+//! (`ferravex::render::ui::kit`): rounded panels, eased buttons and key caps
+//! in the modern text face.
+use crate::Game;
+use ferravex::{
+    core::session::SessionState,
+    play::tween::{Entrance, Motion},
+    render::{
+        preferences,
+        prelude::*,
+        shapes,
+        text::{TextAlign, TextStyle, draw_text_styled},
+        ui::kit::{self, ButtonKind, ButtonMotion, ButtonState, KitTheme, Tone},
+    },
+};
+
+/// Accent colors shared by the world and the HUD.
+pub(crate) const PLAYER: Color = Color::from_hex(0x5ce1e6);
+pub(crate) const BEACON: Color = Color::from_hex(0xffc15e);
+
+/// The UI kit's default dark theme with the beacon gold as its accent.
+pub(crate) fn theme() -> KitTheme {
+    KitTheme {
+        accent: BEACON,
+        ..KitTheme::default()
+    }
+}
+
+/// Presentation state that follows the rules: a short trail behind the player
+/// and the moment the beacon was reached. Feedback starts from the accepted
+/// game event (the session entering Won), never from raw input.
+pub(crate) struct Juice {
+    /// Recent player positions, newest first, for the motion trail.
+    pub trail: [Vec2; 14],
+    /// Seconds of presentation time when the beacon was reached.
+    pub won_at: Option<f32>,
+    /// Animation time; frozen while paused so effects pause too.
+    pub time: f32,
+    pub motion: Motion,
+    last_tick: u64,
+    button: ButtonMotion,
+}
+
+impl Juice {
+    pub fn new() -> Self {
+        Self {
+            trail: [crate::game::START; 14],
+            won_at: None,
+            time: 0.0,
+            motion: Motion::Full,
+            last_tick: 0,
+            button: ButtonMotion::default(),
+        }
+    }
+
+    /// Call once per frame after [`Game::advance`].
+    pub fn observe(&mut self, game: &Game, alpha: f32, dt: f32) {
+        let session = game.session();
+        self.motion = Motion::from_reduced(preferences::feedback_policy().reduced_motion());
+        if !session.is_paused() {
+            self.time += dt;
+        }
+        if session.tick() < self.last_tick {
+            // A restart: drop the old trail instead of streaking across the arena.
+            self.trail = [game.position(); 14];
+        }
+        self.last_tick = session.tick();
+        match session.state() {
+            SessionState::Won => {
+                self.won_at.get_or_insert(self.time);
+            }
+            _ => self.won_at = None,
+        }
+        if session.is_playing() {
+            self.trail.rotate_right(1);
+            self.trail[0] = game.render_position(alpha);
+        }
+    }
+
+    /// Seconds since the beacon was reached, while the game is won.
+    pub fn since_win(&self) -> Option<f32> {
+        self.won_at.map(|at| self.time - at)
+    }
+
+    /// False when the player asked for reduced motion: skip big movement.
+    pub fn full_motion(&self) -> bool {
+        self.motion == Motion::Full
+    }
+
+    /// 0..1 breathing pulse for idle animation (steady under reduced motion).
+    pub fn pulse(&self, speed: f32) -> f32 {
+        match self.motion {
+            Motion::Full => (self.time * speed).sin() * 0.5 + 0.5,
+            Motion::Reduced => 0.5,
+        }
+    }
+}
+
+/// Draws the HUD in screen units. Returns true when the main button was clicked.
+pub(crate) fn draw(game: &Game, juice: &mut Juice, title: &str, dt: f32) -> bool {
+    let theme = theme();
+    let (width, height) = (screen_width(), screen_height());
+    let session = game.session();
+
+    // Title and goal, top left.
+    let size = if width < 560.0 { kit::TYPE_TITLE } else { kit::TYPE_DISPLAY };
+    let display = TextStyle::modern(size, theme.ink).with_shadow(theme.shadow);
+    draw_text_styled(title, 24.0, 52.0, display);
+    let body = TextStyle::modern(kit::TYPE_BODY, theme.muted);
+    draw_text_styled("Reach the gold beacon", 24.0, 80.0, body);
+
+    // Run timer, top right. Ticks are exact, so the time is too.
+    let seconds = session.tick() as f32 * session.dt();
+    let chip = Rect::new(width - 132.0, 24.0, 108.0, 40.0);
+    kit::panel(chip, &theme);
+    let timer = TextStyle::modern(kit::TYPE_BODY, theme.ink).with_align(TextAlign::Center);
+    let center = chip.center();
+    draw_text_styled(&format!("{seconds:.2} s"), center.x, timer.centered_baseline(center.y), timer);
+
+    // Celebrate the accepted win with a toast that pops in.
+    if let Some(since) = juice.since_win() {
+        let look = Entrance::pop(0.6).sample(since, 0, juice.motion);
+        let text = format!("Beacon reached in {seconds:.2} s");
+        kit::toast(width * 0.5, 104.0, Some('★'), &text, Tone::Success, look, &theme);
+    }
+
+    // While playing, show the controls. Otherwise show one clear next action.
+    let label = match session.state() {
+        SessionState::Playing => {
+            let prompts: [(&[&str], &str); 3] =
+                [(&["W", "A", "S", "D"], "Move"), (&["Esc"], "Pause"), (&["R"], "Restart")];
+            let mut x = 24.0;
+            for (keys, action) in prompts {
+                if x > width - 150.0 {
+                    break; // Narrow screen: show only the prompts that fit.
+                }
+                x += kit::key_prompt(x, height - 52.0, keys, action, &theme) + 28.0;
+            }
+            return false;
+        }
+        SessionState::Ready => "Play  (Enter)",
+        SessionState::Paused => "Resume  (Enter)",
+        SessionState::Won | SessionState::Lost => "Play again  (Enter)",
+    };
+    if session.is_paused() {
+        // Dim the world behind the pause button.
+        shapes::fill_rounded_rect(Rect::new(0.0, 0.0, width, height), 0.0, theme.backdrop);
+    }
+    let size = vec2(240.0_f32.min(width - 32.0), 48.0);
+    let button = Rect::new((width - size.x) * 0.5, height - size.y - 32.0, size.x, size.y);
+    let hovered = button.contains(Vec2::from(mouse_position()));
+    let state = ButtonState {
+        hovered,
+        pressed: hovered && is_mouse_button_down(MouseButton::Left),
+        ..ButtonState::default()
+    };
+    juice.button.update(state, dt, juice.motion);
+    kit::button(button, label, ButtonKind::Primary, &juice.button, &theme);
+    hovered && is_mouse_button_pressed(MouseButton::Left)
+}

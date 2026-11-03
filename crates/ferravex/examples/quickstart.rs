@@ -69,27 +69,29 @@ fn advance(
 }
 
 fn render_frame(ball: &Ball, alpha: f32, state: SessionState) {
-    render::clear_background(Color::new(0.05, 0.07, 0.12, 1.0));
+    use render::{
+        shapes,
+        text::{TextStyle, draw_text_styled},
+    };
+    render::clear_background(Color::from_hex(0x0d1220));
     render::set_camera(&Camera2D::from_display_rect(Rect::new(
         0.0, 0.0, SIZE.x, SIZE.y,
     )));
+    // Anti-aliased shapes: a soft additive glow under a solid ball.
     let position = ball.visible_position(alpha, state == SessionState::Playing);
-    render::draw_circle(position.x, position.y, RADIUS, render::ORANGE);
-    render::draw_text(
+    let accent = Color::from_hex(0xffa94d);
+    shapes::glow_disc(position, RADIUS * 3.0, accent.with_alpha(0.5));
+    shapes::fill_circle(position, RADIUS, accent);
+    let ink = TextStyle::modern(16.0, Color::from_hex(0xf2ede3));
+    draw_text_styled(
         "Arrows move | Space pauses | N steps | R restarts",
         18.0,
-        28.0,
-        20.0,
-        render::WHITE,
+        30.0,
+        ink,
     );
     if state == SessionState::Paused {
-        render::draw_text(
-            "Paused — N steps once; Space resumes",
-            18.0,
-            56.0,
-            20.0,
-            render::YELLOW,
-        );
+        let note = ink.with_color(Color::from_hex(0xffd166));
+        draw_text_styled("Paused: N steps once, Space resumes", 18.0, 56.0, note);
     }
 }
 

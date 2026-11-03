@@ -62,10 +62,10 @@ impl Goal {
 
     pub fn title(self) -> &'static str {
         match self {
-            Self::Strike => "STRIKE",
-            Self::Airtime => "AIRTIME",
-            Self::Avalanche => "AVALANCHE",
-            Self::CleanSweep => "CLEAN SWEEP",
+            Self::Strike => "Strike",
+            Self::Airtime => "Airtime",
+            Self::Avalanche => "Avalanche",
+            Self::CleanSweep => "Clean sweep",
         }
     }
 
@@ -73,7 +73,7 @@ impl Goal {
         match self {
             Self::Strike => "Bowl into the big stack: topple 10 crates.",
             Self::Airtime => "Pulse something 7 m into the air.",
-            Self::Avalanche => "50 bonks in one second. Try CHAOS.",
+            Self::Avalanche => "50 bonks in one second. Try Chaos.",
             Self::CleanSweep => "Topple all 30 stack crates. Orbit, bowl, repeat.",
         }
     }

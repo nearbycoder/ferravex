@@ -98,9 +98,9 @@ layout and the correct world/HUD/input boundaries.
 ![Modern UI specimen: the mixed-case face, kit card, buttons, meters, key caps, toast, anti-aliased shapes and additive glows](screenshots/modern-ui-specimen.png)
 
 Every piece below is opt-in and additive. The legacy font, `draw_text_ex` and
-`Ui` paint emit exactly the same geometry as before (`draw_text_ex` keeps one
-quad per lit pixel because browser tests count those quads; it now records them
-with one stream borrow per string). Drawing the same classic letters through
+`Ui` paint keep exactly the same pixel coverage as before; `draw_text_ex` now
+emits one quad per horizontal run of lit pixels in each glyph row rather than
+one per pixel. Drawing the same classic letters through
 `draw_text_styled` with `FontFace::Classic` uses about 64% fewer vertices on a
 text-heavy HUD (10,038 → 3,588 vertices for ten typical HUD lines); the modern
 face is similar (3,780).

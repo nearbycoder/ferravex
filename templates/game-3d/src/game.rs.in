@@ -1,13 +1,21 @@
-//! Renderer-independent game rules. Inputs are held directions sampled once per
-//! frame; discrete actions (start, pause, restart) are applied once by the host.
+//! The rules. They run on fixed ticks, never draw and never read the clock,
+//! so `cargo test` checks them without a window.
+//!
+//! To grow the game: add state to [`Game`], reset it in [`Game::restart`],
+//! and update it inside the tick loop in [`Game::advance`]. Drawing code in
+//! `lib.rs` only reads it.
 use ferravex::{
     core::{FrameStep, session::GameSession},
     math::{Vec2, vec2},
 };
 
+// Tuning knobs, in arena units (the arena spans -6..6 by -3..3).
 pub(crate) const START: Vec2 = vec2(-4.0, 0.0);
 pub(crate) const GOAL: Vec2 = vec2(4.0, 0.0);
+pub(crate) const GOAL_RADIUS: f32 = 0.5;
 pub(crate) const BOUNDS: Vec2 = vec2(6.0, 3.0);
+/// Player speed in arena units per second.
+pub(crate) const SPEED: f32 = 3.0;
 
 /// A small, testable game: move from the blue starting pad to the gold beacon.
 /// Coordinates are ground-plane units; positive Y means forward/up.
@@ -89,8 +97,9 @@ impl Game {
             Vec2::ZERO
         };
         for _ in 0..frame.steps {
+            // One fixed tick. Add new per-tick rules in this loop.
             self.previous = self.position;
-            self.position = (self.position + movement * (3.0 * frame.dt)).clamp(-BOUNDS, BOUNDS);
+            self.position = (self.position + movement * (SPEED * frame.dt)).clamp(-BOUNDS, BOUNDS);
             // Test the swept segment so a coarse tick cannot skip the beacon.
             let delta = self.position - self.previous;
             let fraction = if delta.length_squared() > 0.0 {
@@ -98,7 +107,7 @@ impl Game {
             } else {
                 0.0
             };
-            if self.previous.lerp(self.position, fraction).distance(GOAL) <= 0.5 {
+            if self.previous.lerp(self.position, fraction).distance(GOAL) <= GOAL_RADIUS {
                 self.session.finish(true);
                 self.previous = self.position;
                 break;
@@ -170,7 +179,7 @@ mod tests {
         assert_eq!(fast.session().tick(), 60);
         let mut diagonal = Game::new(true);
         diagonal.advance(1.0 / Game::TICK_RATE_HZ, Vec2::ONE);
-        let distance = 3.0 * diagonal.session().dt();
+        let distance = SPEED * diagonal.session().dt();
         assert!((diagonal.position().distance(START) - distance).abs() < 1e-6);
         let position = diagonal.position();
         diagonal.advance(1.0 / Game::TICK_RATE_HZ, vec2(f32::NAN, 1.0));

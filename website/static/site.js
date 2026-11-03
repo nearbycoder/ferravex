@@ -125,6 +125,11 @@ for (const button of document.querySelectorAll('[data-launch]')) {
     frame.addEventListener('load', () => frame.focus(), {once: true});
     player.classList.add('is-playing');
     player.replaceChildren(frame);
+    // Keep the game's menu inside a phone's visible viewport after launch.
+    if (matchMedia('(any-pointer: coarse)').matches) {
+      const headerHeight = document.querySelector('.header')?.getBoundingClientRect().height ?? 0;
+      window.scrollTo({top: window.scrollY + player.getBoundingClientRect().top - headerHeight, behavior: 'instant'});
+    }
     // A running game owns the page: preview loops stop streaming.
     document.documentElement.dataset.gameActive = '';
     updateLoops();

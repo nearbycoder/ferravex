@@ -1,0 +1,23 @@
+{
+ "game": "pantry-panic",
+ "loop": "loop.mp4",
+ "poster": "poster.webp",
+ "alt": "Pantry Panic: cooking service management campaign in play",
+ "width": 960,
+ "height": 600,
+ "seconds": 6,
+ "stills": [
+  {
+   "file": "still-1.webp",
+   "alt": "Pantry Panic: opening campaign decisions"
+  },
+  {
+   "file": "still-2.webp",
+   "alt": "Pantry Panic: campaign action and objectives"
+  },
+  {
+   "file": "still-3.webp",
+   "alt": "Pantry Panic: campaign progress"
+  }
+ ]
+}

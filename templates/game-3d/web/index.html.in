@@ -6,18 +6,24 @@
   <title>@@WINDOW_TITLE_HTML@@ · Ferravex</title>
   <style>
     * { box-sizing: border-box; }
-    html, body { margin: 0; height: 100%; background: #0e1623; color: #e4eef2; font: 14px system-ui; }
+    html, body { margin: 0; height: 100%; background: #080b14; color: #f2ede3;
+      font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
     body { display: flex; flex-direction: column; }
-    nav { min-height: 42px; padding: 6px 12px; display: flex; align-items: center; gap: 12px; }
-    nav span { flex: 1; }
-    button { font: inherit; color: inherit; border: 1px solid #5bd5d8; background: #141f2f; padding: 4px 12px; cursor: pointer; }
-    button:focus-visible, canvas:focus-visible { outline: 2px solid #f7b553; }
+    nav { min-height: 48px; padding: 8px 16px; display: flex; align-items: center; gap: 12px;
+      background: #121a2e; border-bottom: 1px solid #ffffff14; }
+    nav span { flex: 1; font-weight: 600; letter-spacing: .01em; }
+    nav small { color: #9aa7b8; font-weight: 400; margin-left: .5em; }
+    button { font: inherit; color: inherit; border: 1px solid #ffffff24; border-radius: 10px;
+      background: #2b3550; padding: 6px 14px; cursor: pointer; }
+    button:hover:not(:disabled) { background: #343f5c; }
+    button:disabled { opacity: .5; cursor: default; }
+    button:focus-visible, canvas:focus-visible { outline: 2px solid #ffc15e; outline-offset: 2px; }
     canvas { display: block; width: 100%; flex: 1; min-height: 0; touch-action: none; }
-    [role=status] { position: absolute; top: 45%; width: 100%; text-align: center; pointer-events: none; }
+    [role=status] { position: absolute; top: 45%; width: 100%; text-align: center; pointer-events: none; color: #9aa7b8; }
   </style>
 </head>
 <body>
-  <nav><span>@@WINDOW_TITLE_HTML@@ · @@DIMENSION@@</span><button type="button" data-controls aria-pressed="false" disabled>Controls (F2)</button></nav>
+  <nav><span>@@WINDOW_TITLE_HTML@@<small>Made with Ferravex</small></span><button type="button" data-controls aria-pressed="false" disabled>Controls (F2)</button></nav>
   <canvas tabindex="0" data-game="@@NAME@@" aria-label="@@WINDOW_TITLE_HTML@@ game: WASD or arrows to move, Enter to start, Escape to pause"></canvas>
   <div role="status">Loading game…</div>
   <script type="module" src="./runtime.js"></script>

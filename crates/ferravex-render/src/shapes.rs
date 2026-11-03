@@ -9,7 +9,10 @@
 //! heap allocation of its own.
 //!
 //! Vertex counts are bounded per call (see each function). Curves use 2–16
-//! segments per quarter turn, chosen from the on-screen radius. Coordinates are
+//! segments per quarter turn, chosen from the on-screen radius. Their unit
+//! directions come from tables built once per process, so the hot path runs no
+//! per-point trigonometry (arcs and round joins rotate incrementally and
+//! re-anchor every 16 steps). Coordinates are
 //! the current camera's logical units (pixels with the default camera).
 //! Non-finite or degenerate input draws nothing.
 //!
@@ -23,12 +26,15 @@
 //! shapes::fill_circle(vec2(80., 100.), 16., Color::from_hex(0xf7b553));
 //! shapes::glow_disc(vec2(80., 100.), 48., Color::new(1., 0.7, 0.3, 0.6));
 //! ```
-use crate::{Color, Rect, State, Vec2, Vec3, effects, vec2};
+use crate::{Color, Rect, State, Vec2, Vec3, Vec4, effects, vec2};
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
 /// Paint for filled shapes. Gradients are evaluated per vertex and interpolated
-/// by the GPU; linear gradients are exact on these convex fans, while radial
-/// gradients are exact along circle spokes and approximate inside other shapes.
+/// by the GPU; linear gradients are exact on these convex fans. A radial
+/// gradient on a circle it is centered on (reaching at least its edge) is
+/// exact along every spoke; on any other shape the fill is drawn on a
+/// subdivided mesh (four bands, long edges split) so the gradient follows its
+/// own circles instead of stretching to the outline.
 ///
 /// ```
 /// use ferravex_render::{Color, Rect, vec2, shapes::Fill};
@@ -288,52 +294,94 @@ impl Stroke {
 pub(crate) struct Sink<'a> {
     pub(crate) s: &'a mut State,
     start: u32,
+    /// Camera columns for `matrix * (x, y, 0, 1)`, read once per sink.
+    x: Vec4,
+    y: Vec4,
+    w: Vec4,
+    /// No lighting and no world palette: colors pass through unchanged.
+    plain: bool,
 }
 
 impl<'a> Sink<'a> {
     pub(crate) fn new(s: &'a mut State) -> Self {
         let start = s.vertices.len() as u32;
-        Self { s, start }
+        let m = s.matrix;
+        let plain = s.lighting.is_none() && !s.world_colors;
+        Self {
+            s,
+            start,
+            x: m.x_axis,
+            y: m.y_axis,
+            w: m.w_axis,
+            plain,
+        }
     }
     /// Logical units covered by one device pixel under the current camera.
     pub(crate) fn device_pixel(&self) -> f32 {
         Self::device_pixel_of(self.s)
     }
+    /// Reserves room for `count` more vertices with the stream's power-of-two
+    /// growth policy, so a bounded shape does not grow storage mid-call.
     #[inline]
-    fn vertex(&mut self, p: Vec2, mut c: Color) {
-        let p = p.extend(0.);
+    pub(crate) fn reserve(&mut self, count: usize) {
+        self.s.reserve_vertices(count);
+    }
+    /// One stream vertex: shaded color and `matrix * (x, y, 0, 1)` without the
+    /// zero z column, as in `State::push_flat_2d` (only the sign of an exact
+    /// zero can differ from the general product).
+    #[inline]
+    fn project(&self, p: Vec2, mut c: Color) -> [f32; 8] {
+        if !self.plain {
+            c = self.shade(p, c);
+        }
+        let v = self.x * p.x + self.y * p.y + self.w;
+        [v.x, v.y, v.z, v.w, c.r, c.g, c.b, c.a]
+    }
+    /// Lighting and world palette for one vertex, as `crate::draw_triangle`.
+    #[inline(never)]
+    fn shade(&self, p: Vec2, mut c: Color) -> Color {
         if let Some(l) = self.s.lighting {
-            c = l.shade_vertex(p, Vec3::Z, c);
+            c = l.shade_vertex(p.extend(0.), Vec3::Z, c);
         }
-        if self.s.world_colors {
-            c = self.s.look_override.unwrap_or(self.s.look).shade(c);
+        if let Some(look) = self.s.world_look() {
+            c = look.shade(c);
         }
-        let v = self.s.matrix * p.extend(1.);
-        self.s
-            .vertices
-            .push([v.x, v.y, v.z, v.w, c.r, c.g, c.b, c.a]);
+        c
     }
     #[inline]
     pub(crate) fn tri(&mut self, a: Vec2, ca: Color, b: Vec2, cb: Color, c: Vec2, cc: Color) {
-        self.vertex(a, ca);
-        self.vertex(b, cb);
-        self.vertex(c, cc);
+        let v = [
+            self.project(a, ca),
+            self.project(b, cb),
+            self.project(c, cc),
+        ];
+        self.s.vertices.extend_from_slice(&v);
     }
     /// Axis-aligned rectangle with the triangle order of `draw_rectangle`.
     #[inline]
     pub(crate) fn rect(&mut self, x: f32, y: f32, w: f32, h: f32, c: Color) {
-        let a = vec2(x, y);
-        let b = vec2(x + w, y);
-        let d = vec2(x, y + h);
-        let e = vec2(x + w, y + h);
-        self.tri(a, c, b, c, d, c);
-        self.tri(d, c, b, c, e, c);
+        self.rect_edges(x, y, x + w, y + h, c)
     }
-    /// Quad `p0 p1 p2 p3` in winding order.
+    /// [`Self::rect`] from its edges, for callers that must reproduce exact
+    /// edge arithmetic (such as merged runs of per-pixel text quads).
+    #[inline]
+    pub(crate) fn rect_edges(&mut self, left: f32, top: f32, right: f32, bottom: f32, c: Color) {
+        self.quad(
+            [
+                vec2(left, top),
+                vec2(right, top),
+                vec2(right, bottom),
+                vec2(left, bottom),
+            ],
+            [c; 4],
+        )
+    }
+    /// Quad `p0 p1 p2 p3` in winding order, as triangles `p0 p1 p3` and
+    /// `p3 p1 p2`. Each corner is projected once.
     #[inline]
     fn quad(&mut self, p: [Vec2; 4], c: [Color; 4]) {
-        self.tri(p[0], c[0], p[1], c[1], p[3], c[3]);
-        self.tri(p[3], c[3], p[1], c[1], p[2], c[2]);
+        let [a, b, e, d] = [0, 1, 2, 3].map(|i| self.project(p[i], c[i]));
+        self.s.vertices.extend_from_slice(&[a, b, d, d, b, e]);
     }
 }
 
@@ -350,12 +398,68 @@ impl Drop for Sink<'_> {
 // ---------------------------------------------------------------------------
 // Rounded-rectangle outlines: the shared core for rects, circles and capsules.
 
+/// Most segments per quarter turn chosen by [`quarter_segments`].
+const MAX_QUARTER: usize = 16;
+/// Most outline points: four quarters of `MAX_QUARTER + 1` points.
+const MAX_POINTS: usize = 4 * (MAX_QUARTER + 1);
+/// Corner directions of the four quarters, in outline order.
+const SIGNS: [Vec2; 4] = [vec2(1., 1.), vec2(-1., 1.), vec2(-1., -1.), vec2(1., -1.)];
+
+/// Unit vectors shared by every curved shape, built once per process with the
+/// exact angle expressions the shapes previously evaluated per point, so the
+/// geometry is bit-for-bit unchanged and no trigonometry runs per call.
+struct UnitTables {
+    /// `quarter[s][q * (s + 1) + step]` is the unit vector at
+    /// `(q + step / s) * π/2` for `s` in `1..=16` and quarter `q` in `0..4`.
+    quarter: [[Vec2; MAX_POINTS]; MAX_QUARTER + 1],
+    /// `circle[k][i]` is the unit vector at `i * τ / n` for `n = 4k`, `k` in
+    /// `1..=16`, and `circle[k][n]` repeats `circle[k][0]` to close the ring.
+    circle: [[Vec2; 4 * MAX_QUARTER + 1]; MAX_QUARTER + 1],
+}
+
+fn unit_tables() -> &'static UnitTables {
+    static TABLES: std::sync::OnceLock<UnitTables> = std::sync::OnceLock::new();
+    TABLES.get_or_init(|| {
+        let unit = |a: f32| vec2(a.cos(), a.sin());
+        let mut t = UnitTables {
+            quarter: [[Vec2::ZERO; MAX_POINTS]; MAX_QUARTER + 1],
+            circle: [[Vec2::ZERO; 4 * MAX_QUARTER + 1]; MAX_QUARTER + 1],
+        };
+        for s in 1..=MAX_QUARTER {
+            for i in 0..4 * (s + 1) {
+                let (quarter, step) = (i / (s + 1), i % (s + 1));
+                t.quarter[s][i] = unit((quarter as f32 + step as f32 / s as f32) * FRAC_PI_2);
+            }
+            let n = 4 * s;
+            for i in 0..n {
+                t.circle[s][i] = unit(i as f32 * TAU / n as f32);
+            }
+            t.circle[s][n] = t.circle[s][0];
+        }
+        t
+    })
+}
+
+/// `n + 1` unit vectors at `i * τ / n` for `i` in `0..n`, followed by the
+/// first again so consecutive pairs close the ring. `n` must be a multiple of
+/// four from 4 to 64 (other counts return `None`). Built once; no per-call trig.
+pub(crate) fn unit_circle(n: usize) -> Option<&'static [Vec2]> {
+    (n.is_multiple_of(4) && (4..=4 * MAX_QUARTER).contains(&n))
+        .then(|| &unit_tables().circle[n / 4][..=n])
+}
+
 /// Segments per quarter turn for a radius in device pixels.
 fn quarter_segments(radius_px: f32) -> usize {
     if radius_px.is_nan() || radius_px <= 0.5 {
         return 1;
     }
-    ((radius_px.sqrt() * 1.5).ceil() as usize).clamp(2, 16)
+    ((radius_px.sqrt() * 1.5).ceil() as usize).clamp(2, MAX_QUARTER)
+}
+
+/// Segments for a full turn of a curve with `radius_px` device pixels: four
+/// times [`quarter_segments`], so always a multiple of four from 4 to 64.
+pub(crate) fn curve_segments(radius_px: f32) -> usize {
+    quarter_segments(radius_px) * 4
 }
 
 /// A rounded rectangle centered at `center` with unit axis `ax` (its local +X).
@@ -366,6 +470,12 @@ struct Outline {
     half: Vec2,
     radius: f32,
     segments: usize,
+}
+
+/// One offset copy of an outline: its points and their (faded) colors.
+struct Ring {
+    points: [Vec2; MAX_POINTS],
+    colors: [Color; MAX_POINTS],
 }
 
 impl Outline {
@@ -386,61 +496,210 @@ impl Outline {
     fn points(&self) -> usize {
         4 * (self.segments + 1)
     }
-    /// Point `i` of the outline grown by `offset` (negative shrinks).
-    fn point(&self, i: usize, offset: f32) -> Vec2 {
+    /// The outline grown by `offset` (negative shrinks), with `fill` faded by
+    /// `alpha` at each point. Uses the shared quarter-arc table.
+    fn ring(&self, offset: f32, fill: &Fill, alpha: f32) -> Ring {
         let half = (self.half + Vec2::splat(offset)).max(Vec2::ZERO);
         let radius = (self.radius + offset).clamp(0., half.x.min(half.y));
-        let quarter = i / (self.segments + 1);
-        let step = i % (self.segments + 1);
-        let angle = (quarter as f32 + step as f32 / self.segments as f32) * FRAC_PI_2;
-        let sign = match quarter {
-            0 => vec2(1., 1.),
-            1 => vec2(-1., 1.),
-            2 => vec2(-1., -1.),
-            _ => vec2(1., -1.),
-        };
-        let local = (half - Vec2::splat(radius)) * sign + vec2(angle.cos(), angle.sin()) * radius;
+        let corner = half - Vec2::splat(radius);
         let ay = self.ax.perp();
-        self.center + self.ax * local.x + ay * local.y
+        let per = self.segments + 1;
+        let units = &unit_tables().quarter[self.segments.clamp(1, MAX_QUARTER)];
+        let mut ring = Ring {
+            points: [Vec2::ZERO; MAX_POINTS],
+            colors: [Color::new(0., 0., 0., 0.); MAX_POINTS],
+        };
+        for (q, sign) in SIGNS.into_iter().enumerate() {
+            let base = corner * sign;
+            let span = q * per..(q + 1) * per;
+            for (point, unit) in ring.points[span.clone()].iter_mut().zip(&units[span]) {
+                let local = base + *unit * radius;
+                *point = self.center + self.ax * local.x + ay * local.y;
+            }
+        }
+        let n = self.points();
+        match *fill {
+            Fill::Solid(c) => ring.colors[..n].fill(fade(c, alpha)),
+            _ => {
+                for (c, p) in ring.colors[..n].iter_mut().zip(&ring.points[..n]) {
+                    *c = fade(fill.at(*p), alpha);
+                }
+            }
+        }
+        ring
     }
-    /// Filled interior up to `offset`, as a fan from the center.
-    fn fan(&self, sink: &mut Sink, offset: f32, fill: &Fill, alpha: f32) {
+    /// Filled interior of `ring`, as a fan from the center.
+    fn fan(&self, sink: &mut Sink, ring: &Ring, fill: &Fill, alpha: f32) {
         let n = self.points();
         let center = fade(fill.at(self.center), alpha);
-        let mut prev = self.point(n - 1, offset);
-        let mut prev_c = fade(fill.at(prev), alpha);
+        sink.reserve(n * 3);
+        let mut prev = n - 1;
         for i in 0..n {
-            let p = self.point(i, offset);
-            let c = fade(fill.at(p), alpha);
-            sink.tri(self.center, center, prev, prev_c, p, c);
-            prev = p;
-            prev_c = c;
+            sink.tri(
+                self.center,
+                center,
+                ring.points[prev],
+                ring.colors[prev],
+                ring.points[i],
+                ring.colors[i],
+            );
+            prev = i;
         }
     }
-    /// Strip between two offset outlines with separate alpha multipliers.
-    fn strip(&self, sink: &mut Sink, inner: (f32, f32), outer: (f32, f32), fill: &Fill) {
+    /// Strip between two offset rings.
+    fn strip(&self, sink: &mut Sink, inner: &Ring, outer: &Ring) {
         let n = self.points();
-        let at = |i: usize| {
-            let a = self.point(i % n, inner.0);
-            let b = self.point(i % n, outer.0);
-            (a, fade(fill.at(a), inner.1), b, fade(fill.at(b), outer.1))
-        };
-        let mut prev = at(n - 1);
+        sink.reserve(n * 6);
+        let mut prev = n - 1;
         for i in 0..n {
-            let next = at(i);
             sink.quad(
-                [prev.0, next.0, next.2, prev.2],
-                [prev.1, next.1, next.3, prev.3],
+                [
+                    inner.points[prev],
+                    inner.points[i],
+                    outer.points[i],
+                    outer.points[prev],
+                ],
+                [
+                    inner.colors[prev],
+                    inner.colors[i],
+                    outer.colors[i],
+                    outer.colors[prev],
+                ],
             );
-            prev = next;
+            prev = i;
         }
     }
 }
 
-fn filled(outline: Outline, fill: Fill, sink: &mut Sink, px: f32) {
+/// Most subdivisions of one straight edge for a radial fill.
+const MAX_EDGE: usize = 8;
+/// Most points of a subdivided radial-fill ring.
+const MAX_DENSE: usize = MAX_POINTS + 4 * (MAX_EDGE - 1);
+/// Most interior rings of a subdivided radial fill (the outline is the last).
+const RADIAL_RINGS: usize = 4;
+
+/// A center fan only reproduces a radial gradient on a circle centered on the
+/// gradient whose radius reaches the circle's edge: then every spoke is the
+/// gradient's own linear ramp. Every other shape needs subdivision.
+fn radial_is_exact(outline: &Outline, center: Vec2, radius: f32, px: f32) -> bool {
+    let eps = px * 1e-3;
+    (outline.half.x - outline.half.y).abs() <= eps
+        && outline.radius >= outline.half.x - eps
+        && (center - outline.center).length() <= eps
+        && radius >= outline.radius - eps
+}
+
+/// A radial fill on a polar mesh: straight edges are subdivided and the
+/// interior is split into two to [`RADIAL_RINGS`] concentric bands (one per
+/// 16 device pixels of half extent), each vertex sampling the gradient.
+/// Without it a long edge spans one fan triangle and the gradient stretches
+/// into a rectangular patch.
+fn filled_radial(outline: Outline, fill: Fill, radius: f32, sink: &mut Sink, px: f32) {
     let f = px * 0.5;
-    outline.fan(sink, -f, &fill, 1.);
-    outline.strip(sink, (-f, 1.), (f, 0.), &fill);
+    let n = outline.points();
+    let per = outline.segments + 1;
+    let corner = outline.half - Vec2::splat(outline.radius);
+    // About two subdivisions per gradient radius, at least 8 device pixels.
+    let step = (radius * 0.5).max(px * 8.);
+    let pieces = |length: f32| ((length / step).ceil() as usize).clamp(1, MAX_EDGE);
+    let edges = [pieces(2. * corner.x), pieces(2. * corner.y)];
+    let dense = |offset: f32| {
+        let base = outline.ring(offset, &Fill::Solid(Color::new(0., 0., 0., 0.)), 0.);
+        let mut out = [Vec2::ZERO; MAX_DENSE];
+        let mut len = 0;
+        for q in 0..4 {
+            for &p in &base.points[q * per..(q + 1) * per] {
+                out[len] = p;
+                len += 1;
+            }
+            // Quarters 0 and 2 end on horizontal edges, 1 and 3 on vertical.
+            let pieces = edges[q % 2];
+            let (a, b) = (
+                base.points[(q + 1) * per - 1],
+                base.points[(q + 1) * per % n],
+            );
+            for j in 1..pieces {
+                out[len] = a + (b - a) * (j as f32 / pieces as f32);
+                len += 1;
+            }
+        }
+        (out, len)
+    };
+    let colors = |points: &[Vec2], alpha: f32| {
+        let mut out = [Color::new(0., 0., 0., 0.); MAX_DENSE];
+        for (c, p) in out.iter_mut().zip(points) {
+            *c = fade(fill.at(*p), alpha);
+        }
+        out
+    };
+    let (edge, len) = dense(-f);
+    let (outer, _) = dense(f);
+    let center = outline.center;
+    let rings =
+        ((outline.half.x.max(outline.half.y) / px / 16.).ceil() as usize).clamp(2, RADIAL_RINGS);
+    let scaled = |k: usize| {
+        let mut out = [Vec2::ZERO; MAX_DENSE];
+        let t = k as f32 / rings as f32;
+        for (o, p) in out.iter_mut().zip(&edge[..len]) {
+            *o = if k == rings {
+                *p
+            } else {
+                center + (*p - center) * t
+            };
+        }
+        out
+    };
+    sink.reserve(len * (3 + 6 * rings));
+    let hub = fill.at(center);
+    let mut ring = scaled(1);
+    let mut ring_colors = colors(&ring[..len], 1.);
+    let mut prev = len - 1;
+    for i in 0..len {
+        sink.tri(
+            center,
+            hub,
+            ring[prev],
+            ring_colors[prev],
+            ring[i],
+            ring_colors[i],
+        );
+        prev = i;
+    }
+    let band = |sink: &mut Sink, a: &[Vec2], ca: &[Color], b: &[Vec2], cb: &[Color]| {
+        let mut prev = len - 1;
+        for i in 0..len {
+            sink.quad(
+                [a[prev], a[i], b[i], b[prev]],
+                [ca[prev], ca[i], cb[i], cb[prev]],
+            );
+            prev = i;
+        }
+    };
+    for k in 2..=rings {
+        let next = scaled(k);
+        let next_colors = colors(&next[..len], 1.);
+        band(sink, &ring, &ring_colors, &next, &next_colors);
+        (ring, ring_colors) = (next, next_colors);
+    }
+    band(
+        sink,
+        &ring,
+        &ring_colors,
+        &outer,
+        &colors(&outer[..len], 0.),
+    );
+}
+
+fn filled(outline: Outline, fill: Fill, sink: &mut Sink, px: f32) {
+    if let Fill::Radial { center, radius, .. } = fill
+        && !radial_is_exact(&outline, center, radius, px)
+    {
+        return filled_radial(outline, fill, radius, sink, px);
+    }
+    let f = px * 0.5;
+    let inner = outline.ring(-f, &fill, 1.);
+    outline.fan(sink, &inner, &fill, 1.);
+    outline.strip(sink, &inner, &outline.ring(f, &fill, 0.));
 }
 
 fn stroked(outline: Outline, width: f32, color: Color, sink: &mut Sink, px: f32) {
@@ -448,9 +707,15 @@ fn stroked(outline: Outline, width: f32, color: Color, sink: &mut Sink, px: f32)
     let half = (width * 0.5).max(f);
     let alpha = (width / px).min(1.);
     let fill = Fill::Solid(color);
-    outline.strip(sink, (-half - f, 0.), (-half + f, alpha), &fill);
-    outline.strip(sink, (-half + f, alpha), (half - f, alpha), &fill);
-    outline.strip(sink, (half - f, alpha), (half + f, 0.), &fill);
+    let rings = [
+        outline.ring(-half - f, &fill, 0.),
+        outline.ring(-half + f, &fill, alpha),
+        outline.ring(half - f, &fill, alpha),
+        outline.ring(half + f, &fill, 0.),
+    ];
+    for pair in rings.windows(2) {
+        outline.strip(sink, &pair[0], &pair[1]);
+    }
 }
 
 fn with_sink<R>(draw: impl FnOnce(&mut Sink, f32) -> R) -> R {
@@ -463,7 +728,7 @@ fn with_sink<R>(draw: impl FnOnce(&mut Sink, f32) -> R) -> R {
 
 /// Filled, anti-aliased rounded rectangle. `radius` is clamped to half the
 /// shorter side; zero gives crisp-but-smooth square corners.
-/// Emits at most 612 vertices.
+/// Emits at most 612 vertices, or 2,592 for a subdivided [`Fill::Radial`].
 ///
 /// ```
 /// use ferravex_render::{Color, Rect, shapes};
@@ -509,7 +774,8 @@ fn circle_rect(center: Vec2, radius: f32) -> Rect {
     )
 }
 
-/// Filled, anti-aliased circle (up to 64 segments). Emits at most 612 vertices.
+/// Filled, anti-aliased circle (up to 64 segments). Emits at most 612 vertices,
+/// or 2,592 for a radial fill that is not centered on the circle.
 ///
 /// ```
 /// use ferravex_render::{Color, vec2, shapes::{self, Fill}};
@@ -532,7 +798,8 @@ pub fn stroke_circle(center: Vec2, radius: f32, width: f32, color: Color) {
 }
 
 /// Filled, anti-aliased capsule (a segment with round ends) of `radius`.
-/// Coincident end points draw a circle. Emits at most 612 vertices.
+/// Coincident end points draw a circle. Emits at most 612 vertices, or 2,592
+/// for a subdivided [`Fill::Radial`].
 ///
 /// ```
 /// use ferravex_render::{Color, vec2, shapes};
@@ -595,11 +862,10 @@ pub fn drop_shadow(rect: Rect, radius: f32, shadow: Shadow) {
         // Smoothstep alpha at five evenly spaced offsets.
         const T: [f32; 5] = [0., 0.25, 0.5, 0.75, 1.];
         let alpha = |t: f32| 1. - t * t * (3. - 2. * t);
-        outline.fan(sink, -half, &fill, 1.);
-        for k in 0..4 {
-            let a = -half + T[k] * blur;
-            let b = -half + T[k + 1] * blur;
-            outline.strip(sink, (a, alpha(T[k])), (b, alpha(T[k + 1])), &fill);
+        let rings = T.map(|t| outline.ring(-half + t * blur, &fill, alpha(t)));
+        outline.fan(sink, &rings[0], &fill, 1.);
+        for pair in rings.windows(2) {
+            outline.strip(sink, &pair[0], &pair[1]);
         }
     })
 }
@@ -653,12 +919,10 @@ impl Strokes<'_, '_> {
     }
     /// Sections around `p` sweeping the normal from `from` by `angle` radians.
     fn sweep(&mut self, p: Vec2, from: Vec2, angle: f32, steps: usize) {
-        for i in 0..=steps {
-            let a = angle * i as f32 / steps as f32;
-            let (sin, cos) = a.sin_cos();
-            let n = vec2(from.x * cos - from.y * sin, from.x * sin + from.y * cos);
+        turn(0., angle, steps, |_, u| {
+            let n = vec2(from.x * u.x - from.y * u.y, from.x * u.y + from.y * u.x);
             self.section(p, n, 1.);
-        }
+        });
     }
     fn cap(&mut self, p: Vec2, dir: Vec2, cap: Cap, start: bool, steps: usize) {
         let n = dir.perp();
@@ -706,6 +970,26 @@ impl Strokes<'_, '_> {
             1
         };
         self.sweep(p, n_in, angle, steps);
+    }
+}
+
+/// Calls `f(i, (cos a, sin a))` for `a = start + sweep * i / steps`, `i` in
+/// `0..=steps` (`steps > 0`). Directions advance by one rotation per step and
+/// are re-anchored with an exact `sin_cos` every 16 steps, so curves need
+/// about one trigonometric evaluation per 16 points and stay within a few
+/// ulps of the directly evaluated angles.
+fn turn(start: f32, sweep: f32, steps: usize, mut f: impl FnMut(usize, Vec2)) {
+    const ANCHOR: usize = 16;
+    let (ds, dc) = (sweep / steps as f32).sin_cos();
+    let mut u = Vec2::ZERO;
+    for i in 0..=steps {
+        u = if i % ANCHOR == 0 || i == steps {
+            let (s, c) = (start + sweep * i as f32 / steps as f32).sin_cos();
+            vec2(c, s)
+        } else {
+            vec2(u.x * dc - u.y * ds, u.x * ds + u.y * dc)
+        };
+        f(i, u);
     }
 }
 
@@ -834,27 +1118,15 @@ pub fn stroke_arc(center: Vec2, radius: f32, start: f32, sweep: f32, stroke: Str
             fringe,
             prev: None,
         };
-        let at = |a: f32| vec2(a.cos(), a.sin());
-        let tangent = |a: f32| at(a).perp() * sweep.signum();
-        strokes.cap(
-            center + at(start) * radius,
-            tangent(start),
-            stroke.cap,
-            true,
-            cap_steps,
-        );
-        for i in 1..steps {
-            let a = start + sweep * i as f32 / steps as f32;
-            strokes.section(center + at(a) * radius, at(a) * -sweep.signum(), 1.);
-        }
-        let end = start + sweep;
-        strokes.cap(
-            center + at(end) * radius,
-            tangent(end),
-            stroke.cap,
-            false,
-            cap_steps,
-        );
+        let sign = sweep.signum();
+        turn(start, sweep, steps, |i, at| {
+            if i == 0 || i == steps {
+                let p = center + at * radius;
+                strokes.cap(p, at.perp() * sign, stroke.cap, i == 0, cap_steps);
+            } else {
+                strokes.section(center + at * radius, at * -sign, 1.);
+            }
+        });
     })
 }
 
@@ -865,26 +1137,50 @@ fn glow_segments(radius: f32, px: f32) -> usize {
     (quarter_segments(radius / px) * 4).clamp(12, 48)
 }
 
-/// Draws additive triangles from `count` lazily generated triangles.
-fn additive(count: usize, triangle: impl Fn(usize) -> [(Vec2, Color); 3]) {
+/// `n + 1` unit directions for a glow of `n` segments (a multiple of four).
+fn glow_units(n: usize) -> &'static [Vec2] {
+    unit_circle(n).expect("glow segment counts are multiples of four in 12..=48")
+}
+
+/// Writes additive triangles through the [`effects::draw_triangles`] path:
+/// the same validation, per-frame budget and batch flags, without adapters.
+fn additive(emit: impl FnOnce(&mut Additive)) {
     let style = effects::EffectStyle {
         blend: effects::EffectBlend::Additive,
         depth_test: None,
         depth_write: false,
     };
-    effects::draw_triangles(
-        (0..count).map(|i| {
-            let t = triangle(i);
-            effects::RibbonTriangle {
-                vertices: t.map(|(p, c)| effects::RibbonVertex {
-                    position: [p.x, p.y, 0.],
-                    color: [c.r, c.g, c.b, c.a],
-                    uv: [0., 0.],
-                }),
+    effects::write_triangles(style, |writer| emit(&mut Additive(writer)));
+}
+
+struct Additive<'w, 's>(&'w mut effects::TriangleWriter<'s>);
+
+impl Additive<'_, '_> {
+    /// One triangle; false once the effect budget is exhausted.
+    #[inline]
+    fn tri(&mut self, t: [(Vec2, Color); 3]) -> bool {
+        self.0
+            .push(t.map(|(p, c)| ([p.x, p.y, 0.], [c.r, c.g, c.b, c.a])))
+    }
+    /// Two triangles per segment between consecutive glow rings, ring by ring,
+    /// in the order the glows have always used. `point(ring, i)`, `i` in `0..=n`.
+    fn bands(
+        &mut self,
+        rings: std::ops::Range<usize>,
+        n: usize,
+        point: impl Fn(usize, usize) -> (Vec2, Color),
+    ) {
+        for ring in rings {
+            let (mut a, mut c) = (point(ring, 0), point(ring + 1, 0));
+            for i in 0..n {
+                let (b, d) = (point(ring, i + 1), point(ring + 1, i + 1));
+                if !(self.tri([a, c, d]) && self.tri([a, d, b])) {
+                    return;
+                }
+                (a, c) = (b, d);
             }
-        }),
-        style,
-    );
+        }
+    }
 }
 
 /// Rings for a glow spanning `extent` device pixels: enough that the
@@ -911,27 +1207,26 @@ pub fn glow_disc(center: Vec2, radius: f32, color: Color) {
     let px = crate::read(Sink::device_pixel_of);
     let n = glow_segments(radius, px);
     let rings = glow_rings(radius / px);
+    let units = glow_units(n);
     let point = |ring: usize, i: usize| {
-        let a = (i % n) as f32 * TAU / n as f32;
         let t = ring as f32 / rings as f32;
         (
-            center + vec2(a.cos(), a.sin()) * radius * t,
+            center + units[i] * radius * t,
             fade(color, (1. - t) * (1. - t)),
         )
     };
     // One fan to the first ring, then two triangles per segment per ring gap.
-    additive(n + (rings - 1) * n * 2, |k| {
-        if k < n {
-            return [point(0, 0), point(1, k), point(1, k + 1)];
+    additive(|out| {
+        let hub = point(0, 0);
+        let mut prev = point(1, 0);
+        for k in 0..n {
+            let next = point(1, k + 1);
+            if !out.tri([hub, prev, next]) {
+                return;
+            }
+            prev = next;
         }
-        let k = k - n;
-        let ring = 1 + k / (2 * n);
-        let i = (k % (2 * n)) / 2;
-        if k.is_multiple_of(2) {
-            [point(ring, i), point(ring + 1, i), point(ring + 1, i + 1)]
-        } else {
-            [point(ring, i), point(ring + 1, i + 1), point(ring, i + 1)]
-        }
+        out.bands(1..rings, n, point);
     });
 }
 
@@ -959,25 +1254,14 @@ pub fn glow_ring(center: Vec2, radius: f32, width: f32, color: Color) {
     // Bands per side of the center line.
     let side = glow_rings(width * 0.5 / px);
     let bands = 2 * side;
+    let units = glow_units(n);
     let point = |band: usize, i: usize| {
-        let a = (i % n) as f32 * TAU / n as f32;
         let u = band as f32 / side as f32 - 1.;
         let r = (radius + u * width * 0.5).max(0.);
         let falloff = 1. - u.abs();
-        (
-            center + vec2(a.cos(), a.sin()) * r,
-            fade(color, falloff * falloff),
-        )
+        (center + units[i] * r, fade(color, falloff * falloff))
     };
-    additive(bands * n * 2, |k| {
-        let band = k / (2 * n);
-        let i = (k % (2 * n)) / 2;
-        if k.is_multiple_of(2) {
-            [point(band, i), point(band + 1, i), point(band + 1, i + 1)]
-        } else {
-            [point(band, i), point(band + 1, i + 1), point(band, i + 1)]
-        }
-    });
+    additive(|out| out.bands(0..bands, n, point));
 }
 
 impl Sink<'_> {
@@ -1181,6 +1465,47 @@ pub(crate) mod tests {
             (b[0] - 8.5).abs() < 1e-3 && (b[1] - 8.5).abs() < 1e-3,
             "{b:?}"
         );
+    }
+
+    /// Largest difference between the GPU-interpolated color at each opaque
+    /// triangle's centroid and the gradient evaluated there.
+    fn worst_centroid_error(v: &[[f32; 8]], w: f32, h: f32, fill: Fill) -> f32 {
+        v.chunks(3)
+            .filter(|t| t.iter().all(|v| v[7] > 0.999))
+            .map(|t| {
+                let p = t
+                    .iter()
+                    .map(|v| screen(v, w, h))
+                    .fold(Vec2::ZERO, |a, b| a + b)
+                    / 3.;
+                let interpolated = t.iter().map(|v| v[4]).sum::<f32>() / 3.;
+                (interpolated - fill.at(p).r).abs()
+            })
+            .fold(0., f32::max)
+    }
+
+    #[test]
+    fn radial_fills_on_long_rects_follow_the_gradient_not_the_outline() {
+        let (black, white) = (Color::new(0., 0., 0., 1.), Color::new(1., 1., 1., 1.));
+        let rect = Rect::new(40., 40., 520., 120.);
+        let fill = Fill::radial(rect.center(), 70., white, black);
+        let v = capture(600, 200, || fill_rounded_rect(rect, 12., fill));
+        assert!(v.len() <= 2592 && v.len() % 3 == 0, "{}", v.len());
+        // Every vertex samples the gradient; the subdivided mesh keeps the
+        // interpolation close between them. A single fan from the center
+        // stretches white across each long edge (error near 0.8).
+        assert!(v.iter().flatten().all(|x| x.is_finite()));
+        let error = worst_centroid_error(&v, 600., 200., fill);
+        assert!(error < 0.2, "centroid error {error}");
+        // Off-center gradients on circles are subdivided as well.
+        let c = vec2(100., 100.);
+        let off = Fill::radial(c + vec2(30., -20.), 50., white, black);
+        let v = capture(200, 200, || fill_circle(c, 80., off));
+        assert!(worst_centroid_error(&v, 200., 200., off) < 0.2);
+        // A concentric circle keeps its exact single fan (as before).
+        let exact = Fill::radial(c, 80., white, black);
+        let fan = capture(200, 200, || fill_circle(c, 80., exact));
+        assert!(fan.len() <= 612, "{}", fan.len());
     }
 
     #[test]

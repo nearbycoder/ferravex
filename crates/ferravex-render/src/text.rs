@@ -903,7 +903,7 @@ mod tests {
     ];
 
     #[test]
-    fn legacy_draw_text_ex_is_unchanged_and_styled_text_saves_vertices() {
+    fn legacy_draw_text_ex_merges_row_runs_and_styled_text_saves_vertices() {
         use crate::{TextParams, draw_text_ex};
         let (w, h) = (420, 240);
         let v = capture(w as u32, h as u32, || {
@@ -922,13 +922,15 @@ mod tests {
         });
         // Expected per-pixel coverage from the bitmaps.
         let mut expected = vec![0_u8; w * h];
-        let mut lit = 0;
+        let (mut lit, mut runs) = (0, 0);
         for (i, line) in HUD.iter().enumerate() {
             for (k, c) in line.chars().enumerate() {
                 for (row, bits) in font::glyph(c).into_iter().enumerate() {
                     for col in 0..5 {
-                        if bits & (1 << (4 - col)) != 0 {
+                        let on = |col: usize| col < 5 && bits & (1 << (4 - col)) != 0;
+                        if on(col) {
                             lit += 1;
+                            runs += usize::from(col == 0 || !on(col - 1));
                             let x0 = 4 + k * 12 + col * 2;
                             let y0 = (20 + i * 22) - 14 + row * 2;
                             for y in y0..y0 + 2 {
@@ -942,9 +944,16 @@ mod tests {
             }
         }
         assert_eq!(coverage(&v, w, h), expected);
-        // Legacy contract: exactly one 6-vertex quad per lit font pixel,
-        // identical to per-pixel draw_rectangle calls.
-        assert_eq!(v.len(), lit * 6);
+        // One 6-vertex quad per maximal horizontal run of lit font pixels,
+        // each exactly one font pixel (2 units) tall, matching the
+        // per-pixel `draw_rectangle` reference coverage with fewer vertices.
+        assert_eq!(v.len(), runs * 6);
+        assert!(runs * 3 < lit * 2, "runs {runs}, lit pixels {lit}");
+        for quad in v.chunks(6) {
+            let ys = quad.iter().map(|v| (1. - v[1]) * h as f32 * 0.5);
+            let (lo, hi) = ys.fold((f32::MAX, f32::MIN), |(lo, hi), y| (lo.min(y), hi.max(y)));
+            assert!((hi - lo - 2.).abs() < 1e-3, "{lo}..{hi}");
+        }
         let reference = capture(w as u32, h as u32, || {
             for (i, line) in HUD.iter().enumerate() {
                 let mut x = 4.;
@@ -961,8 +970,9 @@ mod tests {
                 }
             }
         });
-        assert_eq!(v, reference);
-        let per_pixel = v.len();
+        assert_eq!(reference.len(), lit * 6);
+        assert_eq!(coverage(&v, w, h), coverage(&reference, w, h));
+        let per_pixel = lit * 6;
         let modern = capture(w as u32, h as u32, || {
             for (i, line) in HUD.iter().enumerate() {
                 draw_text_styled(
@@ -986,8 +996,9 @@ mod tests {
         })
         .len();
         println!(
-            "HUD vertices: classic draw_text_ex {per_pixel}, classic styled {classic_styled} \
+            "HUD vertices: per-pixel {per_pixel}, classic draw_text_ex runs {}, classic styled {classic_styled} \
              ({:.0}% fewer), modern styled {modern} ({:.0}% fewer)",
+            v.len(),
             100. * (1. - classic_styled as f32 / per_pixel as f32),
             100. * (1. - modern as f32 / per_pixel as f32),
         );

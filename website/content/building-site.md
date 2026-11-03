@@ -10,7 +10,7 @@ python3 -B scripts/test_site.py
 python3 scripts/serve-site.py --port 8080
 ```
 
-Open http://127.0.0.1:8080/. The build audits the workspace, compiles the nineteen catalog examples for WebAssembly, stages their original hosts and shared runtime, generates first-party Rust API documentation and writes `dist/site`. Web, API and site output are rebuilt from clean directories so stale adapters and loaders cannot survive. No external runtime packages are fetched.
+Open http://127.0.0.1:8080/. The build audits the workspace, compiles all catalog examples for WebAssembly, stages their original hosts and shared runtime, generates first-party Rust API documentation and writes `dist/site`. Web, API and site output are rebuilt from clean directories so stale adapters and loaders cannot survive. No external runtime packages are fetched.
 
 For content-only changes after a complete local build:
 
@@ -45,7 +45,7 @@ node scripts/capture-media.mjs encode
 node scripts/capture-media.mjs post
 ```
 
-The tool needs Node 22 or newer, Google Chrome or Chromium with working GPU WebGL2, and `ffmpeg` built with `libx264` and `libwebp`. These are maintainer-only requirements, not site, game or engine dependencies. `record` plays each game's `?autoplay` demo (or a short scripted input for Courtyard and Orbit Breaker) in headless Chrome and saves a raw session plus a contact sheet in `target/media-capture/`. `encode` cuts each loop and its stills at the timings in the script's `SHOTS` table. Timings can drift between recordings, so check every contact sheet, loop and still before committing. Keep each loop under 450 KB and all media under 12 MB; `python3 -B scripts/build-site.py --self-test` checks both limits.
+The tool needs Node 22 or newer, Google Chrome or Chromium with working GPU WebGL2, and `ffmpeg` built with `libx264` and `libwebp`. These are maintainer-only requirements, not site, game or engine dependencies. `record` plays each game's `?autoplay` demonstration (or a short scripted input for Courtyard and Orbit Breaker) in headless Chrome and saves a raw session plus a contact sheet in `target/media-capture/`. `encode` cuts each loop and its stills at the timings in the script's `SHOTS` table. Timings can drift between recordings, so check every contact sheet, loop and still before committing. Keep each loop under 450 KiB and total media within an average of 640 KiB per catalog entry; `python3 -B scripts/build-site.py --self-test` checks both limits. Use `--only mosslight,signalbox` to capture selected games and `--directory target/games20/web` to read an isolated staging directory. A filtered `all` capture leaves unrelated game media alone.
 
 Pages load posters first. `site.js` creates a muted `<video>` only for loops that are visible, hovered or centered on touch screens. At most four play at once (two on phones), and none autoplay when reduced motion or Save-Data is on, or after a visitor pauses motion.
 

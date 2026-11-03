@@ -1,0 +1,23 @@
+{
+ "game": "gilded-deck",
+ "loop": "loop.mp4",
+ "poster": "poster.webp",
+ "alt": "Gilded Deck: roguelike deck-building campaign in play",
+ "width": 960,
+ "height": 600,
+ "seconds": 6,
+ "stills": [
+  {
+   "file": "still-1.webp",
+   "alt": "Gilded Deck: opening campaign decisions"
+  },
+  {
+   "file": "still-2.webp",
+   "alt": "Gilded Deck: campaign action and objectives"
+  },
+  {
+   "file": "still-3.webp",
+   "alt": "Gilded Deck: campaign progress"
+  }
+ ]
+}

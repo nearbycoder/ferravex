@@ -1,0 +1,23 @@
+{
+ "game": "paper-alibi",
+ "loop": "loop.mp4",
+ "poster": "poster.webp",
+ "alt": "Paper Alibi: detective deduction adventure campaign in play",
+ "width": 960,
+ "height": 600,
+ "seconds": 6,
+ "stills": [
+  {
+   "file": "still-1.webp",
+   "alt": "Paper Alibi: opening campaign decisions"
+  },
+  {
+   "file": "still-2.webp",
+   "alt": "Paper Alibi: campaign action and objectives"
+  },
+  {
+   "file": "still-3.webp",
+   "alt": "Paper Alibi: campaign progress"
+  }
+ ]
+}

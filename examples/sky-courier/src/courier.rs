@@ -65,9 +65,9 @@ pub(super) enum DropGrade {
 impl DropGrade {
     pub fn name(self) -> &'static str {
         match self {
-            Self::Bullseye => "BULLSEYE DROP",
-            Self::Smooth => "SMOOTH DROP",
-            Self::Bumpy => "BUMPY DROP",
+            Self::Bullseye => "Bullseye drop",
+            Self::Smooth => "Smooth drop",
+            Self::Bumpy => "Bumpy drop",
         }
     }
     fn tip(self) -> u32 {

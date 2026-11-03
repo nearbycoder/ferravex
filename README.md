@@ -14,8 +14,16 @@ latest source by a revision or two.
 
 ## The games
 
-Nineteen games and labs run in the browser with nothing to install. Each one is
+Thirty-nine games and labs run in the browser with nothing to install. Each one is
 built on the same engine, and its source is a click away.
+
+[The Twenty](docs/GAMES_20.md) adds twenty complete campaigns: dungeon exploration,
+rail dispatch, sailing trade, farming, detective cases, rhythm concerts, squad
+tactics, submarine rescue, space crafting, cooking, optics puzzles, racket sports,
+firefighting, deck building, lander deliveries, stealth, robot programming,
+excavation, naval artillery and kingdom decisions. Each has its own rules, content,
+procedural art, guide, ending and retry flow. The collection guide links every game
+and records validation and play instructions.
 
 <table>
 <tr>
@@ -54,7 +62,7 @@ built on the same engine, and its source is a click away.
 </table>
 
 The [catalog](examples/catalog.json) is the source of truth for IDs, controls and
-hosts. Seventeen games use the shared `ferravex-render` runtime; Courtyard keeps its
+hosts. Thirty-seven games use the shared `ferravex-render` runtime; Courtyard keeps its
 instanced WebGL2 renderer and Orbit Breaker presents its Rust framebuffer through
 Canvas2D. The [player guide](docs/PLAYER_GUIDE.md) covers the controls, settings,
 accessibility options and troubleshooting tools every game shares.
@@ -113,17 +121,21 @@ interoperate automatically. See the [netcode API](crates/ferravex-fps/README.md)
 
 ## Make your own game
 
-The [getting-started guide](website/content/getting-started.md) walks through
-setup and the 2D/3D project generator. From this checkout, create a new sibling
-project (the destination must not exist):
+Three commands take you from this checkout to a playable, polished starter game:
 
 ```sh
-python3 -B scripts/ferravex.py new moon-garden ../moon-garden --template 2d --tick-rate 120 --window-title 'Moon Garden'
+python3 -B scripts/ferravex.py new moon-garden   # add --template 3d for 3D
 cd ../moon-garden
-cargo test --offline --locked --jobs 2
+cargo run
 ```
 
-Use `--template 3d` for a 3D view. The generator seeds a separate workspace and
+Rules live in `src/game.rs`; `src/lib.rs` and `src/hud.rs` draw them with the
+modern UI kit, anti-aliased shapes and a subtle post-processing look. Run
+`python3 scripts/build-web.py --serve` inside the project to play it in the
+browser. The [getting-started guide](website/content/getting-started.md) covers
+setup checks, both templates and every generator option.
+
+The generator seeds a separate workspace and
 lockfile and records provenance in `ferravex.json`. Follow its README for native
 rendering and its own `target/web` browser build. To use the facade in an
 existing project, add this manifest excerpt, adjusting the local path:

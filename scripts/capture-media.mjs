@@ -68,6 +68,31 @@ const SHOTS = {
   glowtide: {record: 290, alt: ["Glowtide: a lantern spirit's weapons carve through a glowing ocean horde", "Orange pufferfish swarm as green eels sweep the field", "A shoal circles overhead in Moonlit Kelp", "Every weapon firing at once in the deep"], clip: [244, 6], stills: [200, 216, 276]},
   'picnic-panic': {record: 150, alt: ["Picnic Panic: the bandleader and his dog chase a raccoon across the park", "Hiding in a bush beside the seesaw", "Ringing the village bell", "The bandleader and his dog search for the raccoon"], clip: [57, 6], stills: [8, 44, 61]},
 };
+// The Twenty: real legal-input autoplay, captured through the same Wasm hosts.
+const TWENTY_SHOTS = {
+  "mosslight": {record: 20, clip: [2, 6], stills: [3, 8, 14], alt: ["Mosslight: turn-based dungeon expedition campaign in play", "Mosslight: opening campaign decisions", "Mosslight: campaign action and objectives", "Mosslight: campaign progress"] },
+  "signalbox": {record: 20, clip: [2, 6], stills: [3, 8, 14], alt: ["Signalbox: railway dispatch puzzle campaign in play", "Signalbox: opening campaign decisions", "Signalbox: campaign action and objectives", "Signalbox: campaign progress"] },
+  "saltwind": {record: 20, clip: [2, 6], stills: [3, 8, 14], alt: ["Saltwind: sailing and merchant strategy campaign in play", "Saltwind: opening campaign decisions", "Saltwind: campaign action and objectives", "Saltwind: campaign progress"] },
+  "hearthharvest": {record: 20, clip: [2, 6], stills: [3, 8, 14], alt: ["Hearthharvest: farming and village management campaign in play", "Hearthharvest: opening campaign decisions", "Hearthharvest: campaign action and objectives", "Hearthharvest: campaign progress"] },
+  "paper-alibi": {record: 20, clip: [2, 6], stills: [3, 8, 14], alt: ["Paper Alibi: detective deduction adventure campaign in play", "Paper Alibi: opening campaign decisions", "Paper Alibi: campaign action and objectives", "Paper Alibi: campaign progress"] },
+  "voltage-choir": {record: 20, clip: [2, 6], stills: [3, 8, 14], alt: ["Voltage Choir: four-lane rhythm campaign in play", "Voltage Choir: opening campaign decisions", "Voltage Choir: campaign action and objectives", "Voltage Choir: campaign progress"] },
+  "ironclad-tactics": {record: 20, clip: [2, 6], stills: [3, 8, 14], alt: ["Ironclad Tactics: turn-based squad tactics campaign in play", "Ironclad Tactics: opening campaign decisions", "Ironclad Tactics: campaign action and objectives", "Ironclad Tactics: campaign progress"] },
+  "deep-pressure": {record: 20, clip: [2, 6], stills: [3, 8, 14], alt: ["Deep Pressure: submarine rescue survival campaign in play", "Deep Pressure: opening campaign decisions", "Deep Pressure: campaign action and objectives", "Deep Pressure: campaign progress"] },
+  "starweaver": {record: 20, clip: [2, 6], stills: [3, 8, 14], alt: ["Starweaver: space exploration and crafting campaign in play", "Starweaver: opening campaign decisions", "Starweaver: campaign action and objectives", "Starweaver: campaign progress"] },
+  "pantry-panic": {record: 20, clip: [2, 6], stills: [3, 8, 14], alt: ["Pantry Panic: cooking service management campaign in play", "Pantry Panic: opening campaign decisions", "Pantry Panic: campaign action and objectives", "Pantry Panic: campaign progress"] },
+  "prism-foundry": {record: 60, clip: [40, 6], stills: [8, 25, 45], alt: ["Prism Foundry: optical logic puzzle campaign in play", "Prism Foundry: opening campaign decisions", "Prism Foundry: campaign action and objectives", "Prism Foundry: campaign progress"] },
+  "mooncourt": {record: 20, clip: [2, 6], stills: [3, 8, 14], alt: ["Mooncourt: lunar racket sports campaign in play", "Mooncourt: opening campaign decisions", "Mooncourt: campaign action and objectives", "Mooncourt: campaign progress"] },
+  "wildfire-watch": {record: 20, clip: [2, 6], stills: [3, 8, 14], alt: ["Wildfire Watch: wildfire emergency strategy campaign in play", "Wildfire Watch: opening campaign decisions", "Wildfire Watch: campaign action and objectives", "Wildfire Watch: campaign progress"] },
+  "gilded-deck": {record: 20, clip: [2, 6], stills: [3, 8, 14], alt: ["Gilded Deck: roguelike deck-building campaign in play", "Gilded Deck: opening campaign decisions", "Gilded Deck: campaign action and objectives", "Gilded Deck: campaign progress"] },
+  "gravity-post": {record: 20, clip: [2, 6], stills: [3, 8, 14], alt: ["Gravity Post: orbital lander delivery campaign in play", "Gravity Post: opening campaign decisions", "Gravity Post: campaign action and objectives", "Gravity Post: campaign progress"] },
+  "velvet-heist": {record: 20, clip: [2, 6], stills: [3, 8, 14], alt: ["Velvet Heist: stealth infiltration campaign in play", "Velvet Heist: opening campaign decisions", "Velvet Heist: campaign action and objectives", "Velvet Heist: campaign progress"] },
+  "tin-automata": {record: 20, clip: [2, 6], stills: [3, 8, 14], alt: ["Tin Automata: robot programming puzzles campaign in play", "Tin Automata: opening campaign decisions", "Tin Automata: campaign action and objectives", "Tin Automata: campaign progress"] },
+  "fossil-frontier": {record: 20, clip: [2, 6], stills: [3, 8, 14], alt: ["Fossil Frontier: excavation and research management campaign in play", "Fossil Frontier: opening campaign decisions", "Fossil Frontier: campaign action and objectives", "Fossil Frontier: campaign progress"] },
+  "stormbound": {record: 20, clip: [2, 6], stills: [3, 8, 14], alt: ["Stormbound: naval artillery campaign in play", "Stormbound: opening campaign decisions", "Stormbound: campaign action and objectives", "Stormbound: campaign progress"] },
+  "crown-council": {record: 20, clip: [2, 6], stills: [3, 8, 14], alt: ["Crown & Council: kingdom strategy campaign in play", "Crown & Council: opening campaign decisions", "Crown & Council: campaign action and objectives", "Crown & Council: campaign progress"] },
+};
+Object.assign(SHOTS, TWENTY_SHOTS);
+
 // Post-processing comparison: one session, the same moment with post off and neon.
 const POST = {game: 'glowtide', at: 212};
 
@@ -80,6 +105,7 @@ function option(name, fallback) {
 const ONLY = option('only', '') ? String(option('only')).split(',') : CATALOG.map(game => game.id);
 const JOBS = Number(option('jobs', 4));
 const PORT = Number(option('port', 8097));
+const WEB_DIRECTORY = resolve(option('directory', join(ROOT, 'dist/web')));
 const CHROME = option('chrome', ['google-chrome-stable', 'google-chrome', 'chromium'].find(name => which(name)) ?? 'google-chrome');
 const HEADED = option('headed', false) === true;
 for (const id of ONLY) if (!SHOTS[id] || !CATALOG.some(game => game.id === id)) throw new Error(`Unknown game: ${id}`);
@@ -298,7 +324,7 @@ async function postComparison() {
 }
 
 async function withServer(task) {
-  const server = spawn('python3', ['-B', join(ROOT, 'scripts/serve-web.py'), '--bind', '127.0.0.1', '--port', String(PORT)], {stdio: 'ignore'});
+  const server = spawn('python3', ['-B', join(ROOT, 'scripts/serve-web.py'), '--bind', '127.0.0.1', '--port', String(PORT), '--directory', WEB_DIRECTORY], {stdio: 'ignore'});
   try {
     for (let i = 0; i < 50; i++) { try { if ((await fetch(`http://127.0.0.1:${PORT}/`)).ok) break; } catch {} await sleep(100); }
     return await task();
@@ -312,5 +338,5 @@ async function pool(items, jobs, task) {
 const games = CATALOG.filter(game => ONLY.includes(game.id));
 if (['record', 'all'].includes(command)) await withServer(() => pool(games, JOBS, record));
 if (['encode', 'all'].includes(command)) await pool(games, 4, encode);
-if (['post', 'all'].includes(command)) await withServer(postComparison);
+if (command === 'post' || (command === 'all' && ONLY.includes(POST.game))) await withServer(postComparison);
 if (!['record', 'encode', 'post', 'all'].includes(command)) { console.error('Usage: node scripts/capture-media.mjs [record|encode|post|all] [--only ids] [--jobs N]'); process.exit(2); }

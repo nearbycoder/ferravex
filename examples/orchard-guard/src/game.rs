@@ -109,8 +109,8 @@ impl Kind {
     }
     pub fn name(self) -> &'static str {
         match self {
-            Self::Seed => "SEED SLING",
-            Self::Frost => "FROST HIVE",
+            Self::Seed => "Seed Sling",
+            Self::Frost => "Frost Hive",
         }
     }
 }

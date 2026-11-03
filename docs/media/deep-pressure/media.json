@@ -1,0 +1,23 @@
+{
+ "game": "deep-pressure",
+ "loop": "loop.mp4",
+ "poster": "poster.webp",
+ "alt": "Deep Pressure: submarine rescue survival campaign in play",
+ "width": 960,
+ "height": 600,
+ "seconds": 6,
+ "stills": [
+  {
+   "file": "still-1.webp",
+   "alt": "Deep Pressure: opening campaign decisions"
+  },
+  {
+   "file": "still-2.webp",
+   "alt": "Deep Pressure: campaign action and objectives"
+  },
+  {
+   "file": "still-3.webp",
+   "alt": "Deep Pressure: campaign progress"
+  }
+ ]
+}

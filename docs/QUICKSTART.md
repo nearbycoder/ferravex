@@ -6,6 +6,23 @@ edition 2024). Every Rust dependency is a first-party crate in this repository;
 the [dependency policy](../DEPENDENCIES.md) explains why. Run the commands below
 from the repository root.
 
+## Make your own game
+
+Three commands from the checkout give you a playable, polished starter game in
+its own folder next to the checkout:
+
+```sh
+python3 -B scripts/ferravex.py new moon-garden   # add --template 3d for 3D
+cd ../moon-garden
+cargo run
+```
+
+Edit `src/game.rs` for the rules, `src/lib.rs` for the world drawing and
+`src/hud.rs` for the UI. `cargo test` checks the rules without a window, and
+`python3 scripts/build-web.py --serve` plays it in the browser. The generated
+README lists controls and first edits. The rest of this page explains the facade
+underneath the starter.
+
 ## Run an existing example
 
 Run the facade example without a display first:
@@ -228,18 +245,19 @@ Choose either direct session advancement or `App::frame`/`frame_report` as the c
 Do not advance the same session twice. Both approaches preserve the existing
 async renderer games; neither requires changing a demo's save or network format.
 
-For a new local project, inspect the stdlib scaffolder and preview its invocation:
+The [starter game](#make-your-own-game) wraps this same loop. To inspect the
+scaffolder or preview an invocation without creating anything:
 
 ```sh
 python3 -B scripts/new-game.py --help
-python3 -B scripts/ferravex.py new moon-garden ../moon-garden --template 2d --dry-run
+python3 -B scripts/ferravex.py new moon-garden --template 2d --dry-run
 ```
 
-Remove `--dry-run` to create it. The destination must not exist and its parent
-must exist. Use `--template 3d`
-for the other template. The generated project points to this checkout; follow
-its README for native and browser entry points. Do not add it to the shared
-workspace or regenerate the workspace lockfile as part of a narrowly owned task.
+Without a destination, the game goes in `./NAME`, or in `../NAME` when run from
+inside the checkout. An explicit destination must not exist and its parent must.
+The generated project points to this checkout; follow its README for native and
+browser entry points. Do not add it to the shared workspace or regenerate the
+workspace lockfile as part of a narrowly owned task.
 
 ## Add input and feedback at the right boundary
 

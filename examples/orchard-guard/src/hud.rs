@@ -35,24 +35,18 @@ pub(super) fn key_hint(input: &PlayerInput, action: &str) -> String {
     input
         .format_hint(action, &mut buffer)
         .unwrap_or("See Controls")
-        .to_uppercase()
+        .to_owned()
 }
 
-fn caption(ui: &mut Ui, rect: Rect, text: &str, color: Color) {
-    ui.label(
-        UiRect {
-            min: [rect.x, rect.y + rect.h + 4.],
-            size: [rect.w, 15.],
-        },
+/// Mixed-case modern caption centred under a control (key hint or status).
+fn caption(_ui: &mut Ui, rect: Rect, text: &str, color: Color) {
+    style::text_fit(
         text,
-        TextStyle {
-            size: 14.,
-            color,
-            align: Align::Center,
-            ..Default::default()
-        },
-    )
-    .unwrap();
+        rect.x + rect.w * 0.5,
+        rect.y + rect.h + 16.,
+        style::body(14., color),
+        rect.w + 24.,
+    );
 }
 
 pub(super) fn format_time(seconds: f32) -> String {
@@ -92,14 +86,14 @@ fn top_bar(campaign: &Campaign, juice: &Juice) {
     draw_circle(33., 32., 4., Color::new(1., 0.8, 0.7, 0.6));
     draw_line(38., 24., 40., 16., 3., Color::from_hex(0x85704c));
     draw_ellipse(46., 18., 7., 3.5, -20., juice::LEAF);
-    label("ORCHARD GUARD", 64., 46., 24., INK);
+    label("Orchard Guard", 64., 46., 24., INK);
     let waves = g.level.waves.len();
     let shown = if g.active || g.outcome != Outcome::Playing {
         g.wave
     } else {
         g.next_wave().map_or(g.wave, |next| next.number)
     };
-    center(&format!("WAVE {shown} / {waves}"), 600., 34., 24., INK);
+    center(&format!("Wave {shown} / {waves}"), 600., 34., 24., INK);
     if g.active {
         let total = g.level.waves[usize::from(g.wave) - 1].count as f32;
         let left = (g.pests.len() + usize::from(g.remaining)) as f32;
@@ -108,11 +102,11 @@ fn top_bar(campaign: &Campaign, juice: &Juice) {
         draw_rectangle(500., 44., 200. * done, 10., GREEN);
     } else if g.outcome == Outcome::Playing {
         let text = if usize::from(g.wave) >= waves {
-            "ALL WAVES SENT".to_string()
+            "All waves sent".to_string()
         } else if g.wave == 0 {
-            "UP NEXT · PLANT, THEN SEND IT".to_string()
+            "Up next · plant, then send it".to_string()
         } else {
-            "UP NEXT · BUILD AND UPGRADE".to_string()
+            "Up next · build and upgrade".to_string()
         };
         center(&text, 600., 59., 13., GREEN);
     }
@@ -129,23 +123,15 @@ fn top_bar(campaign: &Campaign, juice: &Juice) {
 /// Declared after Restart and before Wave so Wave stays last in focus order.
 fn speed_button(ui: &mut Ui, campaign: &Campaign) {
     let fast = campaign.fast;
-    ui.hud_button(
+    // Painted by the shared control style: gold when fast-forward is on.
+    style::toggle(
+        ui,
         SPEED_ID,
-        UiRect {
-            min: [SPEED_RECT.x, SPEED_RECT.y],
-            size: [SPEED_RECT.w, SPEED_RECT.h],
-        },
-        if fast { "SPEED 2×" } else { "SPEED 1×" },
-        true,
-        ButtonStyle {
-            fill: if fast { GOLD } else { GREEN },
-            ink: if fast { INK } else { CREAM },
-            focus: if fast { GREEN } else { GOLD },
-            disabled: Color::from_hex(0x616956),
-            size: 18.,
-        },
-    )
-    .unwrap();
+        SPEED_RECT,
+        if fast { "Speed 2×" } else { "Speed 1×" },
+        fast,
+        18.,
+    );
 }
 
 fn mix_color(a: Color, b: Color, t: f32) -> Color {
@@ -209,7 +195,7 @@ fn banner(campaign: &Campaign, juice: &Juice, input: &PlayerInput) {
     let beetles = u32::from(next.spec.count) - zoomies;
     fit_center(
         &format!(
-            "INCOMING: {beetles} BEETLES + {zoomies} ZOOMIES · {:.0} HP",
+            "Incoming: {beetles} beetles + {zoomies} zoomies · {:.0} HP",
             next.spec.hp
         ),
         600.,
@@ -220,10 +206,10 @@ fn banner(campaign: &Campaign, juice: &Juice, input: &PlayerInput) {
     );
     let towers = g.towers.iter().flatten().count();
     let line = if g.wave == 0 && towers == 0 {
-        "PICK A ROUND PLOT, PLANT A TOWER, THEN SEND THE WAVE".to_string()
+        "Pick a round plot, plant a tower, then send the wave".to_string()
     } else if g.wave == 0 {
         format!(
-            "NICE! PLANT MORE, OR PRESS {} TO SEND THE WAVE",
+            "Nice! Plant more, or press {} to send the wave",
             key_hint(input, "wave")
         )
     } else {
@@ -234,9 +220,9 @@ fn banner(campaign: &Campaign, juice: &Juice, input: &PlayerInput) {
 
 fn notice(campaign: &Campaign, save_error: bool) {
     let text = if save_error {
-        "SAVE UNAVAILABLE".to_string()
+        "Save unavailable".to_string()
     } else if let Some(message) = campaign.notice() {
-        notice_text(message).to_uppercase()
+        notice_text(message).to_owned()
     } else {
         return;
     };
@@ -269,20 +255,20 @@ pub(super) fn hud(
     if let Some(tower) = g.towers[g.selected] {
         label(tower.kind.name(), 24., 684., 22., INK);
         label(
-            &format!("PLOT {} · LEVEL {}/3", g.selected + 1, tower.level + 1),
+            &format!("Plot {} · Level {}/3", g.selected + 1, tower.level + 1),
             24.,
             706.,
             14.,
             GREEN,
         );
         label(
-            &format!("{:.0} DMG · {:.2}s", tower.damage(), tower.reload()),
+            &format!("{:.0} dmg · {:.2}s", tower.damage(), tower.reload()),
             24.,
             727.,
             14.,
             SOFT,
         );
-        label(&format!("RANGE {:.0}", tower.range()), 24., 748., 14., SOFT);
+        label(&format!("Range {:.0}", tower.range()), 24., 748., 14., SOFT);
         let status = g.upgrade_status(g.selected);
         let next = Tower {
             level: (tower.level + 1).min(2),
@@ -294,9 +280,9 @@ pub(super) fn hud(
             3,
             rect,
             &if tower.level == 2 {
-                "FULLY GROWN".into()
+                "Fully grown".into()
             } else {
-                format!("UPGRADE · {} COINS", tower.upgrade_cost())
+                format!("Upgrade · {} coins", tower.upgrade_cost())
             },
             status.is_ok(),
             20.,
@@ -304,7 +290,7 @@ pub(super) fn hud(
         let (text, color) = match status {
             Ok(()) => (
                 format!(
-                    "NEXT → {:.0} DMG · {:.0} RANGE · {:.2}s",
+                    "Next → {:.0} dmg · {:.0} range · {:.2}s",
                     next.damage(),
                     next.range(),
                     next.reload()
@@ -321,22 +307,22 @@ pub(super) fn hud(
         );
     } else {
         label(
-            &format!("EMPTY PLOT {}", g.selected + 1),
+            &format!("Empty plot {}", g.selected + 1),
             24.,
             684.,
             22.,
             INK,
         );
-        label("PICK A TOWER  →", 24., 708., 14., GREEN);
-        label("SLING: BIG BONKS", 24., 728., 14., SOFT);
-        label("FROST: SLOWS PESTS", 24., 748., 14., SOFT);
+        label("Pick a tower  →", 24., 708., 14., GREEN);
+        label("Sling: big bonks", 24., 728., 14., SOFT);
+        label("Frost: slows pests", 24., 748., 14., SOFT);
         for (id, kind, x, action, blurb) in [
-            (1, Kind::Seed, 240., "select_one", "HITS HARD"),
-            (2, Kind::Frost, 443., "select_two", "SLOWS + SPLASH"),
+            (1, Kind::Seed, 240., "select_one", "Hits hard"),
+            (2, Kind::Frost, 443., "select_two", "Slows + splash"),
         ] {
             let status = g.build_status(g.selected, kind);
             let rect = Rect::new(x, 683., 190., 55.);
-            let name = if kind == Kind::Seed { "SLING" } else { "FROST" };
+            let name = if kind == Kind::Seed { "Sling" } else { "Frost" };
             button(
                 ui,
                 id,
@@ -353,26 +339,26 @@ pub(super) fn hud(
         }
     }
     let pause = Rect::new(695., 683., 110., 55.);
-    button(ui, 6, pause, "PAUSE", campaign.session.is_started(), 20.);
+    button(ui, 6, pause, "Pause", campaign.session.is_started(), 20.);
     caption(ui, pause, &key_hint(input, "pause"), SOFT);
     let restart = Rect::new(817., 683., 128., 55.);
-    button(ui, 5, restart, "RESTART", true, 20.);
+    button(ui, 5, restart, "Restart", true, 20.);
     caption(ui, restart, &key_hint(input, "restart"), SOFT);
     speed_button(ui, campaign);
     let next = g.next_wave();
     let title = if g.active {
-        format!("WAVE {} ACTIVE", g.wave)
+        format!("Wave {} active", g.wave)
     } else if let Some(wave) = &next {
-        format!("SEND WAVE {}", wave.number)
+        format!("Send wave {}", wave.number)
     } else {
-        "HARVEST TIME".into()
+        "Harvest time".into()
     };
     let wave = Rect::new(957., 683., 215., 55.);
     button(ui, 4, wave, &title, g.wave_status().is_ok(), 20.);
     let text = if g.active {
-        format!("{} PESTS TO GO", g.pests.len() + usize::from(g.remaining))
+        format!("{} pests to go", g.pests.len() + usize::from(g.remaining))
     } else if let Some(wave) = next {
-        format!("{} PESTS · [{}]", wave.spec.count, key_hint(input, "wave"))
+        format!("{} pests · [{}]", wave.spec.count, key_hint(input, "wave"))
     } else {
         String::new()
     };
@@ -406,7 +392,7 @@ pub(super) fn overlay(
     if paused {
         style::card(Rect::new(345., 215., 510., 300.), 18., 1.);
         draw_rectangle(345., 215., 510., 6., GOLD);
-        center("ORCHARD PAUSED", 600., 268., 30., INK);
+        center("Orchard paused", 600., 268., 30., INK);
         fit_center(
             quips::pause(g.kills + u32::from(g.wave)),
             600.,
@@ -417,7 +403,7 @@ pub(super) fn overlay(
         );
         center(
             &format!(
-                "WAVE {}/{} · {} HEARTS · {} STOPPED",
+                "Wave {}/{} · {} hearts · {} stopped",
                 g.wave,
                 g.level.waves.len(),
                 g.lives,
@@ -430,10 +416,10 @@ pub(super) fn overlay(
         );
         ui.modal(100).unwrap();
         let resume = Rect::new(375., 404., 215., 55.);
-        button(ui, 7, resume, "RESUME", true, 20.);
+        button(ui, 7, resume, "Resume", true, 20.);
         caption(ui, resume, &key_hint(input, "pause"), SOFT);
         let again = Rect::new(610., 404., 215., 55.);
-        button(ui, 8, again, "PLANT AGAIN", true, 20.);
+        button(ui, 8, again, "Plant again", true, 20.);
         caption(ui, again, &key_hint(input, "restart"), SOFT);
         return;
     }
@@ -465,15 +451,15 @@ pub(super) fn overlay(
         draw_triangle(a, b, mid, colors[i % 4]);
     }
     let title = if won {
-        "HARVEST SAVED!"
+        "Harvest saved!"
     } else {
-        "THE PESTS GOT THROUGH"
+        "The pests got through"
     };
     center(title, 600., y + 74., 36., INK);
     let sub = if won {
-        format!("ALL {} WAVES DEFENDED", g.level.waves.len())
+        format!("All {} waves defended", g.level.waves.len())
     } else {
-        format!("THE BEETLES REACHED THE PIES IN WAVE {}", g.wave)
+        format!("The beetles reached the pies in wave {}", g.wave)
     };
     center(&sub, 600., y + 100., 15., GREEN);
     let ribbon = if won { GOLD } else { Color::from_hex(0xd8c49a) };
@@ -490,7 +476,7 @@ pub(super) fn overlay(
         vec2(800., y + 182.),
         ribbon,
     );
-    center("YOUR GARDENER RANK", 600., y + 136., 12., INK);
+    center("Your gardener rank", 600., y + 136., 12., INK);
     fit_center(rank.title, 600., y + 168., 28., 370., INK);
     fit_center(rank.quip, 600., y + 206., 15., 590., GREEN);
     let best_score = best.and_then(|b| b.previous_score);
@@ -499,28 +485,28 @@ pub(super) fn overlay(
     stat(
         c1,
         top,
-        "PESTS STOPPED",
+        "Pests stopped",
         &g.kills.to_string(),
-        new_score.then_some("NEW BEST!"),
+        new_score.then_some("New best!"),
     );
     stat(
         c2,
         top,
-        "HEARTS LEFT",
+        "Hearts left",
         &format!("{} / {}", g.lives, g.level.lives),
-        (won && g.lives == g.level.lives).then_some("FLAWLESS"),
+        (won && g.lives == g.level.lives).then_some("Flawless"),
     );
     stat(
         c1,
         top + 62.,
-        "PERFECT WAVES",
+        "Perfect waves",
         &format!("{} / {}", g.perfect_waves, g.level.waves.len()),
         None,
     );
     stat(
         c2,
         top + 62.,
-        "LUCKY BONKS",
+        "Lucky bonks",
         &g.lucky_hits.to_string(),
         None,
     );
@@ -529,15 +515,15 @@ pub(super) fn overlay(
         stat(
             c1,
             top + 124.,
-            "HARVEST TIME",
+            "Harvest time",
             &format_time(g.time),
-            new_time.then_some("FASTEST!"),
+            new_time.then_some("Fastest!"),
         );
     } else {
         stat(
             c1,
             top + 124.,
-            "WAVES SURVIVED",
+            "Waves survived",
             &format!("{} / {}", g.wave.saturating_sub(1), g.level.waves.len()),
             None,
         );
@@ -545,12 +531,12 @@ pub(super) fn overlay(
     let previous = match (best_score, best.and_then(|b| b.previous_fastest_us)) {
         (Some(score), Some(us)) => format!("{score} · {}", format_time(us as f32 / 1e6)),
         (Some(score), None) => score.to_string(),
-        _ => "FIRST RUN!".into(),
+        _ => "First run!".into(),
     };
-    stat(c2, top + 124., "PREVIOUS BEST", &previous, None);
+    stat(c2, top + 124., "Previous best", &previous, None);
     if g.royal_stopped {
         fit_center(
-            "* SECRET FOUND: SIR CRUNCHALOT DETHRONED *",
+            "★ Secret found: Sir Crunchalot dethroned ★",
             600.,
             y + 432.,
             15.,
@@ -569,7 +555,7 @@ pub(super) fn overlay(
     fit_center(&goal, 600., y + 468., 16., 560., GREEN);
     ui.modal(100).unwrap();
     let again = Rect::new(490., y + 488., 220., 55.);
-    button(ui, 8, again, "PLANT AGAIN", true, 22.);
+    button(ui, 8, again, "Plant again", true, 22.);
     caption(ui, again, &key_hint(input, "restart"), SOFT);
 }
 

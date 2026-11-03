@@ -385,9 +385,9 @@ impl Juice {
                     self.pop(
                         at - vec2(0., 30.),
                         if kind == Kind::Seed {
-                            "LUCKY BONK!"
+                            "Lucky bonk!"
                         } else {
-                            "BRRRR!"
+                            "Brrrr!"
                         },
                         None,
                         if kind == Kind::Seed { GOLD } else { ICE },
@@ -439,8 +439,8 @@ impl Juice {
                     self.ring(at, 80., 0.7, GOLD);
                     self.kick(0.45);
                     self.toast(
-                        "SIR CRUNCHALOT DETHRONED!".into(),
-                        "THE CROWN ROLLS INTO A FLOWERBED. LONG LIVE THE ORCHARD.".into(),
+                        "Sir Crunchalot dethroned!".into(),
+                        "The crown rolls into a flowerbed. Long live the orchard.".into(),
                         GOLD,
                         3.2,
                         Priority::Milestone,
@@ -462,7 +462,7 @@ impl Juice {
                 );
                 self.kick(0.5);
                 self.toast(
-                    "-1 HEART".into(),
+                    "-1 heart".into(),
                     quips::leak(self.leaks).into(),
                     APPLE,
                     1.8,
@@ -487,7 +487,7 @@ impl Juice {
                         16,
                     );
                     self.ring(at, 40., 0.35, CREAM);
-                    self.pop(at - vec2(0., 46.), "PLANTED!", None, CREAM, 18.);
+                    self.pop(at - vec2(0., 46.), "Planted!", None, CREAM, 18.);
                 }
             }
             Feed::Grown { plot, level } => {
@@ -498,9 +498,9 @@ impl Juice {
                     self.pop(
                         at - vec2(0., 48.),
                         if level >= 2 {
-                            "MAX LEVEL!"
+                            "Max level!"
                         } else {
-                            "LEVEL UP!"
+                            "Level up!"
                         },
                         None,
                         GOLD,
@@ -510,7 +510,7 @@ impl Juice {
             }
             Feed::Launched { wave } => {
                 self.toast(
-                    format!("WAVE {wave} INCOMING!"),
+                    format!("Wave {wave} incoming!"),
                     quips::incoming(wave).into(),
                     CREAM,
                     2.2,
@@ -526,9 +526,9 @@ impl Juice {
                 let finale = usize::from(wave) == game.level.waves.len();
                 if !finale {
                     let head = if perfect {
-                        format!("PERFECT WAVE {wave}! +{reward} COINS")
+                        format!("Perfect wave {wave}! +{reward} coins")
                     } else {
-                        format!("WAVE {wave} CLEARED! +{reward} COINS")
+                        format!("Wave {wave} cleared! +{reward} coins")
                     };
                     self.toast(
                         head,
@@ -737,7 +737,7 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .head
-                .starts_with("PERFECT WAVE 1")
+                .starts_with("Perfect wave 1")
         );
         for id in 0..100 {
             juice.on_event(

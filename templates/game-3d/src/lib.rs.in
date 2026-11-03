@@ -1,6 +1,10 @@
-//! @@NAME@@: a native/browser @@DIMENSION@@ game using the Ferravex facade.
-//! [`Game`] contains the fixed-step rules and a headless usage example.
+//! @@NAME@@: a @@DIMENSION@@ Ferravex game for native windows and the browser.
+//!
+//! - `src/game.rs`: the rules ([`Game`]). Start here to change gameplay.
+//! - `src/lib.rs` (this file): the frame loop and [`draw_world`].
+//! - `src/hud.rs`: title, timer, key prompts, buttons and win effects.
 mod game;
+mod hud;
 pub use game::Game;
 
 use ferravex::{
@@ -9,79 +13,119 @@ use ferravex::{
         self,
         demo::Demo,
         input::{PlayerInput, Preset},
+        post::{self, PostFx},
         prelude::*,
-        ui,
+        shaders::LitSettings,
+        shapes::{self, Fill},
     },
 };
+use hud::{BEACON, Juice, PLAYER};
+
+/// Window, browser and in-game title.
+const TITLE: &str = @@WINDOW_TITLE_RUST@@;
 
 fn window_conf() -> Conf {
-    render::window_conf(@@WINDOW_TITLE_RUST@@)
+    render::window_conf(TITLE)
 }
 
-fn draw_world(game: &Game, alpha: f32) {
-    let aspect = screen_width().max(1.0) / screen_height().max(1.0);
-    let distance = (1.6 / aspect).max(1.0);
+/// Rules use a 2D ground plane; the 3D view puts it on X/Z with Y up.
+/// Positive rule Y (forward) is negative Z (away from the camera).
+fn ground(p: Vec2, height: f32) -> Vec3 {
+    vec3(p.x, height, -p.y)
+}
+
+/// Paints the arena with a fixed camera, sunlight and cubes.
+fn draw_world(game: &Game, juice: &Juice, alpha: f32) {
+    let (width, height) = (screen_width().max(1.0), screen_height().max(1.0));
+    // Backdrop: a soft vertical gradient behind everything.
+    let screen = Rect::new(0.0, 0.0, width, height);
+    let sky = Fill::vertical(screen, Color::from_hex(0x18213a), Color::from_hex(0x080b14));
+    shapes::fill_rounded_rect(screen, 0.0, sky);
+
+    // Pull the camera back on narrow screens so the arena always fits.
+    let aspect = width / height;
+    let eye = vec3(0.0, 8.5, 9.5) * (1.6 / aspect).max(1.0);
     set_camera(&Camera3D {
-        position: vec3(0.0, 9.0, 12.0) * distance,
-        target: Vec3::ZERO,
+        position: eye,
+        target: vec3(0.0, 0.0, 0.5),
         aspect: Some(aspect),
         ..Default::default()
     });
-    draw_cube(vec3(0.0, -0.2, 0.0), vec3(13.0, 0.4, 7.0), None, ui::PANEL);
+    // Directional sunlight shades every cube drawn until lighting is reset.
+    let sun = LitSettings {
+        light_direction: vec3(-0.45, 0.85, 0.35),
+        camera_position: eye,
+        ambient: 0.45,
+        ..LitSettings::default()
+    };
+    render::set_lighting(Some(sun));
+
+    // A checkered floor on a thick base.
+    draw_cube(vec3(0.0, -0.35, 0.0), vec3(13.4, 0.5, 7.4), None, Color::from_hex(0x151d33));
     for x in -6..=6 {
-        draw_line_3d(
-            vec3(x as f32, 0.01, -3.0),
-            vec3(x as f32, 0.01, 3.0),
-            ui::LINE,
-        );
+        for z in -3..=3 {
+            let tile = if (x + z) % 2 == 0 { 0x2a375c } else { 0x24304f };
+            draw_cube(vec3(x as f32, -0.1, z as f32), vec3(0.96, 0.1, 0.96), None, Color::from_hex(tile));
+        }
     }
-    for z in -3..=3 {
-        draw_line_3d(
-            vec3(-6.0, 0.01, z as f32),
-            vec3(6.0, 0.01, z as f32),
-            ui::LINE,
-        );
+    draw_cube(ground(game::START, -0.03), vec3(1.2, 0.08, 1.2), None, Color::from_hex(0x2f6f86));
+
+    // Beacon: a pedestal and a floating gem. Unlit (ambient 1) so it glows.
+    draw_cube(ground(game::GOAL, 0.1), vec3(1.1, 0.2, 1.1), None, Color::from_hex(0x6b5330));
+    render::set_lighting(Some(LitSettings { ambient: 1.0, ..sun }));
+    let bob = 0.15 * juice.pulse(2.5);
+    draw_cube(ground(game::GOAL, 1.0 + bob), vec3(0.45, 0.45, 0.45), None, BEACON);
+    draw_cube(ground(game::GOAL, 0.22), vec3(0.8, 0.04, 0.8), None, BEACON);
+
+    // Win effect: a burst of confetti cubes thrown from the beacon. Positions
+    // come from time alone, so there is no particle state to manage.
+    if let Some(t) = juice.since_win().filter(|&t| t < 2.5 && juice.full_motion()) {
+        for i in 0..28 {
+            let angle = i as f32 * 2.4; // Golden-angle spread.
+            let speed = 2.0 + (i % 5) as f32 * 0.5;
+            let velocity = vec3(angle.cos() * speed, 5.0 + (i % 3) as f32, angle.sin() * speed);
+            let mut p = ground(game::GOAL, 1.0) + velocity * t + vec3(0.0, -9.0 * t * t, 0.0);
+            p.y = p.y.max(0.07); // Land on the floor.
+            let color = [BEACON, PLAYER, Color::from_hex(0xffffff)][i % 3];
+            draw_cube(p, vec3(0.14, 0.14, 0.14), None, color);
+        }
     }
-    draw_cube(
-        vec3(game::START.x, 0.03, -game::START.y),
-        vec3(1.2, 0.06, 1.2),
-        None,
-        ui::LINE,
-    );
-    draw_cube(
-        vec3(game::GOAL.x, 0.1, -game::GOAL.y),
-        vec3(1.2, 0.2, 1.2),
-        None,
-        ui::AMBER,
-    );
-    draw_cube(
-        vec3(game::GOAL.x, 0.9, -game::GOAL.y),
-        vec3(0.15, 1.6, 0.15),
-        None,
-        ui::AMBER,
-    );
+    render::set_lighting(Some(sun));
+
+    // Player: a soft contact shadow, then a cube that hops while moving.
     let player = game.render_position(alpha);
-    // Positive simulation Y is forward, which is negative Z in this view.
-    draw_cube(
-        vec3(player.x, 0.35, -player.y),
-        vec3(0.55, 0.7, 0.55),
-        None,
-        ui::CYAN,
-    );
-    draw_cube(
-        vec3(player.x, 0.73, -player.y),
-        vec3(0.35, 0.08, 0.35),
-        None,
-        ui::INK,
-    );
-    set_default_camera();
+    let moving = juice.trail[0].distance(juice.trail[1]) > 0.001;
+    let hop = if moving && juice.full_motion() { 0.12 * (juice.time * 14.0).sin().abs() } else { 0.0 };
+    draw_cube(ground(player, -0.04), vec3(0.75, 0.02, 0.75), None, Color::new(0.0, 0.0, 0.0, 0.35));
+    draw_cube(ground(player, 0.35 + hop), vec3(0.6, 0.7, 0.6), None, PLAYER);
+    draw_cube(ground(player, 0.74 + hop), vec3(0.4, 0.08, 0.4), None, Color::from_hex(0xe8ffff));
+    render::set_lighting(None);
+    set_default_camera(); // Also the boundary: post-processing stops before the HUD.
+}
+
+/// Start, resume or replay: what Enter and the main button do.
+fn primary_action(game: &mut Game) {
+    match game.session().state() {
+        SessionState::Ready => {
+            game.start();
+        }
+        SessionState::Paused => {
+            game.toggle_pause();
+        }
+        SessionState::Won | SessionState::Lost => game.restart(),
+        SessionState::Playing => {}
+    }
 }
 
 async fn play() {
-    let mut demo = Demo::new();
+    let mut demo = Demo::new(); // Native flags: --autoplay --smoke-frames N --screenshot x.png
     let mut game = Game::new(demo.autoplay);
     let mut input = PlayerInput::preset("@@NAME@@", Preset::Explore);
+    let mut juice = Juice::new();
+    // Gentle bloom and vignette. Try PostFx::neon() or PostFx::off().
+    post::set_post_fx(PostFx::subtle());
     loop {
+        // 1. Input, sampled once per frame. Menu actions apply here.
         input.sample(game.session().is_playing());
         if input.pressed("restart") {
             game.restart();
@@ -90,56 +134,19 @@ async fn play() {
             game.toggle_pause();
         }
         if input.pressed("confirm") {
-            match game.session().state() {
-                SessionState::Ready => {
-                    game.start();
-                }
-                SessionState::Paused => {
-                    game.toggle_pause();
-                }
-                SessionState::Won | SessionState::Lost => game.restart(),
-                SessionState::Playing => {}
-            }
+            primary_action(&mut game);
         }
-        let movement = if demo.autoplay {
-            Vec2::X
-        } else {
-            input.movement()
-        };
-        // The input adapter suppresses elapsed time while unfocused or editing
-        // controls. GameSession owns explicit pause/start/terminal state.
+        let movement = if demo.autoplay { Vec2::X } else { input.movement() };
+
+        // 2. Rules: fixed ticks. Elapsed time stops while unfocused or rebinding.
         let frame = game.advance(f64::from(input.simulation_dt(demo.dt())), movement);
-        clear_background(ui::BACKGROUND);
-        draw_world(&game, frame.alpha);
-        ui::header(
-            "@@DIMENSION@@",
-            @@WINDOW_TITLE_RUST@@,
-            "Reach the gold beacon | WASD / arrows: move | Esc: pause | R: restart",
-        );
-        let label = match game.session().state() {
-            SessionState::Ready => "Play (Enter)",
-            SessionState::Paused => "Resume (Enter / Esc)",
-            SessionState::Won => "Beacon reached! Play again (Enter)",
-            SessionState::Lost => "Try again (Enter)",
-            SessionState::Playing => "Pause (Esc)",
-        };
-        let width = 310.0_f32.min((screen_width() - 24.0).max(1.0));
-        let button = Rect::new(
-            (screen_width() - width) * 0.5,
-            (screen_height() - 62.0).max(110.0),
-            width,
-            42.0,
-        );
-        if ui::button(button, label, !game.session().is_playing()) {
-            match game.session().state() {
-                SessionState::Ready => {
-                    game.start();
-                }
-                SessionState::Playing | SessionState::Paused => {
-                    game.toggle_pause();
-                }
-                SessionState::Won | SessionState::Lost => game.restart(),
-            }
+        juice.observe(&game, frame.alpha, demo.dt());
+
+        // 3. Drawing: the world, then the HUD on top.
+        clear_background(Color::from_hex(0x080b14));
+        draw_world(&game, &juice, frame.alpha);
+        if hud::draw(&game, &mut juice, TITLE, demo.dt()) {
+            primary_action(&mut game);
         }
         if demo.finish_frame() {
             break;

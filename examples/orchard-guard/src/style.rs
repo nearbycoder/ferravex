@@ -426,17 +426,34 @@ struct Paint {
 }
 
 pub(super) fn control(ui: &mut Ui, id: u64, rect: Rect, label: &str, enabled: bool, size: f32) {
+    let look = if id == 4 {
+        Look::Hero
+    } else if id == 10 {
+        Look::Toggle(false)
+    } else if id == 9 {
+        Look::Quiet
+    } else {
+        Look::Primary
+    };
+    control_look(ui, id, rect, label, enabled, size, look);
+}
+
+/// An on/off control (fast-forward): gold when `on`, green otherwise.
+pub(super) fn toggle(ui: &mut Ui, id: u64, rect: Rect, label: &str, on: bool, size: f32) {
+    control_look(ui, id, rect, label, true, size, Look::Toggle(on));
+}
+
+fn control_look(
+    ui: &mut Ui,
+    id: u64,
+    rect: Rect,
+    label: &str,
+    enabled: bool,
+    size: f32,
+    look: Look,
+) {
     UI_ANIM.with(|anim| {
         let mut anim = anim.borrow_mut();
-        let look = if id == 4 {
-            Look::Hero
-        } else if id == 10 {
-            Look::Toggle(false)
-        } else if id == 9 {
-            Look::Quiet
-        } else {
-            Look::Primary
-        };
         anim.button(ui, false, id, rect, label, enabled, look);
         if let Some(index) = slot(id) {
             anim.pending[index] = Some(Paint {

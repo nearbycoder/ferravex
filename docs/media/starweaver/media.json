@@ -1,0 +1,23 @@
+{
+ "game": "starweaver",
+ "loop": "loop.mp4",
+ "poster": "poster.webp",
+ "alt": "Starweaver: space exploration and crafting campaign in play",
+ "width": 960,
+ "height": 600,
+ "seconds": 6,
+ "stills": [
+  {
+   "file": "still-1.webp",
+   "alt": "Starweaver: opening campaign decisions"
+  },
+  {
+   "file": "still-2.webp",
+   "alt": "Starweaver: campaign action and objectives"
+  },
+  {
+   "file": "still-3.webp",
+   "alt": "Starweaver: campaign progress"
+  }
+ ]
+}

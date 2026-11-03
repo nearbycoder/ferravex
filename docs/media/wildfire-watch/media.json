@@ -1,0 +1,23 @@
+{
+ "game": "wildfire-watch",
+ "loop": "loop.mp4",
+ "poster": "poster.webp",
+ "alt": "Wildfire Watch: wildfire emergency strategy campaign in play",
+ "width": 960,
+ "height": 600,
+ "seconds": 6,
+ "stills": [
+  {
+   "file": "still-1.webp",
+   "alt": "Wildfire Watch: opening campaign decisions"
+  },
+  {
+   "file": "still-2.webp",
+   "alt": "Wildfire Watch: campaign action and objectives"
+  },
+  {
+   "file": "still-3.webp",
+   "alt": "Wildfire Watch: campaign progress"
+  }
+ ]
+}

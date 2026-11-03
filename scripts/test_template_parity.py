@@ -38,7 +38,7 @@ LIMITATIONS = [
     "Wasm is compiled and its export table inspected, not instantiated or rendered.",
     "Input tests inject controller samples; no physical controller, keyboard or touch test.",
     "The generated async play loop is compiled; the headless harness calls public rules/input APIs.",
-    "The templates have held movement and menu actions, no network/replay gameplay or feedback effects.",
+    "The templates have held movement and menu actions, no network/replay gameplay; win effects are presentation-only and not asserted.",
     "No browser, GPU, audio, accessibility, performance or cross-platform determinism claim.",
 ]
 

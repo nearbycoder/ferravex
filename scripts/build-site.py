@@ -74,6 +74,10 @@ DOCS = [
  ('journey-200','Journey200 implementation ledger','Project history','docs/JOURNEY_200.md'),
  ('journey-400','Journey400 roadmap and deferred work','Project history','docs/JOURNEY_400.md'),
 ]
+# Each collection game has a readable rules guide alongside its playable route.
+TWENTY = json.loads((ROOT/'docs/games20/plan.json').read_text())
+DOCS.append(('games-20','The Twenty: twenty complete games','Examples','docs/GAMES_20.md'))
+DOCS.extend((g['id'],g['title'],'Examples',f"examples/{g['id']}/README.md") for g in TWENTY)
 # Reader-facing order and one-line purpose for each documentation group.
 GROUPS = {
  'Start here':'Install, play, and make your first change.',
@@ -142,6 +146,7 @@ GAME_GUIDES = {'picnic-panic': ('Cross pranks off the to-do list without getting
  'physics-3d': ('Bowl a heavy ball into a 30-crate stack, drop CHAOS piles and complete four optional goals. Orbit the camera, single-step the simulation, and press G for engine stats.',
                 'joints-and-compounds',
                 'Mechanisms and world joint frames')}
+GAME_GUIDES.update({g['id']:(next(c['description'] for c in GAMES if c['id']==g['id']),g['id'],'Rules, controls and campaign') for g in TWENTY})
 # One-line hooks for cards and heroes; the catalog description stays in titles and search.
 TAGLINES={'picnic-panic':'A raccoon, a picnic and a very long to-do list.',
  'glowtide':'A little light against the whole tide.',
@@ -272,13 +277,16 @@ ICON_THEME=('<svg class="icon icon-moon" viewBox="0 0 20 20" width="18" height="
 # Gallery genres: a small, reader-facing grouping of the catalog's specific genres.
 GENRES={'action':'Action','racing':'Racing & flight','arcade':'Arcade','platform':'Platforming','puzzle':'Puzzle & strategy','golf':'Mini golf','lab':'Physics labs'}
 GAME_GENRE={'picnic-panic':'puzzle','glowtide':'action','owned-lab':'action','strike':'action','neon-swarm':'action','pocket-rally':'racing','dune-skimmer':'racing','sky-courier':'racing','owned-orbit':'arcade','salvage-pinball':'arcade','emberline':'platform','marble-run':'platform','orchard-guard':'puzzle','siege-foundry':'puzzle','crystal-cavern':'puzzle','mini-golf-2d':'golf','mini-golf-3d':'golf','physics-2d':'lab','physics-3d':'lab'}
+GENRES.update({'management':'Management','story':'Story & deduction','sports':'Sports','rhythm':'Rhythm'})
+GAME_GENRE.update({'mosslight':'action','signalbox':'puzzle','saltwind':'management','hearthharvest':'management','paper-alibi':'story','voltage-choir':'rhythm','ironclad-tactics':'puzzle','deep-pressure':'action','starweaver':'management','pantry-panic':'management','prism-foundry':'puzzle','mooncourt':'sports','wildfire-watch':'puzzle','gilded-deck':'puzzle','gravity-post':'racing','velvet-heist':'action','tin-automata':'puzzle','fossil-frontier':'management','stormbound':'arcade','crown-council':'story'})
 KINDS={'game':'Game','lab':'Lab','prototype':'Prototype'}
 CODE_LANGS={'sh':'Shell','bash':'Shell','shell':'Shell','console':'Shell','rust':'Rust','toml':'TOML','json':'JSON','js':'JavaScript','javascript':'JavaScript','mjs':'JavaScript','python':'Python','py':'Python','html':'HTML','css':'CSS','text':'Text','txt':'Text','wgsl':'WGSL','glsl':'GLSL'}
 def genre(game):return GAME_GENRE.get(game['id'],'arcade')
 def guide_for(game):return GAME_GUIDES.get(game['id'],(game['description'],'gameplay','Gameplay toolkit'))
 
-KEY_WORDS={'wasd','space','enter','escape','esc','shift','tab','mouse','click','drag','arrows','arrow','ctrl','alt','backspace'}
-def is_key(word):return all(p and (p.lower() in KEY_WORDS or re.fullmatch(r'[A-Z0-9]',p)) for p in word.split('/'))
+# "Act" is the shared confirm binding the Twenty's hosts label in their own menus; digit ranges ("1-3") pick panels.
+KEY_WORDS={'wasd','space','enter','escape','esc','shift','tab','mouse','click','drag','arrows','arrow','ctrl','alt','backspace','act','left','right','up','down'}
+def is_key(word):return all(p and (p.lower() in KEY_WORDS or re.fullmatch(r'[A-Z0-9]|[0-9][-–][0-9]',p)) for p in word.split('/'))
 def key_chips(word):return '<span class="key-sep">/</span>'.join(f'<kbd>{esc(p[:1].upper()+p[1:])}</kbd>' for p in word.split('/'))
 def controls_html(text):
  """Render a catalog controls summary ("A/D move · Space jump") as key chips and actions."""
@@ -320,15 +328,16 @@ def documentation_index():
   items='<ul>'+''.join(f'<li><a href="/docs/{slug}/">{esc(title)}</a></li>' for slug,title in guides)+'</ul>'
   if group=='Project history':
    sections.append(f'<details class="docs-history"><summary><span class="eyebrow">For contributors</span><strong>{esc(group)}</strong><span>{esc(GROUPS[group])}</span></summary>{items}</details>')
-  else:sections.append(f'<section class="doc-card"><div class="doc-card-media">{group_thumb(group)}<span class="doc-count">{len(guides)}</span></div><div class="doc-card-body"><h2>{esc(group)}</h2><p>{esc(GROUPS.get(group,""))}</p>{items}</div></section>')
+  # Long groups (the game guides) span the directory and flow their links into columns.
+  else:sections.append(f'<section class="doc-card{" wide" if len(guides)>12 else ""}"><div class="doc-card-media">{group_thumb(group)}<span class="doc-count">{len(guides)}</span></div><div class="doc-card-body"><h2>{esc(group)}</h2><p>{esc(GROUPS.get(group,""))}</p>{items}</div></section>')
  history=next((s for s in sections if s.startswith('<details')),'');sections=[s for s in sections if s!=history]
  paths=''.join(f'<a class="path-card visual" href="{url}">{loop_media(by_id(game),cls="path-media") if any(g["id"]==game for g in GAMES) else ""}<span class="path-copy"><span class="eyebrow">{label}</span><h2>{title}</h2><p>{detail}</p></span><span class="card-arrow" aria-hidden="true">↗</span></a>' for url,label,title,detail,game in [('/docs/getting-started/','01 / Start','Run your first game','Setup to first change.','sky-courier'),('/docs/engine-workflows/','02 / Compose','Tour the engine','Ticks, physics, UI, netcode.','marble-run'),('/docs/agent-guide/','03 / Collaborate','Bring a coding agent','Real symbols. Verified changes.','neon-swarm')])
- return '<main id="main" class="docs-index"><section class="docs-hero"><div class="container"><div class="eyebrow">Documentation</div><h1>From first tick<br>to finished game.</h1><div class="button-row"><button class="button search-inline" type="button" data-qikbar-open>Search the docs <kbd data-command-key>Ctrl K</kbd></button><a class="button ghost" href="/api/ferravex/index.html">Rust API ↗</a></div></div></section><div class="container"><div class="path-grid">'+paths+'</div><div class="docs-directory">'+''.join(sections)+'</div>'+history+'</div></main>'
+ return f'<main id="main" class="docs-index"><section class="docs-hero"><div class="container"><div class="eyebrow">Documentation</div><h1>From first tick<br>to finished game.</h1><p class="docs-lede">{len(DOCS)} guides, runnable recipes and the complete Rust API, searchable in one place.</p><div class="button-row"><button class="button search-inline" type="button" data-qikbar-open>Search the docs <kbd data-command-key>Ctrl K</kbd></button><a class="button ghost" href="/api/ferravex/index.html">Rust API ↗</a></div></div></section><div class="container"><div class="path-grid">'+paths+'</div><div class="docs-directory">'+''.join(sections)+'</div>'+history+'</div></main>'
 NAV=[('games','/examples/','Games'),('features','/features/','Features'),('docs','/docs/','Docs'),('api','/api/ferravex/index.html','API')]
 def layout(title,body,url='/',description='An original Rust engine for small 2D and 3D games you can play in the browser.',section='',image='picnic-panic.png'):
  nav=''.join(f'<a href="{href}"'+(' aria-current="page"' if section==key else '')+f'>{label}</a>' for key,href,label in NAV)
  footer=(f'<footer class="footer"><div class="container footer-grid"><div class="footer-brand"><a class="brand" href="/" translate="no"><img class="brand-mark" src="/favicon-32.png" alt="" width="28" height="28">ferravex</a><p>Rust games, built from scratch.</p></div>'
-  '<nav class="footer-links" aria-label="Footer"><div><strong>Play</strong><a href="/examples/">All games</a><a href="/examples/picnic-panic/">Picnic Panic</a><a href="/examples/glowtide/">Glowtide</a></div>'
+  '<nav class="footer-links" aria-label="Footer"><div><strong>Play</strong><a href="/examples/">All games</a><a href="/examples/picnic-panic/">Picnic Panic</a><a href="/examples/glowtide/">Glowtide</a><a href="/docs/games-20/">The Twenty</a></div>'
   '<div><strong>Learn</strong><a href="/docs/getting-started/">Getting started</a><a href="/docs/">Documentation</a><a href="/api/ferravex/index.html">Rust API</a></div>'
   f'<div><strong>Project</strong><a href="{REPO}">GitHub</a><a href="{REPO}/blob/main/LICENSE">MIT license</a><a href="/docs/release-status/">Release scope</a><a href="/docs/status/">Implementation status</a></div></nav></div></footer>')
  return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="theme-color" content="#f6f5ef"><script>try{{const t=localStorage.getItem("ferravex-theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}}catch{{}}</script><title>{esc(title)} · Ferravex</title><meta name="description" content="{esc(description)}"><link rel="canonical" href="{BASE}{url}"><meta property="og:title" content="{esc(title)} · Ferravex"><meta property="og:description" content="{esc(description)}"><meta property="og:image" content="{BASE}/assets/{esc(image)}"><meta name="twitter:card" content="summary_large_image"><meta property="og:type" content="website"><link rel="icon" href="/favicon.ico"><link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png"><link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png"><link rel="stylesheet" href="/site.css"><link rel="stylesheet" href="/search.css"><script src="/site.js" defer></script><script type="module" src="/site-search.js"></script></head><body><a class="skip" href="#main">Skip to content</a><header class="header"><div class="header-inner"><a class="brand" href="/" translate="no" aria-label="Ferravex home"><img class="brand-mark" src="/favicon-32.png" alt="" width="28" height="28" aria-hidden="true">ferravex</a><nav class="main-nav" aria-label="Main navigation">{nav}</nav><div class="header-actions"><button class="search-trigger" type="button" data-qikbar-open aria-label="Search Ferravex"><svg class="icon" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m13 13 4.5 4.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg><span class="search-label">Search</span><kbd data-command-key>Ctrl K</kbd></button><button class="theme-toggle" type="button" id="theme-toggle" aria-label="Switch color theme" title="Switch color theme">{ICON_THEME}</button><a class="github-link" href="{REPO}">GitHub</a></div></div></header>{body}{footer}</body></html>'''
@@ -342,9 +351,18 @@ def tile(game,heading='h2',eager=False):
  """Gallery card: poster plus hover loop, title and a dimension/genre chip; filters read data-*."""
  search=' '.join(game[key] for key in ('title','genre','description','controls'))+' '+GENRES[genre(game)]
  kind=game.get('kind','game');label=GENRES[genre(game)]+(' · '+KINDS.get(kind,kind.title()) if kind!='game' else '')
+ badge='<span class="thumb-badge">New</span>' if game['id'] in NEW_IDS else ''
  return (f'<article class="example-tile" data-dimension="{esc(game["dimension"])}" data-genre="{genre(game)}" data-search="{esc(search)}"><a class="tile-link" href="/examples/{game["id"]}/" title="{esc(game["description"])}">'
-  f'<span class="thumb">{loop_media(game,loading="eager" if eager else "lazy")}<span class="thumb-play" aria-hidden="true">{ICON_PLAY}</span></span>'
+  f'<span class="thumb">{loop_media(game,loading="eager" if eager else "lazy")}{badge}<span class="thumb-play" aria-hidden="true">{ICON_PLAY}</span></span>'
   f'<span class="tile-meta"><{heading}>{esc(game["title"])}</{heading}><span class="tile-chip"><b>{esc(game["dimension"])}</b>{esc(label)}</span></span></a></article>')
+# The Twenty are the newest catalog entries; their cards carry a New badge everywhere.
+NEW_IDS={g['id'] for g in TWENTY}
+# A genre-diverse home selection; the gallery always lists the whole catalog.
+HOME_PICKS=['mosslight','sky-courier','signalbox','salvage-pinball','voltage-choir','dune-skimmer','velvet-heist','marble-run','deep-pressure','orchard-guard','gilded-deck']
+def wasm_kib():
+ """Median gzip-compressed size of the staged game modules, in KiB (None before a web build)."""
+ sizes=sorted(len(gzip.compress((ROOT/'dist/web'/g['host']/(g['id'].replace('-','_')+'.wasm')).read_bytes(),6)) for g in GAMES if (ROOT/'dist/web'/g['host']/(g['id'].replace('-','_')+'.wasm')).is_file())
+ return round(sizes[len(sizes)//2]/1024) if sizes else None
 HERO_SLIDES=['glowtide','dune-skimmer','neon-swarm','sky-courier','physics-3d','picnic-panic']
 HERO_SIDE=['marble-run','pocket-rally','physics-2d']
 MOTION_TOGGLE='<button class="motion-toggle" type="button" data-motion-toggle aria-pressed="false"><svg class="icon icon-pause" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 3h3v10H4zM9 3h3v10H9z" fill="currentColor"/></svg>'+ICON_PLAY.replace('class="icon"','class="icon icon-resume"')+'<span>Pause motion</span></button>'
@@ -356,8 +374,8 @@ def home():
   slides.append(f'<a class="slide{" is-active" if first else ""}" href="/examples/{g["id"]}/" data-slide="{i}"{"" if first else " hidden"}>{media}</a>')
   rail.append(f'<button type="button" class="rail-item" data-go="{i}" aria-pressed="{str(first).lower()}"><span>{esc(g["title"])}</span><i aria-hidden="true"></i></button>')
  side=''.join(f'<a class="wall-tile" href="/examples/{g["id"]}/">{loop_media(g,g["title"]+" gameplay",play="hero",loading="eager")}<span class="wall-label">{esc(g["title"])}</span></a>' for g in present(HERO_SIDE))
- spotlights=''.join(f'<a class="spotlight" href="/examples/{g["id"]}/">{loop_media(g,g["title"]+" gameplay",play="visible")}<span class="spotlight-copy"><span class="badge">New</span><strong>{esc(g["title"])}</strong><span class="spotlight-tag">{esc(tagline(g))}</span><span class="button small">{ICON_PLAY}Play</span></span></a>' for g in present(['picnic-panic','glowtide']))
- cards=''.join(tile(g,'h3') for g in GAMES)+f'<a class="more-tile" href="/examples/"><strong>{n}</strong><span>Filter by genre ↗</span></a>'
+ spotlights=''.join(f'<a class="spotlight" href="/examples/{g["id"]}/">{loop_media(g,g["title"]+" gameplay",play="visible")}<span class="spotlight-copy"><span class="badge">{esc(g["dimension"])} showcase</span><strong>{esc(g["title"])}</strong><span class="spotlight-tag">{esc(tagline(g))}</span><span class="button small">{ICON_PLAY}Play</span></span></a>' for g in present(['picnic-panic','glowtide']))
+ cards=''.join(tile(g,'h3') for g in present(HOME_PICKS))+f'<a class="more-tile" href="/examples/"><strong>{n}</strong><span>Browse every game ↗</span></a>'
  slider=''
  if (MEDIA/'post/off.webp').is_file() and (MEDIA/'post/neon.webp').is_file():
   slider=('<figure class="bento-tile compare-tile"><div class="compare" data-compare><img src="/media/post/neon.webp" alt="Glowtide with bloom and the neon color grade" width="1200" height="750" loading="lazy" decoding="async">'
@@ -368,14 +386,18 @@ def home():
  def media_tile(key,href,caption):
   return f'<a class="bento-tile" href="{href}">{loop_media(by_id(key),caption,play="visible")}<span class="bento-cap"><strong>{esc(caption)}</strong></span></a>' if any(g['id']==key for g in GAMES) else ''
  ui=('<a class="bento-tile ui-tile" href="/docs/responsive-games/"><span class="loop"><img src="/media/engine/ui-kit.webp" alt="Ferravex UI kit: pixel fonts, menus, meters and glow effects" width="1600" height="1000" loading="lazy" decoding="async"></span><span class="bento-cap"><strong>A UI kit made for games.</strong></span></a>') if (MEDIA/'engine/ui-kit.webp').is_file() else ''
- stat=lambda big,small:f'<div class="stat"><strong>{big}</strong><span>{small}</span></div>'
+ stat=lambda big,small,href:f'<a class="stat" href="{href}"><strong>{big}</strong><span>{small}</span></a>'
+ kib=wasm_kib()
+ stats=(f'<section class="proof" aria-label="Ferravex at a glance"><div class="container stats">{stat(n,"games, playable now","/examples/")}{stat(0,"third-party crates","/docs/dependencies/")}'
+  +(stat(f'{kib}<small>KB</small>','median game download, gzip','/docs/performance/') if kib else stat('100%','Rust and std','/docs/dependencies/'))
+  +f'{stat("2D+3D","one toolkit","/features/")}</div></section>')
  engine=(f'<div class="bento">{slider}{media_tile("physics-3d","/docs/rigid-bodies/","Physics that pushes back.")}</div>'
-  f'<div class="stats">{stat(n,"games to play")}{stat(0,"dependencies")}{stat("2D+3D","one toolkit")}{stat("100%","Rust + std")}</div>'
   f'<div class="bento">{ui}{media_tile("neon-swarm","/docs/effects/","Particles, trails, juice.")}</div>')
  body=f'''<main id="main" class="home">
- <section class="hero-wall" aria-label="Featured gameplay"><div class="wall"><div class="wall-main" data-rotator>{"".join(slides)}<div class="hero-copy"><p class="hero-kicker">A from-scratch Rust game engine</p><h1>Built from scratch.<span>Ready to play.</span></h1><div class="button-row"><a class="button" href="/examples/">{ICON_PLAY}Play</a><a class="button ghost" href="/docs/getting-started/">Build <span aria-hidden="true">↗</span></a></div></div><div class="hero-rail" aria-label="Featured games">{"".join(rail)}</div>{MOTION_TOGGLE}</div><div class="wall-side">{side}</div></div></section>
- <section class="band featured" aria-labelledby="featured-title"><div class="container"><div class="band-head"><h2 id="featured-title">Fresh from the forge</h2></div><div class="spotlights">{spotlights}</div></div></section>
- <section class="band games" aria-labelledby="games-title"><div class="container"><div class="band-head"><h2 id="games-title">{n} games. All playable.</h2><a class="text-link" href="/examples/">Browse all ↗</a></div><div class="example-grid dense">{cards}</div></div></section>
+ <section class="hero-wall" aria-label="Featured gameplay"><div class="wall"><div class="wall-main" data-rotator>{"".join(slides)}<div class="hero-copy"><p class="hero-kicker">Rust game engine · std only</p><h1>Built from scratch.<span>Ready to play.</span></h1><p class="hero-lede">An original engine for 2D and 3D games with zero third-party crates. All {n} games run right here in your browser.</p><div class="button-row"><a class="button" href="/examples/">{ICON_PLAY}Play now</a><a class="button ghost" href="/docs/getting-started/">Start building <span aria-hidden="true">↗</span></a></div></div><div class="hero-rail" aria-label="Featured games">{"".join(rail)}</div>{MOTION_TOGGLE}</div><div class="wall-side">{side}</div></div></section>
+ {stats}
+ <section class="band featured" aria-labelledby="featured-title"><div class="container"><div class="band-head"><div><h2 id="featured-title">Start with the showcase</h2><p class="band-sub">Two flagship games built to show what the engine can do.</p></div><a class="text-link" href="/examples/">Browse all {n} ↗</a></div><div class="spotlights">{spotlights}</div></div></section>
+ <section class="band games" aria-labelledby="games-title"><div class="container"><div class="band-head"><div><h2 id="games-title">{n} games. All playable.</h2><p class="band-sub">Including {len(NEW_IDS)} brand-new complete games: dungeon crawls, railway puzzles, heists, rhythm and more.</p></div><a class="text-link" href="/docs/games-20/">Meet the {len(NEW_IDS)} new games ↗</a></div><div class="example-grid dense">{cards}</div></div></section>
  <section class="band engine" aria-labelledby="engine-title"><div class="container"><div class="band-head"><h2 id="engine-title">Inside the engine</h2><a class="text-link" href="/docs/engine-workflows/">Tour the engine ↗</a></div>{engine}</div></section>
  <section class="cta"><div class="container cta-inner"><h2>Your game next.</h2><code class="cta-code">cargo run --release -p picnic-panic</code><div class="button-row"><a class="button" href="/docs/getting-started/">Start building ↗</a><a class="button ghost" href="/docs/">Read the docs</a></div></div></section>
  </main>'''
@@ -419,12 +441,13 @@ def example_page(g):
  shots=''.join(f'<a class="shot" href="{esc(s["src"])}" data-lightbox><img src="{esc(s["src"])}" alt="{esc(s["alt"] or g["title"]+" gameplay")}" width="1600" height="1000" loading="lazy" decoding="async"></a>' for s in media['stills'])
  gallery_html=f'<section class="shots" aria-label="{esc(g["title"])} gameplay stills">{shots}</section>' if shots else ''
  hero_alt=media.get('alt') or g['title']+' gameplay'
+ act_hint='<span class="act-hint"><kbd>Act</kbd> is <kbd>Space</kbd> or <kbd>Enter</kbd></span>' if re.search(r'\bAct\b',g['controls']) else ''
  return f'''<main id="main" class="example-page"><section class="game-hero"><div class="container"><a class="example-back" href="/examples/"><span aria-hidden="true">←</span> All games</a>
 <div class="game-head"><div><div class="chips">{chips}</div><h1>{esc(g['title'])}</h1><p class="play-brief"><span class="eyebrow">Your objective</span>{esc(objective_line(g))}</p></div><div class="button-row"><a class="button ghost" href="{g['play']}">Open full player ↗</a><a class="button ghost" href="{src}">Source</a></div></div>
 <div class="player" data-game="{g['play']}" data-title="{esc(g['title'])}">{loop_media(g,hero_alt,play="hero",loading="eager",priority=True)}<div class="launch"><button class="button play-button" data-launch>{ICON_PLAY}Play {esc(g['title'])}</button><p>Instant. In your browser.</p></div></div>
 </div></section>
 <div class="container">{gallery_html}
-<section class="default-controls" aria-labelledby="controls-title"><h2 id="controls-title">Default controls</h2>{controls_html(g['controls'])}<p class="hint">Remap in <strong>Game menu → Controls</strong></p></section>
+<section class="default-controls" aria-labelledby="controls-title"><h2 id="controls-title">Default controls</h2>{controls_html(g['controls'])}<p class="hint">{act_hint}Remap in <strong>Game menu → Controls</strong></p></section>
 <section class="more-games" aria-labelledby="more-title"><div class="band-head"><h2 id="more-title">More games</h2><a class="text-link" href="/examples/">All {len(GAMES)} ↗</a></div><div class="example-grid compact">{more}</div></section>
 <details class="under-hood"><summary><strong>Under the hood</strong><span>Objective · run locally · source · looks</span></summary><div class="hood-grid"><div><p>{esc(objective)}</p><p class="hood-links"><a class="text-link" href="/docs/{guide_slug}/">Explore: {esc(guide_title)} ↗</a><a class="text-link" href="/docs/player-guide/">Player guide ↗</a><a class="text-link" href="/features/">Engine features ↗</a></p></div>
 <div><div class="code-wrap" data-lang="Shell"><pre><code class="language-sh">cargo run --release -p {esc(g['id'])}</code></pre><button class="copy" type="button" aria-label="Copy code">Copy</button></div><p class="looks">Looks: <a href="{g['play']}?look=warm" target="_blank" rel="noopener">Warm</a><a href="{g['play']}?look=cool" target="_blank" rel="noopener">Cool</a><a href="{g['play']}?look=ink" target="_blank" rel="noopener">Ink</a><a class="inline-link" href="/docs/platforms/">Platforms</a></p></div></div></details></div></main>'''
@@ -508,6 +531,14 @@ def self_test():
    self.assertIn('<kbd>A</kbd><span class="key-sep">/</span><kbd>D</kbd><span class="key-sep">or</span><kbd>Arrows</kbd></dt><dd>Move</dd>',keys)
    self.assertIn('<kbd>Space</kbd><span class="key-sep">/</span><kbd>Enter</kbd></dt><dd>Launch</dd>',keys)
    self.assertIn('<dd>Wait to charge</dd>',keys);self.assertIn('<kbd>R</kbd></dt><dd>Restart (+1)</dd>',keys)
+   # The Twenty's shared bindings: Act, direction names and digit ranges are keys, not tips.
+   keys=controls_html('1-3 Choose · Left/Right Tilt · Up/Act Thrust · Arrows/1-5 Select')
+   self.assertNotIn('Tip',keys);self.assertIn('<kbd>1-3</kbd></dt><dd>Choose</dd>',keys)
+   self.assertIn('<kbd>Left</kbd><span class="key-sep">/</span><kbd>Right</kbd></dt><dd>Tilt</dd>',keys)
+   self.assertIn('<kbd>Up</kbd><span class="key-sep">/</span><kbd>Act</kbd></dt><dd>Thrust</dd>',keys)
+   new=next((g for g in GAMES if g['id'] in NEW_IDS),None)
+   if new:self.assertIn('class="thumb-badge">New<',tile(new))
+   self.assertNotIn('thumb-badge',tile(next(g for g in GAMES if g['id'] not in NEW_IDS)))
 
   def test_history_is_collapsed_and_start_here_leads(self):
    groups=list(doc_groups());self.assertEqual(groups[0],'Start here');self.assertEqual(groups[-1],'Project history')
@@ -517,7 +548,8 @@ def self_test():
 
   def test_every_game_has_lean_committed_gameplay_media(self):
    total=sum(p.stat().st_size for p in MEDIA.rglob('*') if p.is_file())
-   self.assertLessEqual(total,12*1024*1024)
+   # Keep the original approximately 640 KiB per-entry allowance as the catalog grows.
+   self.assertLessEqual(total,len(GAMES)*640*1024)
    for game in GAMES:
     media=media_for(game['id'])
     self.assertTrue(media['loop'] and media['poster'],game['id'])

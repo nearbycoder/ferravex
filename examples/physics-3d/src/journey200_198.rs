@@ -9,8 +9,8 @@ fn narrow_inspector_reserves_complete_fixed_size_fields_and_readable_buttons() {
             "PLAYING 180/180 tick 18446744073709551615",
             "Contacts 21528 | awake 180 | sleep 180",
             "Ray 8/214 capped | near 60.0m",
-            "Body limit reached. RESET yard.",
-            "Resume to pulse. DROP/STEP work.",
+            "Body limit reached. Reset the yard.",
+            "Resume to pulse. Drop/Step work.",
             "Stepped 8.33 ms; still paused.",
         ] {
             let lines: Vec<_> = hud_lines(text, text_width, 14).collect();
@@ -28,7 +28,7 @@ fn narrow_inspector_reserves_complete_fixed_size_fields_and_readable_buttons() {
             }
         }
         for (button, label) in buttons.iter().zip([
-            "CRATE", "BALL", "DROP", "PULSE", "RESUME", "STEP", "VIEW", "RESET",
+            "Crate", "Ball", "Drop", "Pulse", "Resume", "Step", "View", "Reset",
         ]) {
             let advance = get_default_font()
                 .try_metrics(17, 1.)

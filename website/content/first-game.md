@@ -4,7 +4,7 @@ Keep simulation independent of rendering. Ferravex applications supply elapsed t
 
 ## Create a world and a checked session
 
-Use the local `ferravex` dependency from [getting started](getting-started.md). Save the following complete program as your project's `src/main.rs`. It uses the existing translational solver and checked session configuration; no renderer initialization is needed.
+Start from a game made with `python3 -B scripts/ferravex.py new` (see [getting started](getting-started.md)). Save the following complete program as `examples/first_sim.rs` in that project; your game in `src/` keeps working. It uses the existing translational solver and checked session configuration; no renderer initialization is needed.
 
 ```rust,check,crate-type=bin
 use ferravex::core::session::{GameSession, SessionConfig, SessionState};
@@ -53,13 +53,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-For a project with its lockfile already in place, run:
+Run it from the project directory:
 
 ```sh
-cargo run --offline --locked --jobs 2
+cargo run --example first_sim
 ```
 
-The scaffold includes a seeded lockfile. For a manually created project, first resolve and review its local dependency graph with `cargo generate-lockfile --offline` from that project directory. Successful execution returns without output; the assertions check the scenario. This example establishes headless behavior, not a rendering, device or cross-platform determinism result.
+Successful execution returns without output; the assertions check the scenario. The scaffold seeds the lockfile, so this works offline; for a manually created project, first resolve and review its local dependency graph with `cargo generate-lockfile --offline`. This example establishes headless behavior, not a rendering, device or cross-platform determinism result.
 
 ## Separate host time from rules
 

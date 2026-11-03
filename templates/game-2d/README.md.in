@@ -1,118 +1,80 @@
 # @@NAME@@
 
-A standalone @@DIMENSION@@ game built with the first-party Ferravex facade and
-Rust std. Move from the blue starting pad to the gold beacon. This project owns
-its Cargo workspace and does not modify the engine workspace or demo catalog.
+A @@DIMENSION@@ game made with [Ferravex](https://ferravex.com/docs/). Steer from the starting
+pad to the gold beacon as fast as you can.
 
-## Run and test
-
-Requires Rust 1.88+ and Python 3.11+. Run these commands from this directory:
+## Play
 
 ```sh
-cargo run --offline --locked --jobs 2
-cargo test --offline --locked --jobs 2
+cargo run                                # in a window
+python3 scripts/build-web.py --serve     # in the browser at http://127.0.0.1:8000/
+cargo test                               # rules and doc tests, no window needed
 ```
 
-The native renderer needs the operating system's window/graphics libraries and
-a display (on Linux: X11 and OpenGL). See `docs/PLATFORMS.md` in the engine
-checkout for platform prerequisites. Headless rule tests need no display.
+| Action | Keyboard | Gamepad |
+| --- | --- | --- |
+| Move | WASD / arrow keys | left stick |
+| Start, resume, play again | Enter (or click the button) | A |
+| Pause | Escape | Start |
+| Restart | R | |
+| Rebind controls | F2 | |
 
-- **Enter / gamepad A / Play button:** start, resume or retry after winning.
-- **WASD / arrow keys / gamepad left stick:** move; diagonals keep the same speed.
-- **Escape / gamepad Start / Pause button:** pause or resume.
-- **R:** restart the clock and player at the starting pad.
-- **F2 / Controls:** inspect and rebind controls. The shipped game expects a
-  keyboard or gamepad for movement; a custom touch movement layout is not included.
+Native windows need your platform's display and OpenGL libraries (on Linux:
+X11 and GLX). The browser build needs the Wasm target once:
+`rustup target add wasm32-unknown-unknown`.
 
-The host pauses elapsed simulation while unfocused or editing controls. The
-game session freezes in Ready, Paused and Won. Rendering keeps running.
-For an automated native smoke run on a display:
+## Make it yours
 
-```sh
-cargo run --offline --locked --jobs 2 -- --autoplay --smoke-frames 180
-```
-
-## Browser
-
-The Rust `wasm32-unknown-unknown` target must already be installed. If it is
-missing, install it explicitly with `rustup target add wasm32-unknown-unknown`.
-
-```sh
-python3 -B scripts/build-web.py
-python3 -m http.server 8000 --bind 127.0.0.1 --directory target/web
-```
-
-Open <http://127.0.0.1:8000/> in a browser with WebGL2. Add `?autoplay` to
-automatically start and move toward the beacon. `--profile dev` selects a faster
-debug build. The helper stages only this project's `target/web`: it copies the
-checkout's first-party browser modules and extracts the shared Rust shaders.
-No npm, wasm-bindgen, registry dependencies, CDN or deployment is involved.
-Use HTTP; opening `index.html` directly as a file cannot load Wasm modules.
-
-## Edit the game
-
-- `src/game.rs`: renderer-independent rules, `GameSession`, fixed updates and tests.
-- `src/lib.rs`: input sampled once per frame, drawing/interpolation, UI and the
-  `ferravex::render::game!` native/browser entry point.
-- `src/main.rs`: native launcher. Build the library for the browser ABI.
-- `web/index.html`: browser page and accessible loading/error status.
-- `Cargo.toml`: one absolute local path dependency on the `ferravex` facade.
-- `ferravex.json`: versioned generation manifest and engine path used by the web
-  helper. If the engine moves, update both this file and `Cargo.toml`.
-
-## Generation options and manifest
-
-From the engine checkout, create a new project with:
-
-```sh
-python3 -B scripts/new-game.py moon-garden ../moon-garden --template 2d --tick-rate 120 --window-title 'Moon Garden'
-```
-
-Use `--template 3d` for the 3D view. The destination must not exist, even as an
-empty directory or symlink; its parent must already exist. Invalid options fail
-before any project files are written. Existing projects are never regenerated.
-
-- `--tick-rate HZ`: finite number from 1 to 1000, including fractional rates
-  such as 59.94; defaults to 60. This project's generated rate is @@TICK_RATE@@ Hz.
-  `Game::TICK_RATE_HZ` in `src/game.rs` is the simulation setting. It is separate
-  from the render frame rate. The catch-up budget is eight ticks per frame;
-  `FrameStep::dropped_seconds` reports discarded time if rendering falls behind.
-- `--window-title TITLE`: 1–120 printable Unicode characters, with nonwhitespace
-  content; defaults to the package name. Sets the native window, in-game header,
-  browser page/accessibility title and `web/games.json` display title. Quotes,
-  backslashes and HTML characters are escaped for their output contexts. The
-  package name, input settings owner, browser game ID and Wasm filename stay
-  tied to the package name.
-
-`ferravex.json` is UTF-8 JSON with `schema_version: 1`. Its fields are:
-
-| Field | Meaning |
+| File | What it holds |
 | --- | --- |
-| `engine_root` | Absolute engine checkout path used by `scripts/build-web.py`. |
-| `package` | Cargo package name, also used to locate the built Wasm module. |
-| `template` | `2D` or `3D`, preserving the original helper metadata. |
-| `tick_rate` | Resolved simulation frequency in Hz, as a JSON number. |
-| `window_title` | Resolved title as a JSON string. |
-| `generated_files` | Sorted project-relative POSIX paths, including hidden files, `Cargo.lock` and this manifest. |
+| `src/game.rs` | The rules: state, fixed-tick `advance`, `restart`, and their tests. Tuning constants sit at the top. |
+| `src/lib.rs` | The frame loop (input → rules → drawing) and `draw_world`. `TITLE` is the window title. |
+| `src/hud.rs` | Title, timer, key prompts, the main button, the win toast and presentation-only effects. |
 
-The options and file list describe generation, with no timestamp or build-output
-entries. They do not track later edits or provide runtime configuration. To
-customize an existing game, edit `Game::TICK_RATE_HZ`, `window_conf()` and the
-`ui::header` call in `src/lib.rs`, and the titles in `web/index.html` and
-`web/games.json` as needed. Editing manifest options alone does not change the
-compiled game. Keep the manifest with the project so tools can inspect its origin.
+A few first edits to try:
 
-`Cargo.lock` is seeded from the engine's first-party dependency closure during
-generation. Commit it with your game. If you intentionally change dependencies
-or update the engine's dependency graph, update this project's lockfile offline
-and review the diff. The engine checkout's lockfile is never rewritten here.
+- Make the player faster: change `SPEED` in `src/game.rs`.
+- Change the look: swap `PostFx::subtle()` for `PostFx::neon()` in `src/lib.rs`,
+  or recolor `PLAYER`/`BEACON` and `theme()` in `src/hud.rs`.
+- Add a rule: put new state on `Game`, reset it in `Game::restart`, and update
+  it inside the tick loop in `Game::advance`. Add a test next to the others.
 
-Add gameplay to fixed updates and leave rendering free of simulation mutations.
-Use `Game::restart()` so both render poses reset with the session clock. The
-rustdoc example on `Game` demonstrates headless start/pause/restart and timing.
-The shipped game has held movement and global menu actions only. When adding
-gameplay button actions, consume `PlayerInput::pressed` or `PlayerInput::take`
-inside actual fixed ticks and pass those action values to renderer-independent
-rules. Zero-tick frames must retain pending gameplay edges, and catch-up ticks
-must not repeat a press captured once in the render frame. Global start, pause
-and restart actions still run once per render frame.
+Three habits keep the game deterministic and smooth:
+
+1. Rules only change inside fixed ticks (`Game::advance`), never while drawing.
+2. Drawing reads `Game` and interpolates with the `alpha` that `advance` returns.
+3. Effects react to accepted game events (the win), not to raw key presses.
+
+For a new gameplay button (jump, shoot), read it with `PlayerInput::take` or
+`take_tick` inside the tick loop so a quick tap is never lost or repeated.
+Menu actions (start, pause, restart) stay once per frame, as in `src/lib.rs`.
+
+## Screenshots and smoke runs
+
+```sh
+cargo run -- --autoplay --smoke-frames 180 --screenshot shot.png
+```
+
+`--autoplay` steers toward the beacon by itself; `--smoke-frames N` exits after N
+frames and `--screenshot` saves the last one. In the browser, add `?autoplay`.
+
+## Reference
+
+`Cargo.toml` and `ferravex.json` point at the Ferravex checkout by absolute path;
+if the checkout moves, update both. `Cargo.lock` was seeded from it so builds
+work offline; commit it with your game. For reproducible builds use
+`cargo run --offline --locked`.
+
+This project was generated with
+`python3 scripts/new-game.py @@NAME@@ --template @@TEMPLATE@@`. Its generated rate is @@TICK_RATE@@ Hz:
+`Game::TICK_RATE_HZ` sets how often the rules run, independently of the frame
+rate (at most eight catch-up ticks per frame). `ferravex.json` (schema version 1)
+records the generation options (`engine_root`, `package`, `template`,
+`tick_rate`, `window_title`) and the generated file list. It is provenance, not
+configuration: to retitle the game, edit `TITLE` in `src/lib.rs` and the titles in
+`web/index.html` and `web/games.json`.
+
+`scripts/build-web.py` builds the library for `wasm32-unknown-unknown` and stages
+the checkout's first-party browser host into `target/web`. `--profile dev` gives a
+faster debug build. No npm, wasm-bindgen, registry dependencies or CDN are
+involved. Serve over HTTP; opening `index.html` as a file cannot load Wasm.

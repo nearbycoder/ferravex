@@ -67,54 +67,82 @@ pub fn draw_triangles(
     triangles: impl IntoIterator<Item = RibbonTriangle>,
     style: EffectStyle,
 ) -> DrawReport {
-    crate::edit(|s| {
-        let start = s.vertices.len() as u32;
-        let mut input = triangles.into_iter();
-        let mut report = DrawReport::default();
-        let budget =
-            (MAX_EFFECT_VERTICES / 3).saturating_sub(s.effect_stats.processed_triangles as usize);
-        for _ in 0..budget {
-            let Some(triangle) = input.next() else {
+    write_triangles(style, |writer| {
+        for triangle in triangles {
+            // One bounded lookahead detects truncation; it does not walk discarded work.
+            if !writer.push(triangle.vertices.map(|v| (v.position, v.color))) {
                 break;
-            };
-            s.effect_stats.processed_triangles += 1;
-            let mut projected = [[0.; 8]; 3];
-            let mut valid = true;
-            for (out, v) in projected.iter_mut().zip(triangle.vertices) {
-                if !v.position.into_iter().chain(v.color).all(f32::is_finite) {
-                    valid = false;
-                    break;
-                }
-                let p = s.matrix * Vec3::from_array(v.position).extend(1.);
-                if !p.is_finite() {
-                    valid = false;
-                    break;
-                }
-                *out = [
-                    p.x,
-                    p.y,
-                    p.z,
-                    p.w,
-                    v.color[0].clamp(0., 1.),
-                    v.color[1].clamp(0., 1.),
-                    v.color[2].clamp(0., 1.),
-                    v.color[3].clamp(0., 1.),
-                ];
-            }
-            if valid {
-                s.vertices.extend_from_slice(&projected);
-                report.triangles += 1;
-            } else {
-                report.invalid += 1;
             }
         }
-        // One bounded lookahead detects truncation; it does not walk discarded work.
-        if s.effect_stats.processed_triangles as usize == MAX_EFFECT_VERTICES / 3
-            && input.next().is_some()
-        {
-            report.truncated = true;
-            s.effect_stats.truncated_calls = s.effect_stats.truncated_calls.saturating_add(1);
+    })
+}
+
+/// Runs `emit` with a [`TriangleWriter`] over the frame stream, then records
+/// the written triangles exactly as [`draw_triangles`] does.
+pub(crate) fn write_triangles(
+    style: EffectStyle,
+    emit: impl FnOnce(&mut TriangleWriter),
+) -> DrawReport {
+    crate::edit(|s| {
+        let mut writer = TriangleWriter {
+            start: s.vertices.len() as u32,
+            s,
+            report: DrawReport::default(),
+        };
+        emit(&mut writer);
+        writer.finish(style)
+    })
+}
+
+/// Budgeted, validating triangle writer shared by [`draw_triangles`] and the
+/// crate's additive 2D glows, so they can emit without iterator adapters.
+pub(crate) struct TriangleWriter<'s> {
+    s: &'s mut crate::State,
+    start: u32,
+    report: DrawReport,
+}
+
+impl TriangleWriter<'_> {
+    /// Projects one triangle of `(position, rgba)` vertices with the current
+    /// camera. Returns false, recording truncation once, when the per-frame
+    /// budget is exhausted; callers stop emitting then.
+    #[inline]
+    pub(crate) fn push(&mut self, triangle: [([f32; 3], [f32; 4]); 3]) -> bool {
+        let s = &mut *self.s;
+        if s.effect_stats.processed_triangles as usize >= MAX_EFFECT_VERTICES / 3 {
+            if !self.report.truncated {
+                self.report.truncated = true;
+                s.effect_stats.truncated_calls = s.effect_stats.truncated_calls.saturating_add(1);
+            }
+            return false;
         }
+        s.effect_stats.processed_triangles += 1;
+        let mut projected = [[0.; 8]; 3];
+        for (out, (position, color)) in projected.iter_mut().zip(triangle) {
+            // A non-finite position always projects to a non-finite point, so
+            // the projected check below also covers the position.
+            let p = s.matrix * Vec3::from_array(position).extend(1.);
+            if !(p.is_finite() && color.iter().all(|c| c.is_finite())) {
+                self.report.invalid += 1;
+                return true;
+            }
+            *out = [
+                p.x,
+                p.y,
+                p.z,
+                p.w,
+                color[0].clamp(0., 1.),
+                color[1].clamp(0., 1.),
+                color[2].clamp(0., 1.),
+                color[3].clamp(0., 1.),
+            ];
+        }
+        s.vertices.extend_from_slice(&projected);
+        self.report.triangles += 1;
+        true
+    }
+    fn finish(self, style: EffectStyle) -> DrawReport {
+        let Self { s, start, report } = self;
         s.effect_stats.invalid_triangles = s
             .effect_stats
             .invalid_triangles
@@ -151,7 +179,7 @@ pub fn draw_triangles(
             }
         }
         report
-    })
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BillboardView {

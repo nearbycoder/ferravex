@@ -1,0 +1,23 @@
+{
+ "game": "crown-council",
+ "loop": "loop.mp4",
+ "poster": "poster.webp",
+ "alt": "Crown & Council: kingdom strategy campaign in play",
+ "width": 960,
+ "height": 600,
+ "seconds": 6,
+ "stills": [
+  {
+   "file": "still-1.webp",
+   "alt": "Crown & Council: opening campaign decisions"
+  },
+  {
+   "file": "still-2.webp",
+   "alt": "Crown & Council: campaign action and objectives"
+  },
+  {
+   "file": "still-3.webp",
+   "alt": "Crown & Council: campaign progress"
+  }
+ ]
+}
