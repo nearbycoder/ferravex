@@ -22,7 +22,8 @@ use ferravex_render::input::{
     touch::{Control, Output, Region},
 };
 use ferravex_render::preferences;
-use ferravex_render::ui::{Align, ButtonOptions, ButtonStyle, TextStyle, Ui, UiRect, Viewport};
+use ferravex_render::ui::kit::ButtonMotion;
+use ferravex_render::ui::{ButtonOptions, Ui, UiRect, Viewport};
 use ferravex_render::{
     demo::Demo,
     mesh::Mesh3d,
@@ -638,15 +639,6 @@ fn ui_rect(x: f32, y: f32, w: f32, h: f32) -> UiRect {
         size: [w, h],
     }
 }
-fn ui_text(size: f32, color: Color, align: Align) -> TextStyle {
-    TextStyle {
-        size,
-        color,
-        align,
-        wrap: true,
-        shadow: false,
-    }
-}
 fn control_hint<'a>(player: &PlayerInput, action: &str, buffer: &'a mut [u8]) -> &'a str {
     if player.current_device() == HintDevice::Touch && !player.touch_customized() {
         // Only these authored touch regions actually exist in this game.
@@ -713,6 +705,7 @@ async fn game() {
     let mut spark_renderer = ParticleRenderer::new(256).unwrap();
     let mut run = FlightRun::new(demo.autoplay);
     let mut ui = Ui::new();
+    let mut menu_button = ButtonMotion::default();
     let mut activate = false;
     let mut menu_ready = true;
     let scene = Scene::new();
@@ -960,8 +953,16 @@ async fn game() {
             coach: &coach,
             pauses,
         };
-        activate = hud(&run, &mut ui, &mut player_input, menu_ready, &hud_view)
-            .expect("bounded courier HUD");
+        activate = hud(
+            &run,
+            &mut ui,
+            &mut player_input,
+            menu_ready,
+            &hud_view,
+            &mut menu_button,
+            demo.dt(),
+        )
+        .expect("bounded courier HUD");
         player_input.draw_controls();
         #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
         capture.end_frame();
@@ -1435,7 +1436,7 @@ mod courier_tests {
         assert!(tour.flight.ledger.tips > route.flight.ledger.tips + 150);
         assert_eq!(
             quips::rank(&tour.flight.ledger, true, 3, GATES).0,
-            "SCENIC ROUTE SPECIALIST"
+            "Scenic Route Specialist"
         );
     }
 

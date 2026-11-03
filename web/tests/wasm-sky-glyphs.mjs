@@ -1,6 +1,11 @@
 // Exact-artifact, supplied-time headless checks. Reads render vertices and
 // supplies ordinary keys/configuration; never writes flight memory or outcomes.
 // Usage: node web/tests/wasm-sky-glyphs.mjs [exact.wasm immutable-source-root]
+//
+// The HUD is painted with the modern UI kit: mixed-case modern-face copy on
+// rounded translucent surfaces. Text is located by its exact ink colour and
+// the row it is centred in; each glyph run is one axis-aligned quad, so the
+// summed quad area of a complete string equals its lit font pixels × pixel².
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
@@ -12,13 +17,15 @@ const failures=[];
 function check(ok, message) { if(!ok && process.env.GLYPH_AUDIT){failures.push(message);console.error('GLYPH FAILURE',message);}else assert.ok(ok,message); }
 const bytes = readFileSync(path), module = new WebAssembly.Module(bytes);
 console.log('Wasm SHA256', createHash('sha256').update(bytes).digest('hex'));
-const font = new Map([...readFileSync(join(source,'crates/ferravex-render/src/font.rs'),'utf8')
-  .matchAll(/'(.)' => \[([\d, ]+)\]/g)].map(m=>[m[1],m[2].split(',').map(Number)]));
-const cream=[.95,.91,.78,1], amber=[.93,.70,.34,1], panel=[.08,.17,.19,.96];
+// Lit pixels per modern-face glyph, parsed from the authored pixel art.
+const art = readFileSync(join(source,'crates/ferravex-render/src/font_modern.rs'),'utf8').split('const ART: &str = r#"')[1].split('\n"#;')[0];
+const lit = new Map();{let current=null;for(const line of art.split('\n')){const head=line.match(/^(\S) \d+$/u);if(head){current=head[1];lit.set(current,0);}else if(current&&/^[#.]+$/.test(line))lit.set(current,lit.get(current)+[...line].filter(c=>c==='#').length);}}
+assert.ok(lit.get('A')>10&&lit.get('·')>0&&lit.get('$')>0,'modern face art parsed');
+const cream=[.95,.91,.78,1], amber=[.93,.70,.34,1], mist=[.72,.84,.84,1], ink=[.10,.20,.22,1], line=[.62,.86,.84,.22], postBlue=[.33,.58,.78,1];
 const same=(a,b)=>a.every((n,i)=>Math.abs(n-b[i])<1e-5);
-const bits=n=>n.toString(2).replaceAll('0','').length;
+const sameRgb=(a,b)=>[0,1,2].every(i=>Math.abs(a[i]-b[i])<1e-5);
 function expectedArea(text,size) {
-  return [...text.toUpperCase()].reduce((n,c)=>n+(c===' '||c==='\n'?0:(font.get(c)??font.get('?')).reduce((s,v)=>s+bits(v),0)),0)*(size/8)**2;
+  return [...text].reduce((n,c)=>n+(c===' '||c==='\n'?0:(lit.get(c)??lit.get('?'))),0)*(size/8)**2;
 }
 // Real Controls-editor profile captured during the owned Sky acceptance pass.
 // Contains only input bindings; embed it so the regression has no evidence-folder dependency.
@@ -59,78 +66,121 @@ function runtime(w,h,autoplay=false,config=configurations[0]) {
   e.ferravex_init();e.ferravex_autoplay(+autoplay);
   let cached; const frame=(dt=1/60)=>{cached=null;return e.ferravex_frame(dt,w,h);};
   const key=code=>{e.ferravex_key(code,1);e.ferravex_key(code,0);frame();frame();};
+  const raw=()=>{const v=new Float32Array(e.memory.buffer,e.ferravex_vertices(),e.ferravex_vertex_count()*8);assert.ok(v.every(Number.isFinite));return v;};
+  const at=(v,i)=>[(v[i*8]+1)*w/2,(1-v[i*8+1])*h/2];
+  const color=(v,i)=>[v[i*8+4],v[i*8+5],v[i*8+6],v[i*8+7]];
+  // Solid axis-aligned quads (two triangles a,b,d / d,b,e of one colour):
+  // glyph runs and other flat rectangles. Gradient/anti-aliased shapes never match.
   function quads() {
     if(cached)return cached;
-    const v=new Float32Array(e.memory.buffer,e.ferravex_vertices(),e.ferravex_vertex_count()*8);
-    assert.ok(v.every(Number.isFinite));const out=[];
-    for(let i=0;i<v.length;i+=48) {
-      const points=Array.from({length:6},(_,j)=>[(v[i+j*8]+1)*w/2,(1-v[i+j*8+1])*h/2]);
-      const xs=points.map(p=>p[0]),ys=points.map(p=>p[1]);
-      out.push({x:Math.min(...xs),y:Math.min(...ys),w:Math.max(...xs)-Math.min(...xs),h:Math.max(...ys)-Math.min(...ys),color:[...v.slice(i+4,i+8)]});
+    const v=raw(),n=v.length/8,out=[];
+    for(let i=0;i+6<=n;) {
+      const c=color(v,i);let flat=true;
+      for(let j=1;j<6&&flat;j++)flat=same(c,color(v,i+j));
+      if(flat){
+        const [a,b,d,d2,b2,f]=Array.from({length:6},(_,j)=>at(v,i+j));
+        const eq=(p,q)=>Math.abs(p[0]-q[0])<1e-3&&Math.abs(p[1]-q[1])<1e-3;
+        if(eq(d,d2)&&eq(b,b2)&&Math.abs(a[1]-b[1])<1e-3&&Math.abs(a[0]-d[0])<1e-3&&Math.abs(f[0]-b[0])<1e-3&&Math.abs(f[1]-d[1])<1e-3) {
+          out.push({x:Math.min(a[0],f[0]),y:Math.min(a[1],f[1]),w:Math.abs(f[0]-a[0]),h:Math.abs(f[1]-a[1]),color:c});i+=6;continue;
+        }
+      }
+      i+=3;
     }
     cached=out;return out;
   }
-  function glyphs(q,color,rect,text,size,label) {
-    const selected=q.filter(v=>same(color,v.color)&&v.x>=rect.x-.02&&v.y>=rect.y-.02&&v.x+v.w<=rect.x+rect.w+.02&&v.y+v.h<=rect.y+rect.h+.02);
-    const area=selected.reduce((n,v)=>n+v.w*v.h,0),expected=expectedArea(text,size);
-    check(Math.abs(area-expected)<.2,`${w}x${h} ${config.name} ${label}: complete glyph area ${area} != ${expected} for ${JSON.stringify(text)}`);
-    check(selected.every(v=>Math.abs(v.h-size/8)<.001),`${label}: fixed ${size}px glyph height, no partial clipped bitmap rows`);
+  // Bounding box of every vertex whose colour matches (optionally any alpha).
+  function extent(match,filter=()=>true) {
+    const v=raw(),n=v.length/8;let box=null;
+    for(let i=0;i<n;i++){const c=color(v,i),p=at(v,i);if(!match(c)||!filter(p))continue;
+      box=box?{l:Math.min(box.l,p[0]),t:Math.min(box.t,p[1]),r:Math.max(box.r,p[0]),b:Math.max(box.b,p[1])}:{l:p[0],t:p[1],r:p[0],b:p[1]};}
+    return box&&{x:box.l,y:box.t,w:box.r-box.l,h:box.b-box.t};
+  }
+  // A glyph run belongs to the row its top starts in (descenders may hang
+  // below a row; the next row's capitals start a few pixels into it).
+  const inRow=(v,rect)=>v.x+v.w/2>=rect.x&&v.x+v.w/2<=rect.x+rect.w&&v.y>=rect.y-.02&&v.y<rect.y+rect.h-.02;
+  // Complete glyphs of `text` in `ink`, starting inside `rect`, contained by `bounds`.
+  function glyphs(ink,rect,text,size,label,bounds=rect,sizes=[size]) {
+    const selected=quads().filter(v=>same(ink,v.color)&&inRow(v,rect));
+    const area=selected.reduce((n,v)=>n+v.w*v.h,0);
+    const used=sizes.find(s=>Math.abs(area-expectedArea(text,s))<.2*(s/8)**2+.2);
+    check(used!==undefined,`${w}x${h} ${config.name} ${label}: complete glyph area ${area} != ${sizes.map(s=>expectedArea(text,s))} for ${JSON.stringify(text)}`);
+    const px=(used??size)/8;
+    check(selected.every(v=>Math.abs(v.h/px-Math.round(v.h/px))<1e-3&&Math.abs(v.w/px-Math.round(v.w/px))<1e-3),`${label}: whole font pixels, no partially clipped glyph rows`);
+    check(selected.every(v=>v.x>=bounds.x-.02&&v.y>=bounds.y-.02&&v.x+v.w<=bounds.x+bounds.w+.02&&v.y+v.h<=bounds.y+bounds.h+.02),`${label}: glyphs stay inside their surface`);
     return Math.round(area*100)/100;
   }
+  function inkArea(ink,rect) {
+    return quads().filter(v=>same(ink,v.color)&&inRow(v,rect)).reduce((n,v)=>n+v.w*v.h,0);
+  }
+  // Only menu cards carry the blue airmail edging; while one is up it is the
+  // only surface, so its hairline outlines it.
+  function card() {
+    if(!extent(c=>same(c,postBlue)))return null;
+    const box=extent(c=>sameRgb(c,line));
+    return box&&box.h>220?{x:box.x+1,y:box.y+1,w:box.w-2,h:box.h-2}:null;
+  }
   function menu(expectedTitle,expectedDetail,summary=null) {
-    const q=quads(),p=q.find(v=>same(panel,v.color)&&v.h>220);
+    const p=card();
     assert.ok(p,'actual inactive menu is painted');
     assert.ok(p.y>=7.99&&p.x>=7.99&&p.x+p.w<=w-7.99&&p.y+p.h<=h-7.99,'compact menu is contained in the actual viewport');
-    const narrow=w-16<600,titleH=28,detailH=40,summaryH=36;
-    const rect=(y,height)=>({x:p.x+12,y,w:p.w-24,h:height});let y=p.y+16;
-    const result={};result.title=glyphs(q,cream,rect(y,titleH),expectedTitle,narrow?20:24,'title');y+=titleH+8;
-    result.detail=glyphs(q,cream,rect(y,detailH),expectedDetail,16,'detail');y+=detailH+8;
-    if(summary)result.summary=glyphs(q,amber,rect(y,summaryH),summary,14,'summary');
-    else {const area=q.filter(v=>same(amber,v.color)&&v.y>=y-.02&&v.y+v.h<=y+summaryH+.02).reduce((n,v)=>n+v.w*v.h,0);assert.ok(area>100);result.summary=Math.round(area*100)/100;}
-    y+=summaryH+12;
-    const button=q.find(v=>same(amber,v.color)&&Math.abs(v.y-y)<.02&&v.w>200&&v.h>40);assert.ok(button&&button.h>=47.99,'48px actual painted target');
+    const ROW=22,rect=(y,height)=>({x:p.x+12,y,w:p.w-24,h:height});let y=p.y+18;
+    const result={};
+    // 24px descenders start below the 30px title row, above the detail capitals.
+    result.title=glyphs(cream,rect(y,34),expectedTitle,24,'title',p,[24,16]);y+=30+4;
+    result.detail=expectedDetail?glyphs(cream,rect(y,ROW),expectedDetail,16,'detail',p):0;y+=2*ROW+8;
+    if(summary)result.summary=glyphs(amber,rect(y,2*ROW),summary,16,'summary',p);
+    else {const area=inkArea(amber,rect(y,2*ROW));assert.ok(area>100,'summary copy painted');result.summary=Math.round(area*100)/100;}
+    y+=2*ROW+12;
+    const width=Math.min(p.w-24,240),button={x:p.x+(p.w-width)/2,y,w:width,h:48};
+    // The anti-aliased fill fades across one device pixel centred on each
+    // edge, so its vertex extent minus that pixel is the painted size.
+    const amberish=c=>[0,1,2].every(i=>Math.abs(c[i]-amber[i])<.08);
+    const fill=extent(amberish,q=>q[0]>=button.x-4&&q[0]<=button.x+button.w+4&&q[1]>=button.y-4&&q[1]<=button.y+button.h+4);
+    assert.ok(fill&&fill.h-1>=47.99&&fill.w-1>200,`48px actual painted target: ${JSON.stringify(fill)}`);
+    assert.ok(inkArea(ink,button)>100,'button label painted on the target');
     return result;
   }
-  function guidance(text) {
-    const q=quads(),width=Math.min(w-16,960),x=(w-width)/2;
-    return glyphs(q,cream,{x:x+12,y:94,w:width-24,h:42},text,14,'delivery guidance');
+  const guideRows=()=>{const width=Math.min(w-16,960),x=8+(w-16-width)/2;return {x:x+12,y:8+52+36,w:width-24,h:22*3};};
+  function guidance(head,detail) {
+    const rows=guideRows();
+    glyphs(cream,rows,head,16,'delivery guidance');
+    return glyphs(mist,rows,detail,16,'delivery guidance detail');
   }
-  function matchesGuidance(text) {
-    const width=Math.min(w-16,960),x=(w-width)/2;
-    const area=quads().filter(v=>same(cream,v.color)&&v.x>=x+11.99&&v.x+v.w<=x+width-11.99&&v.y>=93.99&&v.y+v.h<=136.01).reduce((n,v)=>n+v.w*v.h,0);
-    return Math.abs(area-expectedArea(text,14))<.2;
+  function matchesGuidance(head) {
+    return Math.abs(inkArea(cream,guideRows())-expectedArea(head,16))<.2;
   }
   function footer() {
-    const q=quads(),narrow=w-16<600,p=q.find(v=>same(panel,v.color)&&Math.abs(v.h-58)<.02);
-    assert.ok(p,'compact playing footer painted');
+    const p=extent(c=>sameRgb(c,line),q=>q[1]>=h-8-58-2);
+    assert.ok(p&&Math.abs(p.h-2-58)<.1,'compact playing footer painted');
     assert.ok(p.h<h*.2,'telemetry does not consume the playfield');
-    glyphs(q,amber,{x:narrow?p.x+12:p.x+p.w/2,y:p.y+(narrow?26:8),w:narrow?p.w-24:p.w/2-12,h:18},
-      'CRUISE / BOOST 100%',14,'current flight mode');
-
+    glyphs(amber,p,'Cruise',16,'current flight mode');
   }
-  frame();return {e,frame,key,quads,menu,guidance,matchesGuidance,footer};
+  frame();return {e,frame,key,raw,quads,menu,guidance,matchesGuidance,footer,card};
 }
-const ready=['SKY COURIER','5 GATES / 1 DELIVERY'];
-const paused=['FLIGHT PAUSED',''];
-const won=['MAIL DELIVERED',''];
-const lost=['AIRCRAFT GROUNDED','3 IMPACTS'];
-const timeout=['TIME UP',''];
-const summary='90 seconds / 3 hull';
+const ready=['Sky Courier','5 gates · 1 delivery'];
+const paused=['Flight paused',''];
+const won=['Mail delivered!',''];
+const lost=['Aircraft grounded','3 impacts'];
+const timeout=["Time's up",''];
+const summary='90 seconds · 3 hull';
 const sizes=[[1280,560],[390,600],[320,600],[320,480],[844,390]];
 for(const config of configurations) {
   let reference;
   for(const [w,h] of sizes) {
     const r=runtime(w,h,false,config);const a=r.menu(...ready,summary);
     r.key(config.confirmCode);r.footer();r.key(0xff1b);const b=r.menu(...paused,summary);
-    // Menu pause cannot consume countdown time. Compare every render vertex.
-    const before=r.quads();for(let i=0;i<30;i++)r.frame();assert.deepEqual(r.quads(),before,'paused render and UI remain frozen');
+    // Menu pause cannot consume countdown time. Let the button's eased
+    // hover/focus springs settle, then compare every render vertex.
+    for(let i=0;i<300;i++)r.frame();
+    const before=Array.from(r.raw());for(let i=0;i<30;i++)r.frame();
+    assert.deepEqual(Array.from(r.raw()),before,'paused render and UI remain frozen');
     const pilot=runtime(w,h,true,config);let slow=false,speed=false,done=false;
-    const slowText=`SLOW DOWN: ${config.slow}\nAt most 18 m/s (35 kt)`,speedText='SPEED READY / 16m';
+    const slowText=`Slow down: ${config.slow}`,speedText='Speed ready';
     for(let i=0;i<2800;i++) {
       pilot.frame();
-      if(i%10===0&&!slow&&pilot.matchesGuidance(slowText)){pilot.guidance(slowText);slow=true;}
-      if(i%10===0&&!speed&&pilot.matchesGuidance(speedText)){pilot.guidance(speedText);speed=true;}
-      if(i%20===0&&pilot.quads().some(v=>same(panel,v.color)&&v.h>220)){done=true;break;}
+      if(i%10===0&&!slow&&pilot.matchesGuidance(slowText)){pilot.guidance(slowText,'At most 18 m/s (35 kt)');slow=true;}
+      if(i%10===0&&!speed&&pilot.matchesGuidance(speedText)){pilot.guidance(speedText,'Drop at the post · 16 m up');speed=true;}
+      if(i%20===0&&pilot.card()){done=true;break;}
     }
     check(slow&&speed&&done,'actual autopilot slow approach and accepted delivery were observed');
     const c=pilot.menu(...won);

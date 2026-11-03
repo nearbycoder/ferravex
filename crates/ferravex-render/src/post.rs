@@ -457,13 +457,15 @@ pub fn glow_circle(x: f32, y: f32, radius: f32, color: Color, intensity: f32) {
         color.g * intensity,
         color.b * intensity,
     ];
+    // Shared unit-circle table: the same angles without per-vertex trig.
+    let units = crate::shapes::unit_circle(GLOW_SEGMENTS).unwrap_or(&[]);
     let ring = |ring: usize, segment: usize| {
         let (fraction, alpha) = GLOW_RINGS[ring];
-        let angle = segment as f32 * std::f32::consts::TAU / GLOW_SEGMENTS as f32;
+        let unit = units[segment];
         (
             Vec3::new(
-                x + angle.cos() * radius * fraction,
-                y + angle.sin() * radius * fraction,
+                x + unit.x * radius * fraction,
+                y + unit.y * radius * fraction,
                 0.,
             ),
             Vec3::Z,

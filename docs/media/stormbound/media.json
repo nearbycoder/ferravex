@@ -1,0 +1,23 @@
+{
+ "game": "stormbound",
+ "loop": "loop.mp4",
+ "poster": "poster.webp",
+ "alt": "Stormbound: naval artillery campaign in play",
+ "width": 960,
+ "height": 600,
+ "seconds": 6,
+ "stills": [
+  {
+   "file": "still-1.webp",
+   "alt": "Stormbound: opening campaign decisions"
+  },
+  {
+   "file": "still-2.webp",
+   "alt": "Stormbound: campaign action and objectives"
+  },
+  {
+   "file": "still-3.webp",
+   "alt": "Stormbound: campaign progress"
+  }
+ ]
+}

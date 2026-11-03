@@ -64,11 +64,11 @@ fn button(ui: &mut Ui, id: u64, rect: Rect, title: &str, enabled: bool, size: f3
 fn availability(status: Result<(), ActionError>, available: &str) -> String {
     match status {
         Ok(()) => available.into(),
-        Err(ActionError::Funds { missing }) => format!("NEED {missing} MORE COINS"),
-        Err(ActionError::FullyGrown) => "MAXED OUT. LOOKING GOOD.".into(),
-        Err(ActionError::Occupied) => "SELECT AN EMPTY PLOT".into(),
-        Err(ActionError::Empty) => "BUILD A TOWER FIRST".into(),
-        Err(_) => "UNAVAILABLE RIGHT NOW".into(),
+        Err(ActionError::Funds { missing }) => format!("Need {missing} more coins"),
+        Err(ActionError::FullyGrown) => "Maxed out. Looking good.".into(),
+        Err(ActionError::Occupied) => "Select an empty plot".into(),
+        Err(ActionError::Empty) => "Build a tower first".into(),
+        Err(_) => "Unavailable right now".into(),
     }
 }
 #[cfg(test)]

@@ -1080,19 +1080,62 @@ pub fn draw_circle_lines(x: f32, y: f32, r: f32, t: f32, c: Color) {
     }
     edit(|s| s.push_flat_2d(&points, c))
 }
-pub fn draw_ellipse(x: f32, y: f32, rx: f32, ry: f32, rotation: f32, c: Color) {
+/// Fan triangles for an ellipse rim sampled at the closed `units` ring.
+fn ellipse_fan(x: f32, y: f32, rx: f32, ry: f32, rotation: f32, units: &[Vec2], out: &mut [Vec2]) {
     let angle = rotation.to_radians();
     let (sin, cos) = (angle.sin(), angle.cos());
-    let point = |a: f32| {
-        let p = vec2(rx * a.cos(), ry * a.sin());
+    let point = |u: Vec2| {
+        let p = vec2(rx * u.x, ry * u.y);
         vec2(x + p.x * cos - p.y * sin, y + p.x * sin + p.y * cos)
     };
-    let rim: [Vec2; 33] = std::array::from_fn(|i| point(i as f32 * std::f32::consts::TAU / 32.));
+    let mut prev = point(units[0]);
+    for (chunk, &u) in out.as_chunks_mut::<3>().0.iter_mut().zip(&units[1..]) {
+        let next = point(u);
+        *chunk = [vec2(x, y), prev, next];
+        prev = next;
+    }
+}
+/// Filled ellipse of radii `rx`/`ry` rotated by `rotation` degrees, as a
+/// 32-segment fan (96 vertices). The rim directions come from a shared table.
+pub fn draw_ellipse(x: f32, y: f32, rx: f32, ry: f32, rotation: f32, c: Color) {
     let mut points = [Vec2::ZERO; 32 * 3];
-    for (i, chunk) in points.as_chunks_mut::<3>().0.iter_mut().enumerate() {
-        *chunk = [vec2(x, y), rim[i], rim[i + 1]];
+    if let Some(table) = shapes::unit_circle(32) {
+        // The closing point keeps its historical exact `TAU` evaluation.
+        let mut units = [Vec2::ZERO; 33];
+        units[..32].copy_from_slice(&table[..32]);
+        units[32] = vec2(std::f32::consts::TAU.cos(), std::f32::consts::TAU.sin());
+        ellipse_fan(x, y, rx, ry, rotation, &units, &mut points);
     }
     edit(|s| s.push_flat_2d(&points, c))
+}
+/// [`draw_ellipse`] with its segment count chosen from the on-screen size:
+/// from 8 segments for a few-pixel blob shadow to 64 for a large ellipse, the
+/// same curve density as [`shapes`] (2–16 segments per quarter turn). Emits
+/// at most 192 vertices; non-finite input draws nothing.
+///
+/// ```
+/// use ferravex_render::{Color, draw_ellipse_adaptive, input::host_frame};
+/// host_frame(1. / 60., 320, 200, || {
+///     // A small contact shadow uses far fewer than draw_ellipse's 96 vertices.
+///     draw_ellipse_adaptive(160., 120., 6., 2.5, 0., Color::new(0., 0., 0., 0.4));
+///     draw_ellipse_adaptive(160., 80., 140., 60., 10., Color::from_hex(0x5bd5d8));
+/// });
+/// ```
+pub fn draw_ellipse_adaptive(x: f32, y: f32, rx: f32, ry: f32, rotation: f32, c: Color) {
+    if ![x, y, rx, ry, rotation].iter().all(|v| v.is_finite()) {
+        return;
+    }
+    edit(|s| {
+        let px = shapes::Sink::device_pixel_of(s);
+        let n = shapes::curve_segments(rx.abs().max(ry.abs()) / px).max(8);
+        let Some(units) = shapes::unit_circle(n) else {
+            return;
+        };
+        let mut points = [Vec2::ZERO; 64 * 3];
+        let points = &mut points[..n * 3];
+        ellipse_fan(x, y, rx, ry, rotation, units, points);
+        s.push_flat_2d(points, c)
+    })
 }
 pub fn draw_line_3d(a: Vec3, b: Vec3, c: Color) {
     let d = (b - a).normalize_or_zero();
@@ -1200,28 +1243,38 @@ pub fn draw_text(t: &str, x: f32, y: f32, size: f32, c: Color) -> TextDimensions
         },
     )
 }
-/// Draws classic 5×7 bitmap text with its baseline at `y`: one quad per lit
-/// font pixel, exactly as before (browser tests count these quads). Use
-/// [`text::draw_text_styled`] with [`text::FontFace::Classic`] for the same
-/// letters with merged geometry, shadows and outlines.
+/// Draws classic 5×7 bitmap text with its baseline at `y`: one quad per
+/// horizontal run of lit font pixels in each glyph row, each exactly one font
+/// pixel tall. Coverage is identical to one quad per lit pixel with fewer
+/// vertices. Use [`text::draw_text_styled`] with [`text::FontFace::Classic`]
+/// for the same letters with vertically merged geometry, shadows and outlines.
+///
+/// ```
+/// use ferravex_render::{TextParams, WHITE, draw_text_ex, input::host_frame};
+/// let size = host_frame(1. / 60., 320, 120, || {
+///     draw_text_ex("HUD 42", 8., 40., TextParams { font_size: 16, font_scale: 1., color: WHITE })
+/// });
+/// assert_eq!((size.width, size.height), (72., 14.));
+/// ```
 pub fn draw_text_ex(t: &str, mut x: f32, y: f32, p: TextParams) -> TextDimensions {
     let px = p.font_size as f32 * p.font_scale / 8.;
-    // One stream borrow and batch record per string instead of two per pixel;
-    // the vertices are identical to per-pixel `draw_rectangle` calls.
+    // One stream borrow and batch record per string.
     edit(|s| {
         let mut sink = shapes::Sink::new(s);
         for c in t.chars() {
             for (row, bits) in font::glyph(c.to_ascii_uppercase()).into_iter().enumerate() {
-                for col in 0..5 {
-                    if bits & (1 << (4 - col)) != 0 {
-                        sink.rect(
-                            x + col as f32 * px,
-                            y - 7. * px + row as f32 * px,
-                            px,
-                            px,
-                            p.color,
-                        );
-                    }
+                let top = y - 7. * px + row as f32 * px;
+                // Maximal runs of set bits, left to right (bit 4 is column 0).
+                let mut bits = bits & 0x1f;
+                while bits != 0 {
+                    let start = bits.leading_zeros() as usize - 3;
+                    let len = (!(bits << (start + 3))).leading_zeros() as usize;
+                    // Edges use the per-pixel arithmetic: left of the first
+                    // pixel, and the last pixel's left plus one pixel.
+                    let left = x + start as f32 * px;
+                    let right = x + (start + len - 1) as f32 * px + px;
+                    sink.rect_edges(left, top, right, top + px, p.color);
+                    bits &= !(((1u8 << len) - 1) << (5 - start - len));
                 }
             }
             x += 6. * px;
@@ -2360,6 +2413,29 @@ mod tests {
                     .collect(),
             )
         })
+    }
+    #[test]
+    fn adaptive_ellipses_scale_segments_with_size_and_stay_on_the_rim() {
+        let draw = |rx: f32, ry: f32| {
+            reset();
+            input::host_frame(1. / 60., 800, 600, || {
+                draw_ellipse_adaptive(400., 300., rx, ry, 30., WHITE)
+            });
+            read(|s| s.vertices.clone())
+        };
+        let small = draw(3., 2.);
+        let large = draw(380., 150.);
+        assert_eq!(small.len(), 12 * 3, "a blob shadow needs few segments");
+        assert_eq!(large.len(), 64 * 3, "large ellipses get the densest rim");
+        // Every rim vertex satisfies the rotated ellipse equation.
+        let (sin, cos) = 30_f32.to_radians().sin_cos();
+        for v in &large {
+            let p = vec2((v[0] + 1.) * 400., (1. - v[1]) * 300.) - vec2(400., 300.);
+            let local = vec2(p.x * cos + p.y * sin, -p.x * sin + p.y * cos);
+            let e = (local.x / 380.).powi(2) + (local.y / 150.).powi(2);
+            assert!(p.length() < 1e-3 || (e - 1.).abs() < 1e-3, "{e}");
+        }
+        assert!(draw(f32::NAN, 2.).is_empty());
     }
     #[test]
     fn batched_primitives_match_the_per_triangle_reference_exactly() {

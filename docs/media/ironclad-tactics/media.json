@@ -1,0 +1,23 @@
+{
+ "game": "ironclad-tactics",
+ "loop": "loop.mp4",
+ "poster": "poster.webp",
+ "alt": "Ironclad Tactics: turn-based squad tactics campaign in play",
+ "width": 960,
+ "height": 600,
+ "seconds": 6,
+ "stills": [
+  {
+   "file": "still-1.webp",
+   "alt": "Ironclad Tactics: opening campaign decisions"
+  },
+  {
+   "file": "still-2.webp",
+   "alt": "Ironclad Tactics: campaign action and objectives"
+  },
+  {
+   "file": "still-3.webp",
+   "alt": "Ironclad Tactics: campaign progress"
+  }
+ ]
+}

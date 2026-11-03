@@ -493,11 +493,11 @@ impl Lab {
         let dropped = self.sandbox.drop_body(self.shape == DropShape::Ball);
         self.fun.stats.drops += u32::from(dropped);
         self.notice(if !dropped {
-            "Body limit reached. RESET yard."
+            "Body limit reached. Reset the yard."
         } else if self.shape == DropShape::Ball {
-            "Ball dropped. DROP to repeat."
+            "Ball dropped. Drop to repeat."
         } else {
-            "Crate dropped. DROP to repeat."
+            "Crate dropped. Drop to repeat."
         });
     }
 
@@ -506,26 +506,26 @@ impl Lab {
             Some(at) => {
                 self.fun.bowled(at);
                 self.notice(if self.session.is_paused() {
-                    "Bowl placed. STEP or RESUME to roll."
+                    "Bowl placed. Step or Resume to roll."
                 } else {
                     "Bowled. Watch the stack."
                 });
             }
-            None => self.notice("Body limit reached. RESET yard."),
+            None => self.notice("Body limit reached. Reset the yard."),
         }
     }
 
     fn chaos(&mut self) {
         let count = self.sandbox.chaos(self.fun.chaos_serial);
         if count == 0 {
-            self.notice("Body limit reached. RESET yard.");
+            self.notice("Body limit reached. Reset the yard.");
             return;
         }
         self.fun.chaos_serial = self.fun.chaos_serial.wrapping_add(1);
         self.fun.stats.chaos += 1;
         self.fun.events.chaos += count;
         self.fun.touch();
-        self.notice("CHAOS delivered.");
+        self.notice("Chaos delivered.");
     }
 
     fn step(&mut self, dt: f32, frame: &mut LabFrame) {
@@ -577,7 +577,7 @@ impl Lab {
                 self.sandbox.snap_interpolation();
             }
             self.notice(if self.session.is_paused() {
-                "Paused. STEP advances 1 tick."
+                "Paused. Step advances 1 tick."
             } else {
                 "Resumed at 120 Hz."
             });
@@ -599,7 +599,7 @@ impl Lab {
         if self.session.is_paused() {
             self.pending_pulse = false;
             if pulse_input() | commands.pulse {
-                self.notice("Resume to pulse. DROP/STEP work.");
+                self.notice("Resume to pulse. Drop/Step work.");
             }
         } else {
             self.pending_pulse |= commands.pulse;
@@ -624,7 +624,7 @@ impl Lab {
                 self.sandbox.snap_interpolation();
                 self.notice("Stepped 8.33 ms; still paused.");
             } else {
-                self.notice("PAUSE before stepping.");
+                self.notice("Pause before stepping.");
             }
         }
         result.alpha = if self.session.is_paused() {
@@ -855,7 +855,7 @@ fn register_lab_actions(player_input: &mut PlayerInput) {
         ("step", "Step once while paused", KeyCode::N, 5),
         ("reset_view", "Reset orbit view", KeyCode::C, 3),
         ("bowl", "Bowl a heavy ball at the stack", KeyCode::B, 10),
-        ("chaos", "CHAOS: throw in sixteen shapes", KeyCode::Key3, 11),
+        ("chaos", "Chaos: throw in sixteen shapes", KeyCode::Key3, 11),
     ] {
         player_input
             .action(
@@ -1051,7 +1051,7 @@ async fn game() {
         }
         if let Some(headline) = bests.update(&lab.fun) {
             juice.toast(
-                "NEW PERSONAL BEST!",
+                "New personal best!",
                 headline,
                 juice::GOLD,
                 2.6,
@@ -1246,32 +1246,32 @@ async fn game() {
                 hovered = Some(i);
             }
         }
-        pending.crate_drop = hud::tool(buttons[0], "CRATE", lab.shape == DropShape::Crate);
-        pending.ball_drop = hud::tool(buttons[1], "BALL", lab.shape == DropShape::Ball);
-        pending.drop = hud::tool(buttons[2], "DROP", false);
+        pending.crate_drop = hud::tool(buttons[0], "Crate", lab.shape == DropShape::Crate);
+        pending.ball_drop = hud::tool(buttons[1], "Ball", lab.shape == DropShape::Ball);
+        pending.drop = hud::tool(buttons[2], "Drop", false);
         pending.pulse = hud::tool_button(
             buttons[3],
-            "PULSE",
+            "Pulse",
             ui::ButtonOptions {
                 enabled: !paused && sandbox.pulse_time == 0.,
                 selected: false,
             },
         );
-        pending.pause = hud::tool(buttons[4], if paused { "RESUME" } else { "PAUSE" }, paused);
+        pending.pause = hud::tool(buttons[4], if paused { "Resume" } else { "Pause" }, paused);
         pending.step = hud::tool_button(
             buttons[5],
-            "STEP",
+            "Step",
             ui::ButtonOptions {
                 enabled: paused,
                 selected: false,
             },
         );
-        pending.view = hud::tool(buttons[6], "VIEW", false);
-        pending.reset = hud::tool(buttons[7], "RESET", false);
+        pending.view = hud::tool(buttons[6], "View", false);
+        pending.reset = hud::tool(buttons[7], "Reset", false);
         let room = sandbox.bodies.len() < MAX_BODIES;
         pending.bowl = hud::tool_button(
             buttons[8],
-            "BOWL",
+            "Bowl",
             ui::ButtonOptions {
                 enabled: room,
                 selected: false,
@@ -1279,7 +1279,7 @@ async fn game() {
         );
         pending.chaos = hud::tool_button(
             buttons[9],
-            "CHAOS",
+            "Chaos",
             ui::ButtonOptions {
                 enabled: room,
                 selected: false,
@@ -1931,7 +1931,7 @@ mod tests {
     #[test]
     fn ten_grouped_buttons_stay_readable_and_leave_scene_room() {
         let labels = [
-            "CRATE", "BALL", "DROP", "PULSE", "RESUME", "STEP", "VIEW", "RESET", "BOWL", "CHAOS",
+            "Crate", "Ball", "Drop", "Pulse", "Resume", "Step", "View", "Reset", "Bowl", "Chaos",
         ];
         for (width, height) in [
             (296., 640.),

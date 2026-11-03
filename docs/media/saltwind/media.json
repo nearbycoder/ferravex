@@ -1,0 +1,23 @@
+{
+ "game": "saltwind",
+ "loop": "loop.mp4",
+ "poster": "poster.webp",
+ "alt": "Saltwind: sailing and merchant strategy campaign in play",
+ "width": 960,
+ "height": 600,
+ "seconds": 6,
+ "stills": [
+  {
+   "file": "still-1.webp",
+   "alt": "Saltwind: opening campaign decisions"
+  },
+  {
+   "file": "still-2.webp",
+   "alt": "Saltwind: campaign action and objectives"
+  },
+  {
+   "file": "still-3.webp",
+   "alt": "Saltwind: campaign progress"
+  }
+ ]
+}

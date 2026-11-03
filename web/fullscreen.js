@@ -1,6 +1,50 @@
 // Shared browser presentation. Rotate the device/viewport, never the canvas alone.
 export const gameOrientation=game=>['owned-orbit','salvage-pinball'].includes(game)?'portrait':'landscape';
 
+// Mobile browser chrome and the software keyboard change the visible viewport
+// independently of layout viewport units. Keep both iframe and direct players
+// fitted to that rectangle, and release every listener/style on teardown.
+export function bindVisibleViewport(element,win=window){
+ const names=['--ferravex-view-left','--ferravex-view-top','--ferravex-view-width','--ferravex-view-height'];
+ const style=element.style;
+ const saved=names.map(name=>[name,style.getPropertyValue?.(name)??style[name],style.getPropertyPriority?.(name)??'']);
+ const set=(name,value)=>style.setProperty?style.setProperty(name,value):style[name]=value;
+ const positive=(value,fallback)=>Number.isFinite(value)&&value>0?value:fallback;
+ const update=()=>{
+  const viewport=win.visualViewport;
+  const width=positive(viewport?.width,win.innerWidth),height=positive(viewport?.height,win.innerHeight);
+  const values=[Math.max(0,viewport?.offsetLeft||0),Math.max(0,viewport?.offsetTop||0),width,height];
+  values.forEach((value,i)=>{if(Number.isFinite(value))set(names[i],value+'px');});
+ };
+ win.addEventListener('resize',update);win.visualViewport?.addEventListener('resize',update);win.visualViewport?.addEventListener('scroll',update);update();
+ let disposed=false;
+ return {update,dispose(){
+  if(disposed)return;disposed=true;win.removeEventListener('resize',update);win.visualViewport?.removeEventListener('resize',update);win.visualViewport?.removeEventListener('scroll',update);
+  for(const [name,value,priority] of saved){if(style.setProperty){if(value)style.setProperty(name,value,priority);else style.removeProperty(name);}else if(value===undefined)delete style[name];else style[name]=value;}
+ }};
+}
+
+function pageScrollLock(doc,win){
+ let saved=null,scroll;
+ return active=>{
+  if(active&&!saved){
+   scroll=[win.scrollX,win.scrollY];saved=[];
+   for(const element of [doc.documentElement,doc.body].filter(Boolean)){
+    const style=element.style,body=element===doc.body;
+    const values=style.setProperty?{'overflow-x':'hidden','overflow-y':'hidden'}:{overflow:'hidden'};
+    if(body)Object.assign(values,{position:'fixed',top:-scroll[1]+'px',left:-scroll[0]+'px',width:'100%'});
+    for(const [name,value] of Object.entries(values)){
+     saved.push([style,name,style.getPropertyValue?.(name)??style[name],style.getPropertyPriority?.(name)??'']);
+     if(style.setProperty)style.setProperty(name,value,'important');else style[name]=value;
+    }
+   }
+  }else if(!active&&saved){
+   for(const [style,name,value,priority] of saved){if(style.setProperty){if(value)style.setProperty(name,value,priority);else style.removeProperty(name);}else if(value===undefined)delete style[name];else style[name]=value;}
+   saved=null;const [left,top]=scroll;win.scrollTo?.({left,top,behavior:'instant'});
+  }
+ };
+}
+
 // The platform callbacks remain synchronous until request() returns, preserving
 // user activation. dispose() returns void, invalidates pending transitions and
 // releases native/expanded presentation best-effort, including late completions.
@@ -134,25 +178,8 @@ export function bindFullscreen(canvas,game,getExports){
   }
  }
 
- const scrollLocks=new Map();let pageScroll=null;
- function lockScroll(active){
-  if(active&&!pageScroll){
-   pageScroll=[window.scrollX,window.scrollY];
-   for(const element of [root,document.body]){
-    const style=element.style;
-    if(style.setProperty){
-     scrollLocks.set(element,['overflow-x','overflow-y'].map(name=>[name,style.getPropertyValue(name),style.getPropertyPriority(name)]));
-     style.setProperty('overflow','hidden','important');
-    }else{scrollLocks.set(element,style.overflow);style.overflow='hidden';}
-   }
-  }else if(!active&&pageScroll){
-   for(const [element,saved] of scrollLocks){
-    if(element.style.setProperty){element.style.removeProperty('overflow');for(const [name,value,priority] of saved)if(value)element.style.setProperty(name,value,priority);}
-    else element.style.overflow=saved;
-   }
-   scrollLocks.clear();const [left,top]=pageScroll;pageScroll=null;window.scrollTo?.({left,top,behavior:'instant'});
-  }
- }
+ const lockScroll=pageScrollLock(document,window);
+ const visibleViewport=bindVisibleViewport(stage,window);
  const hadGameClass=document.body.classList.contains('ferravex-game');
  document.body.classList.add('ferravex-game');
  const button=document.createElement('button');button.type='button';button.className='ferravex-fullscreen-trigger';button.textContent='Fullscreen';button.setAttribute('aria-label','Fullscreen');button.setAttribute('aria-pressed','false');button.dataset.mode='inline';button.title=`Fullscreen · ${desired}`;
@@ -177,10 +204,11 @@ export function bindFullscreen(canvas,game,getExports){
  .ferravex-fullscreen{height:100dvh!important;min-height:0!important;box-sizing:border-box;padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)!important;overflow:hidden}
  /* The app, not its document header or guide, owns the fullscreen viewport. */
  body.ferravex-fullscreen{padding:0!important;overflow:hidden!important}
- body.ferravex-fullscreen .ferravex-game-stage{position:fixed!important;inset:0!important;width:100vw!important;height:100dvh!important;min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;aspect-ratio:auto!important;overflow:hidden!important;display:block!important;z-index:10;background:#101a21}
- body.ferravex-fullscreen .ferravex-game-stage canvas,body.ferravex-fullscreen canvas.ferravex-game-stage{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;aspect-ratio:auto!important}
+ body.ferravex-fullscreen .ferravex-game-stage{position:fixed!important;inset:auto!important;left:var(--ferravex-view-left,0px)!important;top:var(--ferravex-view-top,0px)!important;width:var(--ferravex-view-width,100vw)!important;height:var(--ferravex-view-height,100dvh)!important;min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;aspect-ratio:auto!important;overflow:hidden!important;display:block!important;z-index:10;background:#101a21}
+ body.ferravex-fullscreen .ferravex-game-stage canvas{position:absolute!important;inset:auto!important;left:env(safe-area-inset-left,0px)!important;top:env(safe-area-inset-top,0px)!important;width:calc(100% - env(safe-area-inset-left,0px) - env(safe-area-inset-right,0px))!important;height:calc(100% - env(safe-area-inset-top,0px) - env(safe-area-inset-bottom,0px))!important;min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;aspect-ratio:auto!important}
+ body.ferravex-fullscreen canvas.ferravex-game-stage{left:calc(var(--ferravex-view-left,0px) + env(safe-area-inset-left,0px))!important;top:calc(var(--ferravex-view-top,0px) + env(safe-area-inset-top,0px))!important;width:calc(var(--ferravex-view-width,100vw) - env(safe-area-inset-left,0px) - env(safe-area-inset-right,0px))!important;height:calc(var(--ferravex-view-height,100dvh) - env(safe-area-inset-top,0px) - env(safe-area-inset-bottom,0px))!important}
  /* Software Orbit retains its portrait projection and matching pointer bounds. */
- body.ferravex-fullscreen .orbit-stage #game{width:min(100vw,calc(100dvh * 8 / 9))!important;height:min(100dvh,calc(100vw * 9 / 8))!important;inset:50% auto auto 50%!important;transform:translate(-50%,-50%)}
+ body.ferravex-fullscreen .orbit-stage #game{width:min(var(--ferravex-view-width,100vw),calc(var(--ferravex-view-height,100dvh) * 8 / 9))!important;height:min(var(--ferravex-view-height,100dvh),calc(var(--ferravex-view-width,100vw) * 9 / 8))!important;inset:50% auto auto 50%!important;transform:translate(-50%,-50%)}
  body.ferravex-fullscreen :is(.pan-rail,.lab-rail,.lab-pan-rail,.short-screen-nav,.lab-scroll,#flight-panel-scroll,#orchard-board-nav,#courtyard-pan){display:none!important}
  .ferravex-menu-original{display:none!important}
  .ferravex-game-menu-trigger{min-width:44px!important;min-height:44px!important;padding:8px!important;border:1px solid #ffffff30!important;border-radius:12px!important;color:#f1f4e9!important;background:#10201cdd!important;font:22px/1 system-ui!important;cursor:pointer;flex:none}
@@ -210,7 +238,7 @@ export function bindFullscreen(canvas,game,getExports){
  body.ferravex-game:has(.toolbar){overflow:hidden}
  .ferravex-game .toolbar{height:auto!important;min-height:48px;flex-wrap:wrap;gap:6px}
  .ferravex-game:has(.toolbar) main{width:min(94vw,640px,calc((100dvh - 112px - env(safe-area-inset-top,0px) - env(safe-area-inset-bottom,0px))*.8888889))}
- @media(max-width:540px){body.ferravex-game>nav>a{display:none}body.ferravex-game>nav{gap:5px;padding-inline:8px}body.ferravex-game>nav button{font-size:12px;padding-inline:6px}}
+ @media(max-width:540px){body.ferravex-game>nav>a{display:none}body.ferravex-game>nav{gap:5px;padding-inline:8px;flex-wrap:nowrap!important}body.ferravex-game>nav>strong{flex:1 1 0!important;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}body.ferravex-game>nav button{font-size:12px;padding-inline:6px}}
  `;document.head.append(css);
  let serial=0,noteTimer,disposed=false,returnFocus=null,feedback='',cancelExpansion=null;
  function reset(){if(!disposed){try{getExports()?.ferravex_blur?.();getExports()?.ferravex_focus?.(document.hasFocus()?1:0);delete canvas.dataset.fullscreenInputError;}catch{canvas.dataset.fullscreenInputError='Input reset unavailable';}}}
@@ -290,7 +318,7 @@ export function bindFullscreen(canvas,game,getExports){
   button.removeEventListener('click',toggle);
   document.removeEventListener('fullscreenchange',sync);document.removeEventListener('webkitfullscreenchange',sync);
   window.removeEventListener('resize',resize);window.removeEventListener('keydown',keydown,true);
-  cancelExpansion?.();disposeSession();clearHint();
+  cancelExpansion?.();disposeSession();clearHint();visibleViewport.dispose();
   document.body.classList.remove('ferravex-expanded');
   if(!hadGameClass)document.body.classList.remove('ferravex-game');
   menu.dispose();if(!hadStageClass)stage.classList.remove('ferravex-game-stage');
@@ -303,14 +331,15 @@ export function bindFullscreen(canvas,game,getExports){
 // Returns {dispose()} to release listeners, page styles and captured focus.
 // Example: const expansion=bindPlayerExpansion(); expansion.dispose();
 export function bindPlayerExpansion(doc=document,win=window){
- let active=null,activeFrame=null,returnFocus=null,overflow='',x=0,y=0,disposed=false;
+ let active=null,activeFrame=null,returnFocus=null,disposed=false,visibleViewport=null;
+ const lockScroll=pageScrollLock(doc,win);
  const observer=win.MutationObserver?new win.MutationObserver(checkHost):null;
  function clear(){
   if(!active)return;
   const restore=doc.hasFocus?.()!==false&&(!doc.activeElement||doc.activeElement===doc.body||doc.activeElement===doc.documentElement||doc.activeElement===activeFrame);
   const frame=activeFrame,target=returnFocus;
-  active.classList.remove('player-expanded');active=null;activeFrame=null;returnFocus=null;observer?.disconnect();
-  doc.documentElement.style.overflow=overflow;win.scrollTo({left:x,top:y,behavior:'instant'});
+  active.classList.remove('player-expanded');active=null;activeFrame=null;returnFocus=null;observer?.disconnect();visibleViewport?.dispose();visibleViewport=null;
+  lockScroll(false);
   if(restore&&!focusElement(target))focusElement(frame);
  }
  function checkHost(){if(active&&(active.isConnected===false||activeFrame.isConnected===false||activeFrame.closest('.player')!==active))clear();}
@@ -328,8 +357,8 @@ export function bindPlayerExpansion(doc=document,win=window){
   if(data.active){
    // A second live player must not silently invalidate the first game's state.
    if(active&&activeFrame!==frame){reply(false);return;}
-   if(!active){overflow=doc.documentElement.style.overflow;x=win.scrollX;y=win.scrollY;returnFocus=doc.activeElement;}
-   active=player;activeFrame=frame;player.classList.add('player-expanded');doc.documentElement.style.overflow='hidden';focusElement(frame);
+   if(!active){returnFocus=doc.activeElement;lockScroll(true);visibleViewport=bindVisibleViewport(player,win);}
+   active=player;activeFrame=frame;player.classList.add('player-expanded');focusElement(frame);
    observer?.observe(doc.documentElement,{childList:true,subtree:true});
   }else if(activeFrame===frame)clear();
   reply(true);

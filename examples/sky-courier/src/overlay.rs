@@ -4,8 +4,10 @@
 //!
 //! Colors deliberately avoid the HUD's exact cream/amber/panel inks so that
 //! overlays can never be mistaken for HUD copy.
+use super::flight_ui::Line;
 use super::presentation::{FlightPresentation, GOLD, POP_LIFE};
 use super::*;
+use ferravex_render::text::{TextAlign, TextStyle, draw_text_styled};
 
 const SPEED_LINE: Color = Color::new(0.96, 0.98, 1.0, 1.0);
 const MARKER: Color = Color::new(1.0, 0.82, 0.40, 1.0);
@@ -89,20 +91,13 @@ pub(super) fn gate_glow(presentation: &FlightPresentation, w: f32, h: f32) {
     }
 }
 
-fn shadowed(text: &str, x: f32, y: f32, size: f32, color: Color) {
-    draw_text(
-        text,
-        x + 2.,
-        y + 2.,
-        size,
-        Color::new(SHADOW.r, SHADOW.g, SHADOW.b, SHADOW.a * color.a),
-    );
-    draw_text(text, x, y, size, color);
-}
-
+/// Mixed-case overlay copy with a one-pixel outline so it reads over bright
+/// cloud and dark water alike.
 fn centered(text: &str, x: f32, y: f32, size: f32, color: Color) {
-    let width = text.chars().count() as f32 * size * 0.75;
-    shadowed(text, x - width * 0.5, y, size, color);
+    let style = TextStyle::modern(size, color)
+        .with_outline(Color::new(SHADOW.r, SHADOW.g, SHADOW.b, SHADOW.a * color.a))
+        .with_align(TextAlign::Center);
+    draw_text_styled(text, x, y, style);
 }
 
 /// Corner brackets around the current target, or an edge arrow when it is
@@ -145,11 +140,11 @@ pub(super) fn waypoint(projector: &Projector, flight: &Flight, w: f32, h: f32) {
             );
         }
         let label = if flight.next == GATES {
-            format!("POST {distance:.0}M")
+            Line::format(format_args!("Post · {distance:.0} m"))
         } else {
-            format!("{distance:.0}M")
+            Line::format(format_args!("{distance:.0} m"))
         };
-        centered(&label, point.x, point.y + size + 18., 12., color);
+        centered(label.as_str(), point.x, point.y + size + 20., 16., color);
         return;
     }
     // Off-screen: an arrow on an inset ellipse, pointing toward the target.
@@ -198,7 +193,7 @@ pub(super) fn pops(projector: &Projector, presentation: &FlightPresentation) {
             &pop.text,
             point.x,
             point.y - presentation.pop_rise(pop),
-            22. * grow,
+            24. * grow,
             color,
         );
     }

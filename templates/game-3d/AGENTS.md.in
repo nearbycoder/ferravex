@@ -3,7 +3,8 @@
 This is a standalone @@DIMENSION@@ game. Its only direct dependency is the local
 `ferravex` facade; keep the entire dependency graph first-party/std-only.
 
-- Read `README.md`, `src/game.rs` and `src/lib.rs` before changing gameplay.
+- Read `README.md`, `src/game.rs`, `src/lib.rs` and `src/hud.rs` before changing
+  gameplay. Rules live in `game.rs`; `lib.rs` and `hud.rs` only read them.
 - Keep fixed simulation in `Game::advance`; use `GameSession` for lifecycle and
   timing. `Game::TICK_RATE_HZ` is the configured rate; keep it finite and in
   `1..=1000`. Restart must reset both interpolation poses and the clock.
@@ -12,6 +13,9 @@ This is a standalone @@DIMENSION@@ game. Its only direct dependency is the local
   buttons, consume `PlayerInput::pressed`/`take` inside actual fixed ticks and
   pass values to the rules. Preserve edges on zero-tick frames and consume them
   once across catch-up ticks. Draw using the returned interpolation alpha.
+- Trigger effects from accepted game events (as `hud::Juice::observe` does for
+  the win), honor `preferences::feedback_policy()` reduced motion, and keep
+  HUD drawing after the world camera so post-processing stays off the UI.
 - This single-player session pauses for local menus. For network/replay games,
   keep the authoritative clock running while local menus suppress commands.
 - Keep `ferravex::render::game!`, the native launcher and the browser ABI intact.
@@ -22,13 +26,13 @@ This is a standalone @@DIMENSION@@ game. Its only direct dependency is the local
 - `Cargo.toml` and `ferravex.json` point to the engine checkout. Treat engine
   source as a dependency; project changes should stay in this game.
 - `ferravex.json` schema version 1 records generation options and generated file
-  paths. Its tick rate/title are provenance, not live settings. Read README's
-  customization section before editing them; changing metadata alone does not
-  change `Game::TICK_RATE_HZ`, Rust window configuration or browser titles.
+  paths. Its tick rate/title are provenance, not live settings; changing them
+  does not change `Game::TICK_RATE_HZ`, `TITLE` in `src/lib.rs` or browser titles.
 - Inspect the local facade/engine implementation before adopting an API. The
   generated game uses `GameSession::new/start/toggle_pause/restart/advance`,
   `PlayerInput::preset/sample/movement/pressed/simulation_dt`,
-  `render::window_conf`, and `render::game!`; do not assume planned APIs exist.
+  `render::window_conf`, `render::game!`, `render::post::set_post_fx`,
+  `render::shapes` and `render::ui::kit`; do not assume planned APIs exist.
 - Do not add registry/Git crates, third-party JS, CDN loaders, or silently
   change protocols/save formats. No workspace/catalog edits or deployment are
   needed to run this project.

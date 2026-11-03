@@ -1536,3 +1536,110 @@ maximum 23 calls, so even this warmed presentation workload is not entirely
 allocation-free. The simulation-only 600-tick regression remains a separate
 zero-allocation guarantee for its tested workload. Raw observation:
 `target/polish/glowtide/stress-perf/report.json`.
+
+## Immediate 2D drawing pass (2026-11-02)
+
+Machine: AMD Ryzen AI Max+ 395 with Radeon 8060S (Mesa 26.2.4, radeonsi),
+Linux 7.2.8 (CachyOS), rustc 1.96.1, release profile, otherwise idle. These
+are local observations, not portable frame-rate promises.
+
+**What was slow.** Every anti-aliased shape point recomputed its angle and
+`sin`/`cos`: a rounded-rectangle stroke evaluated each outline point six
+times, a drop shadow eight times, and every glow vertex ran its own trig plus
+an integer division. A kit `card` (shadow, fill, stroke) cost about 11 µs; a
+plain rectangle about 0.014 µs.
+
+**Changes** (all in `ferravex-render`, additive API only):
+
+- Quarter-arc and full-circle unit tables are built once per process
+  (`OnceLock`, about 18 KB static) with the exact angle expressions used
+  before, so outlines, fills, strokes, shadows and glows are bit-identical and
+  trig-free. Each offset ring is computed once per call into a stack array.
+- `Sink` reads the camera columns once, projects `(x, y, 0, 1)` without the
+  zero column (as `push_flat_2d` does), keeps lighting/world-palette shading off
+  the common path, projects each quad corner once and appends with
+  `extend_from_slice` after one bounded reservation.
+- Additive glows and `post::glow_circle` use the tables; glows write through a
+  crate-private `effects::TriangleWriter` that `draw_triangles` now also uses
+  (same validation, per-frame budget, truncation and batch flags).
+- Arcs and round joins/caps rotate incrementally and re-anchor with an exact
+  `sin_cos` every 16 steps (end caps stay exact); measured drift is at most
+  4.8e-7 clip units, about 0.0002 px.
+- Legacy `draw_text`/`draw_text_ex` emit one quad per horizontal run of lit
+  pixels in each glyph row (still one font pixel tall, outer edges computed with
+  the per-pixel arithmetic), with identical coverage.
+- `draw_ellipse` uses the shared table (identical vertices, including its exact
+  closing point). New `draw_ellipse_adaptive` picks 8–64 segments from the
+  on-screen size (at most 192 vertices).
+- Radial fills that the centre fan cannot represent (anything but a circle
+  centred on the gradient that reaches its edge) use a subdivided mesh: long
+  edges split, two to four interior bands. This fixes the visible rectangular
+  patch on large rounded rectangles and the lost off-centre highlights on
+  spheres/badges. Those calls emit at most 2,592 vertices. The reported
+  "darker" translucent radial discs are not an interpolation artifact: a
+  concentric fan is exact along every spoke, so they show the authored linear
+  alpha falloff.
+- Fixed-step `--smoke-frames` runs ignore window focus events. Previously
+  `PlayerInput::simulation_dt` returned zero while the window was unfocused,
+  so headless captures could stall. Interactive runs still pause on focus loss.
+
+**Microbenchmark.** Run `cargo run --release -p ferravex-render --example shapes_bench`.
+It reports the median of seven repetitions, 32 calls per host frame, with
+the empty-frame cost subtracted. Values are µs per call:
+
+| Workload | Before | After |
+|---|---:|---:|
+| `fill_rounded_rect` 120×40 r8 | 1.40 | 0.36 |
+| `stroke_rounded_rect` 120×40 r8 | 2.84 | 0.67 |
+| `drop_shadow` 300×200 blur 24 | 6.20 | 1.59 |
+| `kit::card` 300×200 | 11.41 | 2.96 |
+| `kit::keycap` | 5.21 | 1.38 |
+| `kit::meter` | 7.01 | 1.84 |
+| `stroke_circle` r40 | 4.79 | 1.13 |
+| `stroke_arc` r18, round caps | 1.88 | 0.98 |
+| `glow_disc` r80 | 15.54 | 4.58 |
+| `glow_ring` r30 w12 | 16.78 | 5.14 |
+| `post::glow_circle` r40 | 8.99 | 5.14 |
+| `draw_ellipse` | 0.26 | 0.10 |
+| `draw_text` 16 chars (legacy) | 3.15 | 1.15 |
+| `draw_text_styled` 16 chars | 2.18 | 1.62 |
+
+**Native games.** Each game ran `FERRAVEX_PERF_OUTPUT=… <game> --autoplay --smoke-frames 1200`.
+The measurement kept 1,140 frames after 60 warmup frames at 1500×1000 or
+1600×1000 and default quality. Three rounds alternated before and after
+binaries. The table pools all 3,420 frames per side and reports `cpu_us`
+(game update plus geometry preparation). Vertices and draw calls are medians.
+Allocation calls per frame were unchanged in every game.
+
+| Game | CPU median µs | CPU p95 µs | Vertices | Draws |
+|---|---:|---:|---:|---:|
+| mosslight | 219.0 → 136.8 | 302.9 → 196.4 | 37,020 → 37,356 | 5 |
+| prism-foundry | 212.3 → 121.9 | 263.5 → 172.7 | 36,012 | 3 |
+| voltage-choir | 221.6 → 143.4 | 342.4 → 334.1 | 31,107 | 1 |
+| signalbox | 255.8 → 165.7 | 285.6 → 214.3 | 42,918 → 43,830 | 1 |
+| gilded-deck | 204.1 → 132.7 | 357.6 → 232.5 | 31,059 → 31,275 | 1 |
+| physics-2d | 593.2 → 514.0 | 924.5 → 833.6 | 57,702 → 59,958 | 27 |
+| glowtide | 588.8 → 448.5 | 731.0 → 646.2 | 62,640 | 16 |
+| sky-courier | 437.4 → 302.6 | 630.9 → 394.9 | 32,541 | 50 |
+| pocket-rally | 811.1 → 553.3 | 1296.4 → 1013.9 | 101,781 → 113,949 | 23 |
+| salvage-pinball | 747.5 → 690.2 | 935.8 → 886.5 | 64,152 → 68,952 | 48 |
+| neon-swarm | 565.5 → 440.8 | 894.0 → 561.2 | 46,131 → 47,157 | 70 |
+
+Vertex increases come only from the subdivided radial fills. Pocket Rally,
+Salvage Pinball and Neon Swarm "before" binaries were built from the clean
+`HEAD` tree; the other "before" binaries share the current game sources. Run
+medians varied by up to about 25% between processes (for example, Sky Courier
+before: 342/499/486 µs), so only differences that hold in every round are meaningful.
+
+**Visual equivalence.** Frame-600 autoplay captures were byte-identical
+before and after for Prism Foundry, Voltage Choir, Glowtide and Sky Courier.
+Captures of the other games differ only where radial fills were corrected.
+Mosslight, Signalbox and Gilded Deck changed 0.03–0.13% of pixels in their
+off-centre highlights. Physics 2D, Pocket Rally and Salvage Pinball changed
+1.6–2.0%, all in the off-centre highlights of balls, bumpers and round
+props. Neon Swarm changed its arena vignette
+by at most 11/255, removing the bow-tie pattern from the old fan. Before the
+radial change all eight original captures were byte-identical. A scratch dump
+compared `HEAD` and current vertex streams for every shape, kit widget and glow
+under default and rotated world cameras. Everything except arc and polyline
+interiors was bit-identical.

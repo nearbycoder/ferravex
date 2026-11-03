@@ -184,7 +184,7 @@ pub(super) fn hud(
         ui,
         layout.status[0],
         &format!(
-            "WAVE {}/{} · {} HEARTS",
+            "Wave {}/{} · {} hearts",
             g.wave,
             g.level.waves.len(),
             g.lives
@@ -198,7 +198,7 @@ pub(super) fn hud(
     line(
         ui,
         layout.status[1],
-        &format!("{} COINS · {} STOPPED", g.money, g.kills),
+        &format!("{} coins · {} stopped", g.money, g.kills),
         INK,
     );
     // Large screen-space numbers identify the board even at 320 logical pixels.
@@ -237,20 +237,20 @@ pub(super) fn hud(
         ui,
         9,
         Rect::new(MARGIN, layout.screen.y - 140., 92., 44.),
-        &format!("PLOT {}", g.selected + 1),
+        &format!("Plot {}", g.selected + 1),
         true,
         picker,
     );
     let detail = if let Some(tower) = g.towers[g.selected] {
         format!(
-            "{} L{}\n{:.0} DMG / {:.0}R",
+            "{} L{}\n{:.0} dmg / {:.0}R",
             tower.kind.name(),
             tower.level + 1,
             tower.damage(),
             tower.range()
         )
     } else {
-        "EMPTY PLOT\nChoose a tower".into()
+        "Empty plot\nChoose a tower".into()
     };
     text(ui, layout.detail, &detail, INK);
     if let Some(tower) = g.towers[g.selected] {
@@ -265,15 +265,15 @@ pub(super) fn hud(
                 44.,
             ),
             &if tower.level == 2 {
-                "FULLY GROWN".into()
+                "Fully grown".into()
             } else {
-                format!("UPGRADE {} COINS", tower.upgrade_cost())
+                format!("Upgrade {} coins", tower.upgrade_cost())
             },
             status.is_ok(),
             false,
         );
     } else {
-        for (i, kind, name) in [(0, Kind::Seed, "SEED"), (1, Kind::Frost, "FROST")] {
+        for (i, kind, name) in [(0, Kind::Seed, "Seed"), (1, Kind::Frost, "Frost")] {
             control(
                 ui,
                 i as u64 + 1,
@@ -289,9 +289,9 @@ pub(super) fn hud(
         4,
         layout.wave,
         &if g.active {
-            format!("{} LEFT", g.pests.len() + usize::from(g.remaining))
+            format!("{} left", g.pests.len() + usize::from(g.remaining))
         } else {
-            format!("WAVE {}", g.wave + 1)
+            format!("Wave {}", g.wave + 1)
         },
         g.wave_status().is_ok(),
         false,
@@ -300,11 +300,11 @@ pub(super) fn hud(
         ui,
         6,
         layout.menu[0],
-        "PAUSE",
+        "Pause",
         campaign.session.is_started(),
         false,
     );
-    control(ui, 5, layout.menu[1], "RESTART", true, false);
+    control(ui, 5, layout.menu[1], "Restart", true, false);
     control(
         ui,
         crate::hud::SPEED_ID,
@@ -327,7 +327,7 @@ pub(super) fn hud(
             ui,
             layout.preview,
             &format!(
-                "NEXT: {} BEETLES + {} ZOOMIES",
+                "Next: {} beetles + {} zoomies",
                 u32::from(next.spec.count) - next.fast_count,
                 next.fast_count
             ),
@@ -335,7 +335,7 @@ pub(super) fn hud(
         );
     }
     if save_error {
-        text(ui, layout.notice, "SAVE UNAVAILABLE", CREAM);
+        text(ui, layout.notice, "Save unavailable", CREAM);
     } else if let Some(toast) = &juice.toast {
         ui.panel(area(layout.notice), INK).unwrap();
         let n = layout.notice;
@@ -391,11 +391,11 @@ pub(super) fn overlay(
         ui,
         line(16., 24.),
         if paused {
-            "ORCHARD PAUSED"
+            "Orchard paused"
         } else if g.outcome == Outcome::Won {
-            "HARVEST SAVED"
+            "Harvest saved"
         } else {
-            "THE PESTS GOT THROUGH"
+            "The pests got through"
         },
         INK,
     );
@@ -403,7 +403,7 @@ pub(super) fn overlay(
         ui,
         line(46., 40.),
         &format!(
-            "WAVE {}/{}\n{} STOPPED / {} HEARTS",
+            "Wave {}/{}\n{} stopped / {} hearts",
             g.wave,
             g.level.waves.len(),
             g.kills,
@@ -412,24 +412,24 @@ pub(super) fn overlay(
         GREEN,
     );
     if paused {
-        control(ui, 7, line(100., 44.), "RESUME", true, false);
-        control(ui, 8, line(154., 44.), "PLANT AGAIN", true, false);
+        control(ui, 7, line(100., 44.), "Resume", true, false);
+        control(ui, 8, line(154., 44.), "Plant again", true, false);
         return;
     }
     let run = crate::hud::run_summary(g);
     let rank = crate::quips::rank(run);
     ui.panel(area(line(96., 30.)), GOLD).unwrap();
-    text(ui, line(102., 20.), &format!("RANK: {}", rank.title), INK);
+    text(ui, line(102., 20.), &format!("Rank: {}", rank.title), INK);
     let best_score = best.and_then(|b| b.previous_score);
     let record = match best_score {
-        Some(score) if best.is_some_and(|b| b.new_score) => format!("NEW BEST! WAS {score}"),
-        Some(score) => format!("BEST {score}"),
-        None => "FIRST RECORDED RUN".into(),
+        Some(score) if best.is_some_and(|b| b.new_score) => format!("New best! Was {score}"),
+        Some(score) => format!("Best {score}"),
+        None => "First recorded run".into(),
     };
     text(
         ui,
         line(134., 40.),
-        &format!("{record} · {} LUCKY BONKS", g.lucky_hits),
+        &format!("{record} · {} lucky bonks", g.lucky_hits),
         GREEN,
     );
     text(
@@ -438,7 +438,7 @@ pub(super) fn overlay(
         &crate::quips::next_goal(run, best_score),
         INK,
     );
-    control(ui, 8, line(254., 44.), "PLANT AGAIN", true, false);
+    control(ui, 8, line(254., 44.), "Plant again", true, false);
 }
 
 #[cfg(test)]
@@ -477,7 +477,7 @@ mod tests {
                 layout.plots[0].y > layout.board.y,
                 "palette overlays the board only on demand"
             );
-            for label in ["SEED 60", "FROST 80"] {
+            for label in ["Seed 60", "Frost 80"] {
                 assert!(
                     label.len() as f32 * FONT * 0.75 <= layout.build[0].w - 16.,
                     "{label} at {width}"
@@ -614,7 +614,7 @@ mod tests {
             }
             assert!(layout.speed.w >= 44. && layout.speed.y + layout.speed.h <= screen.y);
             assert!(
-                layout.detail.w >= text_width_14("SEED SLING L1"),
+                layout.detail.w >= text_width_14("Seed Sling L1"),
                 "{screen:?}"
             );
             // Results/pause cards begin below the corner when they fit there.

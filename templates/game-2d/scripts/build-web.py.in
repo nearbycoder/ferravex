@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
-"""Build this game and stage Ferravex's first-party browser host in target/web."""
+"""Build this game for the browser into target/web; --serve also hosts it.
+
+    python3 scripts/build-web.py --serve      # build, then play at http://127.0.0.1:8000/
+    python3 scripts/build-web.py --profile dev  # faster debug build, no server
+
+Stages Ferravex's first-party browser host next to the Wasm module: no npm,
+wasm-bindgen, CDN or deployment.
+"""
 import argparse
+import functools
+import http.server
 import json
 from pathlib import Path
 import re
@@ -52,15 +61,40 @@ def stage_host(engine: Path, output: Path, wasm: Path) -> None:
     shutil.copyfile(wasm, output / wasm.name)
 
 
+def wasm_target_missing() -> bool:
+    """True only when rustc reports a sysroot without the Wasm standard library."""
+    try:
+        sysroot = subprocess.check_output(["rustc", "--print", "sysroot"], text=True).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return False  # Let Cargo report the real problem.
+    return not (Path(sysroot) / "lib/rustlib/wasm32-unknown-unknown").is_dir()
+
+
+def serve(directory: Path, port: int) -> None:
+    """Serve the staged game on localhost until Ctrl-C."""
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(directory))
+    with http.server.ThreadingHTTPServer(("127.0.0.1", port), handler) as server:
+        print(f"Playing at http://127.0.0.1:{server.server_address[1]}/  (Ctrl-C to stop)", flush=True)
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
+
+
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--profile", choices=("dev", "release"), default="release")
+    parser.add_argument("--serve", action="store_true", help="serve target/web on localhost after building")
+    parser.add_argument("--port", type=int, default=8000, help="port for --serve (default: 8000)")
     args = parser.parse_args(argv)
     try:
         config = json.loads((ROOT / "ferravex.json").read_text(encoding="utf-8"))
         engine = Path(config["engine_root"])
         if not (engine / "web/runtime.js").is_file():
             raise ValueError("engine checkout moved: update ferravex.json and Cargo.toml")
+        if wasm_target_missing():
+            raise ValueError("the WebAssembly target is not installed; run once:\n"
+                             "  rustup target add wasm32-unknown-unknown")
         # argv and an explicit target directory make spaces/quotes in paths safe
         # and keep all build output in this standalone project.
         subprocess.run([
@@ -76,9 +110,16 @@ def main(argv=None) -> int:
     except (OSError, ValueError, KeyError) as error:
         print(f"build-web: {error}", file=sys.stderr)
         return 1
-    print("Built target/web. Serve from the project directory:")
-    print("  python3 -m http.server 8000 --bind 127.0.0.1 --directory target/web")
-    print("Open http://127.0.0.1:8000/ (WebGL2 required).")
+    if args.serve:
+        try:
+            serve(ROOT / "target/web", args.port)
+        except OSError as error:
+            print(f"build-web: cannot serve on port {args.port}: {error}; try --port 8080", file=sys.stderr)
+            return 1
+        return 0
+    print("Built target/web. Play it with:")
+    print("  python3 scripts/build-web.py --serve")
+    print("or serve target/web with any static file server (WebGL2 required).")
     return 0
 
 

@@ -100,7 +100,15 @@ impl Runner {
                     pointer(old.x, old.y, dx, dy);
                 }
                 Event::Wheel(v) => wheel(v),
-                Event::Focus(v) => focus(v),
+                // Fixed-step smoke/capture runs are headless automation: window
+                // focus must not gate their simulated time, or captures depend
+                // on the desktop's focus and stall nondeterministically.
+                // Interactive runs keep focus-loss pausing and input reset.
+                Event::Focus(v) => {
+                    if window_focus_applies(self.fixed) {
+                        focus(v);
+                    }
+                }
                 Event::Resize(_, _) => {}
                 Event::Touch { id, phase, x, y } => touch(id, phase, x, y),
                 Event::Suspend(value) => {
@@ -245,8 +253,43 @@ impl Runner {
         self.suspended
     }
 }
+/// Whether window focus changes reach input and simulation time. Fixed-step
+/// smoke/capture runs (`--smoke-frames`) ignore them.
+fn window_focus_applies(fixed: bool) -> bool {
+    !fixed
+}
 impl Drop for Runner {
     fn drop(&mut self) {
         self.finish();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn smoke_runs_ignore_window_focus_but_interactive_runs_pause() {
+        let mut input = crate::input::PlayerInput::transient("runner-focus");
+        let sampled_dt = |fixed: bool, input: &mut crate::input::PlayerInput| {
+            if window_focus_applies(fixed) {
+                focus(false);
+            }
+            crate::input::host_frame(1. / 60., 64, 64, || {
+                input.sample(true);
+                input.simulation_dt(1. / 60.)
+            })
+        };
+        assert_eq!(
+            sampled_dt(true, &mut input),
+            1. / 60.,
+            "smoke time advances"
+        );
+        assert_eq!(
+            sampled_dt(false, &mut input),
+            0.,
+            "interactive focus loss pauses"
+        );
+        focus(true);
     }
 }

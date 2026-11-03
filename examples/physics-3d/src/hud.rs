@@ -9,6 +9,7 @@ use super::toys::{Fun, Goal, STACK};
 use super::{Inspector, Lab, MAX_BODIES};
 use ferravex_render::input::PlayerInput;
 use ferravex_render::prelude::*;
+use ferravex_render::shapes::{self, Fill, Shadow};
 use ferravex_render::storage::Records;
 use ferravex_render::ui;
 
@@ -17,25 +18,22 @@ const CARD_LIFE: f32 = 12.;
 
 /// Tooltip copy per stable button index: (label, action, what it does).
 pub(super) const TOOLS: [(&str, &str, &str); 10] = [
-    ("CRATE", "select_one", "DROP A CRATE. REPEAT WITH DROP"),
-    ("BALL", "select_two", "DROP A BALL. REPEAT WITH DROP"),
-    ("DROP", "drop", "DROP THE SELECTED SHAPE AGAIN"),
-    ("PULSE", "pulse", "SHOCKWAVE FROM THE YARD CENTER"),
-    ("PAUSE", "pause", "FREEZE TIME. STEP AND ORBIT"),
-    ("STEP", "step", "ONE 1/120 S TICK WHILE PAUSED"),
-    ("VIEW", "reset_view", "RESTORE THE DEFAULT CAMERA"),
-    ("RESET", "restart", "REBUILD THE YARD AND THE STACK"),
-    ("BOWL", "bowl", "ROLL A HEAVY BALL FROM YOUR SIDE"),
-    ("CHAOS", "chaos", "SIXTEEN SHAPES. NO SIGNATURE"),
+    ("Crate", "select_one", "Drop a crate. Repeat with Drop"),
+    ("Ball", "select_two", "Drop a ball. Repeat with Drop"),
+    ("Drop", "drop", "Drop the selected shape again"),
+    ("Pulse", "pulse", "Shockwave from the yard centre"),
+    ("Pause", "pause", "Freeze time. Step and orbit"),
+    ("Step", "step", "One 1/120 s tick while paused"),
+    ("View", "reset_view", "Restore the default camera"),
+    ("Reset", "restart", "Rebuild the yard and the stack"),
+    ("Bowl", "bowl", "Roll a heavy ball from your side"),
+    ("Chaos", "chaos", "Sixteen shapes. No signature"),
 ];
 
 pub(super) fn hint(input: &PlayerInput, action: &str) -> String {
     let mut buffer = [0; 96];
-    let text = input.format_hint(action, &mut buffer).unwrap_or("CONTROLS");
-    text.split(" / ")
-        .next()
-        .unwrap_or(text)
-        .to_ascii_uppercase()
+    let text = input.format_hint(action, &mut buffer).unwrap_or("Controls");
+    text.split(" / ").next().unwrap_or(text).to_owned()
 }
 
 /// Browser fullscreen pins a 44 px menu button 8 px inside the canvas's
@@ -118,9 +116,36 @@ fn faded(color: Color, alpha: f32) -> Color {
     }
 }
 
+/// Rounded progress track with a filled capsule.
 fn bar(x: f32, y: f32, w: f32, h: f32, ratio: f32, color: Color) {
-    draw_rectangle(x, y, w, h, ui::LINE);
-    draw_rectangle(x, y, w * ratio.clamp(0., 1.), h, color);
+    let track = Rect::new(x, y, w, h);
+    shapes::fill_rounded_rect(track, h * 0.5, Color::new(1., 1., 1., 0.10));
+    let ratio = ratio.clamp(0., 1.);
+    if ratio > 0. {
+        let fill = Rect::new(x, y, (w * ratio).max(h), h);
+        shapes::fill_rounded_rect(fill, h * 0.5, color);
+    }
+}
+
+/// Raised translucent surface shared by toasts, pops, stats and the card.
+fn surface(rect: Rect, radius: f32, alpha: f32, edge: Color) {
+    shapes::drop_shadow(
+        rect,
+        radius,
+        Shadow::soft(faded(Color::new(0., 0., 0., 0.35), alpha))
+            .offset(vec2(0., 4.))
+            .blur(14.),
+    );
+    shapes::fill_rounded_rect(
+        rect,
+        radius,
+        Fill::vertical(
+            rect,
+            faded(Color::new(0.11, 0.16, 0.23, 0.97), alpha),
+            faded(Color::new(0.07, 0.11, 0.17, 0.97), alpha),
+        ),
+    );
+    shapes::stroke_rounded_rect(rect, radius, 1., faded(edge, alpha));
 }
 
 /// Stored personal bests, compared against session values.
@@ -167,14 +192,14 @@ impl Bests {
         };
         if fun.airtime >= 5. && self.airtime.is_none_or(|best| fun.airtime > best + 0.25) {
             if self.airtime.is_some() {
-                headline = Some(format!("NEW BEST AIRTIME · {:.1} M", fun.airtime));
+                headline = Some(format!("New best airtime · {:.1} m", fun.airtime));
             }
             self.airtime = Some(fun.airtime);
             store(&mut self.records, "airtime", (fun.airtime * 100.) as u64);
         }
         if fun.bonk_peak >= 20 && self.bonks.is_none_or(|best| fun.bonk_peak > best) {
             if self.bonks.is_some() {
-                headline = Some(format!("NEW BEST · {} BONKS/S", fun.bonk_peak));
+                headline = Some(format!("New best · {} bonks/s", fun.bonk_peak));
             }
             self.bonks = Some(fun.bonk_peak);
             store(&mut self.records, "bonks", u64::from(fun.bonk_peak));
@@ -183,7 +208,7 @@ impl Bests {
             && self.sweep.is_none_or(|best| bowls < best)
         {
             if self.sweep.is_some() {
-                headline = Some(format!("NEW BEST SWEEP · {bowls} BOWLS"));
+                headline = Some(format!("New best sweep · {bowls} bowls"));
             }
             self.sweep = Some(bowls);
             store(&mut self.records, "sweep", 1000 - u64::from(bowls.min(999)));
@@ -193,12 +218,12 @@ impl Bests {
 
     pub fn next_hook(&self, fun: &Fun) -> String {
         if !fun.secret {
-            return "SECRET: ONE OF THE CORNER PEDESTALS LOOKS LONELY...".into();
+            return "Secret: one of the corner pedestals looks lonely…".into();
         }
         match self.sweep {
-            Some(1) => "NEXT: A ONE-BOWL SWEEP. AGAIN. FOR SCIENCE.".into(),
-            Some(best) => format!("NEXT: CLEAN SWEEP IN FEWER THAN {best} BOWLS"),
-            None => "NEXT: CLEAN SWEEP WITH AS FEW BOWLS AS YOU DARE".into(),
+            Some(1) => "Next: a one-bowl sweep. Again. For science.".into(),
+            Some(best) => format!("Next: clean sweep in fewer than {best} bowls"),
+            None => "Next: clean sweep with as few bowls as you dare".into(),
         }
     }
 }
@@ -281,17 +306,26 @@ impl Hud {
         let w = screen_width();
         let fun = &f.lab.fun;
         let wide = w >= 780.;
-        draw_rectangle(0., 0., w, 44., Color::from_rgba(12, 19, 30, 235));
-        draw_line(0., 44., w, 44., 1., ui::LINE);
-        fitted("3D PHYSICS LAB", 16., 21., 220., 16., ui::INK);
+        let band = Rect::new(0., 0., w, 44.);
+        shapes::fill_rounded_rect(
+            band,
+            0.,
+            Fill::vertical(
+                band,
+                Color::from_rgba(18, 27, 41, 240),
+                Color::from_rgba(10, 16, 26, 235),
+            ),
+        );
+        draw_line(0., 44., w, 44., 1., Color::new(1., 1., 1., 0.08));
+        fitted("3D Physics Lab", 16., 21., 220., 16., ui::INK);
         let rank = quips::rank(fun.goals_done(), fun.secret);
-        let used = fitted("LOADING YARD", 16., 37., 120., 11., ui::AMBER);
+        let used = fitted("Loading Yard", 16., 37., 120., 12., ui::AMBER);
         fitted(
             &format!("· {}", rank.title),
             22. + used,
             37.,
             rank_width(w, used),
-            11.,
+            12.,
             ui::MUTED,
         );
         // Wide: goal block right of the title. Narrow: a translucent strip
@@ -303,45 +337,37 @@ impl Hud {
         match fun.current_goal() {
             Some(goal) => {
                 let (value, target) = fun.progress(goal);
-                let head = format!("GOAL {}/4 · {}", goal.index() + 1, goal.title());
+                let head = format!("Goal {}/4 · {}", goal.index() + 1, goal.title());
                 let amount = match goal {
-                    Goal::Airtime => format!("{value:.1} / {target:.1} M"),
-                    Goal::Avalanche => format!("{value:.0} / {target:.0} PER S"),
-                    _ => format!("{value:.0} / {target:.0} CRATES"),
+                    Goal::Airtime => format!("{value:.1} / {target:.1} m"),
+                    Goal::Avalanche => format!("{value:.0} / {target:.0} per s"),
+                    _ => format!("{value:.0} / {target:.0} crates"),
                 };
                 let amount_w = width_of(&amount, 12.).min(row * 0.4);
                 fitted(&head, x, y + 20., row - amount_w - 16., 14., GOLD);
                 right(&amount, x + row, y + 20., amount_w, 12., ui::INK);
                 let brief = match goal {
-                    Goal::Strike | Goal::CleanSweep => format!(
-                        "{} BOWL: {}",
-                        goal.brief().to_ascii_uppercase(),
-                        hint(f.input, "bowl")
-                    ),
-                    Goal::Airtime => format!(
-                        "{} PULSE: {}",
-                        goal.brief().to_ascii_uppercase(),
-                        hint(f.input, "pulse")
-                    ),
-                    Goal::Avalanche => format!(
-                        "{} CHAOS: {}",
-                        goal.brief().to_ascii_uppercase(),
-                        hint(f.input, "chaos")
-                    ),
+                    Goal::Strike | Goal::CleanSweep => {
+                        format!("{} Bowl: {}", goal.brief(), hint(f.input, "bowl"))
+                    }
+                    Goal::Airtime => format!("{} Pulse: {}", goal.brief(), hint(f.input, "pulse")),
+                    Goal::Avalanche => {
+                        format!("{} Chaos: {}", goal.brief(), hint(f.input, "chaos"))
+                    }
                 };
-                fitted(&brief, x, y + 36., width, 11., ui::INK);
-                bar(x, y + 41., width, 2., value / target, GOLD);
+                fitted(&brief, x, y + 36., width, 12., ui::MUTED);
+                bar(x, y + 40., width, 3., value / target, GOLD);
             }
             None => {
                 fitted(
-                    &format!("ALL GOALS DONE · {}", rank.title),
+                    &format!("All goals done · {}", rank.title),
                     x,
                     y + 20.,
                     row,
                     14.,
                     MINT,
                 );
-                fitted(&f.bests.next_hook(fun), x, y + 36., width, 11., ui::INK);
+                fitted(&f.bests.next_hook(fun), x, y + 36., width, 12., ui::MUTED);
             }
         }
     }
@@ -374,13 +400,18 @@ impl Hud {
             let height = size * 7. / 8.;
             // Pops never rise into the top bar or the menu corner.
             let at = vec2(at.x, at.y.max(MENU_CORNER.y + height + 9.));
-            draw_rectangle(
-                at.x - width * 0.5 - 6.,
-                at.y - height - 5.,
-                width + 12.,
-                height + 10.,
+            let chip = Rect::new(
+                at.x - width * 0.5 - 8.,
+                at.y - height - 6.,
+                width + 16.,
+                height + 12.,
+            );
+            shapes::fill_rounded_rect(
+                chip,
+                chip.h * 0.5,
                 faded(Color::from_rgba(10, 16, 26, 255), alpha * 0.82),
             );
+            shapes::stroke_rounded_rect(chip, chip.h * 0.5, 1., faded(pop.color, alpha * 0.45));
             fitted(
                 &pop.text,
                 at.x - width * 0.5,
@@ -407,9 +438,9 @@ impl Hud {
                 toast.alpha(),
             ),
             None if f.lab.session.is_paused() && f.active => (
-                "PAUSED",
+                "Paused",
                 format!(
-                    "{} · {} STEPS · DRAG STILL ORBITS",
+                    "{} · {} steps · drag still orbits",
                     quips::pause(f.lab.session.tick() as u32),
                     hint(f.input, "step")
                 ),
@@ -428,13 +459,12 @@ impl Hud {
         let width = width_of(head, 24.).max(widest).min(max) + 36.;
         let height = 42. + lines.len() as f32 * 17.;
         let rect = Rect::new(w * 0.5 - width * 0.5, top, width, height);
-        draw_rectangle(rect.x, rect.y, rect.w, rect.h, faded(ui::PANEL, alpha));
-        draw_rectangle(rect.x, rect.y, rect.w, 3., faded(color, alpha));
-        draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 1., faded(ui::LINE, alpha));
+        // The hairline carries the event colour.
+        surface(rect, 14., alpha, faded(color, 0.55));
         centered(head, w * 0.5, top + 30., max, 24., faded(color, alpha));
         for (row, line) in lines.iter().enumerate() {
             let y = top + 49. + row as f32 * 17.;
-            centered(line, w * 0.5, y, max, 12., faded(ui::INK, alpha));
+            centered(line, w * 0.5, y, max, 12., faded(ui::INK, alpha * 0.9));
         }
     }
 
@@ -446,20 +476,20 @@ impl Hud {
         let wide = screen_width() >= 540.;
         let size = if wide { 16. } else { 14. };
         let (state, color) = if !f.active {
-            ("SUSPENDED", ui::MUTED)
+            ("Suspended", ui::MUTED)
         } else if lab.session.is_paused() {
-            ("PAUSED", ui::AMBER)
+            ("Paused", ui::AMBER)
         } else {
-            ("PLAYING", MINT)
+            ("Playing", MINT)
         };
         let used = fitted(state, x, panel.y + 21., 120., size, color);
         let shape = if lab.shape == super::DropShape::Ball {
-            "BALL"
+            "ball"
         } else {
-            "CRATE"
+            "crate"
         };
         let summary = format!(
-            " · {} / {MAX_BODIES} BODIES · {shape} READY",
+            " · {} / {MAX_BODIES} bodies · {shape} ready",
             lab.sandbox.bodies.len()
         );
         let summary_w = fitted(
@@ -481,7 +511,7 @@ impl Hud {
                 GOLD,
             ))
         } else if lab.feedback_time > 0. && !lab.feedback.is_empty() {
-            Some((lab.feedback.to_ascii_uppercase(), ui::CYAN))
+            Some((lab.feedback.to_string(), ui::CYAN))
         } else {
             None
         };
@@ -508,14 +538,14 @@ impl Hud {
         } else {
             let onboarding = if screen_width() < 560. {
                 format!(
-                    "DRAG ORBITS · {} BOWL · {} CHAOS · {} PULSE",
+                    "Drag orbits · {} bowl · {} chaos · {} pulse",
                     hint(f.input, "bowl"),
                     hint(f.input, "chaos"),
                     hint(f.input, "pulse")
                 )
             } else {
                 format!(
-                    "DRAG: ORBIT · WHEEL: ZOOM · {}: BOWL · {}: CHAOS · {}: PULSE · {}: STATS",
+                    "Drag: orbit · Wheel: zoom · {}: bowl · {}: chaos · {}: pulse · {}: stats",
                     hint(f.input, "bowl"),
                     hint(f.input, "chaos"),
                     hint(f.input, "pulse"),
@@ -527,7 +557,7 @@ impl Hud {
             }
             if self.hint < 0.99 {
                 let tip = format!(
-                    "TIP: {} RESTORES THE CAMERA · {} SHOWS ENGINE STATS",
+                    "Tip: {} restores the camera · {} shows engine stats",
                     hint(f.input, "reset_view"),
                     hint(f.input, "stats")
                 );
@@ -544,44 +574,44 @@ impl Hud {
         let query = &f.inspector.query;
         let near = f.inspector.hits[0].map(|hit| hit.distance);
         let lines = [
-            format!("TICK {} · 120 HZ · 8.33 MS", lab.session.tick()),
+            format!("Tick {} · 120 Hz · 8.33 ms", lab.session.tick()),
             format!(
-                "AWAKE {} · ASLEEP {} · {}/{MAX_BODIES} BODIES",
+                "Awake {} · asleep {} · {}/{MAX_BODIES} bodies",
                 sleep.awake_bodies,
                 sleep.sleeping_bodies,
                 lab.sandbox.bodies.len()
             ),
             format!(
-                "CONTACTS {} · EVENTS {}",
+                "Contacts {} · events {}",
                 physics.contacts().count(),
                 physics.contact_events().len()
             ),
             format!(
-                "RAY {}/{}{} · NEAR {}",
+                "Ray {}/{}{} · near {}",
                 query.written,
                 query.total,
-                if query.is_truncated() { " CAPPED" } else { "" },
-                near.map_or("—".into(), |d| format!("{d:.1} M"))
+                if query.is_truncated() { " capped" } else { "" },
+                near.map_or("—".into(), |d| format!("{d:.1} m"))
             ),
             if lab.sandbox.pulse_time > 0. {
-                format!("PULSE RECHARGING {:.2} S", lab.sandbox.pulse_time)
+                format!("Pulse recharging {:.2} s", lab.sandbox.pulse_time)
             } else {
-                "PULSE READY".into()
+                "Pulse ready".into()
             },
             format!(
-                "BONKS {}/S · PEAK {} · STACK {}/{STACK} DOWN",
+                "Bonks {}/s · peak {} · stack {}/{STACK} down",
                 lab.fun.bonks_now, lab.fun.bonk_peak, lab.fun.toppled
             ),
         ];
         let rect = stats_rect(w, lines.len());
         let width = rect.w;
-        ui::panel(rect);
+        surface(rect, 12., 1., Color::new(1., 1., 1., 0.08));
         fitted(
-            "ENGINE STATS",
+            "Engine stats",
             rect.x + 10.,
             rect.y + 16.,
             width - 20.,
-            11.,
+            12.,
             ui::AMBER,
         );
         for (row, line) in lines.iter().enumerate() {
@@ -604,14 +634,17 @@ impl Hud {
         draw_rectangle(0., 0., w, h, faded(Color::new(0., 0., 0., 0.45), alpha));
         let rect = card_rect(w, h, 300.);
         let (width, height) = (rect.w, rect.h);
-        draw_rectangle(rect.x, rect.y, rect.w, rect.h, faded(ui::PANEL, alpha));
-        draw_rectangle(rect.x, rect.y, rect.w, 4., faded(GOLD, alpha));
-        draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 1., faded(GOLD, alpha));
+        surface(rect, 18., alpha, faded(GOLD, 0.55));
+        shapes::fill_rounded_rect(
+            Rect::new(rect.x + rect.w * 0.5 - 28., rect.y + 8., 56., 4.),
+            2.,
+            faded(GOLD, alpha),
+        );
         let cx = w * 0.5;
         let inner = width - 40.;
         let rank = quips::rank(fun.goals_done(), fun.secret);
         centered(
-            "YARD CERTIFIED",
+            "Yard certified",
             cx,
             rect.y + 34.,
             inner,
@@ -624,23 +657,23 @@ impl Hud {
             cx,
             rect.y + 90.,
             inner,
-            11.,
+            12.,
             faded(ui::INK, alpha),
         );
         let best = |stored: Option<String>| stored.unwrap_or_else(|| "—".into());
         let rows = [
             (
-                "BOWLS FOR A CLEAN SWEEP",
+                "Bowls for a clean sweep",
                 fun.sweep_best.map_or("—".into(), |b| b.to_string()),
                 best(f.bests.sweep.map(|b| b.to_string())),
             ),
             (
-                "HIGHEST AIRTIME",
-                format!("{:.1} M", fun.airtime),
-                best(f.bests.airtime.map(|b| format!("{b:.1} M"))),
+                "Highest airtime",
+                format!("{:.1} m", fun.airtime),
+                best(f.bests.airtime.map(|b| format!("{b:.1} m"))),
             ),
             (
-                "BONKS PER SECOND",
+                "Bonks per second",
                 fun.bonk_peak.to_string(),
                 best(f.bests.bonks.map(|b| b.to_string())),
             ),
@@ -649,14 +682,14 @@ impl Hud {
         let x1 = rect.x + width * 0.6;
         let x2 = rect.x + width - 24.;
         fitted(
-            "SESSION",
+            "Session",
             x1 - 30.,
             rect.y + 122.,
             100.,
-            10.,
+            12.,
             faded(ui::MUTED, alpha),
         );
-        right("BEST", x2, rect.y + 122., 80., 10., faded(ui::MUTED, alpha));
+        right("Best", x2, rect.y + 122., 80., 12., faded(ui::MUTED, alpha));
         for (row, (label, value, stored)) in rows.iter().enumerate() {
             let y = rect.y + 144. + row as f32 * 24.;
             fitted(label, x0, y, x1 - x0 - 40., 13., faded(ui::INK, alpha));
@@ -666,7 +699,7 @@ impl Hud {
         let s = fun.stats;
         centered(
             &format!(
-                "BOWLS {} · STRIKES {} · PULSES {} · CHAOS {} · COLLAPSES {}",
+                "Bowls {} · strikes {} · pulses {} · chaos {} · collapses {}",
                 s.bowls, s.strikes, s.pulses, s.chaos, s.collapses
             ),
             cx,
@@ -800,7 +833,7 @@ mod tests {
         assert!(first.update(&fun).is_none(), "first visit claims nothing");
         assert_eq!(first.sweep, Some(2));
         fun.sweep_best = Some(1);
-        assert!(first.update(&fun).unwrap().contains("1 BOWLS"));
+        assert!(first.update(&fun).unwrap().contains("1 bowls"));
         assert!(first.update(&fun).is_none(), "no repeat headline");
     }
 
@@ -811,9 +844,9 @@ mod tests {
             sweep: Some(3),
             ..Default::default()
         };
-        assert!(bests.next_hook(&fun).starts_with("SECRET"));
+        assert!(bests.next_hook(&fun).starts_with("Secret"));
         fun.secret = true;
-        assert!(bests.next_hook(&fun).contains("FEWER THAN 3"));
+        assert!(bests.next_hook(&fun).contains("fewer than 3"));
     }
 
     #[test]

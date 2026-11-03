@@ -1,6 +1,6 @@
 // Platform contracts, including browsers without native fullscreen/orientation.
 import assert from 'node:assert/strict';
-import {fullscreenSession,gameOrientation,bindFullscreen,bindPlayerExpansion} from '../fullscreen.js';
+import {fullscreenSession,gameOrientation,bindFullscreen,bindPlayerExpansion,bindVisibleViewport} from '../fullscreen.js';
 assert.equal(gameOrientation('marble-run'),'landscape');assert.equal(gameOrientation('owned-orbit'),'portrait');assert.equal(gameOrientation('salvage-pinball'),'portrait');
 function platform(){const calls=[];let native=false;const p={mobile:true,request:async()=>{calls.push('request');native=true;},exit:async()=>{native=false;},isNative:()=>native,expand:async active=>calls.push(['expand',active]),lock:async()=>calls.push('lock'),unlock:()=>calls.push('unlock'),reset:()=>calls.push('reset'),change:mode=>calls.push(mode),hint:text=>calls.push(['hint',text])};return {p,calls,escape(){native=false;}};}
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
@@ -27,9 +27,9 @@ const flush=()=>new Promise(resolve=>setImmediate(resolve));
 }
 {
  const classes=new Set(),messages=[],events=new Map();let focus=0,restored;
- const player={classList:{add:c=>classes.add(c),remove:c=>classes.delete(c)}},source={postMessage:(...args)=>messages.push(args)};
+ const player={style:{},classList:{add:c=>classes.add(c),remove:c=>classes.delete(c)}},source={postMessage:(...args)=>messages.push(args)};
  const frame={src:'https://local.test/play/marble-run/',contentWindow:source,closest:selector=>selector==='.player'?player:null,focus:()=>focus++};
- const doc={documentElement:{style:{overflow:'clip'}},querySelectorAll:()=>[frame]},win={location:{origin:'https://local.test',href:'https://local.test/examples/marble-run/'},scrollX:12,scrollY:80,scrollTo:value=>restored=value,addEventListener:(type,callback)=>events.set(type,callback)};
+ const doc={documentElement:{style:{overflow:'clip'}},querySelectorAll:()=>[frame]},win={location:{origin:'https://local.test',href:'https://local.test/examples/marble-run/'},scrollX:12,scrollY:80,scrollTo:value=>restored=value,addEventListener:(type,callback)=>events.set(type,callback),removeEventListener:type=>events.delete(type)};
  bindPlayerExpansion(doc,win);const send=(origin=win.location.origin,sender=source,active=true)=>events.get('message')({origin,source:sender,data:{type:'ferravex:expand',active,id:1}});
  send('https://other.test');send(win.location.origin,{});assert.equal(classes.size,0,'untrusted origins/windows cannot expand a player');
  send();assert.ok(classes.has('player-expanded'));assert.equal(doc.documentElement.style.overflow,'hidden');assert.equal(focus,1);assert.equal(messages[0][0].ok,true);
@@ -83,6 +83,20 @@ class Target {
  count(type){return this.listeners.get(type)?.size??0;}
  get listenerCount(){return [...this.listeners.values()].reduce((total,set)=>total+set.size,0);}
 }
+
+await test('visible viewport tracks mobile browser bars, rotation and offsets, then removes every listener',()=>{
+ const win=new Target();win.innerWidth=390;win.innerHeight=844;
+ win.visualViewport=new Target();Object.assign(win.visualViewport,{width:390,height:664,offsetLeft:0,offsetTop:0});
+ const element={style:{'--ferravex-view-height':'12px'}};
+ const binding=bindVisibleViewport(element,win);
+ assert.equal(element.style['--ferravex-view-height'],'664px');
+ Object.assign(win.visualViewport,{width:844,height:320,offsetLeft:3,offsetTop:24});win.visualViewport.emit('resize');
+ assert.equal(element.style['--ferravex-view-width'],'844px');assert.equal(element.style['--ferravex-view-height'],'320px');
+ assert.equal(element.style['--ferravex-view-left'],'3px');assert.equal(element.style['--ferravex-view-top'],'24px');
+ win.visualViewport.height=360;win.visualViewport.emit('scroll');assert.equal(element.style['--ferravex-view-height'],'360px');
+ binding.dispose();binding.dispose();assert.equal(win.listenerCount+win.visualViewport.listenerCount,0);
+ assert.deepEqual(element.style,{'--ferravex-view-height':'12px'});
+});
 class Element extends Target {
  constructor(doc,tag){super();this.ownerDocument=doc;this.tagName=tag;this.children=[];this.parentElement=null;this.dataset={};this.style={};this.attributes=new Map();this.classes=new Set();this.focusCalls=[];this.classList={add:c=>this.classes.add(c),remove:c=>this.classes.delete(c),contains:c=>this.classes.has(c),toggle:(c,active)=>active?this.classes.add(c):this.classes.delete(c)};}
  click(){if(!this.disabled)this.emit('click');}
@@ -250,7 +264,8 @@ function parentFixture(){
 }
 
 await test('parent expansion restores focus, scroll and overflow; repeated requests keep the original target',()=>{
- const h=parentFixture();h.send();h.send();assert.equal(h.doc.activeElement,h.frame);h.send(false);
+ const h=parentFixture();h.doc.body.style.position='relative';h.doc.body.style.top='2px';h.send();h.send();assert.equal(h.doc.activeElement,h.frame);assert.equal(h.doc.body.style.position,'fixed');assert.equal(h.doc.body.style.top,'-80px');h.send(false);
+ assert.equal(h.doc.body.style.position,'relative');assert.equal(h.doc.body.style.top,'2px');
  assert.equal(h.doc.activeElement,h.opener);assert.equal(h.doc.documentElement.style.overflow,'clip');assert.deepEqual(h.win.restored,{left:12,top:80,behavior:'instant'});
  assert.ok(!h.player.classList.contains('player-expanded'));h.expansion.dispose();assert.equal(h.win.listenerCount,0);
 });

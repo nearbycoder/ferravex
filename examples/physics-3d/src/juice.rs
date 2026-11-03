@@ -280,7 +280,7 @@ impl Juice {
             self.toast = None;
             self.resets += 1;
             self.toast(
-                "YARD RESET",
+                "Yard reset",
                 quips::reset(self.resets).to_owned(),
                 ui::INK,
                 1.8,
@@ -357,8 +357,8 @@ impl Juice {
             self.toast(
                 head,
                 format!(
-                    "{knocked} CRATE{} · BOWL {} ON THIS STACK",
-                    if knocked == 1 { "" } else { "S" },
+                    "{knocked} crate{} · bowl {} on this stack",
+                    if knocked == 1 { "" } else { "s" },
                     fun.stack_bowls
                 ),
                 color,
@@ -372,7 +372,7 @@ impl Juice {
         if events.chaos > 0 {
             self.toast(
                 quips::chaos(fun.stats.chaos),
-                format!("+{} SHAPES INBOUND", events.chaos),
+                format!("+{} shapes inbound", events.chaos),
                 PINK,
                 1.8,
                 Priority::Info,
@@ -381,7 +381,7 @@ impl Juice {
         if let Some((center, rumble)) = events.collapse {
             self.toast(
                 quips::collapse(fun.stats.collapses),
-                format!("COLLAPSE · RUMBLE {rumble}"),
+                format!("Collapse · rumble {rumble}"),
                 GOLD,
                 2.,
                 Priority::Info,
@@ -557,6 +557,6 @@ mod tests {
         );
         juice.on_frame(&lab, &frame);
         assert!(juice.particles.is_empty() && juice.pops.iter().all(Option::is_none));
-        assert_eq!(juice.toast.as_ref().unwrap().head, "YARD RESET");
+        assert_eq!(juice.toast.as_ref().unwrap().head, "Yard reset");
     }
 }

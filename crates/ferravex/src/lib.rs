@@ -1,5 +1,22 @@
 //! Ferravex: original, modular Rust engine systems using only project crates and std.
 //!
+//! # Make a game
+//!
+//! From a Ferravex checkout, three commands give you a playable 2D starter
+//! (add `--template 3d` for 3D) that depends only on this crate:
+//!
+//! ```sh
+//! python3 -B scripts/ferravex.py new moon-garden
+//! cd ../moon-garden
+//! cargo run
+//! ```
+//!
+//! Its rules live in `src/game.rs` and run on fixed ticks; drawing in
+//! `src/lib.rs` and `src/hud.rs` only reads them. The same project builds for
+//! the browser with `python3 scripts/build-web.py --serve`.
+//!
+//! # Learn the facade
+//!
 //! Start with [`prelude`] for session timing, math, cameras and input. Rendering
 //! functions stay under [`render`] so their origin remains clear. The full
 //! engine modules remain available for more specialized systems.
@@ -52,6 +69,10 @@
 //! assert!((visible_position.x - 1.0).abs() < 0.0001);
 //! # Ok::<(), ferravex::core::FixedClockError>(())
 //! ```
+//!
+//! For drawing, [`render::shapes`] provides anti-aliased rounded shapes and glows,
+//! [`render::ui::kit`] provides modern panels, buttons and key prompts, and
+//! [`render::post`] adds opt-in bloom and grading such as `PostFx::subtle()`.
 //!
 //! Run the facade-only example's deterministic scenario without a display:
 //! `cargo run -p ferravex --example quickstart --offline --locked -j 2 -- --headless`.

@@ -1,6 +1,10 @@
-//! @@NAME@@: a native/browser @@DIMENSION@@ game using the Ferravex facade.
-//! [`Game`] contains the fixed-step rules and a headless usage example.
+//! @@NAME@@: a @@DIMENSION@@ Ferravex game for native windows and the browser.
+//!
+//! - `src/game.rs`: the rules ([`Game`]). Start here to change gameplay.
+//! - `src/lib.rs` (this file): the frame loop and [`draw_world`].
+//! - `src/hud.rs`: title, timer, key prompts, buttons and win effects.
 mod game;
+mod hud;
 pub use game::Game;
 
 use ferravex::{
@@ -9,44 +13,97 @@ use ferravex::{
         self,
         demo::Demo,
         input::{PlayerInput, Preset},
+        post::{self, PostFx},
         prelude::*,
-        ui,
+        shapes::{self, Fill},
     },
 };
+use hud::{BEACON, Juice, PLAYER};
+
+/// Window, browser and in-game title.
+const TITLE: &str = @@WINDOW_TITLE_RUST@@;
 
 fn window_conf() -> Conf {
-    render::window_conf(@@WINDOW_TITLE_RUST@@)
+    render::window_conf(TITLE)
 }
 
-fn draw_world(game: &Game, alpha: f32) {
-    let width = screen_width().max(1.0);
-    let height = screen_height().max(1.0);
-    let scale = (width / 15.0).min(height / 11.0);
+/// Paints the arena in world units: x right, y up, origin at the center.
+fn draw_world(game: &Game, juice: &Juice, alpha: f32) {
+    let (width, height) = (screen_width().max(1.0), screen_height().max(1.0));
+    // Backdrop: a soft vertical gradient behind everything.
+    let screen = Rect::new(0.0, 0.0, width, height);
+    let sky = Fill::vertical(screen, Color::from_hex(0x18213a), Color::from_hex(0x080b14));
+    shapes::fill_rounded_rect(screen, 0.0, sky);
+
+    // Fit the 13 x 7 arena on screen, leaving room for the HUD.
+    let scale = (width / 15.0).min(height / 10.5);
     set_camera(&Camera2D {
         zoom: vec2(2.0 * scale / width, -2.0 * scale / height),
         ..Default::default()
     });
-    draw_rectangle(-6.4, -3.4, 12.8, 6.8, ui::PANEL);
+    let arena = Rect::new(-6.5, -3.5, 13.0, 7.0);
+    shapes::drop_shadow(arena, 0.5, shapes::Shadow::soft(Color::new(0.0, 0.0, 0.0, 0.5)));
+    let floor = Fill::vertical(arena, Color::from_hex(0x1a2440), Color::from_hex(0x222e50));
+    shapes::fill_rounded_rect(arena, 0.5, floor);
+    shapes::stroke_rounded_rect(arena, 0.5, 0.03, Color::new(1.0, 1.0, 1.0, 0.08));
     for x in -6..=6 {
-        draw_line(x as f32, -3.0, x as f32, 3.0, 0.015, ui::LINE);
+        for y in -3..=3 {
+            shapes::fill_circle(vec2(x as f32, y as f32), 0.04, Color::new(1.0, 1.0, 1.0, 0.12));
+        }
     }
-    for y in -3..=3 {
-        draw_line(-6.0, y as f32, 6.0, y as f32, 0.015, ui::LINE);
+
+    // Starting pad and the beacon, which breathes until it is reached.
+    shapes::stroke_circle(game::START, 0.55, 0.05, Color::new(0.36, 0.88, 0.9, 0.35));
+    let pulse = juice.pulse(3.0);
+    shapes::glow_disc(game::GOAL, 1.6 + 0.3 * pulse, BEACON.with_alpha(0.35));
+    shapes::stroke_circle(game::GOAL, game::GOAL_RADIUS + 0.1 * pulse, 0.06, BEACON);
+    shapes::fill_circle(game::GOAL, 0.22, BEACON);
+
+    // Win effect: two shockwaves leave the beacon (skipped for reduced motion).
+    if let Some(t) = juice.since_win().filter(|_| juice.full_motion()) {
+        for delay in [0.0, 0.18] {
+            let k = ((t - delay) / 0.9).clamp(0.0, 1.0);
+            if k > 0.0 && k < 1.0 {
+                shapes::glow_ring(game::GOAL, 0.5 + 4.0 * k, 0.4, BEACON.with_alpha(1.0 - k));
+            }
+        }
     }
-    draw_circle(game::START.x, game::START.y, 0.6, ui::LINE);
-    draw_circle_lines(game::GOAL.x, game::GOAL.y, 0.6, 0.06, ui::AMBER);
-    draw_circle(game::GOAL.x, game::GOAL.y, 0.22, ui::AMBER);
+
+    // Player: a fading trail, a glow and a lit orb.
+    for (i, &p) in juice.trail.iter().enumerate().skip(1) {
+        let fade = 1.0 - i as f32 / juice.trail.len() as f32;
+        shapes::fill_circle(p, 0.26 * fade, PLAYER.with_alpha(0.4 * fade));
+    }
     let player = game.render_position(alpha);
-    draw_circle(player.x, player.y, 0.26, ui::CYAN);
-    draw_circle_lines(player.x, player.y, 0.32, 0.03, ui::INK);
-    set_default_camera();
+    shapes::glow_disc(player, 1.0, PLAYER.with_alpha(0.45));
+    let orb = Fill::radial(player + vec2(-0.08, 0.08), 0.3, Color::from_hex(0xe8ffff), PLAYER);
+    shapes::fill_circle(player, 0.26, orb);
+    set_default_camera(); // Also the boundary: post-processing stops before the HUD.
+}
+
+/// Start, resume or replay: what Enter and the main button do.
+fn primary_action(game: &mut Game) {
+    match game.session().state() {
+        SessionState::Ready => {
+            game.start();
+        }
+        SessionState::Paused => {
+            game.toggle_pause();
+        }
+        SessionState::Won | SessionState::Lost => game.restart(),
+        SessionState::Playing => {}
+    }
 }
 
 async fn play() {
-    let mut demo = Demo::new();
+    let mut demo = Demo::new(); // Native flags: --autoplay --smoke-frames N --screenshot x.png
     let mut game = Game::new(demo.autoplay);
     let mut input = PlayerInput::preset("@@NAME@@", Preset::Explore);
+    let mut juice = Juice::new();
+    // Gentle bloom and vignette. Try PostFx::neon() or PostFx::off().
+    post::set_post_fx(PostFx::subtle());
     loop {
+        // 1. Input, sampled once per frame. Menu actions apply here.
         input.sample(game.session().is_playing());
         if input.pressed("restart") {
             game.restart();
@@ -55,56 +112,19 @@ async fn play() {
             game.toggle_pause();
         }
         if input.pressed("confirm") {
-            match game.session().state() {
-                SessionState::Ready => {
-                    game.start();
-                }
-                SessionState::Paused => {
-                    game.toggle_pause();
-                }
-                SessionState::Won | SessionState::Lost => game.restart(),
-                SessionState::Playing => {}
-            }
+            primary_action(&mut game);
         }
-        let movement = if demo.autoplay {
-            Vec2::X
-        } else {
-            input.movement()
-        };
-        // The input adapter suppresses elapsed time while unfocused or editing
-        // controls. GameSession owns explicit pause/start/terminal state.
+        let movement = if demo.autoplay { Vec2::X } else { input.movement() };
+
+        // 2. Rules: fixed ticks. Elapsed time stops while unfocused or rebinding.
         let frame = game.advance(f64::from(input.simulation_dt(demo.dt())), movement);
-        clear_background(ui::BACKGROUND);
-        draw_world(&game, frame.alpha);
-        ui::header(
-            "@@DIMENSION@@",
-            @@WINDOW_TITLE_RUST@@,
-            "Reach the gold beacon | WASD / arrows: move | Esc: pause | R: restart",
-        );
-        let label = match game.session().state() {
-            SessionState::Ready => "Play (Enter)",
-            SessionState::Paused => "Resume (Enter / Esc)",
-            SessionState::Won => "Beacon reached! Play again (Enter)",
-            SessionState::Lost => "Try again (Enter)",
-            SessionState::Playing => "Pause (Esc)",
-        };
-        let width = 310.0_f32.min((screen_width() - 24.0).max(1.0));
-        let button = Rect::new(
-            (screen_width() - width) * 0.5,
-            (screen_height() - 62.0).max(110.0),
-            width,
-            42.0,
-        );
-        if ui::button(button, label, !game.session().is_playing()) {
-            match game.session().state() {
-                SessionState::Ready => {
-                    game.start();
-                }
-                SessionState::Playing | SessionState::Paused => {
-                    game.toggle_pause();
-                }
-                SessionState::Won | SessionState::Lost => game.restart(),
-            }
+        juice.observe(&game, frame.alpha, demo.dt());
+
+        // 3. Drawing: the world, then the HUD on top.
+        clear_background(Color::from_hex(0x080b14));
+        draw_world(&game, &juice, frame.alpha);
+        if hud::draw(&game, &mut juice, TITLE, demo.dt()) {
+            primary_action(&mut game);
         }
         if demo.finish_frame() {
             break;

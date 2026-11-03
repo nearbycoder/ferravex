@@ -2,74 +2,49 @@
 
 Ferravex is a small, readable Rust engine for 2D and 3D games. Everything from math and physics to rendering, audio and netcode lives in this repository, so you can follow any behavior straight to its source.
 
-This guide takes you from a fresh checkout to a game of your own: check your tools, generate a project, then run the bundled games. Want to see what the engine can do first? [Play the games](../../examples/catalog.json) right in your browser.
+You need Rust 1.88 or newer and Python 3.11 or newer. There is nothing else to install and nothing to download: every Rust dependency is a crate in this repository ([why](../../DEPENDENCIES.md)).
 
-## Check your setup
+## Make a game in a minute
 
-You need:
+From the Ferravex checkout:
 
-- Rust 1.88 or newer (the workspace's `rust-version`)
-- Git and Python 3.11 or newer
-- Node 22 or newer, only if you run the browser-host tests
+```sh
+python3 -B scripts/ferravex.py new moon-garden
+cd ../moon-garden
+cargo run
+```
 
-From the Ferravex checkout, run:
+`new` creates a playable game next to the checkout, and `cargo run` opens it in a window after a first build of a few seconds. Steer from the starting pad to the gold beacon with WASD or the arrow keys. Add `--template 3d` to `new` for the 3D starter.
+
+The project is a standalone Cargo workspace with its own lockfile and a local `ferravex` dependency; generating it never edits the checkout. Pass a destination as the second argument to put it somewhere else, for example `new moon-garden ~/games/moon-garden`. Optional `--tick-rate HZ` (1 to 1000, default 60) and `--window-title TITLE` flags set the rule rate and the title.
+
+### Make it yours
+
+- `src/game.rs` holds the rules and their tests. Tuning constants such as `SPEED` sit at the top.
+- `src/lib.rs` is the frame loop and the world drawing.
+- `src/hud.rs` draws the title, timer, key prompts and buttons with the UI kit.
+
+```sh
+cargo test                               # rules and doc tests, no window needed
+python3 scripts/build-web.py --serve     # play it at http://127.0.0.1:8000/
+```
+
+The browser build needs the WebAssembly target once: `rustup target add wasm32-unknown-unknown`. It goes into the project's own `target/web` folder and nothing is deployed. The generated README lists the controls and a few first edits to try.
+
+### If something fails
+
+Native windows need your platform's display and graphics libraries (on Linux: X11 and a working OpenGL driver). To check your tools without launching anything, run these from the checkout:
 
 ```sh
 python3 -B scripts/ferravex.py doctor --profile core
-python3 -B scripts/audit-owned.py
-python3 -B scripts/ferravex.py test -p ferravex-core session
-python3 -B scripts/ferravex.py list
+python3 -B scripts/ferravex.py doctor --profile web
 ```
 
-`doctor` checks your prerequisites (it does not launch a game) and `list` shows every game you can run. The helper always uses `--offline --locked` and at most two Cargo jobs. Add `--dry-run` to preview any command. Pass `-p` to `test` or `check` to focus on one package; without it they cover the whole workspace.
-
-There is nothing to download: the Rust dependency graph, including optional, test and platform dependencies, contains only crates from this repository and Rust std. The [dependency policy](../../DEPENDENCIES.md) explains the rules, including the one self-hosted script this documentation site uses for search.
-
-## Generate a small game
-
-Create a new project next to your checkout. The destination folder must not exist yet:
-
-```sh
-python3 -B scripts/ferravex.py new moon-garden ../moon-garden --template 2d --tick-rate 120 --window-title 'Moon Garden'
-cd ../moon-garden
-cargo test --offline --locked --jobs 2
-```
-
-Use `--template 3d` for a 3D starter. The tick rate (1 to 1000 Hz) sets how often your rules run, independently of the frame rate. The generator creates a standalone Cargo workspace with its own lockfile and a local `ferravex` dependency. It never edits this checkout.
-
-Where to start editing:
-
-- `src/game.rs` holds your rules and game state.
-- `src/lib.rs` handles input, rendering and UI.
-- `ferravex.json` records how the project was generated. Changing its tick rate does not change the compiled game; edit the code instead.
-
-The generated README lists the controls and commands. [Template verification](../../docs/JOURNEY_200_TEMPLATES.md) describes what the generator is tested against.
-
-### Run it in a window
-
-From the generated project:
-
-```sh
-cargo run --offline --locked --jobs 2
-```
-
-Native windows need your platform's display and graphics libraries.
-
-### Run it in the browser
-
-Install the WebAssembly target once, then build and serve the project:
-
-```sh
-rustup target add wasm32-unknown-unknown
-python3 -B scripts/build-web.py
-python3 -m http.server 8000 --bind 127.0.0.1 --directory target/web
-```
-
-Open http://127.0.0.1:8000/ in a browser with WebGL2. The build goes into the project's own `target/web` folder and nothing is deployed.
+[Platforms](../../docs/PLATFORMS.md) covers prerequisites per operating system, and [template verification](../../docs/JOURNEY_200_TEMPLATES.md) describes what the generator is tested against.
 
 ## Play the bundled games
 
-Back in the Ferravex checkout, build and serve every browser game:
+Want to see what the engine can do first? `python3 -B scripts/ferravex.py list` shows every bundled game, and `python3 -B scripts/ferravex.py run neon-swarm` runs one natively. To build and serve every browser game from the checkout:
 
 ```sh
 python3 -B scripts/ferravex.py doctor --profile web
@@ -78,12 +53,6 @@ python3 -B scripts/serve-web.py --bind 127.0.0.1 --port 8000
 ```
 
 This needs the WebAssembly target from the previous step. Open http://127.0.0.1:8000/ for the game catalog. Each game has its own route, such as `/emberline/`, `/marble-run/` or `/strike/`; Courtyard lives at `/owned/` and Orbit Breaker at `/owned-orbit/`. On this website the same games live under `/play/`. Load one game at a time, and click the game to give it keyboard focus, pointer lock and audio.
-
-To run a game natively, pass its catalog ID:
-
-```sh
-python3 -B scripts/ferravex.py run neon-swarm
-```
 
 On Linux, native rendering needs X11/GLX and a working OpenGL driver. Windows and macOS host code exists with its own verification limits, and Courtyard and Orbit Breaker can also run headless. See [Platforms](../../docs/PLATFORMS.md) and each game's README for details.
 

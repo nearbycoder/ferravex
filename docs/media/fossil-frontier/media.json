@@ -1,0 +1,23 @@
+{
+ "game": "fossil-frontier",
+ "loop": "loop.mp4",
+ "poster": "poster.webp",
+ "alt": "Fossil Frontier: excavation and research management campaign in play",
+ "width": 960,
+ "height": 600,
+ "seconds": 6,
+ "stills": [
+  {
+   "file": "still-1.webp",
+   "alt": "Fossil Frontier: opening campaign decisions"
+  },
+  {
+   "file": "still-2.webp",
+   "alt": "Fossil Frontier: campaign action and objectives"
+  },
+  {
+   "file": "still-3.webp",
+   "alt": "Fossil Frontier: campaign progress"
+  }
+ ]
+}

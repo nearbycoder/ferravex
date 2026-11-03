@@ -3,11 +3,33 @@
 version = 4
 
 [[package]]
+name = "crown-council"
+version = "0.1.0"
+dependencies = [
+ "ferravex-arcade",
+ "ferravex-core",
+ "ferravex-math",
+ "ferravex-play",
+ "ferravex-render",
+]
+
+[[package]]
 name = "crystal-cavern"
 version = "0.1.0"
 dependencies = [
  "ferravex-core",
  "ferravex-physics",
+ "ferravex-play",
+ "ferravex-render",
+]
+
+[[package]]
+name = "deep-pressure"
+version = "0.1.0"
+dependencies = [
+ "ferravex-arcade",
+ "ferravex-core",
+ "ferravex-math",
  "ferravex-play",
  "ferravex-render",
 ]
@@ -37,6 +59,15 @@ version = "0.1.0"
 dependencies = [
  "ferravex-core",
  "ferravex-engine",
+]
+
+[[package]]
+name = "ferravex-arcade"
+version = "0.1.0"
+dependencies = [
+ "ferravex-core",
+ "ferravex-play",
+ "ferravex-render",
 ]
 
 [[package]]
@@ -130,10 +161,65 @@ dependencies = [
 ]
 
 [[package]]
+name = "fossil-frontier"
+version = "0.1.0"
+dependencies = [
+ "ferravex-arcade",
+ "ferravex-core",
+ "ferravex-math",
+ "ferravex-play",
+ "ferravex-render",
+]
+
+[[package]]
+name = "gilded-deck"
+version = "0.1.0"
+dependencies = [
+ "ferravex-arcade",
+ "ferravex-core",
+ "ferravex-math",
+ "ferravex-play",
+ "ferravex-render",
+]
+
+[[package]]
 name = "glowtide"
 version = "0.1.0"
 dependencies = [
  "ferravex-core",
+ "ferravex-play",
+ "ferravex-render",
+]
+
+[[package]]
+name = "gravity-post"
+version = "0.1.0"
+dependencies = [
+ "ferravex-arcade",
+ "ferravex-core",
+ "ferravex-math",
+ "ferravex-play",
+ "ferravex-render",
+]
+
+[[package]]
+name = "hearthharvest"
+version = "0.1.0"
+dependencies = [
+ "ferravex-arcade",
+ "ferravex-core",
+ "ferravex-math",
+ "ferravex-play",
+ "ferravex-render",
+]
+
+[[package]]
+name = "ironclad-tactics"
+version = "0.1.0"
+dependencies = [
+ "ferravex-arcade",
+ "ferravex-core",
+ "ferravex-math",
  "ferravex-play",
  "ferravex-render",
 ]
@@ -177,6 +263,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "mooncourt"
+version = "0.1.0"
+dependencies = [
+ "ferravex-arcade",
+ "ferravex-core",
+ "ferravex-math",
+ "ferravex-play",
+ "ferravex-render",
+]
+
+[[package]]
+name = "mosslight"
+version = "0.1.0"
+dependencies = [
+ "ferravex-arcade",
+ "ferravex-core",
+ "ferravex-math",
+ "ferravex-play",
+ "ferravex-render",
+]
+
+[[package]]
 name = "neon-swarm"
 version = "0.1.0"
 dependencies = [
@@ -210,6 +318,28 @@ version = "0.1.0"
 dependencies = [
  "ferravex-core",
  "ferravex-engine",
+]
+
+[[package]]
+name = "pantry-panic"
+version = "0.1.0"
+dependencies = [
+ "ferravex-arcade",
+ "ferravex-core",
+ "ferravex-math",
+ "ferravex-play",
+ "ferravex-render",
+]
+
+[[package]]
+name = "paper-alibi"
+version = "0.1.0"
+dependencies = [
+ "ferravex-arcade",
+ "ferravex-core",
+ "ferravex-math",
+ "ferravex-play",
+ "ferravex-render",
 ]
 
 [[package]]
@@ -252,6 +382,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "prism-foundry"
+version = "0.1.0"
+dependencies = [
+ "ferravex-arcade",
+ "ferravex-core",
+ "ferravex-math",
+ "ferravex-play",
+ "ferravex-render",
+]
+
+[[package]]
+name = "saltwind"
+version = "0.1.0"
+dependencies = [
+ "ferravex-arcade",
+ "ferravex-core",
+ "ferravex-math",
+ "ferravex-play",
+ "ferravex-render",
+]
+
+[[package]]
 name = "salvage-pinball"
 version = "0.1.0"
 dependencies = [
@@ -270,10 +422,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "signalbox"
+version = "0.1.0"
+dependencies = [
+ "ferravex-arcade",
+ "ferravex-core",
+ "ferravex-math",
+ "ferravex-play",
+ "ferravex-render",
+]
+
+[[package]]
 name = "sky-courier"
 version = "0.1.0"
 dependencies = [
  "ferravex-core",
+ "ferravex-play",
+ "ferravex-render",
+]
+
+[[package]]
+name = "starweaver"
+version = "0.1.0"
+dependencies = [
+ "ferravex-arcade",
+ "ferravex-core",
+ "ferravex-math",
+ "ferravex-play",
+ "ferravex-render",
+]
+
+[[package]]
+name = "stormbound"
+version = "0.1.0"
+dependencies = [
+ "ferravex-arcade",
+ "ferravex-core",
+ "ferravex-math",
  "ferravex-play",
  "ferravex-render",
 ]
@@ -285,6 +470,50 @@ dependencies = [
  "ferravex-core",
  "ferravex-fps",
  "ferravex-net",
+ "ferravex-play",
+ "ferravex-render",
+]
+
+[[package]]
+name = "tin-automata"
+version = "0.1.0"
+dependencies = [
+ "ferravex-arcade",
+ "ferravex-core",
+ "ferravex-math",
+ "ferravex-play",
+ "ferravex-render",
+]
+
+[[package]]
+name = "velvet-heist"
+version = "0.1.0"
+dependencies = [
+ "ferravex-arcade",
+ "ferravex-core",
+ "ferravex-math",
+ "ferravex-play",
+ "ferravex-render",
+]
+
+[[package]]
+name = "voltage-choir"
+version = "0.1.0"
+dependencies = [
+ "ferravex-arcade",
+ "ferravex-core",
+ "ferravex-math",
+ "ferravex-play",
+ "ferravex-render",
+]
+
+[[package]]
+name = "wildfire-watch"
+version = "0.1.0"
+dependencies = [
+ "ferravex-arcade",
+ "ferravex-core",
+ "ferravex-math",
  "ferravex-play",
  "ferravex-render",
 ]
