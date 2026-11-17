@@ -1,7 +1,7 @@
 //! Presentation-only effects. Neither preferences nor render cadence own combat.
 use crate::game::{Enemy, Foe, Game, Note, Style, Supply};
 use crate::hud::{Line, line};
-use crate::juice::{self, GOLD, Juice, MAGENTA, Priority, VIOLET};
+use crate::juice::{self, Badge, GOLD, Juice, MAGENTA, Priority, VIOLET};
 use crate::quips;
 use crate::{AMBER, CORAL, CYAN, PAPER};
 use ferravex_core::session::SessionState;
@@ -13,6 +13,7 @@ use ferravex_play::particles::{
     Emitter, EmitterDesc, EmitterTransform, ParticleDesc, ParticleMotion, ParticlePool,
 };
 use ferravex_render::audio::{Cue, Surface};
+use ferravex_render::icons::Icon;
 use ferravex_render::prelude::{Color, Vec2, vec2};
 use ferravex_render::{audio::GameAudio, preferences};
 
@@ -54,6 +55,11 @@ fn chunk_desc(start: Color, end: Color, speed: f32, size: f32, life: f32) -> Emi
         rate: 0.,
         ..Default::default()
     }
+}
+
+/// Style points as a violet gem badge; style feeds the rank, not the score.
+fn style_badge(points: u32) -> Badge {
+    Badge::new(Icon::Gem, line!("+{points}"), VIOLET)
 }
 
 impl Presentation {
@@ -272,21 +278,21 @@ impl Presentation {
                     j.ring(at, 20., 260., 0.7, VIOLET);
                     j.callout(
                         Line::from("OVERSEER DOWN!"),
-                        Line::from("+250 style · the hive is leaderless"),
+                        Some(style_badge(250)),
                         GOLD,
                         Priority::Epic,
                     );
                 } else if let Some(line) = quips::multi_kill(multi) {
                     j.callout(
                         Line::from(line),
-                        line!("{multi} in a blink · +{} style", 25 * (multi - 1)),
+                        Some(style_badge(25 * (multi - 1))),
                         tier,
                         Priority::Combo,
                     );
                 } else if drive_by {
                     j.callout(
                         Line::from(quips::drive_by(style.drive_bys)),
-                        Line::from("+50 style"),
+                        Some(style_badge(50)),
                         CYAN,
                         Priority::Minor,
                     );
@@ -309,7 +315,7 @@ impl Presentation {
             Note::MultiplierUp(tier) => {
                 j.callout(
                     line!("×{tier} {}", quips::multiplier(tier)),
-                    Line::from("Keep the chain alive"),
+                    None,
                     juice::tier_color(tier),
                     Priority::Combo,
                 );
@@ -318,7 +324,7 @@ impl Presentation {
             Note::ChainBroken(chain) => {
                 j.callout(
                     Line::from(quips::chain_broken(style.hits_taken)),
-                    line!("{chain}-kill chain lost"),
+                    Some(Badge::new(Icon::Flame, line!("{chain}"), CORAL)),
                     CORAL,
                     Priority::Minor,
                 );
@@ -328,7 +334,7 @@ impl Presentation {
                 j.ring(at, 12., 40., 0.25, AMBER);
                 j.callout(
                     Line::from(quips::close_shave(style.close_shaves)),
-                    Line::from("+20 style"),
+                    Some(style_badge(20)),
                     AMBER,
                     Priority::Minor,
                 );
@@ -337,7 +343,7 @@ impl Presentation {
             Note::LevelUp { level, damage } => {
                 j.callout(
                     line!("WEAPON LV {level}"),
-                    line!("Shots now hit for {damage:.0}"),
+                    Some(Badge::new(Icon::Sword, line!("{damage:.0}"), CYAN)),
                     CYAN,
                     Priority::Major,
                 );
@@ -346,21 +352,11 @@ impl Presentation {
             Note::EliteInbound(at) => {
                 j.ring(at, 10., 120., 0.6, GOLD);
                 j.trauma(0.3);
-                j.callout(
-                    Line::from("OVERSEER INBOUND"),
-                    Line::from("Big, armored, grumpy · focus fire to stagger"),
-                    GOLD,
-                    Priority::Epic,
-                );
+                j.callout(Line::from("OVERSEER INBOUND"), None, GOLD, Priority::Epic);
                 Some((Cue::Impact(Surface::Metal), 0.8))
             }
             Note::LastDrone => {
-                j.callout(
-                    Line::from("ONE LEFT!"),
-                    Line::from("Make it count"),
-                    PAPER,
-                    Priority::Major,
-                );
+                j.callout(Line::from("ONE LEFT!"), None, PAPER, Priority::Major);
                 None
             }
             Note::WaveClear {
@@ -368,15 +364,15 @@ impl Presentation {
             } => {
                 if health <= crate::game::CLUTCH_HEALTH {
                     j.callout(
-                        line!("SURVIVED ON {health} HP"),
-                        Line::from("+150 style · breathe"),
+                        Line::from("CLUTCH!"),
+                        Some(Badge::new(Icon::Heart, line!("{health}"), CORAL)),
                         CORAL,
                         Priority::Epic,
                     );
                 } else if untouched {
                     j.callout(
                         Line::from("UNTOUCHED!"),
-                        Line::from("Not a scratch · +200 style"),
+                        Some(style_badge(200)),
                         GOLD,
                         Priority::Epic,
                     );
@@ -388,8 +384,8 @@ impl Presentation {
                 j.ring(at, 6., 60., 0.5, CYAN);
                 if lit == 4 {
                     j.callout(
-                        Line::from("DISCO MODE UNLOCKED"),
-                        Line::from("All four lamps lit · the sector is now a party"),
+                        Line::from("DISCO MODE!"),
+                        Some(Badge::new(Icon::Music, line!("4/4"), MAGENTA)),
                         MAGENTA,
                         Priority::Epic,
                     );
@@ -399,8 +395,8 @@ impl Presentation {
                     Some((Cue::Success, 0.6))
                 } else {
                     j.callout(
-                        line!("LAMP {lit}/4 LIT"),
-                        Line::from("Something is warming up…"),
+                        Line::from("LAMP LIT"),
+                        Some(Badge::new(Icon::Bulb, line!("{lit}/4"), CYAN)),
                         CYAN,
                         Priority::Major,
                     );
@@ -408,12 +404,12 @@ impl Presentation {
                 }
             }
             Note::Supply { at, kind } => {
-                let (text, color) = match kind {
-                    Supply::Repair => ("+22 HP", Color::from_rgba(130, 246, 160, 255)),
-                    Supply::Battery => ("Shield full", Color::from_rgba(140, 200, 255, 255)),
+                let (icon, text, color) = match kind {
+                    Supply::Repair => (Icon::Heart, "+22", Color::from_rgba(130, 246, 160, 255)),
+                    Supply::Battery => (Icon::Shield, "FULL", Color::from_rgba(140, 200, 255, 255)),
                 };
                 j.ring(at, 10., 44., 0.3, color);
-                j.pop(at - vec2(0., 18.), Line::from(text), color, 16.);
+                j.pop_icon(at - vec2(0., 18.), Some(icon), Line::from(text), color, 16.);
                 None
             }
         }
@@ -712,6 +708,79 @@ mod tests {
             .iter()
             .count();
         assert_eq!(enemies, 0);
+    }
+
+    #[test]
+    fn every_callout_is_one_short_line_with_at_most_a_number_badge() {
+        let _guard = RestorePolicy::new();
+        let mut game = Game::new();
+        let at = Vec2::new(300., 300.);
+        let kill = |foe, multi, drive_by| Note::Kill {
+            at,
+            foe,
+            points: 100,
+            multiplier: 2,
+            multi,
+            drive_by,
+        };
+        let notes = [
+            kill(Foe::Overseer, 1, false),
+            kill(Foe::Drone, 3, false),
+            kill(Foe::Brute, 1, true),
+            Note::MultiplierUp(5),
+            Note::ChainBroken(12),
+            Note::CloseShave(at),
+            Note::LevelUp {
+                level: 3,
+                damage: 32.,
+            },
+            Note::EliteInbound(at),
+            Note::LastDrone,
+            Note::WaveClear {
+                wave: 1,
+                untouched: true,
+                health: 100,
+            },
+            Note::WaveClear {
+                wave: 2,
+                untouched: false,
+                health: 9,
+            },
+            Note::Beacon { index: 0, lit: 2 },
+            Note::Beacon { index: 1, lit: 4 },
+        ];
+        let style = Style {
+            drive_bys: 7,
+            close_shaves: 4,
+            hits_taken: 3,
+            ..Style::default()
+        };
+        for note in notes {
+            let mut p = Presentation::new();
+            p.sync(&mut game);
+            p.note(note, &style);
+            let callout = p.juice.callout.as_ref().expect("each note announces");
+            let head = callout.head.as_str();
+            assert!(head.split_whitespace().count() <= 3, "{head}");
+            assert_eq!(head, head.to_uppercase(), "{head}");
+            if let Some(badge) = callout.badge {
+                let text = badge.text.as_str();
+                assert!(
+                    text.len() <= 5 && text.chars().any(|c| c.is_ascii_digit()),
+                    "badges are numbers: {text}"
+                );
+            }
+        }
+        // Supplies pop an icon and a number or one word where they are taken.
+        let mut p = Presentation::new();
+        p.sync(&mut game);
+        for kind in [Supply::Repair, Supply::Battery] {
+            p.note(Note::Supply { at, kind }, &style);
+        }
+        let pops: Vec<_> = p.juice.pops.iter().flatten().collect();
+        assert_eq!(pops.len(), 2);
+        assert!(pops.iter().all(|pop| pop.icon.is_some()));
+        assert!(pops.iter().any(|pop| pop.text == "+22"));
     }
 
     #[test]

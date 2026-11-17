@@ -7,14 +7,19 @@
 //! respawn pop-in. Reduced flash clears and blocks the fall vignette and lantern
 //! flare. Text pops and toasts are informational, so they remain, but they no
 //! longer rise or bounce under reduced motion.
+//!
+//! Toasts are one-line callouts: a pictogram, at most three words and an
+//! optional number (a split time). Nothing here explains rules in sentences.
 use super::quips::{self, DeathCause};
 use super::style::{Line, line};
 use super::{Game, PLAYER, SPEED, motion_scale};
 use ferravex_play::feedback::FeedbackPolicy;
+use ferravex_play::gameplay::trial::Medal;
 use ferravex_play::particles::{
     Emitter, EmitterDesc, EmitterTransform, ParticleDesc, ParticleMotion, ParticlePool,
 };
 use ferravex_play::tween::{Motion, Spring};
+use ferravex_render::icons::Icon;
 use ferravex_render::prelude::{Color, Vec2, vec2};
 
 const SEED: u64 = 0x454d_4a55;
@@ -48,12 +53,35 @@ pub(super) enum Priority {
     Alert,
 }
 
+/// A pictogram drawn before toast headlines, HUD values and card stats. The
+/// same idea always uses the same glyph (falls are a skull, points a star).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Glyph {
+    /// A shared engine pictogram.
+    Icon(Icon),
+    /// Emberline's caged lantern, lit or empty.
+    Lantern(bool),
+    /// An ember diamond.
+    Ember,
+    /// Two rising chevrons: the earned air jump.
+    AirJump,
+    /// The secret moth.
+    Moth,
+    /// A medal disc stamped with its letter.
+    Medal(Medal),
+    /// Left and right arrows: movement.
+    Move,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Toast {
+    /// A short callout (at most three words).
     pub head: Line,
-    pub sub: Line,
-    /// A Modern-face glyph drawn in `color` before the headline.
-    pub icon: char,
+    /// An optional number after the headline, such as a split time.
+    pub value: Line,
+    pub value_color: Color,
+    /// Drawn in `color` before the headline.
+    pub icon: Glyph,
     pub color: Color,
     pub age: f32,
     pub life: f32,
@@ -88,6 +116,9 @@ pub(super) struct Juice {
     pub flare: [f32; 2],
     /// Presentation seconds since reaching the lift (render time, Won only).
     pub celebrate: f32,
+    /// The earned air jump has been used at least once this run, so its
+    /// key-cap prompt has done its job.
+    pub air_jump_taught: bool,
     /// Vertical camera kick in world units (positive pushes the view down).
     kick: Spring,
     /// Cape tip offset from the shoulder, trailing motion with follow-through.
@@ -157,6 +188,7 @@ impl Juice {
             flash: 0.,
             flare: [0.; 2],
             celebrate: 0.,
+            air_jump_taught: false,
             kick: Spring::underdamped(0., 9., 0.45),
             cape: [
                 Spring::underdamped(-14., 6., 0.35),
@@ -293,11 +325,16 @@ impl Juice {
         });
     }
 
-    pub fn toast(
+    pub fn toast(&mut self, icon: Glyph, head: Line, color: Color, life: f32, priority: Priority) {
+        self.toast_value(icon, head, (Line::new(), color), color, life, priority);
+    }
+
+    /// A toast whose headline is followed by a short number in `value.1`.
+    pub fn toast_value(
         &mut self,
-        icon: char,
+        icon: Glyph,
         head: Line,
-        sub: Line,
+        value: (Line, Color),
         color: Color,
         life: f32,
         priority: Priority,
@@ -311,7 +348,8 @@ impl Juice {
         }
         self.toast = Some(Toast {
             head,
-            sub,
+            value: value.0,
+            value_color: value.1,
             icon,
             color,
             age: 0.,
@@ -358,17 +396,13 @@ impl Juice {
             }
             self.spawn_in = if self.motion > 0. { 0.28 } else { 0. };
             self.squash = 0.;
-            let back = if game.checkpoints.index() == 0 {
-                Line::from_str("Back to the trailhead")
-            } else {
-                line!("Back to lantern {}", game.checkpoints.index())
-            };
+            // The wipe and the pop-in at the lantern show where you went back
+            // to; the callout only names the fall.
             self.toast(
-                '×',
+                Glyph::Icon(Icon::Skull),
                 Line::from_str(quips::fall(game.death_cause, game.deaths, game.deaths_here)),
-                back,
                 color,
-                1.9,
+                1.5,
                 Priority::Alert,
             );
             return;
@@ -385,6 +419,7 @@ impl Juice {
         if fb.jumped {
             self.squash = -1.;
             if fb.air_jumped {
+                self.air_jump_taught = true;
                 self.burst(
                     burst_desc(GREEN, CREAM, [0., 140.], [160., 40.], 0., 0.35, 6.),
                     feet,
@@ -425,12 +460,18 @@ impl Juice {
             }
         }
         if fb.air_jump_unlocked {
+            // Felt on the hero, named once; the HUD pips light up with it.
+            self.burst(
+                burst_desc(GREEN, CREAM, [0., -120.], [180., 120.], 120., 0.6, 7.),
+                feet - vec2(0., PLAYER.y * 0.5),
+                18,
+            );
+            self.ring(feet - vec2(0., PLAYER.y * 0.5), 44., 0.45, GREEN);
             self.toast(
-                '▲',
-                Line::from_str("Air jump unlocked!"),
-                Line::from_str("Press jump again in mid-air · once per landing"),
+                Glyph::AirJump,
+                Line::from_str("AIR JUMP!"),
                 GREEN,
-                2.8,
+                2.2,
                 Priority::Info,
             );
         }
@@ -460,11 +501,10 @@ impl Juice {
                 self.flare[index - 1] = self.flash_scale;
             }
             self.toast(
-                '♦',
-                line!("Lantern {index} lit"),
+                Glyph::Lantern(true),
                 Line::from_str(quips::lantern(index)),
                 GOLD,
-                2.4,
+                1.9,
                 Priority::Info,
             );
         }
@@ -476,19 +516,22 @@ impl Juice {
             );
             self.ring(super::MOTH_AT, 90., 0.8, MOTH);
             self.toast(
-                '★',
-                Line::from_str("Secret: the Moth of Fortune!"),
-                Line::from_str("+500 and eternal bragging rights"),
+                Glyph::Moth,
+                Line::from_str("MOTH OF FORTUNE!"),
                 MOTH,
-                3.2,
+                2.8,
                 Priority::Alert,
             );
         }
         if let Some(split) = fb.split {
-            self.toast(
-                '→',
+            let elapsed = game.trial.elapsed();
+            self.toast_value(
+                Glyph::Icon(Icon::Flag),
                 Line::from_str(super::ZONES[split + 1]),
-                line!("Split {:.2}s", game.trial.elapsed()),
+                (
+                    line!("{elapsed:.2}"),
+                    super::hud::medal_color(super::hud::pace(elapsed)),
+                ),
                 CREAM,
                 1.6,
                 Priority::Zone,
@@ -637,9 +680,8 @@ mod tests {
         juice.advance(0.);
         assert_eq!((juice.time, juice.particles.len()), frozen);
         juice.toast(
-            '★',
+            Glyph::Icon(Icon::Star),
             Line::from_str("A"),
-            Line::from_str("B"),
             CREAM,
             1.,
             Priority::Info,
@@ -649,20 +691,47 @@ mod tests {
     }
 
     #[test]
+    fn every_toast_is_a_one_line_callout_of_at_most_three_words() {
+        let mut juice = Juice::new();
+        let mut game = Game::new(true);
+        let mut heads = std::collections::BTreeSet::new();
+        // A fall, then an autoplay clear that lights both lanterns, unlocks the
+        // air jump and crosses both section splits.
+        fall_into_spikes(&mut game);
+        juice.on_tick(&game);
+        heads.insert(juice.toast.as_ref().unwrap().head.as_str().to_owned());
+        let mut game = Game::new(true);
+        for _ in 0..2400 {
+            game.update(game.autoplay(), DT);
+            juice.on_tick(&game);
+            if let Some(toast) = &juice.toast {
+                heads.insert(toast.head.as_str().to_owned());
+                assert!(toast.value.len() <= 8, "only a short number may follow");
+            }
+            juice.advance(DT);
+            if game.won() {
+                break;
+            }
+        }
+        assert!(heads.len() >= 4, "{heads:?}");
+        for head in &heads {
+            assert!(head.split_whitespace().count() <= 3, "{head}");
+        }
+    }
+
+    #[test]
     fn higher_priority_toasts_are_not_stomped_by_zone_banners() {
         let mut juice = Juice::new();
         juice.toast(
-            '×',
+            Glyph::Icon(Icon::Skull),
             Line::from_str("FALL"),
-            Line::new(),
             RED,
             2.,
             Priority::Alert,
         );
         juice.toast(
-            '→',
+            Glyph::Icon(Icon::Flag),
             Line::from_str("ZONE"),
-            Line::new(),
             CREAM,
             2.,
             Priority::Zone,
@@ -670,9 +739,8 @@ mod tests {
         assert_eq!(juice.toast.as_ref().unwrap().head, "FALL");
         juice.advance(1.9);
         juice.toast(
-            '→',
+            Glyph::Icon(Icon::Flag),
             Line::from_str("ZONE"),
-            Line::new(),
             CREAM,
             2.,
             Priority::Zone,

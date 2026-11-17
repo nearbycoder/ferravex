@@ -656,7 +656,13 @@ impl Lab {
             }
             // Score first, then the elimination callout under it.
             if eliminated {
-                self.juice.pop(juice::Pop::Eliminated);
+                let running = matches!(self.qualifier.status().phase, QualifierPhase::Running(_));
+                let bonus = if offline && running {
+                    qualifier::ELIMINATION_BONUS * actions.eliminations
+                } else {
+                    0
+                };
+                self.juice.pop(juice::Pop::Eliminated { bonus });
             }
             self.update_orientation();
             self.physics.step(step.dt).unwrap();

@@ -23,24 +23,29 @@ reveals left/right steering and gas/brake controls along the bottom edge. The
 four default touch regions shrink to fit narrow viewports without overlapping;
 saved customization still addresses the same control indexes. On-screen start,
 driving and retry hints show the first current-device binding from the live
-Controls profile, including remaps and unbound actions.
-Default touch hints use the visible button labels (for example, **Hold GAS for
-gas**) instead of internal touch channel numbers. Remapped touch actions follow
-their actual button; customized layouts and unknown channels keep the shared
-binding description because the default button labels are not drawn there.
-Touch results say **Tap to retry**; no invisible restart/confirm touch buttons
-are advertised. Keyboard and gamepad retry hints still follow live bindings.
+Controls profile, including remaps and unbound actions. Prompts are a key cap
+beside the pictogram of what it does (an up arrow for gas, a skidding car for
+the handbrake drift, play/restart/controller on the pause card) rather than a
+sentence. Default touch prompts name the visible button (a **GAS** cap) instead
+of internal touch channel numbers. Remapped touch actions follow their actual
+button; customized layouts and unknown channels keep the shared binding
+description because the default button labels are not drawn there. Touch
+results show a tap hand beside the restart icon; no invisible restart/confirm
+touch buttons are advertised. Keyboard and gamepad retry prompts still follow
+live bindings.
 The editor retains its **Brake / slow** label for the handbrake action. The browser help lists defaults;
 Tab leaves the canvas, while normal Tab inside Controls navigates that editor.
 Shift+Tab can leave the canvas even with Controls open.
 
 Every race begins with **3, 2, 1, GO**: three start lamps light while the camera
 flies in from the circuit overview to the car, and a big **GO!** stamps the start.
-The first countdown also shows the live gas/drift bindings; retries show a fresh
-retry quip and your best race time. Hold gas to accelerate when the countdown
+The first countdown also shows the live gas/drift key caps; retries show a short
+retry quip, the three medal targets as medals with their times, and your best
+race beside a crown. Hold gas to accelerate when the countdown
 ends; neither the car nor the lap/race timer advances before GO. Pause freezes
-countdown, race time and transient feedback, and shows a pause card with the race
-state, a quip and the live resume/restart bindings. Interactive play also suspends
+countdown, race time and transient feedback, and shows a pause card with one
+co-driver line, lap pips, the race clock beside its medal, and the live
+resume/restart/controls key caps. Interactive play also suspends
 for control settings and lost focus; autoplay ignores those focus interruptions. A
 resumed frame discards elapsed inactive time, and restart clears skid trails,
 particles, pops, banners, style points, audio travel/voices, countdown and
@@ -56,7 +61,8 @@ up to a x5 multiplier. Sliding onto the grass **botches** the drift: the unbanke
 points are lost and the chain breaks. A lap without touching grass earns **CLEAN
 LAP +250**, three clean laps add **PERFECT LINE +500**, and a full 360° handbrake
 spin is a **DONUT +300**. There is also a small secret on the farm; the results
-card hints at it once you have gold and a perfect line.
+card hints at it (a wave icon and a question mark) once you have gold and a
+perfect line.
 
 After a best lap exists, every gate shows a green (ahead) or red (behind) split
 versus that lap, and the HUD keeps the latest delta under the lap timer. The
@@ -65,9 +71,11 @@ derived from its 20 Hz poses, so the save format is unchanged.
 
 The finish card ranks the race with a medal (gold under 43 s, silver under 47 s,
 bronze under 55 s; the handbrake-free autopilot runs about 43.8 s), a silly title
-(SILVER SLIDER, FENCE INSPECTOR, AGRICULTURAL DRIVER, VALLE VERDE LEGEND…), the
-personal-best comparison, a next-goal hook ("0.81S FASTER FOR GOLD!") and stats:
-best lap, style (and style record), best drift, clean laps, grass time and the
+(SILVER SLIDER, FENCE INSPECTOR, AGRICULTURAL DRIVER, VALLE VERDE LEGEND…) with
+one co-driver line, the personal-best comparison as a crown chip, a next-goal
+hook drawn as icons (the next medal and the seconds to cut, three clean-lap
+pips, a style target, the duck secret) and pictogram stat tiles: best lap,
+style (crowned when it is a record), best drift, clean laps, grass time and the
 secret. Human races store the best race time and best style score in the shared
 `pocket-rally/records` record book; autoplay is labelled a demo and never writes.
 
@@ -77,20 +85,29 @@ or its ghost. Quips (`quips.rs`) rotate deterministically from race counters and
 never repeat back-to-back.
 
 The road is deliberately forgiving, but grass sharply reduces speed. The HUD bar
-shows the lap counter, a large lap timer with the latest split delta, gates cleared
-this lap, speed with an amber speed bar, and race time; narrow screens use a
-three-row bar. Times are stopwatch text from whole centiseconds. A minimap under
-the bar shows the circuit, the car, the ghost, the next gate and the best lap
-(**SESSION BEST** when the save failed). Completed laps show a banner with the lap
-time and **FIRST BEST**, **TIED BEST**, **NEW BEST** or signed seconds versus the
-previous best. Small pale arrows pulse at the next gate. Facing or moving back
-along the road shows **WRONG WAY!** with a quip. Autoplay exposes the shared
-driver's reversing recovery state. These observations cannot award gates.
-After a quarter-second on grass, a co-driver quip ("SCENIC ROUTE SELECTED") asks
-you to follow an amber arrow pointing back toward the nearest road segment;
-returning shows **BACK ON TRACK**. Recovery guidance never teleports the car, skips
-a checkpoint or resets lap time. Short onboarding tips (hold gas; hold the
-handbrake to drift) disappear once each lesson is learned. Sixteen ordered gates
+carries no labels: a flag and three lap pips (gold and ticked when done, the
+current lap a breathing amber ring), a sixteen-segment gate meter whose next
+segment pulses amber like the arrows on the road, a clock beside the large lap
+timer with the latest split delta, a speedometer arc with the speed, and the race
+clock beside a medal showing the best medal still in reach (it changes colour,
+with a pop, as each target time slips by). Narrow screens use a two-row chip and
+a strip. Times are stopwatch text from whole centiseconds. A minimap under the
+bar shows the circuit, the car, the ghost, the next gate and the best lap beside
+a gold star (a grey star and an alert icon when the save failed and the best
+lasts only this session). Completed laps show a flag banner (**LAP n**, a short
+clean-lap quip, or **FINAL LAP!**) over the lap time and a star chip: **BEST**,
+a signed delta, or a tie. Small pale arrows pulse at the next gate. Facing or
+moving back along the road shows a red U-turn banner (**WRONG WAY!** first,
+then short quips) and red chevrons pointing along the circuit. Autoplay exposes
+the shared driver's reversing recovery state. These observations cannot award
+gates. After a quarter-second on grass, a grass icon and a short co-driver quip
+("SCENIC ROUTE SELECTED") appear while amber chevrons pulse toward the nearest
+road point; returning shows a green tick and **BACK ON TRACK**. In-race callouts
+are at most three words; longer jokes appear only on the pause and results
+cards. Recovery guidance never teleports the car, skips a checkpoint or resets
+lap time. Contextual key-cap prompts under the car (gas when parked after GO; the
+handbrake as you reach a bend at speed, first race only) disappear once each
+lesson is learned. Sixteen ordered gates
 check forward line crossings inside the road corridor; repeatedly crossing the
 finish, reversing, and driving outside a gate cannot award a lap. The three-lap
 result freezes the race timer.
@@ -147,8 +164,9 @@ tire model and authored tuning are unchanged, so saved ghosts stay valid.
 
 Juice (`juice.rs`) is presentation only: tire smoke while drifting, grass and dirt
 spray off-road, sparks and a squash when the car bumps the farm fence, a water
-splash, gold bursts for a new best lap, finish confetti, rising score pops, a lap
-zoom punch and camera shake. Effects are created from accepted ticks and age with
+splash, an amber spark burst at both markers of each cleared gate (and a glow on
+its HUD meter segment), gold bursts for a new best lap, finish confetti, rising
+score pops, a lap zoom punch and camera shake. Effects are created from accepted ticks and age with
 accepted simulation time (the results celebration uses render time while the race
 is frozen). The shared presentation policy is read every frame, including paused
 menus and zero-tick frames. Reduced motion clears and blocks skid trails,
@@ -158,7 +176,7 @@ blocks the gold new-best edge glow. Restoring a preference never revives old
 effects. No duplicate preference store or Wasm export is added.
 
 Debug native builds read a few capture-only environment variables (window size,
-pause frame, forced drifts/off-road/pond visit, fake previous best) documented in
+pause frame, forced drifts/off-road/pond visit/wrong-way turn, fake previous best) documented in
 `src/capture.rs`; release and Wasm builds do not compile them.
 
 The shared Racer input preset also supplies gamepad bindings and remapping.

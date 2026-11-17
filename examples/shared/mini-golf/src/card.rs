@@ -330,14 +330,15 @@ impl Best {
             Some(p) => Self::Short(total - p),
         }
     }
-    /// One line that makes another round tempting.
-    pub fn line(self) -> String {
+    /// A short headline for the comparison; the results card shows the
+    /// stroke difference beside it as a number.
+    pub fn line(self) -> &'static str {
         match self {
-            Self::First => "FIRST ROUND ON RECORD. NOW BEAT IT.".into(),
-            Self::New(n) => format!("NEW PERSONAL BEST! {n} BETTER THAN BEFORE"),
-            Self::Tied => "TIED YOUR BEST. ONE STROKE FOR GLORY.".into(),
-            Self::Short(1) => "ONE STROKE OFF YOUR BEST. SO CLOSE.".into(),
-            Self::Short(n) => format!("{n} STROKES OFF YOUR BEST"),
+            Self::First => "FIRST RECORD",
+            Self::New(_) => "NEW BEST!",
+            Self::Tied => "TIED BEST",
+            Self::Short(1) => "SO CLOSE",
+            Self::Short(_) => "BEST",
         }
     }
 }
@@ -439,7 +440,10 @@ mod tests {
         assert_eq!(Best::compare(38, Some(40)), Best::New(2));
         assert_eq!(Best::compare(40, Some(40)), Best::Tied);
         assert_eq!(Best::compare(41, Some(40)), Best::Short(1));
-        assert!(Best::Short(1).line().contains("ONE STROKE"));
+        assert_eq!(Best::Short(1).line(), "SO CLOSE");
+        for best in [Best::First, Best::New(9), Best::Tied, Best::Short(4)] {
+            assert!(best.line().split(' ').count() <= 2, "{}", best.line());
+        }
         assert_eq!(to_par_text(0), "E");
         assert_eq!(to_par_text(-3), "-3");
         assert_eq!(to_par_text(5), "+5");

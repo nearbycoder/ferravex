@@ -390,6 +390,60 @@ pub enum ButtonKind {
 ///     &ButtonMotion::default(), &KitTheme::default());
 /// ```
 pub fn button(rect: Rect, label: &str, kind: ButtonKind, motion: &ButtonMotion, theme: &KitTheme) {
+    button_with(rect, None, label, kind, motion, theme);
+}
+
+/// [`button`] with a pictogram before its label (or alone when `label` is
+/// empty): `[▶ Play]`, `[↻ Retry]`, `[⚙]`. The icon takes the label's ink.
+///
+/// ```
+/// use ferravex_render::{Rect, icons::Icon, ui::kit::{self, ButtonKind, ButtonMotion, KitTheme}};
+/// let theme = KitTheme::default();
+/// kit::button_icon(Rect::new(20., 20., 160., 40.), Icon::Play, "Resume",
+///     ButtonKind::Primary, &ButtonMotion::default(), &theme);
+/// ```
+pub fn button_icon(
+    rect: Rect,
+    icon: crate::icons::Icon,
+    label: &str,
+    kind: ButtonKind,
+    motion: &ButtonMotion,
+    theme: &KitTheme,
+) {
+    button_with(rect, Some(icon), label, kind, motion, theme);
+}
+
+/// The label (and optional icon) centered on `c` in `style`.
+fn button_label(c: Vec2, icon: Option<crate::icons::Icon>, label: &str, style: TextStyle) {
+    let Some(icon) = icon else {
+        draw_text_styled(label, c.x, style.centered_baseline(c.y), style);
+        return;
+    };
+    let size = style.size * 1.1;
+    let gap = if label.is_empty() { 0. } else { SPACE[1] };
+    let left = style.with_align(TextAlign::Left);
+    let w = size
+        + gap
+        + if label.is_empty() {
+            0.
+        } else {
+            text_width(label, left)
+        };
+    let x = c.x - w * 0.5;
+    crate::icons::draw(icon, vec2(x + size * 0.5, c.y), size, style.color);
+    if !label.is_empty() {
+        draw_text_styled(label, x + size + gap, left.centered_baseline(c.y), left);
+    }
+}
+
+fn button_with(
+    rect: Rect,
+    icon: Option<crate::icons::Icon>,
+    label: &str,
+    kind: ButtonKind,
+    motion: &ButtonMotion,
+    theme: &KitTheme,
+) {
     let (hover, press, focus) = (motion.hover(), motion.press(), motion.focus());
     let radius = theme.radius.min(rect.h * 0.5);
     let sink = 2. * press;
@@ -409,8 +463,7 @@ pub fn button(rect: Rect, label: &str, kind: ButtonKind, motion: &ButtonMotion, 
         let style = theme
             .text(theme.body, theme.disabled)
             .with_align(TextAlign::Center);
-        let c = r.center();
-        draw_text_styled(label, c.x, style.centered_baseline(c.y), style);
+        button_label(r.center(), icon, label, style);
         return;
     }
     if kind != ButtonKind::Ghost {
@@ -456,8 +509,7 @@ pub fn button(rect: Rect, label: &str, kind: ButtonKind, motion: &ButtonMotion, 
         // Light ink on a dark fill reads crisper with a 1 px shadow.
         style = style.with_shadow(theme.c(Color::new(0., 0., 0., 0.35)));
     }
-    let c = r.center();
-    draw_text_styled(label, c.x, style.centered_baseline(c.y), style);
+    button_label(r.center(), icon, label, style);
 }
 
 /// Horizontal meter (health, XP, loading): an inset rounded track, a gradient
@@ -578,6 +630,71 @@ pub fn toast(
     rect
 }
 
+/// [`toast`] led by a pictogram in the tone's color instead of a font glyph.
+///
+/// ```
+/// use ferravex_play::tween::Appearance;
+/// use ferravex_render::{icons::Icon, ui::kit::{self, KitTheme, Tone}};
+/// let theme = KitTheme::default();
+/// let r = kit::toast_icon(320., 40., Icon::Trophy, "Course record", Tone::Success,
+///     Appearance::SHOWN, &theme);
+/// assert!(r.w > 100.);
+/// ```
+pub fn toast_icon(
+    center_x: f32,
+    top: f32,
+    icon: crate::icons::Icon,
+    text: &str,
+    tone: Tone,
+    look: Appearance,
+    theme: &KitTheme,
+) -> Rect {
+    let theme = theme.faded(look.alpha);
+    let tint = match tone {
+        Tone::Info => theme.focus,
+        Tone::Success => theme.success,
+        Tone::Warning => theme.warning,
+        Tone::Danger => theme.danger,
+    };
+    let style = theme.text(theme.body, theme.ink);
+    let icon_w = theme.body * 1.15 + SPACE[1];
+    let w = icon_w + text_width(text, style) + SPACE[3] * 2. + SPACE[0];
+    let h = theme.body * 1.25 + SPACE[2];
+    let rect = appear(Rect::new(center_x - w * 0.5, top, w, h), look);
+    let radius = rect.h * 0.5;
+    shapes::drop_shadow(
+        rect,
+        radius,
+        Shadow::soft(theme.c(theme.shadow))
+            .offset(vec2(0., 6.))
+            .blur(20.),
+    );
+    shapes::fill_rounded_rect(
+        rect,
+        radius,
+        Fill::vertical(rect, theme.c(theme.raised), theme.c(theme.surface)),
+    );
+    shapes::stroke_rounded_rect(
+        rect,
+        radius,
+        1.,
+        theme.c(Color::new(tint.r, tint.g, tint.b, 0.35)),
+    );
+    let s = rect.w / w.max(1e-3);
+    let style = style.with_size(theme.body * s);
+    let cy = rect.y + rect.h * 0.5;
+    let x = rect.x + (SPACE[3] + SPACE[0]) * s;
+    let size = theme.body * 1.15 * s;
+    crate::icons::draw(icon, vec2(x + size * 0.5, cy), size, theme.c(tint));
+    draw_text_styled(
+        text,
+        x + icon_w * s,
+        style.centered_baseline(cy),
+        style.with_pixel_snap(look.scale == 1.),
+    );
+    rect
+}
+
 /// A keyboard/gamepad key cap (e.g. `"Space"`, `"E"`, `"A"`) with a raised
 /// lip, its top-left at (`x`, `y`). Returns its rectangle so prompts can flow.
 ///
@@ -638,6 +755,213 @@ pub fn key_prompt(x: f32, y: f32, keys: &[&str], action: &str, theme: &KitTheme)
     let baseline = style.centered_baseline(y + (height - 3.) * 0.5);
     let w = draw_text_styled(action, cursor + SPACE[0], baseline, style).width;
     cursor + SPACE[0] + w - x
+}
+
+/// The standard HUD stat: `icon` then `value`, vertically centered on `cy`
+/// and starting at `x` (for example a heart and `12`). `size` is the icon's
+/// box; the value uses the theme's body size scaled to match. Returns the width.
+///
+/// ```
+/// use ferravex_render::{Color, icons::Icon, ui::kit::{self, KitTheme}};
+/// let theme = KitTheme::default();
+/// let w = kit::icon_value(20., 40., Icon::Coin, "158", 20., Color::from_hex(0xf7b553), &theme);
+/// assert!(w > 20.);
+/// ```
+pub fn icon_value(
+    x: f32,
+    cy: f32,
+    icon: crate::icons::Icon,
+    value: &str,
+    size: f32,
+    color: Color,
+    theme: &KitTheme,
+) -> f32 {
+    crate::icons::draw_styled(
+        icon,
+        vec2(x + size * 0.5, cy),
+        size,
+        crate::icons::IconStyle::new(theme.c(color)).shadow(theme.c(theme.shadow)),
+    );
+    if value.is_empty() {
+        return size;
+    }
+    let style = theme
+        .text(size.max(theme.body * 0.75), theme.ink)
+        .with_shadow(theme.c(theme.shadow));
+    let gap = SPACE[1] * size / 20.;
+    let w = draw_text_styled(value, x + size + gap, style.centered_baseline(cy), style).width;
+    size + gap + w
+}
+
+/// A row of progress pips centered on `cy`: pips before `current` (one-based)
+/// are filled, `current` is enlarged with a glow, later ones are hollow.
+/// Totals above 16 draw a compact meter instead. Returns the width.
+///
+/// ```
+/// use ferravex_render::{Color, ui::kit::{self, KitTheme}};
+/// let w = kit::pips(20., 40., 3, 6, Color::from_hex(0x8fd16a), &KitTheme::default());
+/// assert!(w > 50.);
+/// ```
+pub fn pips(x: f32, cy: f32, current: u32, total: u32, color: Color, theme: &KitTheme) -> f32 {
+    if total == 0 {
+        return 0.;
+    }
+    if total > 16 {
+        let w = 96.;
+        let f = current.min(total) as f32 / total as f32;
+        meter(Rect::new(x, cy - 3., w, 6.), f, None, color, theme);
+        return w;
+    }
+    let gap = 13.;
+    for i in 0..total {
+        let at = vec2(x + 5. + i as f32 * gap, cy);
+        let index = i + 1;
+        if index < current {
+            shapes::fill_circle(at, 4., theme.c(color));
+        } else if index == current {
+            shapes::glow_disc(
+                at,
+                11.,
+                theme.c(Color::new(color.r, color.g, color.b, 0.35)),
+            );
+            shapes::fill_circle(
+                at,
+                5.,
+                theme.c(mix(color, Color::new(1., 1., 1., 1.), 0.25)),
+            );
+        } else {
+            shapes::stroke_circle(
+                at,
+                3.5,
+                1.5,
+                theme.c(Color::new(color.r, color.g, color.b, 0.45)),
+            );
+        }
+    }
+    10. + (total - 1) as f32 * gap
+}
+
+/// Circular progress: a faint track and a bright arc clockwise from 12
+/// o'clock covering `fraction` (timers, cooldowns, charge).
+///
+/// ```
+/// use ferravex_render::{Color, vec2, ui::kit::{self, KitTheme}};
+/// kit::ring_meter(vec2(40., 40.), 14., 4., 0.65, Color::from_hex(0x5bd5d8), &KitTheme::default());
+/// ```
+pub fn ring_meter(
+    center: Vec2,
+    radius: f32,
+    width: f32,
+    fraction: f32,
+    color: Color,
+    theme: &KitTheme,
+) {
+    let f = if fraction.is_finite() {
+        fraction.clamp(0., 1.)
+    } else {
+        0.
+    };
+    shapes::stroke_circle(center, radius, width, theme.c(theme.line));
+    if f > 0. {
+        shapes::stroke_arc(
+            center,
+            radius,
+            -std::f32::consts::FRAC_PI_2,
+            f * std::f32::consts::TAU,
+            shapes::Stroke::new(width, theme.c(color)).cap(shapes::Cap::Round),
+        );
+    }
+}
+
+/// Width of [`keycap`] for `label` without drawing it, for laying out rows.
+///
+/// ```
+/// use ferravex_render::ui::kit::{self, KitTheme};
+/// let theme = KitTheme::default();
+/// assert!(kit::keycap_width("Space", &theme) > kit::keycap_width("E", &theme));
+/// ```
+pub fn keycap_width(label: &str, theme: &KitTheme) -> f32 {
+    let style = theme.text(theme.body, theme.ink);
+    let h = theme.body * 1.5 + 2.;
+    (text_width(label, style) + SPACE[2] * 2.).max(h - 3.)
+}
+
+/// One piece of a [`row`]: the vocabulary of an icon-first HUD line.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RowItem<'a> {
+    /// A pictogram in a `size` box.
+    Icon(crate::icons::Icon, f32, Color),
+    /// Modern-face text at `size`.
+    Text(&'a str, f32, Color),
+    /// A key cap such as `E` or `Space`.
+    Key(&'a str),
+    /// Progress pips: `(current, total, color)`, see [`pips`].
+    Pips(u32, u32, Color),
+    /// Extra horizontal space.
+    Gap(f32),
+}
+
+impl RowItem<'_> {
+    fn width(&self, theme: &KitTheme) -> f32 {
+        match *self {
+            RowItem::Icon(_, size, _) => size,
+            RowItem::Text(text, size, color) => text_width(text, theme.text(size, color)),
+            RowItem::Key(label) => keycap_width(label, theme),
+            RowItem::Pips(_, total, _) if total > 16 => 96.,
+            RowItem::Pips(_, 0, _) => 0.,
+            RowItem::Pips(_, total, _) => 10. + (total - 1) as f32 * 13.,
+            RowItem::Gap(w) => w,
+        }
+    }
+}
+
+/// Width of [`row`] for `items` without drawing, for centering and fitting.
+pub fn row_width(items: &[RowItem], theme: &KitTheme) -> f32 {
+    let gaps = items.len().saturating_sub(1) as f32 * SPACE[1];
+    items.iter().map(|item| item.width(theme)).sum::<f32>() + gaps
+}
+
+/// Lay out `items` left to right from `x`, vertically centered on `cy`, with
+/// an 8-unit gap between pieces; returns the width. This is the standard
+/// icon-first HUD line (`[E] gem 3/6 ●●○`), shared so games don't each
+/// rebuild it.
+///
+/// ```
+/// use ferravex_render::{Color, icons::Icon, ui::kit::{self, KitTheme, RowItem}};
+/// let theme = KitTheme::default();
+/// let gold = Color::from_hex(0xf7b553);
+/// let items = [RowItem::Key("E"), RowItem::Icon(Icon::Gem, 18., gold),
+///     RowItem::Text("3", 16., gold), RowItem::Pips(3, 6, gold)];
+/// let w = kit::row(40., 40., &items, &theme);
+/// assert!((w - kit::row_width(&items, &theme)).abs() < 0.5);
+/// ```
+pub fn row(x: f32, cy: f32, items: &[RowItem], theme: &KitTheme) -> f32 {
+    let mut cursor = x;
+    for (i, item) in items.iter().enumerate() {
+        if i > 0 {
+            cursor += SPACE[1];
+        }
+        let w = item.width(theme);
+        match *item {
+            RowItem::Icon(icon, size, color) => {
+                crate::icons::draw(icon, vec2(cursor + size * 0.5, cy), size, theme.c(color));
+            }
+            RowItem::Text(text, size, color) => {
+                let style = theme.text(size, color);
+                draw_text_styled(text, cursor, style.centered_baseline(cy), style);
+            }
+            RowItem::Key(label) => {
+                let h = theme.body * 1.5 + 2.;
+                keycap(cursor, cy - (h - 3.) * 0.5, label, theme);
+            }
+            RowItem::Pips(current, total, color) => {
+                pips(cursor, cy, current, total, color, theme);
+            }
+            RowItem::Gap(_) => {}
+        }
+        cursor += w;
+    }
+    cursor - x
 }
 
 /// Draws a full-screen scene transition at `coverage` (0 clear … 1 covered)

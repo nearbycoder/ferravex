@@ -88,6 +88,124 @@ pub(crate) struct Work {
     pub total: u16,
     pub kind: u8,
 }
+/// A logical-canvas pointer zone. The sidebar buttons mirror X, C and Space
+/// so a pointer player reaches every action through the same rule path.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Zone {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+impl Zone {
+    pub fn contains(self, x: f32, y: f32) -> bool {
+        x.is_finite()
+            && y.is_finite()
+            && (self.x..self.x + self.w).contains(&x)
+            && (self.y..self.y + self.h).contains(&y)
+    }
+}
+/// Sidebar button that toggles crouching, like X.
+pub(crate) const CROUCH_ZONE: Zone = Zone {
+    x: 682.,
+    y: 246.,
+    w: 250.,
+    h: 52.,
+};
+/// Sidebar button that throws a coin, like C.
+pub(crate) const COIN_ZONE: Zone = Zone {
+    x: 682.,
+    y: 306.,
+    w: 250.,
+    h: 52.,
+};
+/// Sidebar button that interacts, like Space.
+pub(crate) const WORK_ZONE: Zone = Zone {
+    x: 682.,
+    y: 366.,
+    w: 250.,
+    h: 66.,
+};
+/// Why a heist attempt failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Cause {
+    Guard,
+    Alarm,
+    Time,
+}
+/// What a refused command was missing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Refusal {
+    NoCoins,
+    BadAim,
+    NeedPass,
+    NeedRecords,
+    Nothing,
+}
+/// One accepted occurrence of the latest tick, recorded only for
+/// presentation effects. Rules never read these.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Event {
+    /// The briefing was accepted and the clock started.
+    Start,
+    /// A heist (re)loaded at its entry stair.
+    Load,
+    Crouch(bool),
+    /// Guard index that started investigating a sound.
+    Heard(u8),
+    /// Guard index that newly saw the thief.
+    Spotted(u8),
+    /// A coin landed on this tile.
+    Throw(Pos),
+    Refused(Pos, Refusal),
+    WorkStart(Pos, u8),
+    WorkCancel(Pos),
+    WorkDone(Pos, u8),
+    /// The thief crossed a live beam.
+    Beam(Pos),
+    /// The heist's first alarm cost the clean medals.
+    MedalLost,
+    /// A final-stretch countdown second (seconds left).
+    Second(u32),
+    /// Extraction with this many medals.
+    Escape(u8),
+    Caught(Cause),
+}
+const EVENT_CAP: usize = 16;
+/// Bounded per-tick event list; cleared at the start of every live update.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Events {
+    list: [Event; EVENT_CAP],
+    len: u8,
+}
+impl Default for Events {
+    fn default() -> Self {
+        Self {
+            list: [Event::Start; EVENT_CAP],
+            len: 0,
+        }
+    }
+}
+impl PartialEq for Events {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_slice() == other.as_slice()
+    }
+}
+impl Eq for Events {}
+impl Events {
+    fn push(&mut self, event: Event) {
+        if let Some(slot) = self.list.get_mut(usize::from(self.len)) {
+            *slot = event;
+            self.len += 1;
+        }
+    }
+    fn clear(&mut self) {
+        self.len = 0;
+    }
+    pub fn as_slice(&self) -> &[Event] {
+        &self.list[..usize::from(self.len)]
+    }
+}
 /// Complete campaign state. Only [`Game::step`] mutates gameplay during play.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Game {
@@ -121,6 +239,10 @@ pub struct Game {
     pub(crate) medals: [u8; 6],
     pub(crate) total_loot: u8,
     pub(crate) note: &'static str,
+    /// Cause of the latest failure, for the capture card.
+    pub(crate) cause: Cause,
+    /// Presentation record of the latest tick; never read by rules.
+    pub(crate) events: Events,
 }
 impl Default for Game {
     fn default() -> Self {
@@ -161,6 +283,8 @@ impl Game {
             medals: [0; 6],
             total_loot: 0,
             note: "Keep low in the violet corridors. Read the guard cones.",
+            cause: Cause::Guard,
+            events: Events::default(),
         };
         g.load();
         g
@@ -336,130 +460,190 @@ impl Game {
         }
         grid
     }
-    fn fail(&mut self, reason: &'static str) -> Cue {
+    fn fail(&mut self, cause: Cause) -> Cue {
         self.phase = if self.retries > 0 {
             Phase::Setback
         } else {
             Phase::Caught
         };
         self.work = None;
-        self.note = reason;
+        self.cause = cause;
+        self.note = match cause {
+            Cause::Guard => "A guard caught you. Use a recovery favor to retry this heist.",
+            Cause::Alarm => "The alarm reached lockdown. This heist must be retried.",
+            Cause::Time => "The midnight shutters closed. Time ran out.",
+        };
+        self.events.push(Event::Caught(cause));
         Cue::Bad
     }
-    fn hear(&mut self, p: Pos, radius: u16) {
-        for g in &mut self.guards[..self.guard_count] {
+    /// Send guards within `radius` to investigate `p`. Footsteps report only
+    /// newly alerted guards; a thrown coin reports every guard it attracts.
+    fn hear(&mut self, p: Pos, radius: u16, report_all: bool) {
+        for i in 0..self.guard_count {
+            let g = &mut self.guards[i];
             if g.pos.distance(p) <= radius {
+                let fresh = g.search == 0;
                 g.search = 180;
                 g.target = p;
                 g.wait = g.wait.min(18);
+                if report_all || fresh {
+                    self.events.push(Event::Heard(i as u8));
+                }
             }
         }
+    }
+    /// Where C would throw now: the marked tile, or up to three clear tiles ahead.
+    pub(crate) fn throw_target(&self) -> Pos {
+        if let Some(p) = self.aim {
+            return p;
+        }
+        let mut p = self.player;
+        for _ in 0..3 {
+            if let Some(q) = p.shifted(self.facing.0, self.facing.1) {
+                if self.solid(q) {
+                    break;
+                }
+                p = q;
+            }
+        }
+        p
+    }
+    /// True when a coin may land on `target`: clear, visible and within five steps.
+    pub(crate) fn throwable(&self, target: Pos) -> bool {
+        target != self.player
+            && target.distance(self.player) <= 5
+            && !self.solid(target)
+            && self.los(self.player, target)
     }
     fn throw_coin(&mut self) -> Cue {
         if self.coins == 0 {
             self.note = "No coins remain. Shadows and timing are still free.";
+            self.events
+                .push(Event::Refused(self.player, Refusal::NoCoins));
             return Cue::None;
         }
-        let target = if let Some(p) = self.aim {
-            p
-        } else {
-            let mut p = self.player;
-            for _ in 0..3 {
-                if let Some(q) = p.shifted(self.facing.0, self.facing.1) {
-                    if self.solid(q) {
-                        break;
-                    }
-                    p = q;
-                }
-            }
-            p
-        };
-        if target == self.player
-            || target.distance(self.player) > 5
-            || self.solid(target)
-            || !self.los(self.player, target)
-        {
+        let target = self.throw_target();
+        if !self.throwable(target) {
             self.note = "Aim at a clear tile within five steps.";
+            self.events.push(Event::Refused(target, Refusal::BadAim));
             return Cue::None;
         }
         self.coins -= 1;
         self.noise = Some((target, 180));
-        self.hear(target, 6);
+        self.events.push(Event::Throw(target));
+        self.hear(target, 6, true);
         self.note = "A coin rings out. Nearby guards investigate its landing.";
         Cue::Action
     }
-    fn interact(&mut self) -> Cue {
-        if self.work.is_some() {
-            return Cue::None;
-        }
+    /// The current tile and its four neighbours, a faced door first.
+    fn candidates(&self) -> [Pos; 5] {
         let mut candidates = [self.player; 5];
         for (i, (dx, dy)) in [(0, -1), (1, 0), (0, 1), (-1, 0)].into_iter().enumerate() {
             candidates[i + 1] = self.player.shifted(dx, dy).unwrap_or(self.player);
         }
-        // A faced door takes priority, then current/adjacent objective tiles.
         if let Some(ahead) = self.player.shifted(self.facing.0, self.facing.1)
             && self.tile(ahead) == b'='
         {
             let i = candidates.iter().position(|p| *p == ahead).unwrap_or(0);
             candidates.swap(0, i);
         }
-        for target in candidates {
-            let kind = self.tile(target);
-            let total = match kind {
-                b'K' => 12,
-                b'=' if self.key => 30,
-                b'T' if !self.disabled => 90,
-                b'L' => 45,
-                b'$' => 30,
-                b'E' if self.stolen == self.needed => {
-                    self.finish_heist();
-                    return if self.phase == Phase::Escaped {
-                        Cue::Win
-                    } else {
-                        Cue::Good
-                    };
-                }
-                _ => continue,
-            };
-            self.work = Some(Work {
-                target,
-                remaining: total,
-                total,
-                kind,
-            });
-            self.note = match kind {
-                b'K' => "Taking the brass pass.",
-                b'=' => "Quietly opening the security door.",
-                b'T' => "Rewiring the console. Guards keep moving.",
-                b'L' => "Lifting a required record from its display.",
-                _ => "Packing an optional artwork.",
-            };
-            return Cue::Action;
-        }
-        self.note = if !self.key {
-            "Find the brass K pass before opening a security door."
-        } else {
-            "Stand beside a record, console or door. Return to E with all records."
-        };
-        Cue::None
+        candidates
     }
-    fn finish_heist(&mut self) {
+    /// The tile and object a Space press would act on now, if any. A faced
+    /// door takes priority, then the current tile and the adjacent tiles in
+    /// north, east, south, west order. Read-only; [`Self::interact`] uses it.
+    pub(crate) fn interaction(&self) -> Option<(Pos, u8)> {
+        self.candidates().into_iter().find_map(|target| {
+            let kind = self.tile(target);
+            let ready = match kind {
+                b'K' | b'L' | b'$' => true,
+                b'=' => self.key,
+                b'T' => !self.disabled,
+                b'E' => self.stolen == self.needed,
+                _ => false,
+            };
+            ready.then_some((target, kind))
+        })
+    }
+    fn interact(&mut self) -> Cue {
+        if self.work.is_some() {
+            return Cue::None;
+        }
+        let Some((target, kind)) = self.interaction() else {
+            let near = self.candidates();
+            let refusal = if let Some(door) = near.iter().find(|p| self.tile(**p) == b'=') {
+                (*door, Refusal::NeedPass)
+            } else if let Some(exit) = near.iter().find(|p| self.tile(**p) == b'E') {
+                (*exit, Refusal::NeedRecords)
+            } else {
+                (self.player, Refusal::Nothing)
+            };
+            self.events.push(Event::Refused(refusal.0, refusal.1));
+            self.note = if !self.key {
+                "Find the brass K pass before opening a security door."
+            } else {
+                "Stand beside a record, console or door. Return to E with all records."
+            };
+            return Cue::None;
+        };
+        let total = match kind {
+            b'K' => 12,
+            b'=' => 30,
+            b'T' => 90,
+            b'L' => 45,
+            b'$' => 30,
+            _ => {
+                self.finish_heist();
+                return if self.phase == Phase::Escaped {
+                    Cue::Win
+                } else {
+                    Cue::Good
+                };
+            }
+        };
+        self.work = Some(Work {
+            target,
+            remaining: total,
+            total,
+            kind,
+        });
+        self.events.push(Event::WorkStart(target, kind));
+        self.note = match kind {
+            b'K' => "Taking the brass pass.",
+            b'=' => "Quietly opening the security door.",
+            b'T' => "Rewiring the console. Guards keep moving.",
+            b'L' => "Lifting a required record from its display.",
+            _ => "Packing an optional artwork.",
+        };
+        Cue::Action
+    }
+    /// Medals an extraction would earn right now: three when clean with both
+    /// artworks, two when clean, otherwise one.
+    pub(crate) fn forecast_medals(&self) -> u8 {
         let clean = self.peak_alarm == 0;
-        let stars = if clean && self.extras == self.extra_total {
+        if clean && self.extras == self.extra_total {
             3
         } else if clean {
             2
         } else {
             1
-        };
+        }
+    }
+    /// Points an extraction would add right now.
+    pub(crate) fn extraction_points(&self) -> u32 {
+        1000 + u32::from(self.forecast_medals()) * 200 + self.seconds_left() * 3
+    }
+    fn finish_heist(&mut self) {
+        let stars = self.forecast_medals();
         self.medals[self.level] = stars;
         self.total_loot += self.stolen;
-        self.score += 1000 + u32::from(stars) * 200 + self.seconds_left() * 3;
+        self.score += self.extraction_points();
         self.phase = if self.level == 5 {
             Phase::Escaped
         } else {
             Phase::Debrief
         };
+        self.events.push(Event::Escape(stars));
         self.note = "The records are safe. The city remembers another stolen story.";
     }
     pub(crate) fn seconds_left(&self) -> u32 {
@@ -507,11 +691,13 @@ impl Game {
         if self.outcome() != Outcome::Playing {
             return Cue::None;
         }
+        self.events.clear();
         match self.phase {
             Phase::Briefing => {
                 if input.primary || input.click {
                     self.phase = Phase::Infiltrating;
                     self.note = "X crouches. Violet shadow corridors conceal a crouching thief.";
+                    self.events.push(Event::Start);
                     return Cue::Action;
                 }
                 return Cue::None;
@@ -520,6 +706,7 @@ impl Game {
                 if input.primary || input.click {
                     self.level += 1;
                     self.load();
+                    self.events.push(Event::Load);
                     return Cue::Action;
                 }
                 return Cue::None;
@@ -529,25 +716,37 @@ impl Game {
                     self.retries -= 1;
                     self.score = self.opening_score;
                     self.load();
+                    self.events.push(Event::Load);
                     return Cue::Action;
                 }
                 return Cue::None;
             }
             _ => {}
         }
+        // Sidebar buttons are pointer twins of X, C and Space.
+        let tap = |zone: Zone| input.click && zone.contains(input.pointer.x, input.pointer.y);
+        let crouch = input.secondary || tap(CROUCH_ZONE);
+        let throw = input.tertiary || tap(COIN_ZONE);
+        let work = input.primary || tap(WORK_ZONE);
+        let clean = self.peak_alarm == 0;
+        let was_seen = self.seen;
         self.elapsed += 1;
+        if self.elapsed.is_multiple_of(60) && (1..=10).contains(&self.seconds_left()) {
+            self.events.push(Event::Second(self.seconds_left()));
+        }
         self.move_wait = self.move_wait.saturating_sub(1);
         if let Some((p, t)) = self.noise {
             self.noise = if t > 1 { Some((p, t - 1)) } else { None };
         }
         let mut cue = Cue::None;
-        if input.secondary {
+        if crouch {
             self.crouched = !self.crouched;
             self.note = if self.crouched {
                 "Crouched: quiet steps and concealment in violet shadows."
             } else {
                 "Standing: faster steps, longer guard sight and nearby footstep noise."
             };
+            self.events.push(Event::Crouch(self.crouched));
             cue = Cue::Action;
         }
         if input.click
@@ -575,25 +774,28 @@ impl Game {
                 && !self.solid(p)
             {
                 self.player = p;
-                self.work = None;
+                if let Some(cancelled) = self.work.take() {
+                    self.events.push(Event::WorkCancel(cancelled.target));
+                }
                 self.move_wait = if self.crouched { 18 } else { 9 };
                 if !self.crouched {
-                    self.hear(p, 2);
+                    self.hear(p, 2, false);
                 }
                 if self.tile(p) == b'!' && !self.disabled {
                     self.alarm = (self.alarm + 450).min(1000);
                     self.note = "Security beam! The alarm rises sharply.";
+                    self.events.push(Event::Beam(p));
                     cue = Cue::Bad;
                 }
             }
         }
-        if input.tertiary {
+        if throw {
             let c = self.throw_coin();
             if c != Cue::None {
                 cue = c;
             }
         }
-        if input.primary {
+        if work {
             let c = self.interact();
             if c != Cue::None {
                 cue = c;
@@ -607,6 +809,7 @@ impl Game {
             if work.remaining == 0 {
                 self.tiles[work.target.index()] = b':';
                 self.work = None;
+                self.events.push(Event::WorkDone(work.target, work.kind));
                 match work.kind {
                     b'K' => {
                         self.key = true;
@@ -641,12 +844,15 @@ impl Game {
             .iter()
             .any(|g| g.pos == self.player)
         {
-            return self.fail("A guard caught you. Use a recovery favor to retry this heist.");
+            return self.fail(Cause::Guard);
         }
         self.seen = false;
         for i in 0..self.guard_count {
             if self.cone(self.guards[i], self.player, self.crouched) {
                 self.seen = true;
+                if !was_seen || self.guards[i].search == 0 {
+                    self.events.push(Event::Spotted(i as u8));
+                }
                 self.guards[i].search = 180;
                 self.guards[i].target = self.player;
             }
@@ -661,11 +867,14 @@ impl Game {
             }
         }
         self.peak_alarm = self.peak_alarm.max(self.alarm);
+        if clean && self.peak_alarm > 0 {
+            self.events.push(Event::MedalLost);
+        }
         if self.alarm >= 1000 {
-            return self.fail("The alarm reached lockdown. This heist must be retried.");
+            return self.fail(Cause::Alarm);
         }
         if self.elapsed >= self.content().seconds * 60 {
-            return self.fail("The midnight shutters closed. Time ran out.");
+            return self.fail(Cause::Time);
         }
         cue
     }
@@ -781,25 +990,31 @@ impl Game {
             ..Input::default()
         }
     }
-    /// Ending and debrief text, consumed by the shared paginated results screen.
+    /// One-sentence career result, published for status and screen readers.
     pub fn summary(&self) -> String {
-        if self.phase == Phase::Escaped {
-            format!(
-                "The midnight broadcast returns the city's history to its people. {} records extracted across six heists. {} medals, {} points and {} recovery favors left.",
+        let medals = self.medals.iter().sum::<u8>();
+        match self.phase {
+            Phase::Escaped => format!(
+                "All six heists cleared with {} records, {medals} of 18 medals and {} points.",
+                self.total_loot, self.score
+            ),
+            Phase::Caught => format!(
+                "Caught on heist {} of 6 with {} records safe, {medals} medals and {} points.",
+                self.heist(),
                 self.total_loot,
-                self.medals.iter().sum::<u8>(),
-                self.score,
-                self.retries
-            )
-        } else {
-            format!(
-                "{} of six heists cleared. {} records safe. {} points. {}",
-                self.level + usize::from(self.phase == Phase::Debrief),
+                self.score
+            ),
+            _ => format!(
+                "{} of 6 heists cleared with {} records, {medals} medals and {} points.",
+                self.cleared(),
                 self.total_loot,
-                self.score,
-                self.note
-            )
+                self.score
+            ),
         }
+    }
+    /// Heists extracted so far.
+    pub(crate) fn cleared(&self) -> usize {
+        self.level + usize::from(matches!(self.phase, Phase::Debrief | Phase::Escaped))
     }
 }
 
@@ -1284,5 +1499,143 @@ mod tests {
             });
         }
         assert_eq!((g.coins, g.score, g.stolen), (3, 0, 0));
+    }
+    fn tap(zone: Zone) -> Input {
+        Input {
+            click: true,
+            pointer: ferravex_arcade::vec2(zone.x + zone.w * 0.5, zone.y + zone.h * 0.5),
+            ..Input::default()
+        }
+    }
+    #[test]
+    fn sidebar_buttons_mirror_crouch_coin_and_work_keys() {
+        let mut keys = arena();
+        sentry(&mut keys, Pos::new(6, 2), (0, -1));
+        keys.facing = (1, 0);
+        keys.tiles[Pos::new(2, 3).index()] = b'L';
+        let mut taps = keys.clone();
+        let pairs = [
+            (
+                Input {
+                    secondary: true,
+                    ..Input::default()
+                },
+                tap(CROUCH_ZONE),
+            ),
+            (
+                Input {
+                    tertiary: true,
+                    ..Input::default()
+                },
+                tap(COIN_ZONE),
+            ),
+            (primary(), tap(WORK_ZONE)),
+        ];
+        for (key, click) in pairs {
+            assert_eq!(keys.step(&key), taps.step(&click));
+            assert_eq!(keys, taps);
+        }
+        assert!(taps.crouched);
+        assert_eq!(taps.coins, 2);
+        assert_eq!(taps.guards[0].target, Pos::new(5, 2));
+        assert_eq!(taps.work.map(|w| w.target), Some(Pos::new(2, 3)));
+        // Clicks elsewhere only mark coin targets; they never act.
+        let mut idle = arena();
+        let before = idle.clone();
+        for pointer in [(670., 240.), (940., 440.), (660., 300.)] {
+            idle.step(&Input {
+                click: true,
+                pointer: ferravex_arcade::vec2(pointer.0, pointer.1),
+                ..Input::default()
+            });
+        }
+        assert_eq!(
+            (idle.crouched, idle.coins, idle.work),
+            (before.crouched, before.coins, None)
+        );
+    }
+    #[test]
+    fn interaction_preview_is_exactly_what_space_accepts() {
+        // A faced door outranks an object underfoot once the pass is held.
+        let mut g = arena();
+        g.facing = (1, 0);
+        g.tiles[Pos::new(3, 2).index()] = b'=';
+        g.tiles[g.player.index()] = b'L';
+        assert_eq!(g.interaction(), Some((g.player, b'L')));
+        g.key = true;
+        assert_eq!(g.interaction(), Some((Pos::new(3, 2), b'=')));
+        // A rewired console and a premature exit offer nothing.
+        let mut idle = arena();
+        idle.tiles[Pos::new(2, 3).index()] = b'T';
+        idle.tiles[Pos::new(1, 2).index()] = b'E';
+        idle.needed = 1;
+        assert_eq!(idle.interaction(), None);
+        assert_eq!(idle.step(&primary()), Cue::None);
+        assert_eq!(
+            idle.events.as_slice(),
+            &[Event::Refused(Pos::new(1, 2), Refusal::NeedRecords)]
+        );
+        // Over a whole legal career, every accepted press matches the preview.
+        let mut g = Game::new();
+        let mut checked = 0;
+        for t in 0..120_000 {
+            let input = g.pilot(t);
+            let live = g.phase == Phase::Infiltrating && g.work.is_none() && input.primary;
+            let preview = g.interaction();
+            let heist = g.level;
+            g.step(&input);
+            if live {
+                checked += 1;
+                match preview {
+                    Some((_, b'E')) => assert!(g.level > heist || g.phase != Phase::Infiltrating),
+                    Some((target, kind)) => {
+                        assert!(
+                            g.work.is_some_and(|w| w.target == target && w.kind == kind)
+                                || g.events.as_slice().contains(&Event::WorkDone(target, kind))
+                        )
+                    }
+                    None => assert!(g.work.is_none()),
+                }
+            }
+            if g.outcome() != Outcome::Playing {
+                break;
+            }
+        }
+        assert_eq!(g.outcome(), Outcome::Won);
+        assert!(checked > 30, "{checked}");
+    }
+    #[test]
+    fn events_record_one_tick_of_accepted_play() {
+        let mut g = arena();
+        sentry(&mut g, Pos::new(5, 2), (-1, 0));
+        g.step(&Input::default());
+        assert!(g.seen);
+        assert_eq!(g.events.as_slice(), &[Event::Spotted(0), Event::MedalLost]);
+        // Still watched: no repeated alert, and the list is cleared each tick.
+        g.step(&Input::default());
+        assert!(g.events.as_slice().is_empty());
+        // A beam crossing and the first alarm are both reported.
+        let mut beam = arena();
+        beam.disabled = false;
+        beam.tiles[Pos::new(3, 2).index()] = b'!';
+        beam.step(&Input {
+            right: true,
+            ..Input::default()
+        });
+        assert_eq!(
+            beam.events.as_slice(),
+            &[Event::Beam(Pos::new(3, 2)), Event::MedalLost]
+        );
+        // Capture names its cause.
+        let mut late = arena();
+        late.elapsed = late.content().seconds * 60 - 1;
+        assert_eq!(late.step(&Input::default()), Cue::Bad);
+        assert_eq!(late.cause, Cause::Time);
+        assert_eq!(late.events.as_slice(), &[Event::Caught(Cause::Time)]);
+        // A fresh career and its inert briefing carry no events.
+        let mut fresh = Game::new();
+        assert!(fresh.events.as_slice().is_empty());
+        fresh.step(&Input::default());
+        assert!(fresh.events.as_slice().is_empty());
     }
 }

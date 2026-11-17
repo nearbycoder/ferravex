@@ -2,7 +2,17 @@
 
 A complete, finite exploration and fabrication expedition. You command **The Little Light**, a survey cutter escorting a colony ark away from a dying star. Recover three ancient relics, manufacture their gate mechanisms, return to Loom Dock and open the gate before watch 52. Zero hull ends the expedition. Restart immediately with R.
 
-The game uses Ferravex's shared arcade host for its title screen, paginated field manual, pause/restart, accepted-event audio, terminal screen and local best-score storage. Simulation is separate from drawing and runs through fixed 60 Hz inputs. Planning is untimed: watches advance only when expedition work is accepted. Lane travel animates for 120 ticks without accepting another command.
+The game uses Ferravex's shared arcade host for its title screen, field manual, pause/restart, accepted-event audio, terminal screen and local best-score storage. Simulation is separate from drawing and runs through fixed 60 Hz inputs. Planning is untimed: watches advance only when expedition work is accepted. Lane travel animates for 120 ticks without accepting another command.
+
+## Reading the screen
+
+Starweaver follows the catalog's [visual language](../../docs/VISUAL_LANGUAGE.md): icons and numbers instead of labels, previews instead of instructions, and effects where things happen.
+
+- **Header.** Four pips count the gate parts (the fourth is opening the gate) beside the current sector's name. Below, a small gate ring lights one arc per built part, three relic badges glow gold when recovered and gain a check once forged, and an arrow points at the next step: a pin and a sector, a hammer and a part, home, or the gate. On the right, a dial counts the watches left (calm, then gold, then red) beside hull, fuel, credits, alloy (gear), crystal (gem), circuits (bolt) and the hold.
+- **Tabs.** Key caps 1–5 with a map, magnifier, hammer, rocket and flag. A dot on a tab means something worth doing waits there: a useful survey or a claimable landmark, a forgeable gate part, low hull or no fuel, or a gate ready to open.
+- **Chart.** The dying star in the corner swells, reddens and beats faster as watches pass. Current sector: cyan ring and the ship. Selection: turning gold arcs and a marching route along the lanes. Surveyed sectors show a radar sweep; each landmark has a badge (a check once claimed); a red triangle marks unvisited first-entry damage; gold sonar rings mark the current goal. Hovering a star previews the route and its total fuel, watches and first-entry hull.
+- **Panels.** Every action row shows its consequence as icons: deposit pips and the haul (`+2`), costs with an arrow to gains, red for what you lack, a lock until surveyed. The confirm button names the action and shows its cost, or why it is refused, in a dark well. Focusing a work row ghosts the haul into the hold slots; the Forge pulses the gate arc or ship bay a recipe fills; the Mission panel previews the escape bonus for crossing on the next watch.
+- **Feedback.** Mining bursts in the ore's color, surveys ring out, relics and rescues earn a callout, damage shakes and pops a heart at the star, forging sparkles on the gate, and costs rise from the header stats. A refused command shakes, rings red on the thing that refused and pops its reason (`crate Full`, `lock Survey`, `fuel Need 2`). Nothing narrates in sentences.
 
 ## Content
 
@@ -30,7 +40,7 @@ Deposits below are the original alloy / crystal / circuit quantities. Mining and
 | Silent Crown | 5 / 5 / 5 | 14 / 2 | Sentinel core encounter |
 | Far Beacon | 1 / 3 / 2 | 0 / 0 | Rescue 9 engineers: +10 hull, +25 credits |
 
-The chart labels every sector, highlights connected lanes, distinguishes current and selected stars, shows station services, lists hazard costs and displays remaining stocks after a survey. The original stock is visible before surveying to support route planning.
+The chart names every sector and marks lanes, hazards, landmarks, surveys and the goal; the Chart panel shows the selected sector's landmark and rewards, deposit stocks as pips, shielded hazard costs, station services and the route there with its total cost. Stocks are visible before surveying to support route planning.
 
 ## Controls
 
@@ -39,7 +49,7 @@ The chart labels every sector, highlights connected lanes, distinguishes current
 | 1–5 / click a tab | Chart / Survey / Forge / Ship / Mission |
 | Arrows or WASD | Select a star, action row or encounter approach |
 | Space or Enter | Accept the selected action |
-| Click a star, then the jump button | Select and travel along a connected lane |
+| Click a star, then click it again (or the jump button) | Select it, previewing the route; then travel along a connected lane |
 | Click an action row or bottom button | Accept that action |
 | X or E on a Survey resource row | Discard one unit of that cargo; no reward or watch cost |
 | X or E on Ship | Cycle the resource to sell |
@@ -48,7 +58,7 @@ The chart labels every sector, highlights connected lanes, distinguishes current
 | R | Restart the entire expedition with fresh stores |
 | M | Shared sound toggle |
 
-During transit, arrival progresses automatically and other gameplay commands are ignored. In an encounter, arrows/Space or clicking an approach resolves the choice. Mission information is read-only except for the explicit gate-opening action.
+During transit, arrival progresses automatically and other gameplay commands are ignored. In an encounter, arrows/Space or clicking an approach resolves the choice; each approach shows its costs and rewards, and unaffordable ones are dimmed with the missing store in red. Mission information is read-only except for the explicit gate-opening action. Hover highlights use the same hit regions as clicks.
 
 ## Rules and fabrication
 
@@ -65,7 +75,7 @@ Every accepted jump, survey, extraction, completed discovery, build or ordinary 
 | Cargo Cradle | 3 | 0 | 1 | Increase hold capacity from 12 to 18 |
 | Deep Scanner | 1 | 2 | 0 | Extract up to three units per action |
 
-Each recipe can be built once. Costs are checked before any ingredient is consumed. Gate components need their named relic; upgrades do not. The Forge panel explains the selected recipe and shows exact costs.
+Each recipe can be built once. Costs are checked before any ingredient is consumed. Gate components need their named relic; upgrades do not. The Forge panel shows each cost against the hold, the required relic and the effect.
 
 The Choir permits a powered probe for **1 fuel**, a dive risking **18 hull** and recovering one bonus crystal if space permits, or a free withdrawal. The Sentinel permits a **2-circuit override**, a **30-credit toll**, or forced entry risking **34 hull**. Privateers offer **3 circuits for 1 alloy** (requiring two free hold spaces), an escape costing **2 fuel**, or a fight risking **22 hull** and awarding **40 credits**. Each completed landmark resolves only once.
 
@@ -97,11 +107,11 @@ cargo run -p starweaver --offline --locked -j 2
 cargo run -p starweaver --offline --locked -j 2 -- --headless
 cargo test -p starweaver --offline --locked -j 2
 cargo clippy -p starweaver --all-targets --offline --locked -j 2 -- -D warnings
-rustfmt --edition 2024 --check examples/starweaver/src/content.rs examples/starweaver/src/model.rs examples/starweaver/src/view.rs examples/starweaver/src/lib.rs examples/starweaver/src/main.rs
+rustfmt --edition 2024 --check examples/starweaver/src/*.rs
 ```
 
 The headless pilot emits only ordinary player inputs into the same rules. It finishes at **tick 2424, watch 37, 64 hull, 4817 points**, with all three mechanisms, all three relics, all nine engineers rescued and at least eight sectors visited. It surveys five sectors; its successful route does not claim to demonstrate every optional choice or upgrade.
 
-Validation completed: **15 behavioral tests plus one executed public-API doctest**, strict scoped Clippy, owned-file formatting and the complete headless expedition. Regressions cover recipes and duplicate builds, finite stocks, capacity, upgrades, invalid routes, encounter affordability, loss/restart, deadline/idle behavior, transit input handling, service costs, trading, tow limits, mouse regions, terminal immutability and reproducibility. The complete-win test begins at `Game::new()` and never injects state.
+Validation completed: **24 behavioral tests plus one executed public-API doctest**, strict scoped Clippy, owned-file formatting and the complete headless expedition. Regressions cover recipes and duplicate builds, finite stocks, capacity, upgrades, invalid routes, encounter affordability, loss/restart, deadline/idle behavior, transit input handling, service costs, trading, tow limits, mouse regions, the click-again jump, terminal immutability and reproducibility. Presentation tests cover header progress, short objectives, per-tick events, effects for surveys, extraction, relics, refusals and damage, lane routes, and that every action preview agrees with what the rules accept across the whole bot expedition. The complete-win test begins at `Game::new()` and never injects state.
 
 The parent also inspected a native autoplay capture at frame 1100 and reported a readable chart, sidebar and transit/resource display with no overflow. For further parent-owned captures, `--autoplay --smoke-frames 1100 --screenshot PATH` gives a mid-expedition chart; 2500 reaches the completed ending. Headless validation is not a comprehensive manual playtest. Browser/Wasm packaging, audio behavior, persistence, controller/remapping integration and the remaining panel/branch screenshots are owned by the parent integration; this game has no standalone network or unfinished-campaign save claim.

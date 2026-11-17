@@ -9,6 +9,7 @@ use crate::{
 };
 mod draw;
 mod hud;
+mod marks;
 mod scenery;
 use draw::terrain_mesh;
 use ferravex_core::session::GameSession;
@@ -215,10 +216,10 @@ fn chip_width(w: f32) -> f32 {
 fn banner_text_rect(w: f32, y: f32, size: f32) -> UiRect {
     rect(CORNER.x, y, w - 2. * CORNER.x, size)
 }
-/// Results card height: the stats grid only appears on tall screens.
+/// Results card height: the stats tiles only appear on tall screens.
 fn final_card_height(h: f32, assists: bool) -> f32 {
     let grid = if h >= 520. {
-        4. * 18. + 12. + if assists { 18. } else { 0. }
+        2. * 26. + 16. + if assists { 20. } else { 0. }
     } else {
         0.
     };
@@ -296,8 +297,16 @@ pub struct App {
     theme: KitTheme,
     buttons: [ButtonMotion; hud::SLOTS],
     scribe: hud::Scribe,
+    /// Second formatting buffer for lines that show two numbers at once.
+    scribe2: hud::Scribe,
     roll: RollCounter,
     shadow_mesh: Mesh3d,
+    /// Par of every hole, so per-frame pips never rebuild course geometry.
+    pars: [u8; 12],
+    /// Power of this hole's previous accepted putt, ticked on the meter.
+    last_power: Option<f32>,
+    /// HUD numbers that just changed (presentation only).
+    bumps: hud::Bumps,
 }
 impl App {
     pub fn new(view: View, autoplay: bool) -> Self {
@@ -469,6 +478,7 @@ impl App {
             theme: hud::golf_theme(),
             buttons: std::array::from_fn(|_| ButtonMotion::default()),
             scribe: hud::Scribe::default(),
+            scribe2: hud::Scribe::default(),
             roll: RollCounter::new(0),
             shadow_mesh: Mesh3d::cylinder(
                 RADIUS * 1.5,
@@ -476,6 +486,9 @@ impl App {
                 Color::new(0.02, 0.06, 0.04, 0.3),
                 20,
             ),
+            pars: std::array::from_fn(|i| course::hole(i).par),
+            last_power: None,
+            bumps: hud::Bumps::default(),
         };
         if app.capture.hole.is_some() {
             app.aim = (app.round.course.cup - app.round.ball).normalize_or_zero();
@@ -505,6 +518,7 @@ impl App {
         self.juice.new_hole();
         self.intro = 0.;
         self.sheet = 0.;
+        self.last_power = None;
     }
     /// Platform focus and Controls state; debug captures may pin focus.
     fn gameplay_focus(&self) -> bool {
@@ -544,6 +558,7 @@ impl App {
                     self.pause_seed = self.pause_seed.wrapping_add(1);
                 }
                 crate::capture::Action::Card => self.menu = Menu::Score,
+                crate::capture::Action::Practice => self.menu = Menu::Practice,
             }
         }
         let w = screen_width();
@@ -585,6 +600,8 @@ impl App {
         }
         self.roll.set_target(i64::from(self.round.total()));
         self.roll.advance(self.frame_dt, self.motion());
+        self.bumps
+            .track(self.round.strokes, self.round_to_par(), self.frame_dt);
         self.screen(false, w, h, scene);
         let controls_open = self.input.controls_open();
         self.ui.set_auto_focus(modal || sheet);
@@ -843,6 +860,7 @@ impl App {
                         .cue(Cue::Impact(SoundSurface::Wood), 0.35 + 0.4 * self.power);
                     self.juice.putt(self.round.ball, self.aim, self.power);
                     self.putts = self.putts.saturating_add(1);
+                    self.last_power = Some(self.power);
                 }
                 self.pending_shot = false;
             }

@@ -1,19 +1,21 @@
 use crate::{
     courses::{COURSES, Course},
-    juice::{self, GREEN, VIOLET},
-    look::{self, GOLD, INK, MUTED, TEAL, line},
-    quips::{self, Rank},
+    juice::{self, CORAL, GREEN, VIOLET},
+    look::{self, GOLD, Glyph, INK, Item, Line, MUTED, TEAL, glyph, line},
+    quips::{self, NextGoal, Rank},
     sim::Run,
+    timing::Comparison,
 };
 use ferravex_engine::play::tween::{Appearance, Entrance, Motion, RollCounter};
 use ferravex_render::{
+    icons::{self, Icon},
     input::PlayerInput,
     prelude::*,
     shapes::{self, Fill, Shadow},
     text::text_width,
     ui::{
         Ui, UiRect, Viewport,
-        kit::{self, ButtonKind, ButtonMotion},
+        kit::{self, ButtonKind, ButtonMotion, KitTheme},
     },
 };
 
@@ -80,7 +82,7 @@ pub(crate) struct Results {
     pub bonks: u32,
     pub secret: bool,
     pub rank: Rank,
-    pub next: String,
+    pub next: NextGoal,
 }
 
 impl Results {
@@ -143,6 +145,29 @@ pub(crate) fn recover_rect(w: f32) -> UiRect {
 /// Input stays in `Ui` (focus, pointer capture, gamepad); the kit paints.
 fn hit(ui: &mut Ui, id: u64, r: UiRect) {
     ui.button(id, r, "", true, kit::INVISIBLE_BUTTON).unwrap();
+}
+
+/// Each course's signature hazard as a pictogram: water lanes, wind-swept
+/// rails, clockwork sweepers and ice.
+pub(crate) fn hazard(index: usize) -> Icon {
+    [Icon::Wave, Icon::Wind, Icon::Gear, Icon::Snowflake][index % 4]
+}
+
+/// Difficulty as 1-3 bolts, from the authored challenge's first word.
+pub(crate) fn difficulty(course: &Course) -> usize {
+    match course.challenge.split(" / ").next() {
+        Some("Warm-up") => 1,
+        Some("Hard") => 2,
+        _ => 3,
+    }
+}
+
+fn medal_of(score: u64) -> &'static str {
+    match score {
+        3 => "GOLD",
+        2 => "SILVER",
+        _ => "BRONZE",
+    }
 }
 
 /// Per-course accent: sandstone, verdigris, rust and ice.
@@ -291,39 +316,56 @@ pub fn draw(
         player,
     );
     if recover {
-        kit::button(
-            screen(recover_rect(w)),
-            "Recover",
-            ButtonKind::Secondary,
-            &recover_button,
-            &look::theme(),
+        // Back to the flag: an icon button for touch players.
+        let r = screen(recover_rect(w));
+        let theme = look::theme();
+        kit::button(r, "", ButtonKind::Secondary, &recover_button, &theme);
+        look::draw_row_centered(
+            &[
+                Item::Icon(Glyph::Icon(glyph::RECOVER), INK),
+                Item::Icon(Glyph::Icon(glyph::CHECKPOINT), TEAL),
+            ],
+            r.x + r.w * 0.5,
+            r.y + r.h * 0.5 + 2. * recover_button.press(),
+            18.,
+            &theme,
         );
     }
     ui.paint();
     if picker {
         let entrance = Entrance::fade_up(14.).with_stagger(0.05);
         let look_in = entrance.sample(menu.opened, 0, motion);
+        // Earned medals per course (current course content for the current one).
+        let medals: [Option<&'static str>; 4] = std::array::from_fn(|i| {
+            let c = &COURSES[i];
+            records
+                .book
+                .get(c.id, if i == course { context } else { c.context() })
+                .filter(|r| r.fastest_us.is_some())
+                .map(|r| medal_of(r.score))
+        });
         if front {
-            title(w, y, menu, motion);
+            title(w, y, menu, motion, medals);
         }
         let panel = kit::appear(Rect::new(x, y, pw, ph), look_in);
         let theme = look::theme().faded(look_in.alpha);
         kit::panel(panel, &theme);
-        let t = look::fit(
-            "Choose your course",
-            pw - 24.,
-            look::centered(look::body(24., look::fade(INK, look_in.alpha))),
-        );
-        look::draw(
-            if resumable {
-                "Courses · run paused"
-            } else {
-                "Choose your course"
-            },
-            panel.x + panel.w * 0.5,
-            t.centered_baseline(panel.y + 19.),
-            t,
-        );
+        // A map headline; a paused run adds the pause mark.
+        let head = look::body(24., INK);
+        let header: &[Item] = if resumable {
+            &[
+                Item::Icon(Glyph::Icon(glyph::COURSES), GOLD),
+                Item::Text("Courses", head),
+                Item::Space(8.),
+                Item::Small(Glyph::Icon(glyph::PAUSED), MUTED, 16.),
+            ]
+        } else {
+            &[
+                Item::Icon(Glyph::Icon(glyph::COURSES), GOLD),
+                Item::Text("Courses", head),
+            ]
+        };
+        look::draw_row_centered(header, panel.x + panel.w * 0.5, panel.y + 19., 22., &theme);
         for (i, c) in COURSES.iter().enumerate() {
             let record = records
                 .book
@@ -338,24 +380,28 @@ pub fn draw(
                 record.map(|r| (r.score, r.fastest_us)),
                 (i == course, i == course && resumable),
                 &card_buttons[i],
-                entrance.sample(menu.opened, i + 1, motion).alpha,
+                (
+                    entrance.sample(menu.opened, i + 1, motion).alpha,
+                    menu.time,
+                    motion,
+                ),
             );
         }
         if front && h - (y + ph) >= 52. {
             let theme = look::theme().faded(entrance.sample(menu.opened, 6, motion).alpha);
-            let keys = ["Enter"];
-            let label = "Roll out";
-            let width = look::prompt_width(&keys, label, &theme);
             let pulse = if motion.is_reduced() {
                 1.
             } else {
                 0.75 + 0.25 * (menu.time * 3.).sin()
             };
-            kit::key_prompt(
-                (w - width) * 0.5,
-                y + ph + 16.,
-                &keys,
-                label,
+            look::draw_row_centered(
+                &[
+                    Item::Key("Enter"),
+                    Item::Icon(Glyph::Icon(glyph::RESUME), GOLD),
+                ],
+                w * 0.5,
+                y + ph + 28.,
+                22.,
                 &theme.faded(pulse),
             );
         }
@@ -394,7 +440,7 @@ pub fn draw(
 }
 
 /// The front door: an idling logo with a rolling marble above the picker.
-fn title(w: f32, panel_y: f32, menu: &Menu, motion: Motion) {
+fn title(w: f32, panel_y: f32, menu: &Menu, motion: Motion, medals: [Option<&'static str>; 4]) {
     if panel_y < 104. {
         return;
     }
@@ -427,37 +473,26 @@ fn title(w: f32, panel_y: f32, menu: &Menu, motion: Motion) {
         menu.time * 2.4
     };
     shapes::glow_disc(c, r * 2.4, look::fade(GOLD, 0.28 * look_in.alpha));
-    shapes::fill_circle(
-        c,
-        r,
-        Fill::radial(
-            c - vec2(r * 0.35, r * 0.35),
-            r * 1.4,
-            look::fade(Color::new(1., 0.98, 0.92, 1.), look_in.alpha),
-            look::fade(Color::new(0.78, 0.72, 0.6, 1.), look_in.alpha),
-        ),
-    );
-    let band = vec2(spin.cos(), spin.sin()) * r * 0.82;
-    shapes::fill_capsule(
-        c - band,
-        c + band,
-        r * 0.22,
-        look::fade(GOLD, look_in.alpha),
-    );
-    shapes::stroke_circle(
-        c,
-        r,
-        1.5,
-        look::fade(Color::new(0.05, 0.1, 0.11, 0.8), look_in.alpha),
-    );
-    let sub = look::centered(look::body(16., look::fade(MUTED, look_in.alpha)));
-    if panel_y - (cy + size * 0.5) > 26. {
-        look::draw(
-            "Four sky courses. One more try.",
-            w * 0.5,
-            sub.centered_baseline(cy + size * 0.5 + 16.),
-            sub,
-        );
+    look::marble(c, r, spin, look_in.alpha);
+    // The medal shelf: one trophy per course, lit in the medal earned.
+    if panel_y - (cy + size * 0.5) > 30. {
+        let y = cy + size * 0.5 + 18.;
+        for (i, medal) in medals.iter().enumerate() {
+            let x = w * 0.5 + (i as f32 - 1.5) * 30.;
+            let color = match medal {
+                Some(medal) => juice::medal_color(medal),
+                None => look::fade(MUTED, 0.35),
+            };
+            if medal.is_some() {
+                shapes::glow_disc(vec2(x, y), 16., look::fade(color, 0.3 * look_in.alpha));
+            }
+            look::icon(
+                glyph::MEDAL,
+                vec2(x, y),
+                20.,
+                look::fade(color, look_in.alpha),
+            );
+        }
     }
 }
 
@@ -513,7 +548,7 @@ fn course_card(
     record: Option<(u64, Option<u64>)>,
     (selected, resume): (bool, bool),
     m: &ButtonMotion,
-    alpha: f32,
+    (alpha, time, motion): (f32, f32, Motion),
 ) {
     if alpha <= 0. {
         return;
@@ -587,62 +622,99 @@ fn course_card(
         r.y + r.h * 0.5
     };
     look::draw(c.name, cx, name.centered_baseline(mid), name);
+    let ink = shapes::mix(tint, INK, 0.55);
+    let bolts = difficulty(c);
+    let theme = look::theme().faded(alpha);
     if tall {
-        let difficulty = c.challenge.split(" / ").next().unwrap_or("");
-        let s = look::body(16., look::fade(shapes::mix(tint, INK, 0.55), alpha));
-        look::draw(difficulty, r.x + 12., s.centered_baseline(r.y + 18.), s);
+        // Difficulty as bolts at the top left; the course's hazard (or a
+        // pulsing resume mark for the paused run) at the top right.
+        for i in 0..3 {
+            let lit = i < bolts;
+            look::icon(
+                glyph::DIFFICULTY,
+                vec2(r.x + 18. + i as f32 * 15., r.y + 18.),
+                14.,
+                look::fade(
+                    if lit { GOLD } else { ink },
+                    alpha * if lit { 1. } else { 0.4 },
+                ),
+            );
+        }
         if resume {
-            let label = "Resume ▶";
-            let rs = look::body(16., look::fade(GOLD, alpha));
-            let lw = text_width(label, rs);
-            look::draw(
-                label,
-                r.x + r.w - 12. - lw,
-                rs.centered_baseline(r.y + 18.),
-                rs,
+            let pulse = if motion.is_reduced() {
+                1.
+            } else {
+                1. + 0.08 * (time * 4.).sin()
+            };
+            icons::badge(
+                glyph::RESUME,
+                vec2(r.x + r.w - 22., r.y + 20.),
+                26. * pulse,
+                look::fade(GOLD, alpha),
+                look::fade(Color::new(0.16, 0.10, 0.03, 1.), alpha),
+            );
+        } else {
+            look::icon(
+                hazard(index),
+                vec2(r.x + r.w - 22., r.y + 19.),
+                20.,
+                look::fade(ink, alpha),
             );
         }
     }
     if r.h >= 60. {
-        let (label, dot) = match record {
-            Some((score, Some(us))) => {
-                let medal = match score {
-                    3 => "GOLD",
-                    2 => "SILVER",
-                    _ => "BRONZE",
-                };
-                (
-                    line!(
-                        "{} · best {}",
-                        medal_name(medal),
-                        crate::hud::stopwatch_line(us as f32 / 1e6)
-                    ),
-                    Some(juice::medal_color(medal)),
-                )
-            }
-            _ if tall => (line!("Gold target {:.0}s", c.gold_seconds), None),
-            _ => (
-                line!(
-                    "{} · gold {:.0}s",
-                    c.challenge.split(" / ").next().unwrap_or(""),
-                    c.gold_seconds
-                ),
-                None,
+        // The earned medal and best time, or the gold target to chase.
+        let (time, medal_color, earned) = match record {
+            Some((score, Some(us))) => (
+                crate::hud::stopwatch_line(us as f32 / 1e6),
+                juice::medal_color(medal_of(score)),
+                true,
             ),
+            _ => (crate::hud::target_time(c.gold_seconds), GOLD, false),
         };
-        let s = look::fit(
-            label.as_str(),
-            r.w - 36.,
-            look::body(16., look::fade(INK, alpha * 0.92)),
+        let text = look::body(16., look::fade(INK, 0.92));
+        let trophy = Item::Icon(
+            Glyph::Icon(glyph::MEDAL),
+            if earned {
+                medal_color
+            } else {
+                look::fade(GOLD, 0.6)
+            },
         );
-        let lw = text_width(label.as_str(), s) + if dot.is_some() { 14. } else { 0. };
-        let y = r.y + r.h - 16.;
-        let mut x = cx - lw * 0.5;
-        if let Some(dot) = dot {
-            shapes::fill_circle(vec2(x + 4., y), 4.5, look::fade(dot, alpha));
-            x += 14.;
+        let bolt = |lit: bool| {
+            Item::Small(
+                Glyph::Icon(glyph::DIFFICULTY),
+                if lit { GOLD } else { look::fade(ink, 0.4) },
+                13.,
+            )
+        };
+        let full = [
+            bolt(bolts > 0),
+            bolt(bolts > 1),
+            bolt(bolts > 2),
+            Item::Space(12.),
+            trophy,
+            Item::Text(time.as_str(), text),
+        ];
+        // Short cards carry the difficulty down here with the medal.
+        let items = if tall { &full[4..] } else { &full[..] };
+        let size = 18.;
+        let items = if look::row_width(items, size, &theme) <= r.w - 16. {
+            items
+        } else {
+            &full[4..]
+        };
+        if earned {
+            shapes::glow_disc(
+                vec2(
+                    cx - look::row_width(items, size, &theme) * 0.5 + 9.,
+                    r.y + r.h - 16.,
+                ),
+                16.,
+                look::fade(medal_color, 0.3 * alpha),
+            );
         }
-        look::draw(label.as_str(), x, s.centered_baseline(y), s);
+        look::draw_row_centered(items, cx, r.y + r.h - 16., size, &theme);
     }
 }
 
@@ -666,26 +738,13 @@ fn finish_card(
     let ribbon = Rect::new(panel.x, panel.y, panel.w, 4.);
     shapes::fill_rounded_rect(ribbon, 2., look::fade(medal_color, panel_look.alpha));
     let buttons_top = next_rect.y;
-    let (comparison, best) = if records.error().is_some() {
-        (line!("Session record · save unavailable"), false)
-    } else {
-        crate::hud::pretty_finish(&records.finish_label())
-    };
-    let mut stats = line!("All {} crystals · falls {}", r.gems, r.falls);
-    if r.bonks > 0 {
-        let _ = std::fmt::Write::write_fmt(&mut stats, format_args!(" · bonks {}", r.bonks));
-    }
-    if r.secret {
-        let _ = std::fmt::Write::write_str(&mut stats, " · moonstone ♦");
-    }
-    let header = line!("{} complete", c.name);
     // (priority, height); lower priority numbers survive first.
     const ROWS: [(u8, f32); 7] = [
         (6, 22.),
-        (0, 48.),
+        (0, 44.),
         (1, 24.),
         (4, 22.),
-        (2, 30.),
+        (2, 28.),
         (5, 22.),
         (3, 22.),
     ];
@@ -703,6 +762,7 @@ fn finish_card(
     let cx = panel.x + panel.w * 0.5;
     let mut cursor = y + 12. + ((available - used) * 0.5).clamp(0., 12.);
     let mut shown = 0;
+    let body = |color: Color| look::body(16., color);
     for (i, row) in ROWS.iter().enumerate() {
         if !keep[i] {
             continue;
@@ -712,67 +772,82 @@ fn finish_card(
         let a = look_in.alpha * panel_look.alpha;
         let mid = cursor + row.1 * 0.5 + look_in.offset[1];
         let width = pw - 32.;
+        let row_theme = look::theme().faded(a);
+        let fit_row = |items: &[Item]| {
+            if look::row_width(items, 18., &row_theme) <= width {
+                look::draw_row_centered(items, cx, mid, 18., &row_theme);
+            }
+        };
         match i {
-            0 => {
-                let s = look::fit(
-                    header.as_str(),
-                    width,
-                    look::centered(look::body(16., look::fade(TEAL, a))),
-                );
-                look::draw(header.as_str(), cx, s.centered_baseline(mid), s);
-            }
-            1 => {
-                let centis = shown_centis.max(0) as f32 / 100.;
-                let time = crate::hud::stopwatch_line(centis);
-                let ts = look::punch(32., look::fade(INK, a));
-                let medal = line!("★ {}", medal_name(r.medal));
-                let ms = look::body(16., look::fade(Color::new(0.12, 0.08, 0.03, 1.), a));
-                let chip_w = text_width(medal.as_str(), ms) + 24.;
-                let total = chip_w + 14. + text_width(time.as_str(), ts);
-                let mut x0 = cx - total * 0.5;
-                let chip = Rect::new(x0, mid - 14., chip_w, 28.);
-                shapes::glow_disc(
-                    chip.center(),
-                    chip_w * 0.8,
-                    look::fade(medal_color, 0.3 * a),
-                );
-                shapes::fill_rounded_rect(
-                    chip,
-                    14.,
-                    Fill::vertical(
-                        chip,
-                        look::fade(
-                            shapes::mix(medal_color, Color::new(1., 1., 1., 1.), 0.35),
-                            a,
-                        ),
-                        look::fade(medal_color, a),
-                    ),
-                );
-                look::draw(medal.as_str(), x0 + 12., ms.centered_baseline(mid), ms);
-                x0 += chip_w + 14.;
-                look::draw(time.as_str(), x0, ts.centered_baseline(mid), ts);
-            }
+            0 => fit_row(&[
+                Item::Icon(Glyph::Icon(glyph::CHECKPOINT), TEAL),
+                Item::Text(c.name, body(TEAL)),
+            ]),
+            1 => medal_and_time(r, cx, mid, a, shown_centis),
             2 => {
-                let s = look::fit(
-                    comparison.as_str(),
-                    width,
-                    look::centered(look::body(
-                        16.,
-                        look::fade(if best { GREEN } else { INK }, a),
-                    )),
-                );
-                look::draw(comparison.as_str(), cx, s.centered_baseline(mid), s);
+                let delta = match records.comparison() {
+                    Comparison::NewBest(d) | Comparison::VsBest(d) => crate::hud::signed_seconds(d),
+                    _ => Line::new(),
+                };
+                let crown = |color| Item::Icon(Glyph::Icon(glyph::BEST), color);
+                let items: &[Item] = if records.error().is_some() {
+                    // The session keeps the record even when saving failed.
+                    &[
+                        Item::Icon(Glyph::Icon(glyph::WARNING), CORAL),
+                        Item::Text("NOT SAVED", body(CORAL)),
+                    ]
+                } else {
+                    match records.comparison() {
+                        Comparison::First => &[crown(GOLD), Item::Text("FIRST CLEAR", body(GOLD))],
+                        Comparison::Tie => &[crown(INK), Item::Text("TIED", body(INK))],
+                        Comparison::NewBest(_) => &[
+                            crown(GREEN),
+                            Item::Text("NEW BEST", body(GREEN)),
+                            Item::Text(delta.as_str(), body(GREEN)),
+                        ],
+                        Comparison::VsBest(_) => {
+                            &[crown(MUTED), Item::Text(delta.as_str(), body(CORAL))]
+                        }
+                        Comparison::Unavailable => &[],
+                    }
+                };
+                fit_row(items);
             }
             3 => {
-                let s = look::fit(
-                    stats.as_str(),
-                    width,
-                    look::centered(look::body(
-                        16.,
-                        look::fade(if r.secret { VIOLET } else { MUTED }, a),
-                    )),
-                );
-                look::draw(stats.as_str(), cx, s.centered_baseline(mid), s);
+                let gems = line!("{}", r.gems);
+                let falls = line!("{}", r.falls);
+                let bonks = line!("{}", r.bonks);
+                let mut items = [Item::Space(0.); 11];
+                let mut n = 0;
+                for item in [
+                    Item::Icon(Glyph::Icon(glyph::CRYSTAL), GOLD),
+                    Item::Text(gems.as_str(), body(INK)),
+                    Item::Space(18.),
+                    Item::Icon(
+                        Glyph::Icon(glyph::FALL),
+                        if r.falls == 0 { MUTED } else { CORAL },
+                    ),
+                    Item::Text(falls.as_str(), body(INK)),
+                ] {
+                    items[n] = item;
+                    n += 1;
+                }
+                if r.bonks > 0 {
+                    for item in [
+                        Item::Space(18.),
+                        Item::Icon(Glyph::Icon(glyph::BONK), CORAL),
+                        Item::Text(bonks.as_str(), body(INK)),
+                    ] {
+                        items[n] = item;
+                        n += 1;
+                    }
+                }
+                if r.secret {
+                    items[n] = Item::Space(18.);
+                    items[n + 1] = Item::Icon(Glyph::Icon(glyph::CRYSTAL), VIOLET);
+                    n += 2;
+                }
+                fit_row(&items[..n]);
             }
             4 => {
                 let s = look::fit(
@@ -794,42 +869,143 @@ fn finish_card(
                 look::draw(r.rank.quip, cx, s.centered_baseline(mid), s);
             }
             _ => {
-                let s = look::fit(
-                    &r.next,
-                    width,
-                    look::centered(look::body(16., look::fade(GOLD, a))),
-                );
-                look::draw(&r.next, cx, s.centered_baseline(mid), s);
+                // The next goal, as a target followed by what it takes.
+                let aim = Item::Icon(Glyph::Icon(glyph::AIM), MUTED);
+                match r.next {
+                    NextGoal::Medal {
+                        medal,
+                        seconds,
+                        falls,
+                    } => {
+                        let time = crate::hud::target_time(seconds);
+                        let falls = if falls == 0 {
+                            line!("0")
+                        } else {
+                            line!("≤{falls}")
+                        };
+                        fit_row(&[
+                            aim,
+                            Item::Space(6.),
+                            Item::Icon(Glyph::Icon(glyph::MEDAL), juice::medal_color(medal)),
+                            Item::Text(time.as_str(), body(INK)),
+                            Item::Space(12.),
+                            Item::Icon(Glyph::Icon(glyph::FALL), MUTED),
+                            Item::Text(falls.as_str(), body(INK)),
+                        ]);
+                    }
+                    NextGoal::Moonstone => fit_row(&[
+                        aim,
+                        Item::Space(6.),
+                        Item::Icon(Glyph::Icon(glyph::CRYSTAL), VIOLET),
+                        Item::Icon(Glyph::Icon(glyph::SECRET), VIOLET),
+                    ]),
+                    NextGoal::Best(best) => {
+                        let best = crate::hud::stopwatch_line(best);
+                        fit_row(&[
+                            aim,
+                            Item::Space(6.),
+                            Item::Icon(Glyph::Icon(glyph::BEST), GOLD),
+                            Item::Text(best.as_str(), body(GOLD)),
+                        ]);
+                    }
+                    NextGoal::Faster => fit_row(&[
+                        aim,
+                        Item::Space(6.),
+                        Item::Icon(Glyph::Icon(glyph::SPEED), GOLD),
+                    ]),
+                }
             }
         }
         cursor += row.1;
     }
-    let next = if course + 1 < COURSES.len() {
-        line!("Next: {} →", COURSES[course + 1].name)
-    } else {
-        line!("Choose a course")
-    };
     let button_look = entrance.sample(opened, shown + 1, motion);
     let theme = look::theme().faded(button_look.alpha * panel_look.alpha);
-    kit::button(
-        kit::appear(next_rect, button_look),
-        next.as_str(),
-        ButtonKind::Primary,
-        next_button,
-        &theme,
-    );
-    kit::button(
-        kit::appear(retry_rect, button_look),
-        if r.medal == "GOLD" {
-            "One more try"
-        } else {
-            "Retry for gold"
-        },
-        ButtonKind::Secondary,
-        retry_button,
-        &theme,
-    );
+    let next = kit::appear(next_rect, button_look);
+    kit::button(next, "", ButtonKind::Primary, next_button, &theme);
+    let ink = theme.accent_ink;
+    let label = look::body(16., ink).with_shadow(Color::new(0., 0., 0., 0.));
+    let next_items = if course + 1 < COURSES.len() {
+        [
+            Item::Text(COURSES[course + 1].name, label),
+            Item::Icon(Glyph::Icon(glyph::NEXT), ink),
+        ]
+    } else {
+        [
+            Item::Icon(Glyph::Icon(glyph::COURSES), ink),
+            Item::Text("Courses", label),
+        ]
+    };
+    button_row(&next_items, next, next_button, &theme);
+    let retry = kit::appear(retry_rect, button_look);
+    kit::button(retry, "", ButtonKind::Secondary, retry_button, &theme);
+    let again = look::body(16., INK);
+    let retry_items: &[Item] = if r.medal == "GOLD" {
+        &[
+            Item::Icon(Glyph::Icon(glyph::ATTEMPT), INK),
+            Item::Text("One more try", again),
+        ]
+    } else {
+        &[
+            Item::Icon(Glyph::Icon(glyph::ATTEMPT), INK),
+            Item::Text("Retry", again),
+            Item::Space(6.),
+            Item::Icon(Glyph::Icon(glyph::MEDAL), GOLD),
+        ]
+    };
+    button_row(retry_items, retry, retry_button, &theme);
     let _ = Appearance::SHOWN;
+}
+
+/// Icons and a short label centred on a kit button, following its press.
+fn button_row(items: &[Item], r: Rect, m: &ButtonMotion, theme: &KitTheme) {
+    look::draw_row_centered(
+        items,
+        r.x + r.w * 0.5,
+        r.y + r.h * 0.5 + 2. * m.press(),
+        18.,
+        theme,
+    );
+}
+
+/// The medal chip (trophy + medal name) beside the rolling finish time.
+fn medal_and_time(r: &Results, cx: f32, mid: f32, a: f32, shown_centis: i64) {
+    let medal_color = juice::medal_color(r.medal);
+    let centis = shown_centis.max(0) as f32 / 100.;
+    let time = crate::hud::stopwatch_line(centis);
+    let ts = look::punch(32., look::fade(INK, a));
+    let dark = Color::new(0.12, 0.08, 0.03, 1.);
+    let ms = look::body(16., look::fade(dark, a)).with_shadow(Color::new(0., 0., 0., 0.));
+    let name = medal_name(r.medal);
+    let chip_w = 18. + 6. + text_width(name, ms) + 24.;
+    let total = chip_w + 14. + text_width(time.as_str(), ts);
+    let mut x0 = cx - total * 0.5;
+    let chip = Rect::new(x0, mid - 15., chip_w, 30.);
+    shapes::glow_disc(
+        chip.center(),
+        chip_w * 0.8,
+        look::fade(medal_color, 0.3 * a),
+    );
+    shapes::fill_rounded_rect(
+        chip,
+        15.,
+        Fill::vertical(
+            chip,
+            look::fade(
+                shapes::mix(medal_color, Color::new(1., 1., 1., 1.), 0.35),
+                a,
+            ),
+            look::fade(medal_color, a),
+        ),
+    );
+    look::icon(
+        glyph::MEDAL,
+        vec2(x0 + 12. + 9., mid),
+        18.,
+        look::fade(dark, a),
+    );
+    look::draw(name, x0 + 12. + 18. + 6., ms.centered_baseline(mid), ms);
+    x0 += chip_w + 14.;
+    look::draw(time.as_str(), x0, ts.centered_baseline(mid), ts);
 }
 
 #[cfg(test)]

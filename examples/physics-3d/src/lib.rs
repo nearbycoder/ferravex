@@ -41,6 +41,7 @@ use ferravex_render::{
 mod capture;
 mod hud;
 mod juice;
+mod look;
 mod quips;
 mod toys;
 
@@ -449,8 +450,42 @@ struct Lab {
     pending_pulse: bool,
     dropped_seconds: f64,
     impact_cooldown: f32,
-    feedback: &'static str,
-    feedback_time: f32,
+    /// The latest accepted or refused command, for presentation only. The HUD
+    /// shows refusals as a red wobble and a short popup on the tool involved.
+    notice: Notice,
+    /// Increments with every notice, so presentation reacts exactly once.
+    notice_serial: u32,
+}
+
+/// What the yard last did with a command. Presentation maps these to icons,
+/// key caps and one- or two-word popups instead of sentences.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Notice {
+    /// Freshly opened yard.
+    Ready,
+    /// RESET rebuilt the yard and restored the view.
+    Rebuilt,
+    Dropped,
+    /// A drop refused by the body cap.
+    DropFull,
+    Bowled,
+    /// A bowl refused by the body cap.
+    BowlFull,
+    Chaos,
+    /// CHAOS refused by the body cap.
+    ChaosFull,
+    /// VIEW restored the default orbit.
+    ViewRestored,
+    Paused,
+    Resumed,
+    /// A pulse requested while paused.
+    PulsePaused,
+    Pulsed,
+    PulseRecharging,
+    /// One manual tick while paused.
+    Stepped,
+    /// STEP pressed while running.
+    StepWhileRunning,
 }
 
 impl Lab {
@@ -467,14 +502,14 @@ impl Lab {
             pending_pulse: false,
             dropped_seconds: 0.,
             impact_cooldown: 0.,
-            feedback: "",
-            feedback_time: 0.,
+            notice: Notice::Ready,
+            notice_serial: 0,
         }
     }
 
-    fn notice(&mut self, text: &'static str) {
-        self.feedback = text;
-        self.feedback_time = 2.5;
+    fn notice(&mut self, notice: Notice) {
+        self.notice = notice;
+        self.notice_serial = self.notice_serial.wrapping_add(1);
     }
 
     fn reset(&mut self) {
@@ -486,18 +521,16 @@ impl Lab {
         self.pending_pulse = false;
         self.dropped_seconds = 0.;
         self.impact_cooldown = 0.;
-        self.notice("Reset complete: yard + view.");
+        self.notice(Notice::Rebuilt);
     }
 
     fn drop(&mut self) {
         let dropped = self.sandbox.drop_body(self.shape == DropShape::Ball);
         self.fun.stats.drops += u32::from(dropped);
-        self.notice(if !dropped {
-            "Body limit reached. Reset the yard."
-        } else if self.shape == DropShape::Ball {
-            "Ball dropped. Drop to repeat."
+        self.notice(if dropped {
+            Notice::Dropped
         } else {
-            "Crate dropped. Drop to repeat."
+            Notice::DropFull
         });
     }
 
@@ -505,27 +538,23 @@ impl Lab {
         match self.sandbox.bowl(self.orbit.yaw) {
             Some(at) => {
                 self.fun.bowled(at);
-                self.notice(if self.session.is_paused() {
-                    "Bowl placed. Step or Resume to roll."
-                } else {
-                    "Bowled. Watch the stack."
-                });
+                self.notice(Notice::Bowled);
             }
-            None => self.notice("Body limit reached. Reset the yard."),
+            None => self.notice(Notice::BowlFull),
         }
     }
 
     fn chaos(&mut self) {
         let count = self.sandbox.chaos(self.fun.chaos_serial);
         if count == 0 {
-            self.notice("Body limit reached. Reset the yard.");
+            self.notice(Notice::ChaosFull);
             return;
         }
         self.fun.chaos_serial = self.fun.chaos_serial.wrapping_add(1);
         self.fun.stats.chaos += 1;
         self.fun.events.chaos += count;
         self.fun.touch();
-        self.notice("Chaos delivered.");
+        self.notice(Notice::Chaos);
     }
 
     fn step(&mut self, dt: f32, frame: &mut LabFrame) {
@@ -558,9 +587,6 @@ impl Lab {
             reset: false,
         };
         self.fun.begin_frame();
-        if elapsed.is_finite() && elapsed > 0. {
-            self.feedback_time = (self.feedback_time - elapsed as f32).max(0.);
-        }
         // Reset wins over all simultaneous input and renders the fresh pose.
         if commands.reset {
             self.reset();
@@ -569,7 +595,7 @@ impl Lab {
         }
         if commands.view {
             self.orbit.reset();
-            self.notice("View restored. Yard unchanged.");
+            self.notice(Notice::ViewRestored);
         }
         if commands.pause {
             self.session.toggle_pause();
@@ -577,9 +603,9 @@ impl Lab {
                 self.sandbox.snap_interpolation();
             }
             self.notice(if self.session.is_paused() {
-                "Paused. Step advances 1 tick."
+                Notice::Paused
             } else {
-                "Resumed at 120 Hz."
+                Notice::Resumed
             });
         }
         if commands.crate_drop || commands.ball_drop || commands.drop {
@@ -599,7 +625,7 @@ impl Lab {
         if self.session.is_paused() {
             self.pending_pulse = false;
             if pulse_input() | commands.pulse {
-                self.notice("Resume to pulse. Drop/Step work.");
+                self.notice(Notice::PulsePaused);
             }
         } else {
             self.pending_pulse |= commands.pulse;
@@ -611,9 +637,9 @@ impl Lab {
             if requested && self.sandbox.pulse(vec3(0., 0.5, 0.)) {
                 result.pulse = true;
                 self.fun.stats.pulses += 1;
-                self.notice("Pulse applied. Recharge 0.65s.");
+                self.notice(Notice::Pulsed);
             } else if requested {
-                self.notice("Pulse recharging.");
+                self.notice(Notice::PulseRecharging);
             }
             self.step(frame.dt, &mut result);
         }
@@ -622,9 +648,9 @@ impl Lab {
                 let step = self.session.step_paused().expect("paused inspector");
                 self.step(step.dt, &mut result);
                 self.sandbox.snap_interpolation();
-                self.notice("Stepped 8.33 ms; still paused.");
+                self.notice(Notice::Stepped);
             } else {
-                self.notice("Pause before stepping.");
+                self.notice(Notice::StepWhileRunning);
             }
         }
         result.alpha = if self.session.is_paused() {
@@ -734,7 +760,8 @@ fn footer_columns(width: f32) -> usize {
 fn footer_layout(width: f32, height: f32) -> (Rect, [Rect; BUTTONS]) {
     let columns = footer_columns(width);
     let rows = BUTTONS.div_ceil(columns);
-    let text_height = 48.;
+    // One row of icon readouts sits above the buttons.
+    let text_height = hud::STATUS_ROW;
     let panel = Rect::new(
         12.,
         height - (text_height + 12. + rows as f32 * 44.),
@@ -767,8 +794,9 @@ fn footer_layout(width: f32, height: f32) -> (Rect, [Rect; BUTTONS]) {
     (panel, buttons)
 }
 
-// These four inspector fields each have two fixed-size rows on narrow views.
-// Borrowed spans keep the existing bounded strings and avoid a second UI system.
+// Wraps bounded text into fixed-size rows. The play HUD now reads as icon
+// readouts; tests keep this helper to prove long bindings stay explicit.
+#[cfg(test)]
 fn hud_lines(mut text: &str, width: f32, size: u16) -> impl Iterator<Item = &str> {
     let metrics = get_default_font().try_metrics(size, 1.).expect("HUD font");
     let columns = (width / metrics.glyph_advance()).floor().max(1.) as usize;
@@ -972,6 +1000,9 @@ async fn game() {
         }
         let zoom = player_input.take("zoom").value;
         let movement = player_input.movement();
+        // A deliberate orbit retires the drag-to-orbit demonstration.
+        let orbited = active
+            && (look.length() > 0.004 || movement.length() > 0.1 || (in_scene && zoom != 0.));
         lab.orbit.input(
             dt,
             look,
@@ -1016,7 +1047,51 @@ async fn game() {
         juice.on_frame(&lab, &frame);
         juice.advance_sim(frame.ticks as f32 / 120.);
         juice.advance_render(dt);
-        hud.advance(&lab, active, dt);
+        let paused = lab.session.is_paused();
+        let room = lab.sandbox.bodies.len() < MAX_BODIES;
+        // Stable index order: CRATE BALL DROP PULSE PAUSE STEP VIEW RESET BOWL CHAOS.
+        let enabled = [
+            true,
+            true,
+            true,
+            !paused && lab.sandbox.pulse_time == 0.,
+            true,
+            paused,
+            true,
+            true,
+            room,
+            room,
+        ];
+        let selected = [
+            lab.shape == DropShape::Crate,
+            lab.shape == DropShape::Ball,
+            false,
+            false,
+            paused,
+            false,
+            false,
+            false,
+            false,
+            false,
+        ];
+        let mouse_down = is_mouse_button_down(MouseButton::Left);
+        let tools: [look::ToolState; BUTTONS] = std::array::from_fn(|i| {
+            let over = active && buttons[i].contains(pointer);
+            look::ToolState {
+                hovered: over,
+                pressed: over && mouse_down,
+                selected: selected[i],
+                enabled: enabled[i],
+            }
+        });
+        hud.advance(
+            &lab,
+            active,
+            dt,
+            ferravex_play::tween::Motion::from_reduced(presentation.policy.reduced_motion()),
+            &tools,
+            orbited,
+        );
         let events = &lab.fun.events;
         if frame.pulse {
             sound.cue(Cue::Impact(Surface::Metal), 0.5);
@@ -1049,10 +1124,11 @@ async fn game() {
         if events.returned > 0 {
             sound.cue(Cue::Pickup, 0.4);
         }
-        if let Some(headline) = bests.update(&lab.fun) {
+        if let Some(best) = bests.update(&lab.fun) {
             juice.toast(
-                "New personal best!",
-                headline,
+                "New best!",
+                Some(look::Glyph::Pict(ferravex_render::icons::Icon::Trophy)),
+                Some((best.glyph, best.value)),
                 juice::GOLD,
                 2.6,
                 juice::Priority::Alert,
@@ -1194,21 +1270,6 @@ async fn game() {
                 draw_line_3d(a, b, ui::CYAN);
             }
         }
-        if let Some((center, remaining)) = presentation.pulse {
-            let radius = (0.65 - remaining) * 12.;
-            for i in 0..32 {
-                let a = i as f32 / 32. * std::f32::consts::TAU;
-                let b = (i + 1) as f32 / 32. * std::f32::consts::TAU;
-                draw_line_3d(
-                    center + vec3(a.cos() * radius, 0.02, a.sin() * radius),
-                    center + vec3(b.cos() * radius, 0.02, b.sin() * radius),
-                    Color {
-                        a: presentation.policy.intensity(),
-                        ..ui::CYAN
-                    },
-                );
-            }
-        }
         if !juice.particles.is_empty()
             && let Ok(billboard) = ferravex_render::effects::BillboardView::new(
                 eye,
@@ -1223,6 +1284,13 @@ async fn game() {
             );
         }
         set_default_camera();
+        // Shockwaves ride the floor plane, projected for crisp glowing loops.
+        hud::rings(
+            &juice,
+            presentation.pulse,
+            presentation.policy.intensity(),
+            view_proj,
+        );
         if let Some((_, beat)) = juice.beat()
             && beat > 0.
         {
@@ -1237,64 +1305,45 @@ async fn game() {
                 Color::new(0., 0., 0., 0.85),
             );
         }
-        ferravex_render::shapes::fill_rounded_rect(panel, 12., Color::new(0.06, 0.10, 0.15, 0.95));
-        ferravex_render::shapes::stroke_rounded_rect(panel, 12., 1., ui::LINE);
-        let paused = lab.session.is_paused();
-        let mut hovered = None;
-        for (i, rect) in buttons.iter().enumerate() {
-            if active && rect.contains(pointer) {
-                hovered = Some(i);
-            }
+        // Buttons act on the next frame, like the keyboard edges sampled above.
+        let mut presses = [false; BUTTONS];
+        let mut refused = [false; BUTTONS];
+        for (i, tool) in tools.iter().enumerate() {
+            let hit = tool.hovered && clicked;
+            presses[i] = hit && tool.enabled;
+            refused[i] = hit && !tool.enabled;
         }
-        pending.crate_drop = hud::tool(buttons[0], "Crate", lab.shape == DropShape::Crate);
-        pending.ball_drop = hud::tool(buttons[1], "Ball", lab.shape == DropShape::Ball);
-        pending.drop = hud::tool(buttons[2], "Drop", false);
-        pending.pulse = hud::tool_button(
-            buttons[3],
-            "Pulse",
-            ui::ButtonOptions {
-                enabled: !paused && sandbox.pulse_time == 0.,
-                selected: false,
-            },
-        );
-        pending.pause = hud::tool(buttons[4], if paused { "Resume" } else { "Pause" }, paused);
-        pending.step = hud::tool_button(
-            buttons[5],
-            "Step",
-            ui::ButtonOptions {
-                enabled: paused,
-                selected: false,
-            },
-        );
-        pending.view = hud::tool(buttons[6], "View", false);
-        pending.reset = hud::tool(buttons[7], "Reset", false);
-        let room = sandbox.bodies.len() < MAX_BODIES;
-        pending.bowl = hud::tool_button(
-            buttons[8],
-            "Bowl",
-            ui::ButtonOptions {
-                enabled: room,
-                selected: false,
-            },
-        );
-        pending.chaos = hud::tool_button(
-            buttons[9],
-            "Chaos",
-            ui::ButtonOptions {
-                enabled: room,
-                selected: false,
-            },
-        );
+        pending.crate_drop = presses[0];
+        pending.ball_drop = presses[1];
+        pending.drop = presses[2];
+        pending.pulse = presses[3];
+        pending.pause = presses[4];
+        pending.step = presses[5];
+        pending.view = presses[6];
+        pending.reset = presses[7];
+        pending.bowl = presses[8];
+        pending.chaos = presses[9];
         if !active || card_closed || (hud.card.is_some() && clicked) {
             pending = Commands::default();
+        } else {
+            for i in 0..BUTTONS {
+                if presses[i] {
+                    hud.tool_kick(i);
+                }
+                if refused[i] {
+                    hud.refuse(&lab, i);
+                    sound.cue(Cue::Failure, 0.3);
+                }
+            }
         }
         hud.draw(&hud::Frame {
             lab: &lab,
             juice: &juice,
             bests: &bests,
             input: &player_input,
-            hovered,
             panel,
+            buttons,
+            tools,
             view_proj,
             inspector: &inspector,
             active,
@@ -1787,7 +1836,7 @@ mod tests {
             home,
             "camera must snap, not ease from the old view"
         );
-        assert!(lab.feedback.starts_with("Reset complete"));
+        assert_eq!(lab.notice, Notice::Rebuilt);
         lab.advance(0.5 / 120., Commands::default());
         assert_eq!(lab.session.tick(), 0, "old fractional time must be cleared");
     }
@@ -1876,7 +1925,7 @@ mod tests {
             },
         );
         assert_eq!(lab.sandbox.sequence, sequence);
-        assert!(lab.feedback.starts_with("Body limit reached"));
+        assert_eq!(lab.notice, Notice::DropFull);
         let before = poses(&lab);
         let frame = lab.advance(
             0.,
@@ -1952,7 +2001,11 @@ mod tests {
                     button.x + button.w <= panel.x + panel.w - 12. + 0.01,
                     "{width}: {i}"
                 );
-                assert!(button.y >= panel.y + 44. && button.y + button.h <= panel.y + panel.h);
+                // The status row of icon readouts sits above every button.
+                assert!(
+                    button.y >= panel.y + hud::STATUS_ROW - 4.
+                        && button.y + button.h <= panel.y + panel.h
+                );
                 let measured = get_default_font()
                     .try_metrics(17, 1.)
                     .unwrap()

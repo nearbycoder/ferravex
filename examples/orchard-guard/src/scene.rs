@@ -34,16 +34,6 @@ fn dot(x: f32, y: f32, r: f32, c: Color) {
     draw_poly(x, y, sides, r, 0., c);
 }
 
-/// World-space label in the modern face with a soft cream shadow.
-fn tag(s: &str, x: f32, baseline: f32, size: f32, color: Color) {
-    text_center(
-        s,
-        x,
-        baseline,
-        body(size, color).with_shadow(Color::new(0.98, 0.95, 0.84, 0.7)),
-    );
-}
-
 const TREES: [Vec2; 18] = [
     vec2(65., 365.),
     vec2(100., 455.),
@@ -251,7 +241,6 @@ fn farmhouse(g: &Game, juice: &Juice) {
         }
         draw_rectangle(1135., y + 7., 47., 4., CREAM);
     }
-    tag("Orchard", 1150., 452., 14., GREEN);
     // The harvest basket holds one apple per remaining heart.
     let basket = Rect::new(1108., 492., 80., 22.);
     shapes::fill_rounded_rect(
@@ -508,19 +497,35 @@ fn pest(pest: &Pest, g: &Game, presentation: &Presentation, juice: &Juice, boost
         );
     }
     if let Some(slow) = pest.slow() {
-        // Shape and countdown remain legible with flashes/motion disabled.
-        shapes::stroke_circle(p, radius + 6., 1.5, Color::from_hex(0x2f6f78));
+        // A frost ring whose bright arc drains as the slow wears off; shape
+        // and countdown stay legible with flashes and motion disabled.
+        let ring = radius + 6.;
+        shapes::stroke_circle(p, ring, 1.5, Color::new(0.18, 0.44, 0.48, 0.55));
+        let total = f64::from(slow.spec.seconds).max(slow.remaining_seconds);
+        let left = if total > 0. {
+            (slow.remaining_seconds / total) as f32
+        } else {
+            0.
+        };
+        shapes::stroke_arc(
+            p,
+            ring,
+            -std::f32::consts::FRAC_PI_2,
+            std::f32::consts::TAU * left.clamp(0., 1.),
+            Stroke::new(3., juice::ICE).cap(shapes::Cap::Round),
+        );
         for k in 0..4 {
             let a = k as f32 * std::f32::consts::FRAC_PI_2 + 0.4;
-            let q = p + vec2(a.cos(), a.sin()) * (radius + 6.);
+            let q = p + vec2(a.cos(), a.sin()) * ring;
             dot(q.x, q.y, 2., juice::ICE);
         }
-        tag(
-            sfmt!("Slow {:.1}s", slow.remaining_seconds).as_str(),
-            p.x,
-            p.y + radius + 22.,
-            (11. * boost).round(),
-            INK,
+        let flake = p + vec2(ring * 0.75, ring * 0.75);
+        shapes::fill_circle(flake, 6. * boost.sqrt(), Color::from_hex(0x2f6f78));
+        ferravex_render::icons::draw(
+            ferravex_render::icons::Icon::Snowflake,
+            flake,
+            10. * boost.sqrt(),
+            juice::ICE,
         );
     }
     if pest.hp < pest.max_hp {
@@ -588,7 +593,7 @@ fn ghost(ghost: &juice::Ghost, juice: &Juice) {
     }
 }
 
-fn plots(g: &Game, juice: &Juice, compact: bool, boost: f32, hover: Option<usize>) {
+fn plots(g: &Game, juice: &Juice, hover: Option<usize>) {
     let teach =
         g.wave == 0 && g.towers.iter().all(Option::is_none) && g.outcome == Outcome::Playing;
     for (i, p) in g.level.plots.iter().enumerate() {
@@ -653,6 +658,16 @@ fn plots(g: &Game, juice: &Juice, compact: bool, boost: f32, hover: Option<usize
                 Color::from_hex(0x8c9866)
             },
         );
+        if juice.plot_hint > 0. {
+            // A click that missed: every plot answers "here!" with a glow.
+            let t = juice.plot_hint;
+            shapes::stroke_circle(
+                top,
+                25. + 6. * (1. - t) * juice.motion(),
+                3.,
+                Color::new(0.98, 0.84, 0.42, t),
+            );
+        }
         if let Some(t) = g.towers[i] {
             tower(top, t, juice.tower_scale(i), true);
         } else {
@@ -673,9 +688,6 @@ fn plots(g: &Game, juice: &Juice, compact: bool, boost: f32, hover: Option<usize
                 Color::from_hex(0x7d8a5f),
             );
         }
-        if !compact {
-            tag(sfmt!("{}", i + 1).as_str(), p.x, p.y + 46., 14., INK);
-        }
         if teach && selected {
             // First-run hint: bounce an arrow at the selected plot until a
             // tower exists. Under reduced motion it holds still.
@@ -693,26 +705,32 @@ fn plots(g: &Game, juice: &Juice, compact: bool, boost: f32, hover: Option<usize
                 2.,
                 juice::GOLD,
             );
-            tag("Plant here", p.x, tip.y - 32., 16. * boost, INK);
+            // The plot itself breathes so the arrow's target is unmistakable.
+            let beat = 0.5 + 0.5 * (juice.clock * 4.).sin();
+            shapes::stroke_circle(
+                *p,
+                29. + 4. * beat * juice.motion(),
+                2.5,
+                Color::new(0.97, 0.76, 0.27, 0.45 + 0.4 * beat),
+            );
         }
     }
 }
 
-/// Draw the board. `boost` enlarges world-space text in compact layouts;
+/// Draw the board. `boost` enlarges world-space marks in compact layouts;
 /// `hover` is the plot under the pointer, if any.
 pub(super) fn field(
     g: &Game,
     presentation: &Presentation,
     juice: &Juice,
     light: &DayLight,
-    compact: bool,
     boost: f32,
     hover: Option<usize>,
 ) {
     ground(g, juice, light);
     farmhouse(g, juice);
     critters(juice);
-    plots(g, juice, compact, boost, hover);
+    plots(g, juice, hover);
     for g_ in juice.ghosts.iter().flatten() {
         ghost(g_, juice);
     }
@@ -720,17 +738,14 @@ pub(super) fn field(
         pest(p, g, presentation, juice, boost);
     }
     if let Some(target) = g.selected_target() {
-        shapes::stroke_circle(target.pos, 22., 2., INK);
-    }
-    // The royal name tag already sits above its pest; skip the duplicate label.
-    if let Some(target) = g.selected_target().filter(|t| t.id != ROYAL_ID) {
-        tag(
-            "Target",
-            target.pos.x,
-            target.pos.y - 28.,
-            (11. * boost).round(),
-            INK,
-        );
+        // Crosshair: a ring with four ticks marks the selected tower's target.
+        let c = target.pos;
+        shapes::stroke_circle(c, 22., 2., INK);
+        for k in 0..4 {
+            let a = k as f32 * std::f32::consts::FRAC_PI_2;
+            let d = vec2(a.cos(), a.sin());
+            shapes::fill_capsule(c + d * 17., c + d * 28., 1.3, INK);
+        }
     }
     look::atmosphere(g, juice, light, juice.flash_amount());
     // Projectiles are emissive: a warm or icy core with a soft bloom halo.

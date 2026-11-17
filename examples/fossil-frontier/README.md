@@ -58,15 +58,68 @@ running short. Camp's final permit action opens the museum and ends the career.
 | Space / Enter in Camp | Accept selected action |
 | Left / Right in Museum | Highlight a permit's exhibit card |
 | Arrows in Atlas | Highlight a species reference |
-| Mouse | Select tabs, field tiles, tools, samples; cycle the Lab candidate; submit research; accept Camp cards |
+| Mouse | Select tabs, field tiles, tools and samples; Dig and Survey buttons; pick a Lab species chip; submit research; accept Camp cards; highlight Atlas and Museum cards |
 | Space / click on permit briefing | Begin fieldwork |
-| Space after a setback | Spend a recovery grant, or close the expedition when none remain |
+| Space / Recover button after a setback | Spend a recovery grant, or close the expedition when none remain |
 | Esc / P, H, M, F2 | Shared pause, help, mute, control remapping |
 | R | Restart the entire career |
 
 The model consumes fresh input edges on actual fixed ticks. Holding a key does
 not repeat purchases or digs. Moving the cursor, reading pages and planning are
-free. Clicking a field tile only selects it; a separate Space action works it.
+free. Clicking a field tile only selects it; Space or the panel's Dig button
+works it. The Dig, Survey and Recover buttons call the same rules as Space and
+X, and a Lab species chip or an Atlas or Museum card selects that entry, as the
+arrow keys do.
+
+## Reading the screen
+
+The interface shows state with icons, meters and motion instead of sentences.
+The help (H) is four short lines; the controls page lists every key.
+
+- **Header:** six pips track the permits, the chip names the site, and the
+  objective row shows the Giant with this permit's section glowing, its name,
+  a mark for each of the other three finds and a flag that lights (with the
+  Camp key) once the permit can close.
+- **Tabs:** pickaxe, magnifier, home, bone and book icons. Badges point at the
+  next step: a bone on Dig when a fossil waits to be jacketed, a count on Lab
+  for unidentified samples, a green flag on Camp when the next site can open
+  and a red alert when daylight or supplies run low.
+- **Strip:** coins, supplies, a draining daylight bar, three day pips, renown,
+  the remaining recovery grants and the site's rock (hardness diamonds and a
+  strata swatch). Low values turn red and pulse.
+- **Field:** surveyed tiles show remaining depth as a number and stacked
+  layer bars; spent layers darken and the pit deepens with each stroke. Cracks
+  show hardness. Pale silhouettes are fossil traces, exposed bone glints, a
+  check marks a jacketed find. Corner brackets preview a survey's reach, and on
+  the selected tile the next stroke's layers pulse in the tool's color; a red
+  silhouette and alert badge mean the stroke will crack bone.
+- **Tile card:** a cross-section of the selected tile with the next stroke
+  bracketed, its state, remaining depth, fossil condition and the predicted
+  depth and condition after the stroke. The Dig and Survey buttons list their
+  supply and daylight costs (red when unaffordable), the condition a stroke
+  would cost and how many tiles a survey would reveal.
+- **Tools:** each row shows layers per stroke, supplies, daylight and a risk
+  badge: a green shield for the brush, amber and red alerts for chisel and
+  drill.
+- **Lab:** the tray marks the Giant's slot with a star; rings show condition,
+  a question badge marks unidentified samples beside their grant. The evidence
+  card sets the specimen against the chosen species, lists its two traits and
+  previews a right answer (coins, renown) and a wrong one (coins, renown lost).
+- **Camp:** every action is an icon, a word and cost chips that turn red when
+  they are what blocks it. The panel beside them previews the focused (hovered
+  or selected) action as before-and-after values, including the medals a
+  closing permit would earn.
+- **Museum and Atlas:** the skeleton assembles section by section with the
+  sought section breathing; placards show finds as dots and medals as stars.
+  Atlas cards show each species' silhouette, grant and traits.
+
+Accepted actions are felt where they happen: dust bursts from a stroke, a
+survey pings across its cross and sparkles on traces, a clean reveal glints
+(the Giant's part gets a callout), cracked bone bursts red with its condition
+loss, a jacketed find flies a ring to the Lab tab, research pays out coins and
+renown over the specimen, and a closed permit raises its medals over the next
+briefing. Refusals shake briefly and ring the refusing control in red with the
+missing resource ("Need 3", "Full", "Sold out").
 
 ## Field rules
 
@@ -158,10 +211,13 @@ collection and score, but are not worth losing an entire permit.
 
 `content.rs` owns six authored sites and the species atlas. `model.rs` owns pure,
 deterministic rules and fixed-capacity storage (48 field cells, four tray slots,
-24 museum records, six medals). `view.rs` only reads model state, measures text
-and draws original geology, fossil silhouettes and the six-part skeleton. The
-shared Ferravex arcade host owns fixed ticks, input collection, audio cues,
-persistence and renderer lifecycle.
+24 museum records, six medals). It also records a small per-tick event feed
+(what was accepted or refused, and where) that is cleared at the start of every
+step, never read by the rules and ignored by state equality. `view.rs` only
+reads model state, the host's presentation clock (idle motion) and pointer
+(hover), draws original geology, fossil silhouettes and the six-part skeleton,
+and turns the event feed into effects. The shared Ferravex arcade host owns
+fixed ticks, input collection, audio cues, persistence and renderer lifecycle.
 
 ```sh
 cargo test -p fossil-frontier --offline --locked -j 2
@@ -169,15 +225,19 @@ cargo clippy -p fossil-frontier --all-targets --offline --locked -j 2 -- -D warn
 rustfmt --edition 2024 --check examples/fossil-frontier/src/content.rs examples/fossil-frontier/src/model.rs examples/fossil-frontier/src/view.rs examples/fossil-frontier/src/lib.rs examples/fossil-frontier/src/main.rs
 ```
 
-Eighteen behavior tests cover survey coverage, tool costs and damage, safe
+Twenty-six behavior tests cover survey coverage, tool costs and damage, safe
 extraction, hardness and upgrades, atomic affordability, identification and
 reward duplication, input edges and pointer bounds, camp limits, progression
 requirements, recovery rollback, insolvency, terminal invariance and content
-integrity. A fresh-game legal-input controller completes all six sites and its
-recorded inputs produce identical state in a second fresh game. It earns all
-24 perfect specimens and eighteen medals at tick 7,752 with 33,255 points and
-938 coins. One public API rustdoc example executes without graphics. The
-`--headless` mode independently runs the same ordinary input path.
+integrity, plus the presentation layer: panel buttons and cards that mirror
+their keys, the event feed, previews that match the rules' damage, camp and
+medal outcomes, header progress, effects requested for accepted and refused
+actions, and the short objective and summary. A fresh-game legal-input
+controller completes all six sites and its recorded inputs produce identical
+state in a second fresh game. It earns all 24 perfect specimens and eighteen
+medals at tick 7,752 with 33,255 points and 938 coins. One public API rustdoc
+example executes without graphics. The `--headless` mode independently runs
+the same ordinary input path.
 
 These checks are model verification, not human usability or native/browser
 visual playtesting. Native screenshots, interactive audio checks, browser/Wasm

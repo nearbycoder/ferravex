@@ -1,77 +1,79 @@
-//! Sergeant Gravel's radio lines: short, table-driven and never repeated back to back.
+//! Sergeant Gravel's radio callouts: punchy, table-driven and never repeated
+//! back to back. During play every line is at most three words; the results
+//! card carries one short verdict line.
 //!
 //! Selectors are pure functions of accepted simulation counters, so the same
 //! inputs always read the same way; no clock, RNG or render cadence is involved.
 use crate::qualifier::Grade;
 
-/// Radio callsign shown above every line.
+/// Radio callsign shown beside every line.
 pub(crate) const CALLSIGN: &str = "SGT. GRAVEL";
 
-pub(crate) const WELCOME: &str = "Welcome to the Courtyard, recruit. Mind the stonework.";
+pub(crate) const WELCOME: &str = "Welcome, recruit!";
 
 /// One line per basic drill, in move/fire/reload/hit order.
 const DRILLS: [&str; 4] = [
-    "Five meters. Your legs work. Splendid.",
-    "That was a shot. Technically.",
-    "Reloaded. Fresh magazine, fresh hope.",
-    "A hit! That operator is filing a complaint.",
+    "Legs work!",
+    "Technically a shot.",
+    "Fresh hope!",
+    "Complaint filed!",
 ];
 
-pub(crate) const ARMED: &str = "Basic drills done. Now the real test: 30 seconds. Make me proud.";
+pub(crate) const ARMED: &str = "Make me proud.";
 pub(crate) const REARMED: [&str; 4] = [
-    "Bell rung. Places, everyone!",
-    "Back for more? I like the attitude.",
-    "Again! The operators were just getting comfortable.",
-    "One more run. They always say one more.",
+    "Places, everyone!",
+    "Back for more?",
+    "Operators, positions!",
+    "Just one more.",
 ];
 pub(crate) const GO: &str = "GO GO GO!";
 
 const STREAK: [&str; 6] = [
-    "Who taught you that? Me. I did.",
-    "Somebody alert the pigeons.",
-    "I'm writing this one down.",
-    "Stop it. No, keep going.",
-    "The stones are applauding. Quietly.",
-    "This is going on the fridge.",
+    "I taught that!",
+    "Alert the pigeons!",
+    "Noted. Impressed.",
+    "Keep going!",
+    "Stones applaud!",
+    "Fridge-worthy!",
 ];
 
 const COLD: [&str; 5] = [
-    "The operators are the ones walking around.",
-    "Aim at the people-shaped cardboard, recruit.",
-    "That wall is not a target. It's a wall.",
-    "Deep breath. Squeeze, don't yank.",
-    "The sky thanks you for your attention.",
+    "They move, recruit.",
+    "Aim at cardboard.",
+    "That's a wall.",
+    "Squeeze, don't yank.",
+    "Sky says thanks.",
 ];
 
-pub(crate) const FIRST_HEADSHOT: &str = "Right between the ears. Rude, but effective.";
-pub(crate) const BELL_SECRET: &str = "DING! +500. Nobody told you about that. Act natural.";
-pub(crate) const NEW_BEST: &str = "I am not impressed. (I am extremely impressed.)";
+pub(crate) const FIRST_HEADSHOT: &str = "Rude. Effective.";
+pub(crate) const BELL_SECRET: &str = "Act natural.";
+pub(crate) const NEW_BEST: &str = "Not impressed. (Very.)";
 
 const GRADES: [[&str; 3]; 5] = [
     [
-        "Outstanding. I'm not crying, it's courtyard dust.",
-        "I have nothing to yell about. This is new for me.",
-        "Frame that card. Then do it again.",
+        "Not crying. It's dust.",
+        "Nothing to yell about.",
+        "Frame that card.",
     ],
     [
         "Sharp. Annoyingly sharp.",
-        "Good. Don't let it go to your helmet.",
-        "That's a grade I can put in a letter home.",
+        "Helmet still fit?",
+        "Letter-home material.",
     ],
     [
         "Acceptable. Barely.",
-        "Solid. Like the walls you kept hitting.",
-        "Not bad. Not legendary. Not bad.",
+        "Solid. Like the walls.",
+        "Not bad. Not legendary.",
     ],
     [
-        "I've seen better aim from a weathervane.",
-        "The operators thank you for the fresh air.",
-        "We'll call that a warm-up. Loudly.",
+        "Weathervanes aim better.",
+        "Thanks for the fresh air.",
+        "Call it a warm-up.",
     ],
     [
-        "Were you aiming at the sky on purpose?",
-        "The stones are safe. So were the operators.",
-        "Every legend starts somewhere. Yours starts here.",
+        "Aiming at the sky?",
+        "The stones are safe.",
+        "Legends start here.",
     ],
 ];
 
@@ -132,46 +134,49 @@ mod tests {
         assert_eq!(grade(Grade::B, 0), "Acceptable. Barely.");
     }
 
-    #[test]
-    fn every_line_fits_every_radio_layout() {
-        // The 5x7 bitmap font is 0.75 * size wide per character. Text columns
-        // are the radio card width minus 24: narrow 276px hosts (220px, four
-        // lines), compact 320px (264px, three), 800px wide (324px, three).
-        let all: Vec<&str> = DRILLS
+    /// Every line Sgt. Gravel says during play.
+    fn callouts() -> Vec<&'static str> {
+        DRILLS
             .iter()
             .chain(&REARMED)
             .chain(&STREAK)
             .chain(&COLD)
-            .chain(GRADES.iter().flatten())
-            .chain(&[WELCOME, ARMED, GO, FIRST_HEADSHOT, BELL_SECRET, NEW_BEST])
+            .chain(&[WELCOME, ARMED, GO, FIRST_HEADSHOT, BELL_SECRET])
             .copied()
-            .collect();
-        for (column, size, max) in [
-            (220., 14., 4),
-            (264., 14., 3),
-            (324., 14., 3),
-            (436., 16., 3),
-        ] {
-            let per_line = (column / (0.75 * size)) as usize;
-            for line in &all {
-                let mut lines = 1;
-                let mut width = 0;
-                for word in line.split(' ') {
-                    let next = if width == 0 {
-                        word.len()
-                    } else {
-                        width + 1 + word.len()
-                    };
-                    if next > per_line {
-                        lines += 1;
-                        width = word.len();
-                    } else {
-                        width = next;
-                    }
-                }
-                assert!(lines <= max, "{line} needs {lines} lines in {column}px");
-                assert!(line.is_ascii(), "bitmap font is ASCII");
+            .collect()
+    }
+
+    #[test]
+    fn play_callouts_are_three_words_and_fit_the_narrowest_radio_chip() {
+        use ferravex_engine::render::text::{TextStyle, text_width};
+        // The radio chip leaves its width minus 64px for the line: 14px copy
+        // in a 244px chip on 276px hosts (180px column), 16px copy once the
+        // chip reaches 360px (296px column).
+        for line in callouts() {
+            let words = line
+                .split_whitespace()
+                .filter(|w| w.chars().any(char::is_alphabetic))
+                .count();
+            assert!(words <= 3, "{line}: {words} words");
+            for (size, column) in [(14., 180.), (16., 296.)] {
+                let width = text_width(
+                    line,
+                    TextStyle::modern(size, ferravex_engine::render::WHITE),
+                );
+                assert!(width <= column, "{line}: {width} > {column}");
             }
+        }
+    }
+
+    #[test]
+    fn verdicts_fit_one_line_of_the_tightest_results_card() {
+        use ferravex_engine::render::text::{TextStyle, text_width};
+        // A 276px host's tight card is 244px wide with 16px insets.
+        let style = TextStyle::modern(14., ferravex_engine::render::WHITE);
+        for line in GRADES.iter().flatten().chain(&[NEW_BEST]) {
+            let quoted = format!("\"{line}\"");
+            let width = text_width(&quoted, style);
+            assert!(width <= 212., "{line}: {width}");
         }
     }
 }

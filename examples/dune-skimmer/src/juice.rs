@@ -1,6 +1,11 @@
 //! Presentation-only juice: gate sparks, rising callouts, lap banners, the
 //! KDUNE radio toast, screen-edge flashes, FOV kicks and speed lines.
 //!
+//! Callouts are a headline of at most three words plus an icon detail (a bolt
+//! with the boost refill and multiplier, a rocket, or the thread-the-centre
+//! glyph for a new pilot's first clips); lap banners carry the lap time and
+//! its delta as numbers, never a sentence.
+//!
 //! Everything here is created from accepted [`RaceEvent`]s and aged by accepted
 //! simulation time, so pausing or finishing freezes it and nothing here can
 //! change steering, gates, boost or timing.
@@ -25,11 +30,26 @@ const PALE: Color = super::PALE;
 const ORANGE: Color = super::ORANGE;
 const TEAL: Color = super::TEAL;
 
+/// What a callout shows under its headline, drawn as icons and numbers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Detail {
+    None,
+    /// Boost refilled by `percent`, at a streak `multiplier` (1 = none).
+    Boost {
+        percent: u32,
+        multiplier: u32,
+    },
+    /// A new pilot's first clipped gates: thread the centre for boost.
+    ThreadHint,
+    /// A rocket launch.
+    Rocket,
+}
+
 /// A rising callout near the craft, in screen space.
 #[derive(Clone, Debug)]
 pub(super) struct Pop {
     pub head: String,
-    pub sub: String,
+    pub detail: Detail,
     pub color: Color,
     pub age: f32,
     pub life: f32,
@@ -46,11 +66,13 @@ impl Pop {
     }
 }
 
-/// A centered lap / final-lap / mirage banner.
+/// A centered lap / final-lap / mirage banner: a headline over the lap time
+/// and its delta against the previous lap (none for the first lap).
 #[derive(Clone, Debug)]
 pub(super) struct Banner {
     pub head: String,
-    pub sub: String,
+    pub time: f32,
+    pub delta: Option<f32>,
     pub color: Color,
     pub sub_color: Color,
     pub age: f32,
@@ -235,10 +257,10 @@ impl Juice {
         }
     }
 
-    fn pop(&mut self, head: impl Into<String>, sub: impl Into<String>, color: Color, size: f32) {
+    fn pop(&mut self, head: impl Into<String>, detail: Detail, color: Color, size: f32) {
         let pop = Pop {
             head: head.into(),
-            sub: sub.into(),
+            detail,
             color,
             age: 0.,
             life: 1.1,
@@ -318,7 +340,7 @@ impl Juice {
         match event {
             RaceEvent::Go { rocket, eager } => {
                 if rocket {
-                    self.pop("ROCKET START!", "PERFECT LAUNCH", GOLD, 30.);
+                    self.pop("ROCKET START!", Detail::Rocket, GOLD, 30.);
                     self.say(quips::launch(true, self.attempt), 2);
                     self.flash(GOLD, 0.45);
                     self.kick(camera, 6., 1.);
@@ -327,7 +349,7 @@ impl Juice {
                     if eager {
                         self.say(quips::launch(false, self.attempt), 2);
                     }
-                    self.pop("GO!", "", MINT, 34.);
+                    self.pop("GO!", Detail::None, MINT, 34.);
                     Some((Cue::Pickup, 0.45))
                 }
             }
@@ -341,13 +363,12 @@ impl Juice {
                 if threaded {
                     self.learned.thread = true;
                     let multiplier = streak.min(MULTIPLIER_CAP);
-                    let sub = if multiplier > 1 {
-                        format!("+{:.0}% BOOST  x{multiplier}", refill * 100.)
-                    } else {
-                        format!("+{:.0}% BOOST", refill * 100.)
+                    let detail = Detail::Boost {
+                        percent: (refill * 100.).round() as u32,
+                        multiplier,
                     };
                     let color = if streak >= MULTIPLIER_CAP { GOLD } else { MINT };
-                    self.pop(quips::streak_callout(streak), sub, color, 24.);
+                    self.pop(quips::streak_callout(streak), detail, color, 24.);
                     self.burst(
                         at,
                         if streak >= 3 { GOLD } else { MINT },
@@ -362,12 +383,12 @@ impl Juice {
                     Some((Cue::Pickup, 0.28 + 0.04 * multiplier as f32))
                 } else {
                     self.clipped += 1;
-                    let sub = if !self.veteran && self.clipped <= 3 {
-                        "THREAD THE CENTER FOR BOOST"
+                    let detail = if !self.veteran && self.clipped <= 3 {
+                        Detail::ThreadHint
                     } else {
-                        ""
+                        Detail::None
                     };
-                    self.pop("CLIPPED", sub, PALE, 18.);
+                    self.pop("CLIPPED", detail, PALE, 18.);
                     self.burst(at, PALE, 8);
                     Some((Cue::Click, 0.3))
                 }
@@ -382,13 +403,10 @@ impl Juice {
             RaceEvent::Lap { lap, time, perfect } => {
                 let previous = (lap >= 2).then(|| race.lap_times[lap as usize - 2]);
                 let delta = previous.map(|p| time - p);
-                let split = super::time_label(time);
-                let (sub, sub_color) = match delta {
-                    Some(d) => (
-                        format!("{split}   {}", signed(d)),
-                        if d <= 0. { MINT } else { ROSE },
-                    ),
-                    None => (format!("{split}   FIRST LAP"), PALE),
+                let sub_color = match delta {
+                    Some(d) if d <= 0. => MINT,
+                    Some(_) => ROSE,
+                    None => PALE,
                 };
                 let head = if perfect {
                     "MIRAGE LAP!".to_owned()
@@ -397,13 +415,14 @@ impl Juice {
                 } else if lap == LAPS {
                     "FINISH!".to_owned()
                 } else {
-                    format!("LAP {lap} DONE")
+                    format!("LAP {lap}")
                 };
                 // The lap banner subsumes the gate callout from the same tick.
                 self.pop = None;
                 self.banner = Some(Banner {
                     head,
-                    sub,
+                    time,
+                    delta,
                     color: if perfect { GOLD } else { super::WHITE },
                     sub_color,
                     age: 0.,
@@ -430,7 +449,10 @@ impl Juice {
             RaceEvent::Scrape { at, refill } => {
                 self.pop(
                     "SCRAPE!",
-                    format!("+{:.0}% BOOST", refill * 100.),
+                    Detail::Boost {
+                        percent: (refill * 100.).round() as u32,
+                        multiplier: 1,
+                    },
                     ORANGE,
                     22.,
                 );
@@ -592,8 +614,37 @@ mod tests {
         );
         let banner = juice.banner.clone().unwrap();
         assert_eq!(banner.head, "FINAL LAP!");
-        assert!(banner.sub.ends_with("-0.50"), "{}", banner.sub);
+        assert_eq!(banner.time, 10.0);
+        assert!((banner.delta.unwrap() + 0.5).abs() < 1e-4, "{banner:?}");
+        assert_eq!(signed(banner.delta.unwrap()), "-0.50");
         assert_eq!(banner.sub_color, MINT);
+        // Callout details are icons and numbers, never instructions.
+        let pop = juice.pop.clone();
+        assert!(pop.is_none(), "the lap banner subsumes the gate callout");
+        juice.veteran = false;
+        juice.on_event(
+            RaceEvent::Gate {
+                gate: 3,
+                threaded: false,
+                streak: 0,
+                refill: 0.,
+            },
+            &race,
+            &mut camera,
+        );
+        let pop = juice.pop.clone().unwrap();
+        assert_eq!(
+            (pop.head.as_str(), pop.detail),
+            ("CLIPPED", Detail::ThreadHint)
+        );
+        juice.on_event(threaded(4, 3), &race, &mut camera);
+        assert_eq!(
+            juice.pop.as_ref().unwrap().detail,
+            Detail::Boost {
+                percent: 14,
+                multiplier: 3
+            }
+        );
         let _ = course;
         assert_eq!(signed(0.25), "+0.25");
     }

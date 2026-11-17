@@ -7,6 +7,15 @@ import {bindInput} from '../input.js';
 import {bindAudio} from '../audio.js';
 import {createInputOverlay} from '../input-overlay.js';
 import {GpuTimer} from '../retained.js';
+// HUD pictograms (inline SVG, currentColor) shared by the vitals strip.
+const HUD_ICON={
+ heart:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21.3 10.6 20C5.4 15.4 2 12.3 2 8.5 2 5.4 4.4 3 7.5 3c1.7 0 3.4.8 4.5 2.1C13.1 3.8 14.8 3 16.5 3 19.6 3 22 5.4 22 8.5c0 3.8-3.4 6.9-8.6 11.5z"/></svg>',
+ ammo:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9a2 2 0 0 1 4 0v11H5zM10 6a2 2 0 0 1 4 0v14h-4zM15 9a2 2 0 0 1 4 0v11h-4z"/></svg>',
+ reload:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4a8 8 0 1 0 7.7 10h-2.1A6 6 0 1 1 12 6c1.6 0 3.1.7 4.2 1.8L13 11h7V4l-2.4 2.4A8 8 0 0 0 12 4z"/></svg>',
+ target:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 3a7 7 0 1 1 0 14 7 7 0 0 1 0-14zm0 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm0 2.5a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3z"/></svg>',
+ clock:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm1 5v5.4l3.6 2.1-1 1.7L11 13.5V7z"/></svg>',
+};
+const hudCache={vitals:null,score:null};
 const $=id=>document.getElementById(id),canvas=$('game'),message=$('message');
 let inputOverlay;
 let wasm,gl,program,shadowProgram,meshes=[],shadowTarget,shadowTexture,view=0,playing=false,recording=false;
@@ -201,8 +210,12 @@ function render(){
  gl.uniform4f(uniforms.muzzleLight,...[0,1,2,3].map(i=>wasm.ferravex_muzzle_light?.(i)??0));gl.uniformMatrix4fv(uniforms.lightProjection,false,light);const status=f32(wasm.ferravex_status(),wasm.ferravex_status_len());gl.uniform3fv(uniforms.eye,status.subarray(8,11));gl.uniform1f(uniforms.fogDensity,Number($('fog').value));gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,shadowTexture);gl.uniform1i(uniforms.shadowMap,0);gl.uniform1i(uniforms.visualLook,wasm.ferravex_visual_look());gl.uniform1i(uniforms.shadowsEnabled,desired?1:0);gl.uniform1f(uniforms.shadowTexel,1/shadowSize);gl.uniform1i(uniforms.shadowRadius,detail===3?1:0);canvas.dataset.look=String(wasm.ferravex_visual_look());drawGroups();
  if(usePost){postLook(frameDt,playing);finishPost(width,height);}
  // Offline operators never fire back: show health only when it can change.
- const health=connected||status[0]<100?`${status[0]}<span>HEALTH</span>`:'',ammo=status[6]>0?'—<span>RELOADING</span>':status[1]===0?'0<span class="empty">EMPTY · RELOAD</span>':`${status[1]}<span>/ 30</span>`;
- $('vitals').innerHTML=health+ammo;$('score').textContent=`${status[2]} eliminations · ${Math.floor(status[7]/60)}:${String(Math.floor(status[7]%60)).padStart(2,'0')}`;
+ // Pictograms instead of labels; readers get the same facts as a label.
+ const time=`${Math.floor(status[7]/60)}:${String(Math.floor(status[7]%60)).padStart(2,'0')}`;
+ const health=connected||status[0]<100?`${HUD_ICON.heart}${status[0]}`:'',ammo=status[6]>0?`<span class="reload">${HUD_ICON.reload}</span>`:status[1]===0?`0<span class="empty">${HUD_ICON.reload}<kbd>R</kbd></span>`:`${HUD_ICON.ammo}${status[1]}<span>/30</span>`;
+ const vitals=health+ammo,score=`${HUD_ICON.target}${status[2]}<span class="gap"></span>${HUD_ICON.clock}${time}`;
+ if(vitals!==hudCache.vitals){hudCache.vitals=vitals;$('vitals').innerHTML=vitals;$('vitals').setAttribute('aria-label',`${health?`Health ${status[0]}, `:''}${status[6]>0?'reloading':status[1]===0?'empty, press R to reload':`ammo ${status[1]} of 30`}`);}
+ if(score!==hudCache.score){hudCache.score=score;$('score').innerHTML=score;$('score').setAttribute('aria-label',`${status[2]} eliminations, ${time}`);}
  gpuTimer.end();
  return status;
 }

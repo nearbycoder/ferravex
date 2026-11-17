@@ -17,6 +17,7 @@
 mod capture;
 mod compact;
 mod game;
+mod glyph;
 mod host;
 mod hud;
 #[cfg(test)]
@@ -56,20 +57,6 @@ fn label(s: &str, x: f32, y: f32, size: f32, color: Color) {
 }
 fn center(s: &str, x: f32, y: f32, size: f32, color: Color) {
     style::text_center(s, x, y, style::body(size, color));
-}
-fn button(ui: &mut Ui, id: u64, rect: Rect, title: &str, enabled: bool, size: f32) {
-    style::control(ui, id, rect, title, enabled, size);
-}
-
-fn availability(status: Result<(), ActionError>, available: &str) -> String {
-    match status {
-        Ok(()) => available.into(),
-        Err(ActionError::Funds { missing }) => format!("Need {missing} more coins"),
-        Err(ActionError::FullyGrown) => "Maxed out. Looking good.".into(),
-        Err(ActionError::Occupied) => "Select an empty plot".into(),
-        Err(ActionError::Empty) => "Build a tower first".into(),
-        Err(_) => "Unavailable right now".into(),
-    }
 }
 #[cfg(test)]
 fn hint(input: &PlayerInput, action: &str) -> String {
@@ -115,14 +102,6 @@ fn hud_action(ui: &Ui, plots: usize) -> Option<Action> {
     })
 }
 
-fn notice_text(message: &str) -> &str {
-    message
-        .split(". ")
-        .next()
-        .unwrap_or(message)
-        .trim_end_matches('.')
-}
-
 ferravex_render::game!(conf, game);
 async fn game() {
     let mut demo = Demo::with_content();
@@ -155,11 +134,14 @@ async fn game() {
     let mut hud_ui = Ui::new();
     hud_ui.set_auto_focus(false);
     let mut plot_picker = false;
+    // Refusals already answered with a shake, chip and sound.
+    let mut seen_refusals = 0;
     loop {
         let reloaded = if let Some(next) = content.poll(demo.dt(), |text| {
             Ok(Game::with_level(Arc::new(level::Level::parse(text)?)))
         }) {
             campaign = Campaign::new(next, demo.autoplay);
+            seen_refusals = campaign.refusals;
             progress.content_changed(
                 &campaign.game,
                 ferravex_play::persistence::checksum(content.current().as_bytes()),
@@ -247,7 +229,6 @@ async fn game() {
             &presentation,
             &juice,
             &daylight,
-            compact.is_some(),
             boost,
             pointer.and_then(|p| {
                 campaign
@@ -317,6 +298,16 @@ async fn game() {
         hud_ui.paint();
         set_default_camera();
         style::paint(&mut hud_ui);
+        if let Some(layout) = compact {
+            compact::paint(
+                layout,
+                &campaign,
+                &juice,
+                best,
+                progress.error().is_some(),
+                &player_input,
+            );
+        }
         let ui_action = hud_action(&hud_ui, campaign.game.level.plots.len());
         if hud_ui.activated(9) {
             plot_picker = !plot_picker;
@@ -341,6 +332,16 @@ async fn game() {
             [keyboard, ui_action, plot],
             || take_command(&mut player_input),
         );
+        if campaign.refusals != seen_refusals {
+            seen_refusals = campaign.refusals;
+            if let Some(refusal) = campaign.refusal {
+                juice.refused(&campaign.game, refusal);
+                if let Some(id) = hud::refusal_control(refusal) {
+                    style::refuse(id);
+                }
+                sound.cue(Cue::Failure, 0.18);
+            }
+        }
         if events.restarted {
             plot_picker = false;
             progress.restart(&campaign.game);
@@ -435,19 +436,6 @@ fn route_feed(game: &mut Game, juice: &mut juice::Juice, sound: &mut GameAudio) 
 mod migration_tests {
     use super::*;
     use ferravex_render::input::{self, ActionKind, Binding, InputCode, PadState};
-
-    #[test]
-    fn short_notices_keep_the_event_and_exact_rejection_amounts() {
-        assert_eq!(
-            notice_text("Wave 2 sent. You can build and upgrade during the wave."),
-            "Wave 2 sent"
-        );
-        assert_eq!(notice_text("45 more coins needed."), "45 more coins needed");
-        assert_eq!(
-            notice_text("Speed 2.5 / 12 hearts"),
-            "Speed 2.5 / 12 hearts"
-        );
-    }
 
     #[test]
     fn hints_follow_remapping_reset_and_unbound_actions_without_stale_defaults() {

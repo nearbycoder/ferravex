@@ -6,47 +6,46 @@
 use crate::style::Stats;
 use ferravex_play::gameplay::trial::Medal;
 
+// In-race callouts stay at three words or fewer; longer jokes live only on
+// the pause and results cards. The first line of each guidance table is the
+// plain message, so the first time a player meets it the words are clearest.
 const OFF_TRACK: [&str; 8] = [
     "SCENIC ROUTE SELECTED",
-    "THAT'S A FIELD, CHAMP",
-    "THE COWS DID NOT ORDER THIS",
-    "FREE LAWN MOWING SERVICE",
-    "TRACTOR MODE ENGAGED",
-    "THE ROAD MISSES YOU",
-    "FARMER GIULIA IS TAKING NOTES",
-    "OFF-ROAD DLC UNLOCKED",
+    "THAT'S A FIELD",
+    "COWS DISAGREE",
+    "FREE LAWN MOWING",
+    "TRACTOR MODE",
+    "ROAD MISSES YOU",
+    "GIULIA SAW THAT",
+    "OFF-ROAD DLC",
 ];
 
 const WRONG_WAY: [&str; 5] = [
-    "WRONG WAY! THE GHOST IS CONFUSED",
-    "VICTORY LAP? BIT EARLY",
-    "BOLD. BACKWARDS, BUT BOLD.",
-    "THE FINISH IS THE OTHER WAY",
-    "REVERSE RALLY IS NEXT YEAR",
+    "WRONG WAY!",
+    "BIT EARLY?",
+    "BOLD. BACKWARDS.",
+    "OTHER WAY!",
+    "REVERSE RALLY?",
 ];
 
 const BACK_ON_TRACK: [&str; 4] = [
-    "ASPHALT, SWEET ASPHALT",
+    "BACK ON TRACK",
+    "SWEET ASPHALT",
     "AND WE'RE BACK",
-    "THE ROAD FORGIVES YOU",
-    "TIRES SAY THANK YOU",
+    "TIRES SAY THANKS",
 ];
 
 const BOTCHED: [&str; 5] = [
-    "THE SHEEP SAW THAT",
+    "SHEEP SAW THAT",
     "TOO MUCH ATTITUDE",
-    "STYLE POINTS REPOSSESSED",
-    "DRIFT RETURNED TO SENDER",
-    "THE GRASS ATE YOUR POINTS",
+    "POINTS REPOSSESSED",
+    "RETURN TO SENDER",
+    "GRASS ATE IT",
 ];
 
 const BUMP: [&str; 5] = ["BONK!", "FENCE SAYS NO", "BOING!", "OOF!", "STURDY FENCE!"];
 
-const CLEAN_LAP: [&str; 3] = [
-    "NOT ONE BLADE OF GRASS",
-    "TIDY AS A TRACTOR SHED",
-    "THE CO-DRIVER NODS",
-];
+const CLEAN_LAP: [&str; 3] = ["NOT ONE BLADE", "SPOTLESS!", "CO-DRIVER NODS"];
 
 const PAUSE: [&str; 5] = [
     "ENGINE IDLING. COWS WAITING.",
@@ -58,18 +57,14 @@ const PAUSE: [&str; 5] = [
 
 const READY: [&str; 6] = [
     "AGAIN! WITH FEELING",
-    "FRESH TIRES, SAME DRIVER",
-    "THE GHOST REMEMBERS YOU",
-    "THIS ONE'S THE ONE",
-    "DEEP BREATH. FLOOR IT.",
-    "THE COWS ARE WATCHING",
+    "FRESH TIRES",
+    "GHOST REMEMBERS YOU",
+    "THIS ONE'S IT",
+    "DEEP BREATH...",
+    "COWS ARE WATCHING",
 ];
 
-const SPLASH: [&str; 3] = [
-    "THE DUCKS ARE FURIOUS",
-    "THE DUCKS HAVE FILED A COMPLAINT",
-    "AMPHIBIOUS MODE: NOT INSTALLED",
-];
+const SPLASH: [&str; 3] = ["QUACK!", "DUCKS FURIOUS", "NOT A BOAT"];
 
 /// Advance by a stride coprime with the table length, so consecutive counters
 /// never repeat a line and every line is eventually visited.
@@ -107,10 +102,11 @@ pub fn pause(seed: u32) -> &'static str {
     rotate(&PAUSE, seed)
 }
 
-/// The countdown title: the track name first, then a retry line.
+/// The countdown title: the track name first, then a retry line. The lap
+/// count is drawn as pips, so the title carries no rule text.
 pub fn ready(attempt: u32) -> &'static str {
     if attempt == 0 {
-        "VALLE VERDE · 3 LAPS"
+        "VALLE VERDE"
     } else {
         rotate(&READY, attempt - 1)
     }
@@ -133,23 +129,21 @@ pub fn medal(total: f32) -> Medal {
     }
 }
 
-pub fn medal_name(medal: Medal) -> &'static str {
+/// The next medal up and its target time, if any.
+pub fn next_medal(medal: Medal) -> Option<(Medal, f32)> {
     match medal {
-        Medal::Gold => "GOLD",
-        Medal::Silver => "SILVER",
-        Medal::Bronze => "BRONZE",
-        Medal::Unranked => "NO MEDAL",
+        Medal::Gold => None,
+        Medal::Silver => Some((Medal::Gold, MEDALS[0])),
+        Medal::Bronze => Some((Medal::Silver, MEDALS[1])),
+        Medal::Unranked => Some((Medal::Bronze, MEDALS[2])),
     }
 }
 
-/// The next medal up and its target time, if any.
-pub fn next_medal(medal: Medal) -> Option<(&'static str, f32)> {
-    match medal {
-        Medal::Gold => None,
-        Medal::Silver => Some(("GOLD", MEDALS[0])),
-        Medal::Bronze => Some(("SILVER", MEDALS[1])),
-        Medal::Unranked => Some(("BRONZE", MEDALS[2])),
-    }
+/// The best medal a race can still earn once `elapsed` seconds have passed.
+/// Presentation only: the live trophy beside the race clock changes colour
+/// as each target slips away; the finish still awards by [`medal`].
+pub fn medal_in_reach(elapsed: f32) -> Medal {
+    medal(elapsed)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -159,57 +153,68 @@ pub struct Rank {
 }
 
 /// Silly, never mean. Rare feats first, then driving style, then medal tiers.
+/// The quip is the results card's one line of flavour.
 pub fn rank(medal: Medal, stats: &Stats) -> Rank {
     let (title, quip) = if stats.splashes > 0 && medal == Medal::Gold {
-        (
-            "RALLY DUCK",
-            "GOLD PACE AND A SWIM. THE DUCKS ARE IMPRESSED.",
-        )
+        ("RALLY DUCK", "GOLD PACE AND A SWIM!")
     } else if stats.splashes > 0 {
-        ("DUCK BOTHERER", "THE DUCKS HAVE FILED A FORMAL COMPLAINT")
+        ("DUCK BOTHERER", "THE DUCKS FILED A COMPLAINT")
     } else if stats.donuts >= 2 {
         ("DONUT ARTIST", "THE BAKERY WANTS YOUR NUMBER")
     } else if medal == Medal::Gold && stats.perfect() && stats.style >= 2000 {
-        ("VALLE VERDE LEGEND", "CLEAN, QUICK AND SIDEWAYS. SHOW-OFF.")
+        ("VALLE VERDE LEGEND", "CLEAN, QUICK AND SIDEWAYS")
     } else if medal == Medal::Gold && stats.perfect() {
-        ("PERFECT LINE", "NOT ONE BLADE OF GRASS DISTURBED")
+        ("PERFECT LINE", "NOT ONE BLADE OF GRASS")
     } else if stats.style >= 2500 {
         ("SIDEWAYS SPECIALIST", "WHY DRIVE FORWARDS AT ALL?")
     } else if stats.bumps >= 3 {
-        ("FENCE INSPECTOR", "EVERY FENCE CHECKED. ALL VERY STURDY.")
+        ("FENCE INSPECTOR", "EVERY FENCE CHECKED. STURDY.")
     } else if stats.grass_seconds() >= 8. {
-        (
-            "AGRICULTURAL DRIVER",
-            "YOU PLOUGHED. THE FARMERS THANK YOU.",
-        )
+        ("AGRICULTURAL DRIVER", "THE FARMERS THANK YOU")
     } else if stats.wrong_way_episodes >= 2 {
-        (
-            "COMPASS OPTIONAL",
-            "AN UNCONVENTIONAL INTERPRETATION OF LAPS",
-        )
+        ("COMPASS OPTIONAL", "LAPS ARE A SUGGESTION")
     } else {
         match medal {
             Medal::Gold => ("GOLDEN GRAVEL", "THE GHOST IS TAKING NOTES"),
             Medal::Silver => ("SILVER SLIDER", "SO CLOSE THE GOLD CAN SMELL YOU"),
-            Medal::Bronze => ("BRONZE BOMBER", "SOLID! THE COWS APPLAUD (SLOWLY)"),
-            Medal::Unranked => ("SUNDAY DRIVER", "SCENIC, RELAXED AND VERY LEGAL"),
+            Medal::Bronze => ("BRONZE BOMBER", "THE COWS APPLAUD (SLOWLY)"),
+            Medal::Unranked => ("SUNDAY DRIVER", "SCENIC, RELAXED, VERY LEGAL"),
         }
     };
     Rank { title, quip }
 }
 
+/// The next goal under the result, drawn as icons: a medal chase, a
+/// clean-lap chase, a style target, the duck secret, or nothing left.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Hook {
+    /// Shave `cut` seconds to earn `medal`.
+    Medal { medal: Medal, cut: f32 },
+    /// Gold already; now all laps clean.
+    CleanLaps(u32),
+    /// Perfect gold; now reach this style score.
+    Style(u32),
+    /// Everything but the pond.
+    Ducks,
+    /// Nothing left to prove.
+    Done,
+}
+
 /// The next-goal hook under the result: medal chase, clean-lap chase, secret.
-pub fn hook(medal: Medal, total: f32, stats: &Stats) -> String {
-    if let Some((name, target)) = next_medal(medal) {
-        format!("{:.2}S FASTER FOR {name}!", (total - target).max(0.01))
+pub fn hook(medal: Medal, total: f32, stats: &Stats) -> Hook {
+    if let Some((medal, target)) = next_medal(medal) {
+        Hook::Medal {
+            medal,
+            cut: (total - target).max(0.01),
+        }
     } else if !stats.perfect() {
-        format!("GOLD! NOW TRY {} CLEAN LAPS", LAPS)
+        Hook::CleanLaps(LAPS)
     } else if stats.style < 2000 {
-        "PERFECT! NOW DO IT SIDEWAYS (2000 STYLE)".to_owned()
+        Hook::Style(2000)
     } else if stats.splashes == 0 {
-        "PSST... THE DUCKS LOOK BORED".to_owned()
+        Hook::Ducks
     } else {
-        "NOTHING LEFT TO PROVE. EXCEPT SPEED.".to_owned()
+        Hook::Done
     }
 }
 
@@ -240,7 +245,25 @@ mod tests {
             assert_eq!(seen.len(), table.len());
             assert!(table.iter().all(|line| line.len() <= 34), "{table:?}");
         }
-        assert_eq!(ready(0), "VALLE VERDE · 3 LAPS");
+        // Lines shown while driving are callouts, never sentences.
+        for table in [
+            &OFF_TRACK[..],
+            &WRONG_WAY,
+            &BACK_ON_TRACK,
+            &BOTCHED,
+            &BUMP,
+            &CLEAN_LAP,
+            &READY,
+            &SPLASH,
+        ] {
+            for line in table {
+                assert!(line.split_whitespace().count() <= 3, "{line}");
+            }
+        }
+        assert_eq!(off_track(1), "SCENIC ROUTE SELECTED");
+        assert_eq!(wrong_way(1), "WRONG WAY!");
+        assert_eq!(back_on_track(1), "BACK ON TRACK");
+        assert_eq!(ready(0), "VALLE VERDE");
         assert_ne!(ready(1), ready(2));
     }
 
@@ -250,19 +273,33 @@ mod tests {
         assert_eq!(medal(43.01), Medal::Silver);
         assert_eq!(medal(50.), Medal::Bronze);
         assert_eq!(medal(90.), Medal::Unranked);
+        assert_eq!(medal_in_reach(10.), Medal::Gold);
+        assert_eq!(medal_in_reach(43.5), Medal::Silver);
+        assert_eq!(medal_in_reach(60.), Medal::Unranked);
         let mut stats = Stats::default();
-        assert_eq!(hook(Medal::Silver, 44.5, &stats), "1.50S FASTER FOR GOLD!");
-        assert_eq!(hook(Medal::Gold, 42., &stats), "GOLD! NOW TRY 3 CLEAN LAPS");
+        let Hook::Medal { medal: next, cut } = hook(Medal::Silver, 44.5, &stats) else {
+            panic!("silver chases gold");
+        };
+        assert_eq!(next, Medal::Gold);
+        assert!((cut - 1.5).abs() < 1e-4);
+        assert_eq!(
+            hook(Medal::Unranked, 90., &stats),
+            Hook::Medal {
+                medal: Medal::Bronze,
+                cut: 35.
+            }
+        );
+        assert_eq!(hook(Medal::Gold, 42., &stats), Hook::CleanLaps(3));
         assert_eq!(rank(Medal::Silver, &stats).title, "SILVER SLIDER");
         stats.clean_laps = 3;
         assert_eq!(rank(Medal::Gold, &stats).title, "PERFECT LINE");
-        assert!(hook(Medal::Gold, 42., &stats).contains("SIDEWAYS"));
+        assert_eq!(hook(Medal::Gold, 42., &stats), Hook::Style(2000));
         stats.style = 2400;
         assert_eq!(rank(Medal::Gold, &stats).title, "VALLE VERDE LEGEND");
-        assert!(hook(Medal::Gold, 42., &stats).contains("DUCKS"));
+        assert_eq!(hook(Medal::Gold, 42., &stats), Hook::Ducks);
         stats.splashes = 1;
         assert_eq!(rank(Medal::Gold, &stats).title, "RALLY DUCK");
-        assert!(hook(Medal::Gold, 42., &stats).contains("NOTHING LEFT"));
+        assert_eq!(hook(Medal::Gold, 42., &stats), Hook::Done);
         let fence = Stats {
             bumps: 3,
             ..Stats::default()

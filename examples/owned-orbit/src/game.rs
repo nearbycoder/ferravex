@@ -706,7 +706,7 @@ impl Game {
                     });
                     self.velocity = [0.; 2];
                     self.ball[1] = PADDLE_Y - 8. - BALL_RADIUS - 1.;
-                    self.record(AcceptedEvent::Spark(Spark::Caught));
+                    self.record(AcceptedEvent::Spark(Spark::Caught { at: self.ball }));
                     break;
                 }
             } else {

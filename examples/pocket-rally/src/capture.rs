@@ -7,6 +7,7 @@
 //! - `RALLY_OFFROAD_AT=N` makes autoplay steer onto the grass for 70 frames.
 //! - `RALLY_FAKE_BEST=SECONDS` pretends a stored best race existed at the finish.
 //! - `RALLY_POND_AT=N` places the car beside the duck pond on frame `N`.
+//! - `RALLY_REVERSE_AT=N` turns the car around on frame `N` (wrong-way review).
 use super::Conf;
 use crate::sim::Controls;
 
@@ -31,6 +32,7 @@ pub(super) struct Capture {
     offroad_at: Option<u32>,
     fake_best: Option<f32>,
     pond_at: Option<u32>,
+    reverse_at: Option<u32>,
 }
 
 impl Capture {
@@ -42,6 +44,7 @@ impl Capture {
             offroad_at: number("RALLY_OFFROAD_AT"),
             fake_best: number("RALLY_FAKE_BEST"),
             pond_at: number("RALLY_POND_AT"),
+            reverse_at: number("RALLY_REVERSE_AT"),
         }
     }
 
@@ -76,6 +79,13 @@ impl Capture {
             race.car.pose.position = ferravex_render::prelude::vec2(1000., 520.);
             race.car.pose.angle = std::f32::consts::FRAC_PI_2;
             race.car.velocity = ferravex_render::prelude::vec2(0., 140.);
+        }
+    }
+
+    pub fn reverse(&self, race: &mut crate::sim::Race) {
+        if self.reverse_at == Some(self.frame) {
+            race.car.pose.angle += std::f32::consts::PI;
+            race.car.velocity = -race.car.velocity;
         }
     }
 

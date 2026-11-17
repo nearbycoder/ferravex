@@ -874,6 +874,15 @@ async fn game() {
         if show_hud {
             hud::letterbox(&l, showcase_weight);
             hud::flash(&l, fx.flash);
+            hud::target(
+                &hud,
+                &l,
+                &run.game,
+                &camera,
+                alpha,
+                visual_time,
+                fx.motion(),
+            );
             hud::bubbles(
                 &mut tx,
                 &l,
@@ -888,12 +897,8 @@ async fn game() {
                 hud::minimap(&mut hud, &l, &run.game, -orbit_yaw, alpha, visual_time);
             }
             let [grab_buf, jump_buf, notes_buf] = &mut hint_buf;
-            let notes_key = if touch {
-                "Tap"
-            } else {
-                hint(&input, "notes", notes_buf, "N")
-            };
-            hud::notepad(&mut tx, &hud, &l, &run.game, &fx, visual_time, notes_key);
+            let notes_key = (!touch).then(|| hint(&input, "notes", notes_buf, "N"));
+            hud::notepad(&mut tx, &hud, &l, &run.game, &fx, notes_key);
             let grab = hint(&input, "interact", grab_buf, "E");
             let jump = hint(&input, "jump", jump_buf, "Space");
             hud::status(&mut tx, &l, &run.game, touch);
@@ -905,6 +910,7 @@ async fn game() {
                 }
             }
             tx.flush();
+            hud::effects(&mut hud, &l, &run.game, &camera, alpha);
             hud::toasts(&mut tx, &l, &fx, motion);
         }
         tx.flush();
@@ -935,7 +941,7 @@ async fn game() {
                         &saves.meta,
                         menus::PAUSE_QUIPS[pauses % menus::PAUSE_QUIPS.len()],
                         pause_age,
-                        run.game.todo.count(),
+                        run.game.completed(),
                     );
                 } else if touch && run.session.is_playing() {
                     menus::touch_pause(&mut menu, &l);

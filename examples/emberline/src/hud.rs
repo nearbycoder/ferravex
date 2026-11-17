@@ -7,7 +7,7 @@
 //! messages from stacking. Copy uses the Modern face; the clock, counters,
 //! logo, rank and pops keep the Classic face's arcade punch. Every steady-state
 //! label formats into a stack [`Line`], so drawing a frame allocates nothing.
-use super::juice::{GOLD, Juice, MOTH, Toast};
+use super::juice::{GOLD, Glyph, Juice, MOTH, Toast};
 use super::presentation::ControlHint;
 use super::quips::{self, RunSummary};
 use super::style::{self, EMBER, INK, LEAF, Line, Scene, fade, line};
@@ -17,7 +17,8 @@ use ferravex_play::tween::{
     Appearance, Entrance, Motion, RollCounter, ScreenTransition, Spring, TransitionKind,
     TransitionPhase,
 };
-use ferravex_render::shapes::{self, Fill};
+use ferravex_render::icons::{self, Icon, IconStyle};
+use ferravex_render::shapes::{self, Cap, Fill, Join, Stroke};
 use ferravex_render::text::TextStyle;
 use ferravex_render::ui::kit::{self, ButtonKind, ButtonMotion, ButtonState};
 
@@ -32,6 +33,7 @@ pub(super) const MENU_CORNER: Vec2 = Vec2::new(72., 60.);
 /// Canvas-space top of the HUD chips.
 const CHIP_TOP: f32 = 24.;
 const CHIP_H: f32 = 68.;
+const LEFT_CHIP_W: f32 = 214.;
 const RIGHT_CHIP_W: f32 = 236.;
 
 /// Wide-layout placements that respect [`MENU_CORNER`] for the current screen.
@@ -74,10 +76,10 @@ impl WideLayout {
 
 /// The visible card, which is also the default touch confirm region.
 pub(super) fn card_rect(state: SessionState) -> Rect {
-    if state == SessionState::Won {
-        Rect::new(250., 104., 780., 476.)
-    } else {
-        Rect::new(290., 150., 700., 380.)
+    match state {
+        SessionState::Won => Rect::new(250., 104., 780., 476.),
+        SessionState::Paused => Rect::new(290., 208., 700., 264.),
+        _ => Rect::new(290., 150., 700., 380.),
     }
 }
 
@@ -140,39 +142,140 @@ pub(super) fn zone(game: &Game) -> usize {
 
 /// Small lantern icon used in the HUD and on the title card.
 pub(super) fn lantern_icon(x: f32, y: f32, lit: bool) {
-    let color = if lit { GOLD } else { MUTED };
-    if lit {
-        shapes::glow_disc(vec2(x, y - 1.), 14., Color::new(1., 0.62, 0.25, 0.55));
-    }
-    draw_triangle(
-        vec2(x - 8., y - 9.),
-        vec2(x + 8., y - 9.),
-        vec2(x, y - 15.),
-        color,
-    );
-    draw_rectangle(x - 7., y - 9., 14., 16., Color::new(0.10, 0.14, 0.12, 1.));
-    draw_rectangle_lines(x - 7., y - 9., 14., 16., 2., color);
-    if lit {
-        diamond(vec2(x, y - 1.), 5., ORANGE);
+    lantern_glyph(vec2(x, y - 4.), 22., lit, 1.);
+}
+
+/// Draws `glyph` centered at `at`, fitted to a `size` box. `color` tints
+/// engine icons and the air-jump chevrons; Emberline's own pictograms keep
+/// their palette and take only `color`'s alpha.
+pub(super) fn glyph(glyph: Glyph, at: Vec2, size: f32, color: Color) {
+    match glyph {
+        Glyph::Icon(icon) => icons::draw_styled(
+            icon,
+            at,
+            size,
+            IconStyle::new(color).shadow(fade(style::SHADOW, color.a * 0.6)),
+        ),
+        Glyph::Lantern(lit) => lantern_glyph(at, size, lit, color.a),
+        Glyph::Ember => {
+            shapes::glow_disc(at, size * 0.75, Color::new(1., 0.55, 0.2, 0.45 * color.a));
+            gem(at, size * 0.48, fade(ORANGE, color.a));
+        }
+        Glyph::AirJump => air_jump_glyph(at, size, color),
+        Glyph::Moth => moth_glyph(at, size, color.a),
+        Glyph::Medal(medal) => medal_badge(at, size * 0.5, medal, color.a),
+        Glyph::Move => {
+            for (icon, dx) in [(Icon::ArrowLeft, -0.3), (Icon::ArrowRight, 0.3)] {
+                icons::draw(icon, at + vec2(dx * size, 0.), size * 0.62, color);
+            }
+        }
     }
 }
 
-/// The one coaching hint a first-time player needs right now.
+/// The caged lantern: a lit one holds a flame and glows (shape, not only color).
+fn lantern_glyph(at: Vec2, size: f32, lit: bool, alpha: f32) {
+    let u = size / 22.;
+    let (x, y) = (at.x, at.y + 4. * u);
+    let color = fade(if lit { GOLD } else { MUTED }, alpha);
+    if lit {
+        shapes::glow_disc(
+            vec2(x, y - u),
+            14. * u,
+            Color::new(1., 0.62, 0.25, 0.55 * alpha),
+        );
+    }
+    shapes::fill_triangle(
+        vec2(x - 8. * u, y - 9. * u),
+        vec2(x + 8. * u, y - 9. * u),
+        vec2(x, y - 15. * u),
+        color,
+    );
+    let cage = Rect::new(x - 7. * u, y - 9. * u, 14. * u, 16. * u);
+    shapes::fill_rounded_rect(cage, 2. * u, fade(Color::new(0.10, 0.14, 0.12, 1.), alpha));
+    shapes::stroke_rounded_rect(cage, 2. * u, 2. * u, color);
+    if lit {
+        gem(vec2(x, y - u), 5. * u, fade(ORANGE, alpha));
+    }
+}
+
+/// An anti-aliased ember diamond with a darker left facet.
+pub(super) fn gem(at: Vec2, radius: f32, color: Color) {
+    let (top, bottom) = (at - vec2(0., radius), at + vec2(0., radius));
+    let (left, right) = (at - vec2(radius * 0.65, 0.), at + vec2(radius * 0.65, 0.));
+    shapes::fill_triangle(top, right, bottom, color);
+    shapes::fill_triangle(
+        top,
+        bottom,
+        left,
+        Color::new(color.r * 0.7, color.g * 0.7, color.b * 0.7, color.a),
+    );
+}
+
+fn gem_outline(at: Vec2, radius: f32, color: Color) {
+    shapes::polyline(
+        &[
+            at - vec2(0., radius),
+            at + vec2(radius * 0.65, 0.),
+            at + vec2(0., radius),
+            at - vec2(radius * 0.65, 0.),
+        ],
+        Stroke::new(1.5, color).closed(true).join(Join::Round),
+    );
+}
+
+/// Two rising chevrons: the earned mid-air jump.
+fn air_jump_glyph(at: Vec2, size: f32, color: Color) {
+    let u = size * 0.5;
+    for (dy, alpha) in [(-0.36, 1.), (0.26, 0.55)] {
+        let y = at.y + dy * u;
+        shapes::polyline(
+            &[
+                vec2(at.x - 0.66 * u, y + 0.34 * u),
+                vec2(at.x, y - 0.3 * u),
+                vec2(at.x + 0.66 * u, y + 0.34 * u),
+            ],
+            Stroke::new(size * 0.17, fade(color, alpha))
+                .cap(Cap::Round)
+                .join(Join::Round),
+        );
+    }
+}
+
+fn moth_glyph(at: Vec2, size: f32, alpha: f32) {
+    let u = size * 0.5;
+    shapes::glow_disc(at, size * 0.7, fade(MOTH, 0.22 * alpha));
+    let hind = shapes::mix(MOTH, Color::new(0.35, 0.3, 0.5, 1.), 0.35);
+    for side in [-1., 1.] {
+        shapes::fill_triangle(
+            at + vec2(0., -0.12 * u),
+            at + vec2(side * 0.98 * u, -0.78 * u),
+            at + vec2(side * 0.86 * u, 0.12 * u),
+            fade(MOTH, alpha),
+        );
+        shapes::fill_triangle(
+            at + vec2(0., 0.04 * u),
+            at + vec2(side * 0.72 * u, 0.22 * u),
+            at + vec2(side * 0.38 * u, 0.74 * u),
+            fade(hind, alpha),
+        );
+    }
+    shapes::fill_capsule(
+        at + vec2(0., -0.5 * u),
+        at + vec2(0., 0.56 * u),
+        0.15 * u,
+        fade(Color::from_hex(0x5a4f6e), alpha),
+    );
+}
+
+/// The one coaching moment a first-time player needs right now. Lessons are
+/// taught by the scene and the HUD, never by sentences: the jump lesson is a
+/// key-cap prompt over the hero, the lantern lesson brightens the save marker,
+/// and the air-jump lesson pulses the last empty ember pip.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Coach {
     Jump,
     Lantern,
     AirJump,
-}
-
-impl Coach {
-    pub fn text(self) -> &'static str {
-        match self {
-            Self::Jump => "Jump · hold it for a bigger leap",
-            Self::Lantern => "Land by a lantern to save your spot",
-            Self::AirJump => "One more ember unlocks an air jump",
-        }
-    }
 }
 
 /// The coaching hint for a first-time player, or `None` once learned.
@@ -186,6 +289,38 @@ pub(super) fn coach(game: &Game) -> Option<Coach> {
         Some(Coach::AirJump)
     } else {
         None
+    }
+}
+
+/// A key cap and pictogram shown over the hero exactly when the move is
+/// useful, until the player has used it once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Prompt {
+    /// Before the first jump.
+    Jump,
+    /// In mid-air with the earned air jump ready, until it is first used.
+    AirJump,
+}
+
+/// The prompt a first-time player needs this frame. `veteran` players (a
+/// stored clear) never see prompts.
+pub(super) fn prompt(game: &Game, juice: &Juice, veteran: bool) -> Option<Prompt> {
+    if veteran || !game.session.is_playing() {
+        return None;
+    }
+    if coach(game) == Some(Coach::Jump) {
+        return Some(Prompt::Jump);
+    }
+    let ready = game.ember_inventory.count(1) >= 3 && !game.air_jump_used;
+    (ready && !game.motor.grounded && !juice.air_jump_taught).then_some(Prompt::AirJump)
+}
+
+impl Prompt {
+    pub fn glyph(self) -> Glyph {
+        match self {
+            Self::Jump => Glyph::Icon(Icon::ArrowUp),
+            Self::AirJump => Glyph::AirJump,
+        }
     }
 }
 
@@ -265,6 +400,15 @@ pub(super) struct Overlay {
     clock: RollCounter,
     embers: Spring,
     last_embers: usize,
+    /// HUD lantern pop when a lantern is lit.
+    lanterns: Spring,
+    last_lanterns: usize,
+    /// HUD air-jump pop on unlock and on every recharge.
+    air: Spring,
+    last_ready: bool,
+    /// The hero prompt being shown or faded out, and its opacity.
+    prompt: Option<Prompt>,
+    prompt_alpha: f32,
     cta: ButtonMotion,
     motion: Motion,
 }
@@ -290,6 +434,12 @@ impl Overlay {
             clock: RollCounter::new(0),
             embers: Spring::underdamped(0., 9., 0.3),
             last_embers: 0,
+            lanterns: Spring::underdamped(0., 9., 0.3),
+            last_lanterns: 0,
+            air: Spring::underdamped(0., 9., 0.3),
+            last_ready: false,
+            prompt: None,
+            prompt_alpha: 0.,
             cta: ButtonMotion::default(),
             motion: Motion::Full,
         }
@@ -302,6 +452,39 @@ impl Overlay {
     /// Ember count bump (0 at rest) for a springy HUD reaction.
     pub fn ember_bump(&self) -> f32 {
         self.embers.value
+    }
+
+    /// Lantern pip bump (0 at rest) when a lantern is lit.
+    pub fn lantern_bump(&self) -> f32 {
+        self.lanterns.value
+    }
+
+    /// Air-jump bump (0 at rest) when the jump unlocks or recharges.
+    pub fn air_bump(&self) -> f32 {
+        self.air.value
+    }
+
+    /// Fades the hero prompt toward `target` on render time. Changing prompt
+    /// kind restarts the fade so two prompts never cross-blend.
+    pub fn prompt_frame(&mut self, target: Option<Prompt>, dt: f32) {
+        let dt = dt.clamp(0., 0.1);
+        match target {
+            Some(kind) => {
+                if self.prompt != Some(kind) {
+                    self.prompt_alpha = 0.;
+                }
+                self.prompt = Some(kind);
+                self.prompt_alpha = (self.prompt_alpha + dt * 6.).min(1.);
+            }
+            None => self.prompt_alpha = (self.prompt_alpha - dt * 3.).max(0.),
+        }
+    }
+
+    /// The visible prompt and its opacity.
+    pub fn prompt(&self) -> Option<(Prompt, f32)> {
+        self.prompt
+            .filter(|_| self.prompt_alpha > 0.01)
+            .map(|kind| (kind, self.prompt_alpha))
     }
 
     pub fn points(&self) -> i64 {
@@ -334,6 +517,9 @@ impl Overlay {
                 self.transition = reveal(TransitionKind::Iris, 0.45);
                 self.points.snap(0);
                 self.last_embers = 0;
+                self.last_lanterns = 0;
+                self.last_ready = false;
+                self.prompt_alpha = 0.;
             }
             if state == SessionState::Won {
                 self.clock.snap(0);
@@ -373,6 +559,18 @@ impl Overlay {
         }
         self.last_embers = embers;
         self.embers.advance(dt, self.motion);
+        let lanterns = game.checkpoints.index();
+        if lanterns > self.last_lanterns {
+            self.lanterns.impulse(9.);
+        }
+        self.last_lanterns = lanterns;
+        self.lanterns.advance(dt, self.motion);
+        let ready = game.ember_inventory.count(1) >= 3 && !game.air_jump_used;
+        if ready && !self.last_ready {
+            self.air.impulse(9.);
+        }
+        self.last_ready = ready;
+        self.air.advance(dt, self.motion);
         self.cta.update(
             ButtonState {
                 focused: true,
@@ -401,18 +599,11 @@ impl Overlay {
     }
 }
 
-/// The in-run HUD. `veteran` players (a stored clear) skip onboarding prompts.
-pub(super) fn play(
-    game: &Game,
-    juice: &Juice,
-    overlay: &Overlay,
-    hints: &Hints,
-    veteran: bool,
-    cluster: f32,
-) {
+/// The in-run HUD: icons, numbers, pips and one toast slot. No sentences.
+pub(super) fn play(game: &Game, juice: &Juice, overlay: &Overlay, cluster: f32) {
     let theme = style::theme();
     // Left chip: section, lanterns and the earned air jump.
-    let left = Rect::new(24., CHIP_TOP, 286., CHIP_H);
+    let left = Rect::new(24., CHIP_TOP, LEFT_CHIP_W, CHIP_H);
     style::chip(left, 1.);
     let section = line!("{:02}", zone(game) + 1);
     let w = style::draw(
@@ -427,40 +618,19 @@ pub(super) fn play(
         left.y + 26.,
         style::body(16., INK),
     );
+    let lit = game.checkpoints.index();
+    let motion = juice.motion();
+    let bump = overlay.lantern_bump() * motion;
     for index in 1..=2 {
-        lantern_icon(
-            left.x + 26. + (index - 1) as f32 * 24.,
-            left.y + 52.,
-            game.checkpoints.index() >= index,
+        let pop = if index == lit { 1. + bump * 0.1 } else { 1. };
+        glyph(
+            Glyph::Lantern(lit >= index),
+            vec2(left.x + 26. + (index - 1) as f32 * 24., left.y + 47.),
+            22. * pop,
+            INK,
         );
     }
-    let earned = game.ember_inventory.count(1).min(3);
-    let ready = earned >= 3 && !game.air_jump_used;
-    for pip in 0..3 {
-        let at = vec2(left.x + 88. + pip as f32 * 14., left.y + 48.);
-        if pip < earned as usize {
-            let color = if game.air_jump_used { MUTED } else { LEAF };
-            if ready {
-                shapes::glow_disc(at, 10., fade(LEAF, 0.6));
-            }
-            shapes::fill_circle(at, 4.5, color);
-        } else {
-            shapes::stroke_circle(at, 4., 1.5, fade(MUTED, 0.8));
-        }
-    }
-    let (air, air_color) = if ready {
-        ("Air jump ready", LEAF)
-    } else if earned >= 3 {
-        ("Air jump used", MUTED)
-    } else {
-        ("Air jump", MUTED)
-    };
-    style::draw(
-        air,
-        left.x + 132.,
-        left.y + 54.,
-        style::body(16., air_color),
-    );
+    air_jump_meter(game, overlay, vec2(left.x + 92., left.y + 47.), motion);
 
     // Center chip: the clock in its medal-pace color and a course track.
     let center = Rect::new(
@@ -473,15 +643,22 @@ pub(super) fn play(
     let elapsed = game.trial.elapsed();
     let medal = pace(elapsed);
     let clock = line!("{elapsed:.2}");
+    let clock_x = WIDTH * 0.5 - 12.;
     let clock_w = style::center(
         &clock,
-        WIDTH * 0.5 - 12.,
+        clock_x,
         CHIP_TOP + 24.,
         style::arcade(32., medal_color(medal)),
     );
+    icons::draw(
+        Icon::Clock,
+        vec2(clock_x - clock_w * 0.5 - 20., CHIP_TOP + 10.),
+        18.,
+        fade(MUTED, 0.9),
+    );
     if medal != Medal::Unranked {
         medal_badge(
-            vec2(WIDTH * 0.5 - 12. + clock_w * 0.5 + 20., CHIP_TOP + 12.),
+            vec2(clock_x + clock_w * 0.5 + 20., CHIP_TOP + 12.),
             11.,
             medal,
             1.,
@@ -513,37 +690,46 @@ pub(super) fn play(
     shapes::fill_circle(vec2(me, y), 5., EMBER);
     shapes::stroke_circle(vec2(me, y), 5., 1.5, INK);
 
-    // Right chip: embers, then points and any live chain.
+    // Right chip: embers (count over total), then a star with the points and
+    // any live chain multiplier with its draining timer.
     let right = Rect::new(cluster - RIGHT_CHIP_W, CHIP_TOP, RIGHT_CHIP_W, CHIP_H);
     style::chip(right, 1.);
     let collected = game.embers.iter().filter(|(_, found)| *found).count();
-    let embers = line!("{collected}/{}", game.embers.len());
-    let ember_w = style::right(
-        &embers,
+    let total = line!("/{}", game.embers.len());
+    let total_w = style::right(
+        &total,
         right.right() - 16.,
+        right.y + 30.,
+        style::arcade(16., MUTED),
+    );
+    let count = line!("{collected}");
+    let count_w = style::right(
+        &count,
+        right.right() - 18. - total_w,
         right.y + 30.,
         style::arcade(24., INK),
     );
-    let bump = overlay.ember_bump() * juice.motion();
-    let gem = vec2(right.right() - 34. - ember_w, right.y + 21.);
+    let bump = overlay.ember_bump() * motion;
+    let gem_at = vec2(right.right() - 36. - total_w - count_w, right.y + 21.);
     shapes::glow_disc(
-        gem,
+        gem_at,
         16. + bump * 3.,
         Color::new(1., 0.55, 0.2, 0.55 + bump * 0.1),
     );
-    diamond(gem, 10. + bump * 1.5, ORANGE);
+    gem(gem_at, 10. + bump * 1.5, ORANGE);
     let points = line!("{}", overlay.points());
-    let pts_w = style::right(
-        "pts",
-        right.right() - 16.,
-        right.y + 56.,
-        style::body(16., MUTED),
-    );
     let points_w = style::right(
         &points,
-        right.right() - 22. - pts_w,
+        right.right() - 16.,
         right.y + 56.,
         style::arcade(16., EMBER),
+    );
+    let star = vec2(right.right() - 30. - points_w, right.y + 50.);
+    icons::draw_styled(
+        Icon::Star,
+        star,
+        17.,
+        IconStyle::new(GOLD).shadow(fade(style::SHADOW, 0.6)),
     );
     if let Some(life) = game
         .score
@@ -551,7 +737,7 @@ pub(super) fn play(
         .filter(|_| game.score.multiplier() > 1)
     {
         let chain = line!("×{}", game.score.multiplier());
-        let x = right.right() - 34. - pts_w - points_w;
+        let x = star.x - 14.;
         let pill = Rect::new(right.x + 12., right.y + 41., x - right.x - 12., 20.);
         shapes::fill_rounded_rect(pill, 10., fade(LEAF, 0.18));
         let life = (life as f32 / 5.).clamp(0., 1.);
@@ -568,12 +754,82 @@ pub(super) fn play(
     if let Some(state) = &juice.toast {
         toast(state, WIDTH * 0.5, 112., overlay.motion());
     }
-    if !veteran
-        && juice.toast.is_none()
-        && let Some(lesson) = coach(game)
-    {
-        coach_prompt(lesson, hints, 652., 1.);
+}
+
+/// The air jump at a glance: chevrons that glow while the jump is ready and
+/// dim once spent (until the next landing), then three ember pips that fill
+/// toward the unlock. With one ember to go, the last pip breathes.
+pub(super) fn air_jump_meter(game: &Game, overlay: &Overlay, at: Vec2, motion: f32) {
+    let earned = (game.ember_inventory.count(1) as usize).min(3);
+    let unlocked = earned >= 3;
+    let ready = unlocked && !game.air_jump_used;
+    let bump = overlay.air_bump() * motion;
+    if ready {
+        shapes::glow_disc(at, 17. + bump * 5., fade(LEAF, 0.4));
     }
+    let color = if ready {
+        LEAF
+    } else {
+        fade(MUTED, if unlocked { 0.95 } else { 0.6 })
+    };
+    glyph(Glyph::AirJump, at, 22. * (1. + bump * 0.12), color);
+    let breathe = if motion > 0. {
+        ferravex_render::juice::pulse(overlay.since, 1.2)
+    } else {
+        1.
+    };
+    for pip in 0..3 {
+        let p = vec2(at.x + 26. + pip as f32 * 17., at.y);
+        if pip < earned {
+            let color = if !unlocked {
+                ORANGE
+            } else if ready {
+                LEAF
+            } else {
+                fade(MUTED, 0.8)
+            };
+            gem(p, 6.5, color);
+        } else {
+            if earned == 2 {
+                shapes::glow_disc(p, 11., fade(ORANGE, 0.25 + 0.35 * breathe));
+            }
+            gem_outline(p, 6., fade(MUTED, 0.85));
+        }
+    }
+}
+
+/// Draws the hero prompt, a key cap and the move's pictogram, over the
+/// hero's head. `camera` is the world camera's left edge in canvas units.
+pub(super) fn hero_prompt(game: &Game, hints: &Hints, overlay: &Overlay, camera: f32) {
+    let Some((kind, alpha)) = overlay.prompt() else {
+        return;
+    };
+    let bob = style::wave(overlay.since, 4., overlay.motion()) * 3.;
+    let head = game.position() - vec2(camera, 0.) + vec2(PLAYER.x * 0.5, -16. + bob);
+    let keys = (!hints.touch).then(|| hints.jump.text());
+    let keys_w = keys.map_or(0., |keys| style::key_prompt_width(keys, "") + 2.);
+    let w = keys_w + 46.;
+    let x = head.x.clamp(w * 0.5 + 12., WIDTH - w * 0.5 - 12.);
+    let rect = Rect::new(x - w * 0.5, head.y - 40., w, 36.);
+    style::soft_shadow(rect, 12., alpha * 0.6);
+    style::chip(rect, alpha);
+    shapes::fill_triangle(
+        vec2(head.x - 6., rect.bottom()),
+        vec2(head.x + 6., rect.bottom()),
+        vec2(head.x, rect.bottom() + 6.),
+        fade(style::GLASS, alpha),
+    );
+    let mut cursor = rect.x + 10.;
+    if let Some(keys) = keys {
+        cursor += style::key_prompt(cursor, rect.y + 5., keys, "", &style::theme().faded(alpha));
+    }
+    let color = if kind == Prompt::AirJump { LEAF } else { INK };
+    glyph(
+        kind.glyph(),
+        vec2(cursor + 14., rect.y + 17.),
+        22.,
+        fade(color, alpha),
+    );
 }
 
 fn medal_badge(at: Vec2, radius: f32, medal: Medal, alpha: f32) {
@@ -604,22 +860,25 @@ fn medal_badge(at: Vec2, radius: f32, medal: Medal, alpha: f32) {
     style::draw(letter, at.x + 1., style.centered_baseline(at.y), style);
 }
 
-/// The toast pill: an icon, a Modern headline and a muted detail line. It
-/// drops in from above and fades out; reduced motion keeps only the fade.
+/// The toast pill: one line with a pictogram, a short callout and an
+/// optional number. It drops in from above and fades out; reduced motion
+/// keeps only the fade.
 pub(super) fn toast(toast: &Toast, center: f32, top: f32, motion: Motion) {
     let enter = Entrance::fade_up(-14.)
         .with_duration(0.24)
         .sample(toast.age, 0, motion);
     let alpha = toast.alpha().min(enter.alpha);
-    let head = style::body(24., fade(INK, alpha));
-    let sub = style::body(16., fade(MUTED, alpha));
-    let icon_w = 26.;
-    let w = (style::width(&toast.head, head) + icon_w)
-        .max(style::width(&toast.sub, sub))
-        .min(760.)
-        + 48.;
-    let h = if toast.sub.is_empty() { 44. } else { 68. };
-    let rect = Rect::new(center - w * 0.5, top + enter.offset[1], w, h);
+    let head = style::arcade(24., fade(INK, alpha));
+    let value = style::arcade(24., fade(toast.value_color, alpha));
+    let icon = 28.;
+    let head_w = style::width(&toast.head, head);
+    let value_w = if toast.value.is_empty() {
+        0.
+    } else {
+        18. + style::width(&toast.value, value)
+    };
+    let w = (icon + 12. + head_w + value_w).min(760.) + 44.;
+    let rect = Rect::new(center - w * 0.5, top + enter.offset[1], w, 50.);
     style::soft_shadow(rect, 16., alpha);
     shapes::fill_rounded_rect(
         rect,
@@ -630,73 +889,38 @@ pub(super) fn toast(toast: &Toast, center: f32, top: f32, motion: Motion) {
             fade(Color::new(0.06, 0.09, 0.09, 0.96), alpha),
         ),
     );
-    shapes::stroke_rounded_rect(rect, 16., 1.5, fade(toast.color, 0.45 * alpha));
-    let head_w = style::width(&toast.head, head) + icon_w;
-    let x = center - head_w.min(w - 48.) * 0.5;
-    let mut buffer = [0_u8; 4];
-    style::draw(
-        toast.icon.encode_utf8(&mut buffer),
-        x,
-        top + enter.offset[1] + 32.,
-        head.with_color(fade(toast.color, alpha)),
+    shapes::stroke_rounded_rect(rect, 16., 1.5, fade(toast.color, 0.55 * alpha));
+    let cy = rect.y + rect.h * 0.5;
+    let x = rect.x + 22.;
+    glyph(
+        toast.icon,
+        vec2(x + icon * 0.5, cy),
+        icon,
+        fade(toast.color, alpha),
     );
-    let fit = if head_w > w - 48. {
-        head.with_size(24. * (w - 48. - icon_w) / (head_w - icon_w))
-    } else {
-        head
-    };
-    style::draw(&toast.head, x + icon_w, top + enter.offset[1] + 32., fit);
-    if !toast.sub.is_empty() {
-        style::center_fit(
-            &toast.sub,
-            center,
-            top + enter.offset[1] + 56.,
-            w - 32.,
-            sub,
+    let x = x + icon + 12.;
+    style::draw(&toast.head, x, head.centered_baseline(cy), head);
+    if !toast.value.is_empty() {
+        style::draw(
+            &toast.value,
+            x + head_w + 18.,
+            value.centered_baseline(cy),
+            value,
         );
     }
 }
 
-/// The onboarding prompt as a pill at the bottom of the course.
-fn coach_prompt(lesson: Coach, hints: &Hints, top: f32, alpha: f32) {
-    let theme = style::theme().faded(alpha);
-    let text = lesson.text();
-    let keys = if lesson == Coach::Jump && !hints.touch {
-        Some(hints.jump.text())
-    } else {
-        None
-    };
-    let w = match keys {
-        Some(keys) => style::key_prompt_width(keys, text),
-        None => style::width(text, style::body(16., INK)) + 22.,
-    } + 40.;
-    let rect = Rect::new(WIDTH * 0.5 - w * 0.5, top, w, 44.);
-    style::chip(rect, alpha);
-    match keys {
-        Some(keys) => {
-            style::key_prompt(rect.x + 20., rect.y + 9., keys, text, &theme);
-        }
-        None => {
-            style::draw(
-                "→",
-                rect.x + 18.,
-                rect.y + 28.,
-                style::body(16., fade(EMBER, alpha)),
-            );
-            style::draw(
-                text,
-                rect.x + 40.,
-                rect.y + 28.,
-                style::body(16., fade(INK, alpha)),
-            );
-        }
-    }
+/// What a card stat shows under its pictogram.
+#[derive(Clone, Copy)]
+enum Value {
+    Text(Line),
+    Icon(Icon),
 }
 
-fn stats(items: &[(&str, Line, Color)], area: Rect, overlay: &Overlay, delay: f32, alpha: f32) {
+fn stats(items: &[(Glyph, Value, Color)], area: Rect, overlay: &Overlay, delay: f32, alpha: f32) {
     let gap = 12.;
     let w = (area.w - gap * (items.len() - 1) as f32) / items.len() as f32;
-    for (i, (name, value, color)) in items.iter().enumerate() {
+    for (i, (icon, value, color)) in items.iter().enumerate() {
         let look = overlay.look(Entrance::fade_up(10.).with_stagger(0.05), i, delay);
         let rect = kit::appear(
             Rect::new(area.x + i as f32 * (w + gap), area.y, w, area.h),
@@ -705,34 +929,190 @@ fn stats(items: &[(&str, Line, Color)], area: Rect, overlay: &Overlay, delay: f3
         let a = look.alpha * alpha;
         style::tile(rect, a);
         let c = rect.center().x;
-        style::center_fit(
-            name,
-            c,
-            rect.y + 24.,
-            w - 12.,
-            style::body(16., fade(MUTED, a)),
-        );
-        style::center_fit(
-            value,
-            c,
-            rect.y + 54.,
-            w - 12.,
-            style::arcade(24., fade(*color, a)),
-        );
+        glyph(*icon, vec2(c, rect.y + 22.), 22., fade(MUTED, a));
+        match value {
+            Value::Text(text) => style::center_fit(
+                text,
+                c,
+                rect.y + 60.,
+                w - 12.,
+                style::arcade(24., fade(*color, a)),
+            ),
+            Value::Icon(icon) => icons::draw(*icon, vec2(c, rect.y + 51.), 22., fade(*color, a)),
+        }
     }
 }
 
-fn cta(label: &str, rect: Rect, overlay: &Overlay, look: Appearance) {
-    kit::button(
-        kit::appear(rect, look),
+fn glyph_width(icon: Glyph) -> f32 {
+    if icon == Glyph::Move { 34. } else { 22. }
+}
+
+/// Width of [`key_group`] without drawing.
+fn key_group_width(keys: Option<&str>, icon: Glyph, label: &str) -> f32 {
+    let keys = keys.map_or(0., |keys| style::key_prompt_width(keys, "") + 4.);
+    let label = if label.is_empty() {
+        0.
+    } else {
+        8. + style::width(label, style::body(16., INK))
+    };
+    keys + glyph_width(icon) + label
+}
+
+/// Key caps, a pictogram and an optional one-word label, vertically centered
+/// on `cy`. Returns the drawn width.
+fn key_group(
+    x: f32,
+    cy: f32,
+    keys: Option<&str>,
+    icon: Glyph,
+    label: &str,
+    ink: Color,
+    alpha: f32,
+) -> f32 {
+    let mut cursor = x;
+    if let Some(keys) = keys {
+        cursor += style::key_prompt(cursor, cy - 12., keys, "", &style::theme().faded(alpha)) + 4.;
+    }
+    let w = glyph_width(icon);
+    glyph(icon, vec2(cursor + w * 0.5, cy), 20., fade(ink, alpha));
+    cursor += w;
+    if !label.is_empty() {
+        // Dark ink on a bright button reads crisper without a drop shadow.
+        let text = if ink.r + ink.g + ink.b > 1.5 {
+            style::body(16., fade(ink, alpha))
+        } else {
+            TextStyle::modern(16., fade(ink, alpha))
+        };
+        cursor += 8. + style::draw(label, cursor + 8., text.centered_baseline(cy), text);
+    }
+    cursor - x
+}
+
+/// A button whose face is a key group: `[Enter] ▶ Start`.
+fn key_button(
+    rect: Rect,
+    keys: Option<&str>,
+    icon: Glyph,
+    label: &str,
+    kind: ButtonKind,
+    motion: &ButtonMotion,
+    look: Appearance,
+) {
+    let theme = style::theme().faded(look.alpha);
+    let rect = kit::appear(rect, look);
+    kit::button(rect, "", kind, motion, &theme);
+    let ink = if kind == ButtonKind::Primary {
+        theme.accent_ink
+    } else {
+        INK
+    };
+    let w = key_group_width(keys, icon, label);
+    let sink = 2. * motion.press();
+    key_group(
+        rect.center().x - w * 0.5,
+        rect.center().y + sink,
+        keys,
+        icon,
         label,
-        ButtonKind::Primary,
-        &overlay.cta,
-        &style::theme().faded(look.alpha),
+        ink,
+        look.alpha,
     );
 }
 
-/// The title card: an animated logo, three goals, key prompts and a clear call to action.
+/// A pill with a pictogram, short text and an optional trailing number.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Chip {
+    pub glyph: Glyph,
+    pub text: Line,
+    pub color: Color,
+    pub value: Line,
+    pub value_color: Color,
+}
+
+impl Chip {
+    fn new(glyph: Glyph, text: Line, color: Color) -> Self {
+        Self {
+            glyph,
+            text,
+            color,
+            value: Line::new(),
+            value_color: color,
+        }
+    }
+
+    fn with_value(mut self, value: Line, color: Color) -> Self {
+        self.value = value;
+        self.value_color = color;
+        self
+    }
+
+    fn width(&self, lead: bool) -> f32 {
+        let text = style::body(16., INK);
+        let value = if self.value.is_empty() {
+            0.
+        } else {
+            10. + style::width(&self.value, text)
+        };
+        (if lead { 26. } else { 0. }) + 22. + 8. + style::width(&self.text, text) + value + 28.
+    }
+
+    /// Draws the pill centered on `center`, optionally led by `lead`.
+    fn draw(&self, center: Vec2, lead: Option<Icon>, alpha: f32) {
+        let w = self.width(lead.is_some());
+        let pill = Rect::new(center.x - w * 0.5, center.y - 15., w, 30.);
+        shapes::fill_rounded_rect(pill, 15., fade(self.color, 0.12 * alpha));
+        shapes::stroke_rounded_rect(pill, 15., 1., fade(self.color, 0.35 * alpha));
+        let mut x = pill.x + 14.;
+        if let Some(icon) = lead {
+            icons::draw(icon, vec2(x + 9., center.y), 18., fade(MUTED, alpha));
+            x += 26.;
+        }
+        glyph(
+            self.glyph,
+            vec2(x + 11., center.y),
+            20.,
+            fade(self.color, alpha),
+        );
+        x += 30.;
+        let text = style::body(16., fade(self.color, alpha));
+        x += style::draw(&self.text, x, text.centered_baseline(center.y), text);
+        if !self.value.is_empty() {
+            let value = text.with_color(fade(self.value_color, alpha));
+            style::draw(
+                &self.value,
+                x + 10.,
+                value.centered_baseline(center.y),
+                value,
+            );
+        }
+    }
+}
+
+/// The three medal targets as badges with their times.
+fn medal_targets(center: Vec2, alpha: f32) {
+    let text = style::body(16., INK);
+    let item = |secs: f32| 28. + style::width(&line!("{secs:.0}s"), text);
+    let gap = 22.;
+    let total: f32 = MEDALS.iter().map(|&s| item(s)).sum::<f32>() + gap * 2.;
+    let mut x = center.x - total * 0.5;
+    for (medal, secs) in [Medal::Gold, Medal::Silver, Medal::Bronze]
+        .into_iter()
+        .zip(MEDALS)
+    {
+        medal_badge(vec2(x + 10., center.y), 10., medal, alpha);
+        let label = line!("{secs:.0}s");
+        style::draw(
+            &label,
+            x + 28.,
+            text.centered_baseline(center.y),
+            text.with_color(fade(medal_color(medal), alpha)),
+        );
+        x += item(secs) + gap;
+    }
+}
+
+/// The title card: an animated logo, three pictogram goals, key caps and a
+/// clear call to action.
 pub(super) fn ready(hints: &Hints, best: Option<(f64, Medal)>, overlay: &Overlay) {
     let rect = card_rect(SessionState::Ready);
     let motion = overlay.motion();
@@ -760,7 +1140,7 @@ pub(super) fn ready(hints: &Hints, best: Option<(f64, Medal)>, overlay: &Overlay
         style::center(
             letter,
             x + advance * 0.5,
-            rect.y + 78. + bob + look.offset[1],
+            rect.y + 80. + bob + look.offset[1],
             logo.with_size(size)
                 .with_color(fade(GOLD, look.alpha))
                 .with_outline(fade(Color::from_hex(0x2a1306), look.alpha))
@@ -768,128 +1148,134 @@ pub(super) fn ready(hints: &Hints, best: Option<(f64, Medal)>, overlay: &Overlay
         );
         x += advance;
     }
-    let tag = overlay.look(Entrance::fade_up(8.), 0, 0.45);
-    style::center(
-        "A lantern, a long night, and suspiciously many spikes.",
-        c,
-        rect.y + 108. + tag.offset[1],
-        style::body(16., fade(MUTED, tag.alpha)),
-    );
 
-    let goals = [
-        ("Light 2 lanterns", "to save your spot"),
-        ("Grab embers", "3 unlock an air jump"),
-        ("Ride the lift", "under 12s for gold"),
-    ];
+    // Goals as pictogram equations with a caption of at most three words.
+    let goals = ["LIGHT LANTERNS", "GRAB EMBERS", "RIDE THE LIFT"];
     let tile_w = (rect.w - 48. - 24.) / 3.;
-    for (i, (head, sub)) in goals.iter().enumerate() {
+    for (i, caption) in goals.iter().enumerate() {
         let look = overlay.look(Entrance::fade_up(12.).with_stagger(0.06), i, 0.5);
+        let a = look.alpha;
         let tile = kit::appear(
             Rect::new(
                 rect.x + 24. + i as f32 * (tile_w + 12.),
-                rect.y + 126.,
+                rect.y + 108.,
                 tile_w,
-                92.,
+                104.,
             ),
             look,
         );
-        style::tile(tile, look.alpha);
+        style::tile(tile, a);
         let x = tile.center().x;
-        let icon_y = tile.y + 26.;
+        let y = tile.y + 40.;
+        let arrow = |x: f32| icons::draw(Icon::ArrowRight, vec2(x, y), 14., fade(MUTED, a));
         match i {
             0 => {
-                lantern_icon(x - 12., icon_y + 6., false);
-                lantern_icon(x + 12., icon_y + 6., true);
+                lantern_glyph(vec2(x - 26., y), 28., false, a);
+                arrow(x);
+                lantern_glyph(vec2(x + 26., y), 28., true, a);
             }
             1 => {
-                shapes::glow_disc(
-                    vec2(x, icon_y),
-                    18.,
-                    Color::new(1., 0.55, 0.2, 0.5 * look.alpha),
-                );
-                diamond(vec2(x, icon_y), 11., fade(ORANGE, look.alpha));
+                for k in 0..3 {
+                    gem(vec2(x - 50. + k as f32 * 16., y), 8., fade(ORANGE, a));
+                }
+                arrow(x + 4.);
+                shapes::glow_disc(vec2(x + 32., y), 18., fade(LEAF, 0.35 * a));
+                glyph(Glyph::AirJump, vec2(x + 32., y), 26., fade(LEAF, a));
             }
             _ => {
-                shapes::stroke_rounded_rect(
-                    Rect::new(x - 11., icon_y - 13., 22., 26.),
-                    3.,
-                    2.,
-                    fade(LEAF, look.alpha),
+                lift_glyph(vec2(x - 18., y), 30., a);
+                glyph(
+                    Glyph::Icon(Icon::Flag),
+                    vec2(x + 20., y - 2.),
+                    24.,
+                    fade(LEAF, a),
                 );
-                shapes::glow_disc(vec2(x, icon_y - 18.), 10., fade(LEAF, 0.6 * look.alpha));
             }
         }
-        style::center(
-            head,
-            x,
-            tile.y + 62.,
-            style::body(16., fade(INK, look.alpha)),
-        );
-        style::center(
-            sub,
-            x,
-            tile.y + 80.,
-            style::body(16., fade(MUTED, look.alpha)),
-        );
+        style::center(caption, x, tile.y + 86., style::body(16., fade(INK, a)));
     }
 
-    // Key prompts for the current device; touch shows the on-screen buttons.
+    // Controls as key caps beside pictograms; touch shows the on-screen buttons.
     let prompts = overlay.look(Entrance::fade_up(8.), 0, 0.72);
-    let theme = style::theme().faded(prompts.alpha);
+    let pa = prompts.alpha;
+    let row_y = rect.y + 244. + prompts.offset[1];
     if hints.touch {
-        style::center(
-            "Use the on-screen ◀ ▶ and jump buttons",
-            c,
-            rect.y + 254.,
-            style::body(16., fade(INK, prompts.alpha)),
-        );
+        let buttons = [Icon::ArrowLeft, Icon::ArrowRight, Icon::ArrowUp];
+        let mut x = c - 96.;
+        icons::draw(Icon::Hand, vec2(x - 20., row_y), 22., fade(MUTED, pa));
+        for icon in buttons {
+            x += 40.;
+            shapes::fill_circle(
+                vec2(x, row_y),
+                17.,
+                fade(Color::new(0.09, 0.14, 0.12, 0.9), pa),
+            );
+            shapes::stroke_circle(vec2(x, row_y), 17., 1., fade(style::GLASS_EDGE, pa * 4.));
+            icons::draw(icon, vec2(x, row_y), 18., fade(INK, pa));
+        }
     } else {
         let row = [
-            (hints.movement.as_str(), "Move"),
-            (hints.jump.text(), "Jump"),
-            (hints.pause.text(), "Pause"),
+            (hints.movement.as_str(), Glyph::Move),
+            (hints.jump.text(), Glyph::Icon(Icon::ArrowUp)),
+            (hints.pause.text(), Glyph::Icon(Icon::Pause)),
         ];
-        let gap = 28.;
+        let gap = 34.;
         let total: f32 = row
             .iter()
-            .map(|(keys, action)| style::key_prompt_width(keys, action))
+            .map(|(keys, icon)| key_group_width(Some(keys), *icon, ""))
             .sum::<f32>()
             + gap * 2.;
         let mut x = c - total.min(rect.w - 32.) * 0.5;
-        for (keys, action) in row {
-            x +=
-                style::key_prompt(x, rect.y + 236. + prompts.offset[1], keys, action, &theme) + gap;
+        for (keys, icon) in row {
+            x += key_group(x, row_y, Some(keys), icon, "", MUTED, pa) + gap;
         }
     }
+
+    // Your best, or the three medal targets to chase.
     let best_look = overlay.look(Entrance::fade_up(8.), 0, 0.8);
+    let ba = best_look.alpha;
+    let best_y = rect.y + 290.;
     if let Some((time, medal)) = best {
-        let text = line!("★ Best {time:.2}s · {}", quips::medal_label(medal));
-        style::center(
-            &text,
-            c,
-            rect.y + 296.,
-            style::body(16., fade(medal_color(medal), best_look.alpha)),
-        );
+        Chip::new(
+            Glyph::Icon(Icon::Trophy),
+            line!("{time:.2}s"),
+            medal_color(medal),
+        )
+        .draw(vec2(c, best_y), None, ba);
     } else {
-        style::center(
-            "Gold under 12s · silver 18s · bronze 30s",
-            c,
-            rect.y + 296.,
-            style::body(16., fade(MUTED, best_look.alpha)),
-        );
+        medal_targets(vec2(c, best_y), ba);
     }
     let button = overlay.look(Entrance::pop(0.9), 0, 0.9);
-    let label = if hints.tap_confirm {
-        line!("Tap to start")
+    let keys = (!hints.tap_confirm).then(|| hints.confirm.text());
+    let icon = if hints.tap_confirm {
+        Glyph::Icon(Icon::Hand)
     } else {
-        line!("Press {} to start", hints.confirm.text())
+        Glyph::Icon(Icon::Play)
     };
-    cta(
-        &label,
-        Rect::new(c - 160., rect.y + 314., 320., 44.),
-        overlay,
+    key_button(
+        Rect::new(c - 160., rect.y + 316., 320., 46.),
+        keys,
+        icon,
+        "Start",
+        ButtonKind::Primary,
+        &overlay.cta,
         button,
     );
+}
+
+/// A miniature exit lift: a green frame with a car and its arrow.
+fn lift_glyph(at: Vec2, size: f32, alpha: f32) {
+    let u = size / 30.;
+    let frame = Rect::new(at.x - 10. * u, at.y - 13. * u, 20. * u, 28. * u);
+    shapes::fill_rounded_rect(frame, 3. * u, fade(Color::from_hex(0x1a2925), alpha));
+    shapes::stroke_rounded_rect(frame, 3. * u, 2. * u, fade(LEAF, alpha));
+    shapes::fill_triangle(
+        at + vec2(-3. * u, -5. * u),
+        at + vec2(5. * u, 0.),
+        at + vec2(-3. * u, 5. * u),
+        fade(LEAF, alpha),
+    );
+    shapes::glow_disc(at - vec2(0., 17. * u), 6. * u, fade(LEAF, 0.6 * alpha));
 }
 
 pub(super) fn paused(game: &Game, hints: &Hints, overlay: &Overlay) {
@@ -906,97 +1292,113 @@ pub(super) fn paused(game: &Game, hints: &Hints, overlay: &Overlay) {
     );
     let collected = game.embers.iter().filter(|(_, found)| *found).count();
     let elapsed = game.trial.elapsed();
+    let lanterns = game.checkpoints.index();
     stats(
         &[
-            ("Time", line!("{elapsed:.2}"), medal_color(pace(elapsed))),
-            ("Embers", line!("{collected}/{}", game.embers.len()), ORANGE),
-            ("Lanterns", line!("{}/2", game.checkpoints.index()), GOLD),
-            ("Falls", line!("{}", game.deaths), INK),
+            (
+                Glyph::Icon(Icon::Clock),
+                Value::Text(line!("{elapsed:.2}")),
+                medal_color(pace(elapsed)),
+            ),
+            (
+                Glyph::Ember,
+                Value::Text(line!("{collected}/{}", game.embers.len())),
+                ORANGE,
+            ),
+            (
+                Glyph::Lantern(lanterns > 0),
+                Value::Text(line!("{lanterns}/2")),
+                GOLD,
+            ),
+            (
+                Glyph::Icon(Icon::Skull),
+                Value::Text(line!("{}", game.deaths)),
+                INK,
+            ),
         ],
-        Rect::new(inner.x, inner.y + 36., inner.w, 76.),
+        Rect::new(inner.x, inner.y + 36., inner.w, 80.),
         overlay,
         0.06,
         look.alpha,
     );
     let buttons = overlay.look(Entrance::fade_up(8.), 0, 0.18);
-    let label = if hints.tap_confirm {
-        line!("Tap to resume")
-    } else {
-        line!("{} / {}  Resume", hints.confirm.text(), hints.pause.text())
-    };
-    let y = inner.y + 136.;
-    cta(
-        &label,
-        Rect::new(inner.x, y, inner.w * 0.6 - 6., 44.),
-        overlay,
+    let resume_keys = line!(
+        "{} / {}",
+        first_key(hints.confirm.text()),
+        first_key(hints.pause.text())
+    );
+    let y = inner.y + 138.;
+    key_button(
+        Rect::new(inner.x, y, inner.w * 0.6 - 6., 46.),
+        (!hints.tap_confirm).then_some(resume_keys.as_str()),
+        Glyph::Icon(if hints.tap_confirm {
+            Icon::Hand
+        } else {
+            Icon::Play
+        }),
+        "Resume",
+        ButtonKind::Primary,
+        &overlay.cta,
         buttons,
     );
-    let restart = line!("{}  Restart", hints.restart.text());
-    kit::button(
-        kit::appear(
-            Rect::new(inner.x + inner.w * 0.6 + 6., y, inner.w * 0.4 - 6., 44.),
-            buttons,
-        ),
-        &restart,
+    key_button(
+        Rect::new(inner.x + inner.w * 0.6 + 6., y, inner.w * 0.4 - 6., 46.),
+        Some(hints.restart.text()),
+        Glyph::Icon(Icon::Restart),
+        "",
         ButtonKind::Secondary,
         &ButtonMotion::default(),
-        &style::theme().faded(buttons.alpha),
+        buttons,
     );
     if hints.keyboard {
-        style::key_prompt(
-            inner.x,
-            inner.y + inner.h - 26.,
-            "F2",
-            "Controls & settings",
-            &style::theme().faded(buttons.alpha),
+        // Controls and settings live in the header: [F2] and a gear.
+        let icon = Glyph::Icon(Icon::Gear);
+        key_group(
+            card.right() - 16. - key_group_width(Some("F2"), icon, ""),
+            card.y + 23.,
+            Some("F2"),
+            icon,
+            "",
+            MUTED,
+            look.alpha,
         );
     }
 }
 
-/// The hook line under the result: next medal, PB chase, or a secret nudge.
-pub(super) fn hook(game: &Game) -> (Line, Color) {
+/// The next goal after a finish: the next medal's time to cut, all embers,
+/// a nudge toward the moth, a fall-free run, or simply going faster.
+pub(super) fn hook(game: &Game) -> Chip {
     let run = summary(game);
     let time = game.trial.elapsed() as f32;
-    if let Some((name, target)) = quips::next_medal(run.medal, MEDALS) {
-        (line!("{:.2}s faster for {name}!", time - target), LEAF)
+    if let Some((medal, target)) = quips::next_medal(run.medal, MEDALS) {
+        Chip::new(Glyph::Medal(medal), line!("−{:.2}s", time - target), LEAF)
     } else if run.embers < run.total_embers {
-        (
-            line!("Gold! Now try all {} embers.", run.total_embers),
-            LEAF,
-        )
+        Chip::new(Glyph::Ember, line!("ALL {}", run.total_embers), LEAF)
     } else if !run.secret {
-        (
-            Line::from_str("Psst… something flutters above the Furnace."),
-            MOTH,
-        )
+        Chip::new(Glyph::Moth, Line::from_str("?"), MOTH)
     } else if run.falls > 0 {
-        (
-            Line::from_str("Now do it without falling. No pressure."),
-            LEAF,
-        )
+        Chip::new(Glyph::Icon(Icon::Skull), Line::from_str("0"), LEAF)
     } else {
-        (Line::from_str("Nothing left to prove. Except speed."), LEAF)
+        Chip::new(Glyph::Icon(Icon::Clock), Line::from_str("FASTER?"), LEAF)
     }
 }
 
-pub(super) fn record_line(game: &Game, results: &Results) -> (Line, Color) {
+/// This run against the stored best, as a trophy chip.
+pub(super) fn record_line(game: &Game, results: &Results) -> Chip {
     let time = game.trial.elapsed();
+    let trophy = Glyph::Icon(Icon::Trophy);
     if results.demo {
-        (Line::from_str("Demo run · not recorded"), MUTED)
+        Chip::new(Glyph::Icon(Icon::EyeOff), Line::from_str("DEMO RUN"), MUTED)
     } else if let Some(best) = results.previous_best {
         if results.new_best(time) {
-            (line!("★ New personal best! −{:.2}s", best - time), GOLD)
+            Chip::new(trophy, Line::from_str("NEW BEST"), GOLD)
+                .with_value(line!("−{:.2}s", best - time), LEAF)
         } else {
-            (
-                line!("Personal best {best:.2}s  (+{:.2}s)", time - best),
-                INK,
-            )
+            Chip::new(trophy, line!("{best:.2}s"), INK)
+                .with_value(line!("+{:.2}s", time - best), style::DANGER)
         }
     } else {
-        (
-            Line::from_str("★ First clear! That's your time to beat."),
-            GOLD,
-        )
+        Chip::new(trophy, Line::from_str("FIRST CLEAR"), GOLD)
     }
 }
 
@@ -1022,12 +1424,6 @@ pub(super) fn won(game: &Game, hints: &Hints, juice: &Juice, overlay: &Overlay, 
     let row = |i: usize| overlay.look(Entrance::fade_up(10.).with_stagger(0.06), i, delay + 0.1);
 
     let r0 = row(0);
-    style::center(
-        "The light carries on",
-        c,
-        rect.y + 40. + r0.offset[1],
-        style::body(16., fade(LEAF, r0.alpha)),
-    );
     let stamp_t = ((overlay.since - delay - 0.18) / 0.22).clamp(0., 1.);
     let stamp = if overlay.motion().is_reduced() {
         1.
@@ -1040,14 +1436,14 @@ pub(super) fn won(game: &Game, hints: &Hints, juice: &Juice, overlay: &Overlay, 
         stamp_t.min(1.) * alpha
     };
     shapes::glow_disc(
-        vec2(c, rect.y + 80.),
+        vec2(c, rect.y + 62.),
         190.,
         Color::new(1., 0.7, 0.3, 0.16 * stamp_alpha),
     );
     style::center_fit(
         rank.title,
         c,
-        rect.y + 92.,
+        rect.y + 78.,
         rect.w - 48.,
         style::display(40. * stamp, fade(GOLD, stamp_alpha)).with_pixel_snap(stamp == 1.),
     );
@@ -1055,7 +1451,7 @@ pub(super) fn won(game: &Game, hints: &Hints, juice: &Juice, overlay: &Overlay, 
     style::center_fit(
         rank.quip,
         c,
-        rect.y + 122. + r1.offset[1],
+        rect.y + 110. + r1.offset[1],
         rect.w - 48.,
         style::body(16., fade(INK, r1.alpha)),
     );
@@ -1065,79 +1461,84 @@ pub(super) fn won(game: &Game, hints: &Hints, juice: &Juice, overlay: &Overlay, 
     let time_style = style::display(40., fade(INK, r2.alpha));
     let time_w = style::width(&line!("{:.2}s", game.trial.elapsed()), time_style);
     let group = 56. + time_w;
-    let badge = vec2(c - group * 0.5 + 22., rect.y + 170. + r2.offset[1]);
+    let badge = vec2(c - group * 0.5 + 22., rect.y + 162. + r2.offset[1]);
     medal_badge(badge, 22., run.medal, r2.alpha);
     style::draw(
         &time,
         badge.x + 34.,
-        rect.y + 190. + r2.offset[1],
+        rect.y + 182. + r2.offset[1],
         time_style,
     );
-    let medal_text = line!("{} medal", quips::medal_label(run.medal));
-    let medal_text = if run.medal == Medal::Unranked {
-        Line::from_str("No medal yet")
-    } else {
-        medal_text
-    };
-    style::center(
-        &medal_text,
-        c,
-        rect.y + 222. + r2.offset[1],
-        style::body(16., fade(medal_color(run.medal), r2.alpha)),
-    );
 
+    // Record and next goal side by side as pictogram chips.
     let r3 = row(3);
-    let (record, record_color) = record_line(game, results);
-    let record_style = style::body(16., fade(record_color, r3.alpha));
-    let pill_w = style::width(&record, record_style).min(rect.w - 80.) + 32.;
-    let pill = Rect::new(c - pill_w * 0.5, rect.y + 236. + r3.offset[1], pill_w, 28.);
-    shapes::fill_rounded_rect(pill, 14., fade(record_color, 0.12 * r3.alpha));
-    shapes::stroke_rounded_rect(pill, 14., 1., fade(record_color, 0.35 * r3.alpha));
-    style::center_fit(&record, c, pill.y + 19., pill_w - 24., record_style);
-    let (hook_text, hook_color) = hook(game);
-    style::center_fit(
-        &hook_text,
-        c,
-        rect.y + 290. + r3.offset[1],
-        rect.w - 48.,
-        style::body(16., fade(hook_color, r3.alpha)),
+    let record = record_line(game, results);
+    let next = hook(game);
+    let (record_w, next_w) = (record.width(false), next.width(true));
+    let gap = 16.;
+    let start = c - (record_w + gap + next_w) * 0.5;
+    let y = rect.y + 228. + r3.offset[1];
+    record.draw(vec2(start + record_w * 0.5, y), None, r3.alpha);
+    next.draw(
+        vec2(start + record_w + gap + next_w * 0.5, y),
+        Some(Icon::Target),
+        r3.alpha,
     );
 
     stats(
         &[
             (
-                "Embers",
-                line!("{}/{}", run.embers, run.total_embers),
+                Glyph::Ember,
+                Value::Text(line!("{}/{}", run.embers, run.total_embers)),
                 ORANGE,
             ),
-            ("Points", line!("{}", game.score.total()), ORANGE),
-            ("Falls", line!("{}", run.falls), INK),
-            ("Close calls", line!("{}", run.close_calls), INK),
             (
-                "Moth",
-                Line::from_str(if run.secret { "★" } else { "?" }),
+                Glyph::Icon(Icon::Star),
+                Value::Text(line!("{}", game.score.total())),
+                GOLD,
+            ),
+            (
+                Glyph::Icon(Icon::Skull),
+                Value::Text(line!("{}", run.falls)),
+                INK,
+            ),
+            (
+                Glyph::Icon(Icon::Alert),
+                Value::Text(line!("{}", run.close_calls)),
+                INK,
+            ),
+            (
+                Glyph::Moth,
+                if run.secret {
+                    Value::Icon(Icon::Check)
+                } else {
+                    Value::Text(Line::from_str("?"))
+                },
                 if run.secret { MOTH } else { MUTED },
             ),
         ],
-        Rect::new(rect.x + 24., rect.y + 306., rect.w - 48., 76.),
+        Rect::new(rect.x + 24., rect.y + 274., rect.w - 48., 84.),
         overlay,
         delay + 0.3,
         alpha,
     );
     let button = overlay.look(Entrance::pop(0.9), 0, delay + 0.55);
-    let label = if hints.tap_confirm {
-        line!("Tap to run again")
-    } else {
-        line!(
-            "{} / {}  Run again",
-            hints.confirm.text(),
-            hints.restart.text()
-        )
-    };
-    cta(
-        &label,
-        Rect::new(c - 170., rect.y + 404., 340., 46.),
-        overlay,
+    let keys = line!(
+        "{} / {}",
+        first_key(hints.confirm.text()),
+        first_key(hints.restart.text())
+    );
+    key_button(
+        Rect::new(c - 170., rect.y + 392., 340., 48.),
+        (!hints.tap_confirm).then_some(keys.as_str()),
+        Glyph::Icon(if hints.tap_confirm {
+            Icon::Hand
+        } else {
+            Icon::Restart
+        }),
+        "Again",
+        ButtonKind::Primary,
+        &overlay.cta,
         button,
     );
 }
@@ -1248,29 +1649,79 @@ mod tests {
             }
         }
         assert_eq!(game.trial.medal(), Some(Medal::Gold));
-        assert_eq!(hook(&game).0, "Gold! Now try all 12 embers.");
+        let next = hook(&game);
+        assert_eq!((next.glyph, next.text.as_str()), (Glyph::Ember, "ALL 12"));
         let results = Results {
             previous_best: Some(game.trial.elapsed() - 0.5),
             demo: false,
         };
+        let slower = record_line(&game, &results);
         assert_eq!(
-            record_line(&game, &results).0,
-            "Personal best 8.60s  (+0.50s)"
+            (slower.text, slower.value),
+            (Line::from_str("8.60s"), Line::from_str("+0.50s"))
         );
+        assert_eq!(slower.value_color, style::DANGER);
         let improved = Results {
             previous_best: Some(game.trial.elapsed() + 0.25),
             demo: false,
         };
+        let best = record_line(&game, &improved);
         assert_eq!(
-            record_line(&game, &improved).0,
-            "★ New personal best! −0.25s"
+            (best.text, best.value),
+            (Line::from_str("NEW BEST"), Line::from_str("−0.25s"))
         );
+        let demo = record_line(
+            &game,
+            &Results {
+                previous_best: None,
+                demo: true,
+            },
+        );
+        assert_eq!(demo.text, "DEMO RUN");
+        assert_eq!(record_line(&game, &Results::default()).text, "FIRST CLEAR");
         for embers in &mut game.embers {
             embers.1 = true;
         }
-        assert!(hook(&game).0.contains("flutters"));
+        assert_eq!(hook(&game).glyph, Glyph::Moth, "nudge toward the secret");
         game.secret = true;
-        assert!(hook(&game).0.contains("speed"));
+        assert_eq!(hook(&game).glyph, Glyph::Icon(Icon::Clock));
+        game.deaths = 2;
+        assert_eq!(hook(&game).text, "0", "a fall-free run is next");
+        // Every chip is a pictogram with at most three words.
+        for chip in [next, slower, best, demo, hook(&game)] {
+            assert!(chip.text.split_whitespace().count() <= 3);
+        }
+    }
+
+    #[test]
+    fn prompts_appear_only_when_useful_and_retire_after_first_use() {
+        let mut game = Game::new(true);
+        let mut juice = Juice::new();
+        assert_eq!(prompt(&game, &juice, false), Some(Prompt::Jump));
+        assert_eq!(prompt(&game, &juice, true), None, "veterans skip prompts");
+        game.jumps = 1;
+        assert_eq!(prompt(&game, &juice, false), None);
+        // An unlocked, ready air jump is prompted only in mid-air.
+        game.embers = vec![(vec2(102., 540.), false); 3];
+        game.update(Input::default(), 1. / 120.);
+        assert!(game.feedback.air_jump_unlocked);
+        juice.on_tick(&game);
+        assert_eq!(prompt(&game, &juice, false), None, "grounded");
+        game.motor.grounded = false;
+        assert_eq!(prompt(&game, &juice, false), Some(Prompt::AirJump));
+        juice.air_jump_taught = true;
+        assert_eq!(prompt(&game, &juice, false), None, "taught once");
+
+        // The overlay fades the prompt in and out on render time.
+        let mut overlay = Overlay::new(game.session.state());
+        overlay.prompt_frame(Some(Prompt::Jump), 0.05);
+        let (kind, alpha) = overlay.prompt().unwrap();
+        assert_eq!(kind, Prompt::Jump);
+        assert!(alpha > 0. && alpha < 1.);
+        for _ in 0..30 {
+            overlay.prompt_frame(None, 0.05);
+        }
+        assert_eq!(overlay.prompt(), None);
     }
 
     #[test]

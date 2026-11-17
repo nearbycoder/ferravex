@@ -7,6 +7,8 @@ pub(super) const BUTTONS: usize = 9;
 /// Visual order groups make / toys / time: BALL CRATE DROP | PULSE CHAOS
 /// DOMINO | PAUSE STEP RESET. Indexed by the lab's stable button index.
 const SLOT: [usize; BUTTONS] = [0, 1, 2, 3, 6, 7, 8, 4, 5];
+/// Text rows under the compact tool palette (icon readouts only).
+const STATUS_LINES: f32 = 1.;
 #[cfg(test)]
 const ROW_HEIGHT: f32 = 20.;
 #[cfg(test)]
@@ -47,17 +49,13 @@ impl LabLayout {
         }
     }
 
-    /// Compact play layout: keep diagnostics out of the scene, without shrinking text.
+    /// Compact play layout: icon-first tool rows over one status row of icon
+    /// readouts, so the scene keeps the rest of the window.
     pub fn compact(width: f32, height: f32) -> Self {
         let mut layout = Self::new(width, height);
         layout.compact = true;
         let rows = BUTTONS.div_ceil(Self::columns(width)) as f32;
-        let lines = if Self::columns(width) == BUTTONS {
-            2.
-        } else {
-            3.
-        };
-        layout.footer_height = 10. + rows * 44. + 14. + lines * 20.;
+        layout.footer_height = 10. + rows * 44. + 14. + STATUS_LINES * 20.;
         layout.footer_y = height - layout.footer_height;
         layout.scale = ((width - 40.) / 26.)
             .min((layout.footer_y - 60.).max(1.) / 14.)
@@ -76,7 +74,7 @@ impl LabLayout {
         }
     }
 
-    /// Whether every button fits one row (two footer text lines follow).
+    /// Whether every button fits one row.
     pub fn single_row(&self) -> bool {
         Self::columns(self.width) == BUTTONS
     }
@@ -288,9 +286,8 @@ mod tests {
                     );
                 }
             }
-            // Three footer text lines (two on the single-row layout) fit.
-            let lines = if layout.single_row() { 2. } else { 3. };
-            assert!(layout.status_y() + (lines - 1.) * 20. + 4. <= h);
+            // The status row of icon readouts fits below the buttons.
+            assert!(layout.status_y() + (STATUS_LINES - 1.) * 20. + 4. <= h);
             // The top bar never overlaps the scene's 13 m grid line.
             assert!(layout.scene_top() >= 44., "{w}x{h}: {}", layout.scene_top());
         }
@@ -435,15 +432,13 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert!(lab.selected_label().starts_with("#35 BOX "));
-        for text in [lab.selected_label(), lab.feedback.to_owned()] {
-            let lines: Vec<_> = label_lines(&text, 264.).collect();
-            assert!(lines.len() <= 4);
-            assert_eq!(lines.join(" "), text);
-        }
+        // Inspection is an icon tag now; the paused drop selects body #35.
+        let selection = lab.selection().unwrap();
+        assert_eq!(selection.number, 35);
+        assert!(matches!(selection.shape, crate::Shape::Box(_)));
         lab.select_body(None);
-        assert!(lab.selected_label().starts_with("No body selected"));
-        assert!(label_lines(lab.feedback, 264.).count() <= 4);
+        assert!(lab.selection().is_none());
+        assert_eq!(lab.notice, crate::Notice::Missed);
         let mut input = PlayerInput::transient("journey200-197-layout");
         register_lab_actions(&mut input);
         input.rebind("inspect", vec![]).unwrap();

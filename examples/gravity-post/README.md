@@ -2,7 +2,7 @@
 
 An eight-world precision flying campaign about delivering the things that keep
 isolated communities connected. A letter, a medical valve, seeds and a peace
-treaty all have to survive a real landing. Collect each parcel at its yellow pad,
+treaty all have to survive a real landing. Collect each parcel at its gold pad,
 then bring it to its green recipient to earn your courier certificate.
 
 This is one of [The Twenty](../../docs/GAMES_20.md). The
@@ -12,7 +12,7 @@ game owns its physics, maps, cargo, resources, progression and procedural art.
 
 ## The route
 
-Each authored world has a blue departure depot, yellow pickup, green destination,
+Each authored world has a blue departure depot, gold pickup, green destination,
 purple supply outpost and one optional airborne survey beacon. Their roles move
 between four landing sites, so later jobs cross the chart in different directions.
 The rocky terrain and pad elevations also change. All eight deliveries are
@@ -48,12 +48,51 @@ consume flight time.
 - **1/2/3** buy engine, tank or landing-gear refits between successful deliveries.
   The three refit cards can also be clicked.
 - **Space/Enter** opens a briefing, advances after a delivery or spends a recovery
-  permit on the wreck screen. The briefing and next-contract buttons accept clicks.
-- **Esc/P** pauses, **H** opens the paginated guide, **F2** remaps controls,
+  permit on the wreck screen. The launch, next-contract and retry buttons accept
+  clicks through the same rule paths as Space.
+- **Esc/P** pauses, **H** opens the guide, **F2** remaps controls,
   **M** toggles sound and **R** starts a completely new eight-world career.
 
-Desktop keyboard play is the intended control scheme. Pointer input covers menus
-and refits; it does not steer the ship.
+Desktop keyboard play is the intended control scheme. Pointer input covers the
+card buttons and refits, which lift and preview their effect under the pointer;
+it does not steer the ship.
+
+## Reading the screen
+
+The game explains itself with icons, meters and motion rather than text
+([visual language](../../docs/VISUAL_LANGUAGE.md)):
+
+- **Header:** eight progress pips and the world's name; the objective is two
+  steps, a gold crate badge with the parcel's name and a green flag badge with
+  the recipient's. The active step glows and finished steps take a check. A gem
+  chip previews the optional beacon's +250 and checks off once it is logged.
+- **Chart:** pads carry role badges (home depot, crate pickup, flag destination,
+  fuel-can outpost) with their remaining fuel and the outpost's repair wrench.
+  The objective pad has a beam, a bobbing arrow and breathing target brackets.
+  Windsocks and drifting streaks show the live wind; during the final storm
+  minute a cloud bank lowers and lightning strikes. Below 120 metres a
+  footprint bracket under the ship turns green over a pad at safe speed and
+  attitude, amber when too fast or tilted, and red over rock. A landed ship shows
+  a floating key bubble: X with what service would do, or Up to lift off.
+- **Instruments:** fuel (flashing red below 20%), hull and parcel meters (the
+  crate cracks at each stamp threshold), then the landing scope: the ship marker
+  sits at its sideways and downward speed, turns with its attitude and must sit
+  inside the green box and tilt fan to land. Exact speed and tilt readouts, the
+  storm clock, gravity, wind arrow with strength pips, credits, recovery permits
+  and refit levels follow.
+- **Cards:** the briefing names the world, its conditions and the parcel's
+  journey, while dashed paths climb, cross and descend over the live chart. The
+  refit desk appears after a short delivery celebration with the earned stamps,
+  the delivery's integrity, effect chips for each refit and its price. The
+  recovery card shows the cause, what a retry rolls back and the permit it
+  spends.
+
+Accepted events produce effects where they happen: touchdown dust with a SOFT or
+FIRM grade, impact debris with hull and parcel losses, fuel, repair and loading
+popups, a confetti burst and credits at the delivery pad, coin popups at the
+refit desk and a large explosion for a wreck. Refusals (unaffordable or maxed
+refits, service with nothing to do, X in midair) get a small ring, shake or
+one-word popup. The guide (H) is four short bullets after the controls page.
 
 ## Flying and landing
 
@@ -154,18 +193,22 @@ eight parcels, 23/24 stamps, all eight beacons, 900 credits, all three recovery
 permits and **31,678 points**. The replay test runs a second fresh game with the
 same command stream and compares their entire states after each tick.
 
-Sixteen behavioral tests cover that campaign, menu inactivity, thrust and cargo
-mass, gravity/wind/inertia, retro-braking, empty fuel, valid/invalid landings,
-gear effects, rough-ground/border impacts, finite service/repair, cargo-gated
-delivery, one-shot beacon rewards, rollback, deadline and bounded retries,
-paid/capped refits, pointer card bounds, authored pad geometry and frozen terminal
-states. A public Rust API doctest executes the pure model without opening a window.
+Twenty-one tests cover that campaign (including header progress at its start
+and end), menu inactivity, thrust and cargo mass, gravity/wind/inertia,
+retro-braking, empty fuel, valid/invalid landings, gear effects,
+rough-ground/border impacts, finite service/repair, cargo-gated delivery,
+one-shot beacon rewards, rollback, deadline and bounded retries, paid/capped
+refits, pointer card bounds and the clickable retry button, authored pad
+geometry, frozen terminal states, short header objectives, the landing verdict
+the footprint bracket shows, and the effects requested for touchdowns,
+deliveries, impacts and refusals. Presentation events are cleared every update
+and never affect rule-state equality. A public Rust API doctest executes the
+pure model without opening a window.
 
 Native visual capture requires a graphics display. Useful windows include frame
-600 for ascent, 1400 for the first pickup approach, 2500 for loaded flight and
-7000 for a later world. Parent review found the frame-600 chart, terrain, pad labels,
-beacon and instruments legible. The parent owns final native/browser builds,
-captures and combined collection checks. Compilation and a headless winning route
+600 for ascent, 1745 for the first landing approach, 1800 for the pickup
+effects and 3893 for the second world's briefing. The parent owns final
+native/browser builds, captures and combined collection checks. Compilation and a headless winning route
 do not establish human difficulty balance, physical gamepad/mobile support,
 audio-device quality, cross-platform floating-point determinism or browser behavior.
 

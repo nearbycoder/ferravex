@@ -5,45 +5,48 @@
 //! same run always reads the same way. No clock, RNG or render cadence is
 //! involved. Rotating tables never repeat a line on consecutive counters.
 
-/// Named areas of the authored map, in [`super::zone_at`] order.
+/// Named areas of the authored map, in [`super::zone_at`] order, each with
+/// the cave's three-word (or shorter) answer. Base Camp shows the objective
+/// chain as pictograms instead of a line.
 pub(super) const ZONES: [(&str, &str); 6] = [
-    ("BASE CAMP", "Somewhere ahead, three crystals hum"),
+    ("BASE CAMP", ""),
     ("THE DRIP GALLERY", "Plink. Plonk. Plink."),
-    ("THE CROSSROADS", "West, east or north. Choose wisely."),
-    ("THE ECHOING GROTTO", "Hello? ...ello? ...llo?"),
-    ("THE GLITTER POCKET", "Everything here is slightly sparkly"),
-    ("HALL OF ALTARS", "Two altars. Both asleep. Relatable."),
+    ("THE CROSSROADS", "Choose wisely."),
+    ("THE ECHOING GROTTO", "Hello? ...ello?"),
+    ("THE GLITTER POCKET", "Ooh. Sparkly."),
+    ("HALL OF ALTARS", "Both asleep. Relatable."),
 ];
 
+// The echo's lines are three words at most: a glance, then its own echo.
 const PICKUP: [&str; 5] = [
     "Shiny. Very shiny.",
-    "Into the pocket it goes.",
-    "The crystal seems relieved.",
-    "Smugness levels rising.",
-    "It hums a happy little hum.",
+    "Pocketed.",
+    "Very relieved.",
+    "Smugness rising.",
+    "Happy little hum.",
 ];
 
 const LOCKED_ALTAR: [&str; 4] = [
-    "The altar ignores you. Rude.",
-    "It wants crystals, not small talk.",
-    "No crystals, no service.",
-    "The altar is pretending to sleep.",
+    "Ignored. Rude.",
+    "Crystals first.",
+    "Crystals, please.",
+    "Fake sleeping.",
 ];
 
 const LOCKED_SEAL: [&str; 4] = [
-    "The seal does not budge. Ever.",
-    "Knock knock. Nobody home.",
-    "Sealed tighter than a pickle jar.",
-    "The seal is deeply unimpressed.",
+    "Does not budge.",
+    "Nobody home.",
+    "Pickle-jar tight.",
+    "Deeply unimpressed.",
 ];
 
 const BONK: [&str; 6] = [
-    "That wall was there first.",
-    "Solid rock. Confirmed.",
-    "The wall says hi.",
-    "Ow, says the wall.",
+    "Wall was first.",
+    "Solid rock.",
+    "Wall says hi.",
+    "Ow, says wall.",
     "Bonk. Bonk. Bonk.",
-    "Walls: still undefeated.",
+    "Walls: undefeated.",
 ];
 
 const PAUSE: [&str; 5] = [
@@ -55,10 +58,10 @@ const PAUSE: [&str; 5] = [
 ];
 
 const RETRY: [&str; 4] = [
-    "The cave forgets. Mostly.",
-    "The crystals pretend not to know you.",
-    "Steve says hi. Probably.",
-    "Same cave. New you.",
+    "Cave forgets. Mostly.",
+    "Crystals: who?",
+    "Steve says hi.",
+    "New you.",
 ];
 
 const NOTE: [&str; 4] = [
@@ -102,7 +105,7 @@ pub(super) fn echo_tail(line: &str) -> String {
 /// first line between expeditions without repeating within one.
 pub(super) fn pickup(count: usize, run: u32) -> &'static str {
     if count >= 3 {
-        return "Three for three. The altars perk up.";
+        return "Three for three!";
     }
     rotate(&PICKUP, run.wrapping_mul(2).wrapping_add(count as u32))
 }
@@ -130,6 +133,8 @@ pub(super) fn retry(runs: u32) -> &'static str {
 }
 
 /// Pages repeat in order; the note is short enough to read in passing.
+pub(super) const NOTE_PAGES: u32 = NOTE.len() as u32;
+
 pub(super) fn note(page: u32) -> &'static str {
     NOTE[page as usize % NOTE.len()]
 }
@@ -137,56 +142,28 @@ pub(super) fn note(page: u32) -> &'static str {
 /// The echo's comment on an awakened altar (0) or the opening seal (1).
 pub(super) fn altar(index: u8) -> &'static str {
     if index == 0 {
-        "It wakes up grumpy, but helpful."
+        "Grumpy, but helpful."
     } else {
-        "Something big just went clunk."
+        "Big clunk."
     }
 }
 
-/// What the stage's next objective needs, as a short HUD label.
-pub(super) fn objective(stage: usize) -> &'static str {
-    match stage {
-        0..=2 => "Find the crystals",
-        3 => "Wake altar I",
-        4 => "Wake altar II",
-        5 => "Walk into daylight",
-        _ => "Expedition complete",
-    }
-}
-
-/// Escalating whispers. `zone` names where the nearest missing crystal is.
-pub(super) fn hint(stage: usize, level: u8, zone: usize) -> String {
+/// Escalating whispers, three words at most; the HUD adds the visuals (the
+/// HUM meter glows at the first whisper, a heading marker from the second).
+/// `zone` names where the nearest missing crystal is.
+pub(super) fn hint(stage: usize, level: u8, zone: usize) -> &'static str {
     match (stage, level) {
-        (_, 0) => String::new(),
-        (0..=2, 1) => "Psst. Crystals hum louder as you get close. Watch HUM.".into(),
-        (3, 1) => "Altar I dozes at the west end of the Hall of Altars.".into(),
-        (4, 1) => "Altar II is on the east side of the hall.".into(),
-        (_, 1) => "The seal is open. Head north, toward the light.".into(),
-        (_, 2) => "Follow the marker at the top of the screen.".into(),
-        (0..=2, _) => format!("Try {}. Trust the hum.", title_case(ZONES[zone].0)),
-        (3 | 4, _) => "Stand right beside the altar and use it.".into(),
-        _ => "North. Through the open seal. Into the sun.".into(),
+        (_, 0) => "",
+        (0..=2, 1) => "Listen closer.",
+        (3, 1) => "West side.",
+        (4, 1) => "East side.",
+        (_, 1) => "Head north.",
+        (_, 2) => "Follow the diamond.",
+        // The third whisper names the place (a proper name, not a sentence).
+        (0..=2, _) => ZONES[zone].0,
+        (3 | 4, _) => "Get closer.",
+        _ => "Into the sun.",
     }
-}
-
-fn title_case(name: &str) -> String {
-    let mut out = String::with_capacity(name.len());
-    for (i, word) in name.split(' ').enumerate() {
-        if i > 0 {
-            out.push(' ');
-        }
-        let lower = word.to_ascii_lowercase();
-        if i == 0 || lower != "of" {
-            let mut chars = lower.chars();
-            if let Some(first) = chars.next() {
-                out.push(first.to_ascii_uppercase());
-                out.extend(chars);
-            }
-        } else {
-            out.push_str(&lower);
-        }
-    }
-    out
 }
 
 /// Seconds a clean (hint-free) run must beat for the fastest titles.
@@ -252,18 +229,32 @@ pub(super) fn rank(run: RunSummary) -> Rank {
     Rank { title, quip }
 }
 
-/// The one thing worth chasing on the next expedition.
-pub(super) fn next_goal(run: RunSummary) -> String {
+/// The one thing worth chasing on the next expedition, drawn as pictograms.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum NextGoal {
+    /// Neither secret yet: a shy fourth crystal hides somewhere.
+    Steve,
+    /// The note is found, Steve is not (he is behind you, at Base Camp).
+    LookBehind,
+    /// Steve is found; the note waits in the Echoing Grotto.
+    Note,
+    /// Every secret, but with hints: now with none.
+    NoHints,
+    /// Everything, hint-free: now faster.
+    Faster,
+}
+
+pub(super) fn next_goal(run: RunSummary) -> NextGoal {
     if !run.shy && !run.note {
-        "Rumor: a fourth crystal hides. It's shy.".into()
+        NextGoal::Steve
     } else if !run.shy {
-        "Steve is shy. Have you tried looking behind you?".into()
+        NextGoal::LookBehind
     } else if !run.note {
-        "Someone lost a note in the Echoing Grotto.".into()
+        NextGoal::Note
     } else if run.hints > 0 {
-        "Now find it all without a single hint.".into()
+        NextGoal::NoHints
     } else {
-        "You've seen it all. Now do it faster.".into()
+        NextGoal::Faster
     }
 }
 
@@ -291,15 +282,12 @@ mod tests {
         for run in 0..8 {
             assert_ne!(pickup(1, run), pickup(2, run));
         }
-        assert_eq!(pickup(3, 7), "Three for three. The altars perk up.");
+        assert_eq!(pickup(3, 7), "Three for three!");
     }
 
     #[test]
     fn echo_tails_fade_out_of_the_last_word() {
-        assert_eq!(
-            echo_tail("The altar ignores you. Rude."),
-            "...rude ...ude ...de"
-        );
+        assert_eq!(echo_tail("Ignored. Rude."), "...rude ...ude ...de");
         assert_eq!(echo_tail("Hi"), "...hi");
         assert_eq!(echo_tail(""), "");
     }
@@ -307,11 +295,18 @@ mod tests {
     #[test]
     fn hints_escalate_and_name_real_places() {
         assert!(hint(0, 0, 3).is_empty());
-        assert!(hint(1, 1, 3).contains("HUM"));
-        assert!(hint(2, 2, 3).contains("marker"));
-        assert_eq!(hint(0, 3, 3), "Try The Echoing Grotto. Trust the hum.");
-        assert_eq!(hint(0, 3, 5), "Try Hall of Altars. Trust the hum.");
-        assert!(hint(5, 1, 0).contains("north"));
+        assert_eq!(hint(1, 1, 3), "Listen closer.");
+        assert_eq!(hint(2, 2, 3), "Follow the diamond.");
+        assert_eq!(hint(0, 3, 3), "THE ECHOING GROTTO");
+        assert_eq!(hint(0, 3, 5), "HALL OF ALTARS");
+        assert_eq!(hint(3, 1, 0), "West side.");
+        assert_eq!(hint(5, 1, 0), "Head north.");
+        for stage in 0..6 {
+            for level in 1..4 {
+                let line = hint(stage, level, 1);
+                assert!(!line.is_empty() && line.split_whitespace().count() <= 3);
+            }
+        }
     }
 
     #[test]
@@ -379,16 +374,19 @@ mod tests {
             .title,
             "SCENIC ROUTE SURVEYOR"
         );
-        assert!(next_goal(base).contains("shy"));
-        assert!(next_goal(RunSummary { note: true, ..base }).contains("behind you"));
-        assert!(next_goal(RunSummary { shy: true, ..base }).contains("note"));
+        assert_eq!(next_goal(base), NextGoal::Steve);
+        assert_eq!(
+            next_goal(RunSummary { note: true, ..base }),
+            NextGoal::LookBehind
+        );
+        assert_eq!(next_goal(RunSummary { shy: true, ..base }), NextGoal::Note);
         let all = RunSummary {
             shy: true,
             note: true,
             ..base
         };
-        assert!(next_goal(all).contains("faster"));
-        assert!(next_goal(RunSummary { hints: 2, ..all }).contains("hint"));
+        assert_eq!(next_goal(all), NextGoal::Faster);
+        assert_eq!(next_goal(RunSummary { hints: 2, ..all }), NextGoal::NoHints);
     }
 
     #[test]
@@ -403,8 +401,12 @@ mod tests {
             .chain(&LOCKED_SEAL)
             .chain(&BONK)
             .chain(&RETRY)
+            .chain(&[pickup(3, 0), altar(0), altar(1)])
+            .chain(ZONES.iter().flat_map(|(name, echo)| [name, echo]))
         {
             assert!(line.len() <= 38, "{line}");
+            // In-play callouts are a glance: three words at most.
+            assert!(line.split_whitespace().count() <= 3, "{line}");
         }
     }
 }

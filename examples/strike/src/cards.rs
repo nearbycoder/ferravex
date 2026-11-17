@@ -2,12 +2,13 @@
 //!
 //! Layout is computed by pure emitters (like the menu's) so tests can check
 //! every block for overlap, clipping and readable sizes at many viewports.
+//! Copy stays to numbers, names and short lines; pictograms (emitted as
+//! [`Item::Glyph`] and painted after the `Ui` pass) replace stat labels.
 use crate::controls::hint;
 use crate::crew::{self, Award, Rank};
-#[cfg(test)]
-use crate::juice::measure;
-use crate::juice::{GOLD, INK, MUTED, TEAL, fit_size};
+use crate::juice::{GOLD, INK, MUTED, RED, TEAL, fit_size, measure};
 use crate::scoreboard::{MATCH_SECONDS, Summary, Tracker};
+use ferravex_render::icons::Icon;
 use ferravex_render::input::PlayerInput;
 use ferravex_render::prelude::*;
 use ferravex_render::ui::{Align, ButtonStyle, TextStyle, Ui, UiRect};
@@ -18,6 +19,24 @@ const CELL: Color = Color::new(0.09, 0.13, 0.12, 0.95);
 /// Records context: match length and frag scoring rules, version 1.
 pub(super) const RECORD_RULES: u64 = 0x5354_524b_0000 | MATCH_SECONDS as u64;
 pub(super) const RECORD_ID: &str = "gauntlet";
+/// Side of a glyph beside a line of card text.
+const GLYPH: f32 = 18.;
+
+/// A pictogram painted over a card after the `Ui` pass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Glyph {
+    Icon(Icon),
+    /// The kill feed's crosshair-in-circle headshot mark.
+    Headshot,
+}
+
+/// What sits under a results stat: a glyph, or a tiny label where no
+/// pictogram says it better ("K/D").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Stat {
+    Glyph(Glyph),
+    Label(&'static str),
+}
 
 /// A finished practice match, captured once at the final authority tick.
 #[derive(Clone, Debug)]
@@ -27,8 +46,8 @@ pub(super) struct Results {
     header: String,
     best_line: String,
     next_line: String,
-    stats: [(String, &'static str); 6],
-    awards: [Option<(&'static str, String)>; 3],
+    stats: [(String, Stat); 6],
+    awards: [Option<(Award, String)>; 3],
 }
 
 impl Results {
@@ -47,45 +66,41 @@ impl Results {
         let new_best = recorded && previous_best.is_none_or(|best| frags > best);
         let mut best_line = String::new();
         let _ = match previous_best {
-            _ if !recorded => write!(best_line, "PRACTICE RUN · NOT RECORDED"),
-            None => write!(best_line, "FIRST RECORD SET: {frags} FRAGS"),
-            Some(best) if frags > best => {
-                write!(
-                    best_line,
-                    "NEW PERSONAL BEST! +{} OVER {best}",
-                    frags - best
-                )
-            }
-            Some(best) if frags == best => write!(best_line, "TIED YOUR BEST OF {best}. SO CLOSE."),
+            _ if !recorded => write!(best_line, "NOT RECORDED"),
+            None => write!(best_line, "FIRST RECORD: {frags}"),
+            Some(best) if frags > best => write!(best_line, "NEW BEST! +{}", frags - best),
+            Some(best) if frags == best => write!(best_line, "TIED BEST: {best}"),
             Some(best) => write!(best_line, "BEST {best} · {} SHORT", best - frags),
         };
         let mut next_line = String::new();
         let _ = match crew::next_rank(s.frags) {
-            Some((title, more)) => write!(next_line, "{more} MORE FOR {title}"),
-            None => write!(next_line, "TOP RANK. THE KRAKEN SALUTES YOU."),
+            Some((title, more)) => write!(next_line, "+{more} → {title}"),
+            None => write!(next_line, "TOP RANK!"),
         };
         let tenths = (s.frags * 10).checked_div(s.deaths).unwrap_or(s.frags * 10);
         let kd = format!("{}.{}", tenths / 10, tenths % 10);
         let stats = [
-            (s.frags.to_string(), "FRAGS"),
-            (s.deaths.to_string(), "DEATHS"),
-            (kd, "K/D"),
-            (format!("{}%", s.accuracy().min(100)), "ACCURACY"),
-            (s.headshots.to_string(), "HEADSHOTS"),
-            (s.best_streak.to_string(), "STREAK"),
+            (s.frags.to_string(), Stat::Glyph(Glyph::Icon(Icon::Target))),
+            (s.deaths.to_string(), Stat::Glyph(Glyph::Icon(Icon::Skull))),
+            (kd, Stat::Label("K/D")),
+            (
+                format!("{}%", s.accuracy().min(100)),
+                Stat::Glyph(Glyph::Icon(Icon::Eye)),
+            ),
+            (s.headshots.to_string(), Stat::Glyph(Glyph::Headshot)),
+            (
+                s.best_streak.to_string(),
+                Stat::Glyph(Glyph::Icon(Icon::Flame)),
+            ),
         ];
         let awards = crew::awards::<3>(&s).map(|award| {
             award.map(|a: Award| {
-                let mut detail = String::new();
-                let _ = a.detail(&mut detail);
-                (a.title(), detail)
+                let mut stat = String::new();
+                let _ = a.stat(&mut stat);
+                (a, stat)
             })
         });
-        let header = format!(
-            "{} YOU {} — {crew} CREW",
-            if new_best { "RECORD!" } else { "FINAL:" },
-            s.frags
-        );
+        let header = format!("{} — {crew}", s.frags);
         Self {
             rank: crew::rank(&s),
             new_best,
@@ -102,6 +117,7 @@ impl Results {
 pub(super) enum Item<'a> {
     Panel(UiRect, Color),
     Text(UiRect, &'a str, f32, Color, Align),
+    Glyph(UiRect, Glyph, Color),
     Button(u64, UiRect, &'static str, f32, bool),
 }
 
@@ -197,7 +213,7 @@ fn results_layout<'a>(
 ) -> f32 {
     let inner = width - 32.;
     let x = left + 16.;
-    let mut items: [Option<Item<'a>>; 40] = std::array::from_fn(|_| None);
+    let mut items: [Option<Item<'a>>; 48] = std::array::from_fn(|_| None);
     let mut count = 0;
     let mut push = |item: Item<'a>| {
         if let Some(slot) = items.get_mut(count) {
@@ -206,50 +222,144 @@ fn results_layout<'a>(
         }
     };
     let mut y = top + 16.;
-    let mut text =
-        |y: &mut f32, value: &'a str, size: f32, color: Color, align: Align, gap: f32| {
-            let (size, lines) = block(value, size, inner);
-            push(Item::Text(
-                rect(x, *y, inner, size * lines as f32),
-                value,
-                size,
-                color,
-                align,
-            ));
-            *y += size * lines as f32 + gap;
-        };
-    text(
-        &mut y,
+    // The final score, framed by you (left) and the crew (right).
+    let score = 20.;
+    let tw = measure(&r.header, score);
+    let x0 = x + (inner - tw) * 0.5;
+    let tone = if r.new_best { GOLD } else { INK };
+    push(Item::Glyph(
+        rect(x0 - GLYPH - 10., y + 1., GLYPH, GLYPH),
+        Glyph::Icon(Icon::Person),
+        GOLD,
+    ));
+    push(Item::Text(
+        rect(x0, y, tw, score),
         &r.header,
-        14.,
-        if r.new_best { GOLD } else { MUTED },
-        Align::Center,
-        10.,
-    );
+        score,
+        tone,
+        Align::Left,
+    ));
+    push(Item::Glyph(
+        rect(x0 + tw + 10., y + 1., GLYPH, GLYPH),
+        Glyph::Icon(Icon::People),
+        TEAL,
+    ));
+    y += score + 10.;
     let title = fit_size(r.rank.title, 34., inner);
     let title_rect = rect(x, y, inner, title);
     y += title + 8.;
-    text(&mut y, r.rank.quip, 14., INK, Align::Center, 12.);
+    // The one joke line on this screen.
+    let (size, lines) = block(r.rank.quip, 14., inner);
+    push(Item::Text(
+        rect(x, y, inner, size * lines as f32),
+        r.rank.quip,
+        size,
+        INK,
+        Align::Center,
+    ));
+    y += size * lines as f32 + 12.;
     let stats_top = y;
     let gap = 8.;
     let columns = if (inner - gap * 2.) / 3. >= 96. { 3 } else { 2 };
     let cell = (inner - gap * (columns - 1) as f32) / columns as f32;
     y += (6 / columns) as f32 * 52. + 6.;
-    text(
+    // A glyph and a short line, centred; wraps without the glyph if needed.
+    let mut glyph_line = |y: &mut f32, glyph: Glyph, value: &'a str, size: f32, color: Color| {
+        let (size, lines) = block(value, size, inner - GLYPH - 8.);
+        if lines == 1 {
+            let tw = measure(value, size);
+            let x0 = x + (inner - (GLYPH + 8. + tw)) * 0.5;
+            push(Item::Glyph(
+                rect(x0, *y + (size - GLYPH) * 0.5, GLYPH, GLYPH),
+                glyph,
+                color,
+            ));
+            push(Item::Text(
+                rect(x0 + GLYPH + 8., *y, tw, size),
+                value,
+                size,
+                color,
+                Align::Left,
+            ));
+        } else {
+            push(Item::Text(
+                rect(x, *y, inner, size * lines as f32),
+                value,
+                size,
+                color,
+                Align::Center,
+            ));
+        }
+        *y += size * lines as f32 + 8.;
+    };
+    glyph_line(
         &mut y,
+        Glyph::Icon(Icon::Trophy),
         &r.best_line,
         16.,
         if r.new_best { GOLD } else { INK },
-        Align::Center,
-        6.,
     );
-    text(&mut y, &r.next_line, 14., TEAL, Align::Center, 6.);
+    glyph_line(&mut y, Glyph::Icon(Icon::ArrowUp), &r.next_line, 14., TEAL);
+    // Awards: pictogram, title and its stat on one row when they fit.
     if shown > 0 {
         y += 4.;
-        text(&mut y, "AWARDS", 13., MUTED, Align::Left, 6.);
-        for (title, detail) in r.awards.iter().flatten().take(shown) {
-            text(&mut y, title, 14., GOLD, Align::Left, 4.);
-            text(&mut y, detail, 13., INK, Align::Left, 8.);
+    }
+    for (award, stat) in r.awards.iter().flatten().take(shown) {
+        let name = award.title();
+        let stat_w = if stat.is_empty() {
+            0.
+        } else {
+            measure(stat, 13.) + 12.
+        };
+        let room = inner - GLYPH - 8. - stat_w;
+        let size = fit_size(name, 14., room);
+        let icon = Glyph::Icon(award.icon());
+        if measure(name, size) <= room {
+            push(Item::Glyph(
+                rect(x, y + (size - GLYPH) * 0.5, GLYPH, GLYPH),
+                icon,
+                GOLD,
+            ));
+            push(Item::Text(
+                rect(x + GLYPH + 8., y, measure(name, size), size),
+                name,
+                size,
+                GOLD,
+                Align::Left,
+            ));
+            if !stat.is_empty() {
+                let sw = measure(stat, 13.);
+                push(Item::Text(
+                    rect(x + inner - sw, y, sw, 13.),
+                    stat,
+                    13.,
+                    INK,
+                    Align::Right,
+                ));
+            }
+            y += size.max(GLYPH - 2.) + 8.;
+        } else {
+            let (size, lines) = block(name, 14., inner - GLYPH - 8.);
+            push(Item::Glyph(rect(x, y, GLYPH, GLYPH), icon, GOLD));
+            push(Item::Text(
+                rect(x + GLYPH + 8., y, inner - GLYPH - 8., size * lines as f32),
+                name,
+                size,
+                GOLD,
+                Align::Left,
+            ));
+            y += (size * lines as f32).max(GLYPH) + 4.;
+            if !stat.is_empty() {
+                let (size, lines) = block(stat, 13., inner - GLYPH - 8.);
+                push(Item::Text(
+                    rect(x + GLYPH + 8., y, inner - GLYPH - 8., size * lines as f32),
+                    stat,
+                    size,
+                    INK,
+                    Align::Left,
+                ));
+                y += size * lines as f32 + 8.;
+            }
         }
     }
     y += 10.;
@@ -262,7 +372,7 @@ fn results_layout<'a>(
         GOLD,
         Align::Center,
     ));
-    for (i, (value, label)) in r.stats.iter().enumerate() {
+    for (i, (value, stat)) in r.stats.iter().enumerate() {
         let cx = x + (i % columns) as f32 * (cell + gap);
         let cy = stats_top + (i / columns) as f32 * 52.;
         emit(Item::Panel(rect(cx, cy, cell, 46.), CELL));
@@ -275,14 +385,27 @@ fn results_layout<'a>(
             color,
             Align::Center,
         ));
-        let size = fit_size(label, 13., cell - 12.);
-        emit(Item::Text(
-            rect(cx + 6., cy + 30., cell - 12., size),
-            label,
-            size,
-            MUTED,
-            Align::Center,
-        ));
+        match *stat {
+            Stat::Glyph(glyph) => emit(Item::Glyph(
+                rect(cx + cell * 0.5 - 8., cy + 28., 16., 16.),
+                glyph,
+                match glyph {
+                    Glyph::Headshot => RED,
+                    Glyph::Icon(Icon::Target) => GOLD,
+                    _ => MUTED,
+                },
+            )),
+            Stat::Label(label) => {
+                let size = fit_size(label, 13., cell - 12.);
+                emit(Item::Text(
+                    rect(cx + 6., cy + 30., cell - 12., size),
+                    label,
+                    size,
+                    MUTED,
+                    Align::Center,
+                ));
+            }
+        }
     }
     for item in items.into_iter().flatten() {
         emit(item);
@@ -323,6 +446,8 @@ fn paint(ui: &mut Ui, item: Item<'_>) {
                 },
             );
         }
+        // Pictograms paint after the `Ui` pass (see `glyphs`).
+        Item::Glyph(..) => {}
         Item::Button(id, r, text, size, primary) => {
             let _ = ui.button(
                 id,
@@ -349,11 +474,37 @@ fn paint(ui: &mut Ui, item: Item<'_>) {
     }
 }
 
+/// Paint one card pictogram (after `Ui::paint`, so it sits on the card).
+fn glyph(item: Item<'_>) {
+    if let Item::Glyph(r, glyph, color) = item {
+        let center = vec2(r.min[0] + r.size[0] * 0.5, r.min[1] + r.size[1] * 0.5);
+        match glyph {
+            Glyph::Icon(icon) => {
+                crate::style::icon(icon, center, r.size[0], color);
+            }
+            Glyph::Headshot => crate::style::headshot_icon(center, r.size[0] * 0.38, color),
+        }
+    }
+}
+
 /// The results screen owns the whole view; the replay footer is hidden.
 pub(super) fn results(ui: &mut Ui, r: &Results) {
     let (w, h) = (screen_width(), screen_height());
     let _ = ui.panel(rect(0., 0., w, h), Color::new(0.02, 0.035, 0.03, 0.55));
     results_items(w, h, h - 12., r, |item| paint(ui, item));
+}
+
+/// The results card's pictograms; call after `Ui::paint`.
+pub(super) fn results_glyphs(r: &Results) {
+    let (w, h) = (screen_width(), screen_height());
+    results_items(w, h, h - 12., r, glyph);
+}
+
+/// Colors and leading pictograms for the three info rows.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct InfoStyle {
+    pub colors: [Color; 3],
+    pub icons: [Option<Icon>; 3],
 }
 
 /// Short info rows under the briefing or pause menu. `menu_bottom` is the
@@ -363,7 +514,7 @@ pub(super) fn info_rows<'a>(
     h: f32,
     menu_left: f32,
     menu_bottom: f32,
-    rows: &[(&'a str, Color)],
+    rows: &[(&'a str, Color, Option<Icon>)],
     mut emit: impl FnMut(Item<'a>),
 ) {
     let limit = h - 150.;
@@ -373,12 +524,13 @@ pub(super) fn info_rows<'a>(
     if width < 120. {
         return;
     }
+    let lead = |icon: &Option<Icon>| if icon.is_some() { GLYPH + 8. } else { 0. };
     let top = menu_bottom + 14.;
     let mut height = 10.;
     let mut fit = 0;
-    for (text, _) in rows {
-        let (size, lines) = block(text, 14., inner);
-        let next = height + size * lines as f32 + 8.;
+    for (text, _, icon) in rows {
+        let (size, lines) = block(text, 14., inner - lead(icon));
+        let next = height + (size * lines as f32).max(if icon.is_some() { 16. } else { 0. }) + 8.;
         if top + next > limit {
             break;
         }
@@ -393,25 +545,32 @@ pub(super) fn info_rows<'a>(
         Color::new(0.03, 0.05, 0.045, 0.82),
     ));
     let mut y = top + 9.;
-    for (text, color) in rows.iter().take(fit) {
-        let (size, lines) = block(text, 14., inner);
+    for (text, color, icon) in rows.iter().take(fit) {
+        let lead = lead(icon);
+        let (size, lines) = block(text, 14., inner - lead);
+        if let Some(icon) = icon {
+            emit(Item::Glyph(
+                rect(left + 12., y + (size - 16.) * 0.5, 16., 16.),
+                Glyph::Icon(*icon),
+                *color,
+            ));
+        }
         emit(Item::Text(
-            rect(left + 12., y, inner, size * lines as f32),
+            rect(left + 12. + lead, y, inner - lead, size * lines as f32),
             text,
             size,
             *color,
             Align::Left,
         ));
-        y += size * lines as f32 + 8.;
+        y += (size * lines as f32).max(if icon.is_some() { 16. } else { 0. }) + 8.;
     }
 }
 
-/// Rows for the opening briefing.
+/// Rows for the opening briefing: your record and the two keys that matter.
 pub(super) fn briefing_rows(best: Option<(u64, u64)>, input: &PlayerInput, out: &mut [String; 3]) {
     for s in out.iter_mut() {
         s.clear();
     }
-    let _ = write!(out[0], "2:00 GAUNTLET VS THE CREW");
     let _ = match best {
         Some((frags, runs)) => {
             let title = crew::rank(&Summary {
@@ -421,18 +580,18 @@ pub(super) fn briefing_rows(best: Option<(u64, u64)>, input: &PlayerInput, out: 
                 ..Default::default()
             })
             .title;
-            write!(out[1], "YOUR BEST: {frags} FRAGS · {title} · {runs} RUNS")
+            write!(out[0], "BEST {frags} · {title} · {runs} RUNS")
         }
-        None => write!(out[1], "NO RECORD YET. SET THE BAR."),
+        None => write!(out[0], "NO RECORD YET"),
     };
     let mut fire = [0; 64];
     let mut roster = [0; 64];
     let fire = hint(input, "fire", &mut fire);
     let roster = hint(input, "roster", &mut roster);
-    let _ = write!(out[2], "{fire} FIRE · HOLD {roster} FOR SCORES");
+    let _ = write!(out[1], "{fire} FIRE · {roster} SCORES");
 }
 
-/// Rows for the paused practice menu.
+/// Rows for the paused practice menu: clock and score, one quip, the record.
 pub(super) fn pause_rows(tracker: &Tracker, best: Option<u64>, seed: u32, out: &mut [String; 3]) {
     for s in out.iter_mut() {
         s.clear();
@@ -447,7 +606,7 @@ pub(super) fn pause_rows(tracker: &Tracker, best: Option<u64>, seed: u32, out: &
         .sum();
     let _ = write!(
         out[0],
-        "{}:{:02} LEFT · YOU {} · CREW {crew}",
+        "{}:{:02} · {} — {crew}",
         seconds / 60,
         seconds % 60,
         tracker.summary.frags
@@ -455,15 +614,40 @@ pub(super) fn pause_rows(tracker: &Tracker, best: Option<u64>, seed: u32, out: &
     let _ = write!(out[1], "{}", crew::pause(seed));
     let _ = match best {
         Some(best) if u64::from(tracker.summary.frags) > best => {
-            write!(out[2], "ON PACE FOR A NEW BEST ({best})")
+            write!(out[2], "BEATING {best}!")
         }
         Some(best) => write!(
             out[2],
-            "BEST {best} · {} TO BEAT IT",
+            "BEST {best} · {} TO BEAT",
             best + 1 - u64::from(tracker.summary.frags)
         ),
         None => write!(out[2], "NO RECORD YET"),
     };
+}
+
+fn info_items<'a>(
+    menu_left: f32,
+    menu_bottom: f32,
+    rows: &'a [String; 3],
+    style: InfoStyle,
+    emit: impl FnMut(Item<'a>),
+) {
+    let mut list: [(&str, Color, Option<Icon>); 3] = [("", INK, None); 3];
+    let mut n = 0;
+    for (k, row) in rows.iter().enumerate() {
+        if !row.is_empty() {
+            list[n] = (row.as_str(), style.colors[k], style.icons[k]);
+            n += 1;
+        }
+    }
+    info_rows(
+        screen_width(),
+        screen_height(),
+        menu_left,
+        menu_bottom,
+        &list[..n],
+        emit,
+    );
 }
 
 pub(super) fn info(
@@ -471,26 +655,24 @@ pub(super) fn info(
     menu_left: f32,
     menu_bottom: f32,
     rows: &[String; 3],
-    colors: [Color; 3],
+    style: InfoStyle,
 ) {
-    let rows = [
-        (rows[0].as_str(), colors[0]),
-        (rows[1].as_str(), colors[1]),
-        (rows[2].as_str(), colors[2]),
-    ];
-    let rows: Vec<_> = rows.into_iter().filter(|(s, _)| !s.is_empty()).collect();
-    info_rows(
-        screen_width(),
-        screen_height(),
-        menu_left,
-        menu_bottom,
-        &rows,
-        |item| paint(ui, item),
-    );
+    info_items(menu_left, menu_bottom, rows, style, |item| paint(ui, item));
 }
 
-pub(super) const BRIEFING_COLORS: [Color; 3] = [GOLD, INK, MUTED];
-pub(super) const PAUSE_COLORS: [Color; 3] = [INK, MUTED, GOLD];
+/// The info rows' pictograms; call after `Ui::paint`.
+pub(super) fn info_glyphs(menu_left: f32, menu_bottom: f32, rows: &[String; 3], style: InfoStyle) {
+    info_items(menu_left, menu_bottom, rows, style, glyph);
+}
+
+pub(super) const BRIEFING_STYLE: InfoStyle = InfoStyle {
+    colors: [GOLD, MUTED, INK],
+    icons: [Some(Icon::Trophy), Some(Icon::Gamepad), None],
+};
+pub(super) const PAUSE_STYLE: InfoStyle = InfoStyle {
+    colors: [INK, MUTED, GOLD],
+    icons: [Some(Icon::Clock), None, Some(Icon::Trophy)],
+};
 
 #[cfg(test)]
 mod tests {
@@ -539,20 +721,25 @@ mod tests {
         let t = tracker(9);
         let first = Results::new(&t, None, true);
         assert!(first.new_best);
-        assert_eq!(first.best_line, "FIRST RECORD SET: 9 FRAGS");
-        assert_eq!(first.next_line, "3 MORE FOR DOCK BOSS");
-        assert_eq!(first.header, "RECORD! YOU 9 — 1 CREW");
+        assert_eq!(first.best_line, "FIRST RECORD: 9");
+        assert_eq!(first.next_line, "+3 → DOCK BOSS");
+        assert_eq!(first.header, "9 — 1");
         let short = Results::new(&t, Some(12), true);
         assert!(!short.new_best);
         assert_eq!(short.best_line, "BEST 12 · 3 SHORT");
-        assert_eq!(short.header, "FINAL: YOU 9 — 1 CREW");
+        assert_eq!(short.header, "9 — 1");
+        let tied = Results::new(&t, Some(9), true);
+        assert!(!tied.new_best, "a tie is not a record");
+        assert_eq!(tied.best_line, "TIED BEST: 9");
         let beat = Results::new(&t, Some(7), true);
         assert!(beat.new_best);
-        assert_eq!(beat.best_line, "NEW PERSONAL BEST! +2 OVER 7");
+        assert_eq!(beat.best_line, "NEW BEST! +2");
         let smoke = Results::new(&t, Some(1), false);
         assert!(!smoke.new_best, "automation never claims a record");
-        assert_eq!(smoke.stats[2].0, "9.0");
+        assert_eq!(smoke.best_line, "NOT RECORDED");
+        assert_eq!(smoke.stats[2], ("9.0".to_owned(), Stat::Label("K/D")));
         assert_eq!(smoke.stats[3].0, "100%");
+        assert_eq!(smoke.stats[4].1, Stat::Glyph(Glyph::Headshot));
     }
 
     #[test]
@@ -570,8 +757,15 @@ mod tests {
                 for footer in [false, true] {
                     let bottom = if footer { h - 150. } else { h - 12. };
                     let mut blocks: Vec<UiRect> = Vec::new();
+                    let mut glyphs: Vec<UiRect> = Vec::new();
                     let mut buttons = 0;
                     let mut panel: Option<UiRect> = None;
+                    let inside = |rect: UiRect, p: UiRect| {
+                        rect.min[0] >= p.min[0] - 0.01
+                            && rect.min[0] + rect.size[0] <= p.min[0] + p.size[0] + 0.01
+                            && rect.min[1] >= p.min[1]
+                            && rect.min[1] + rect.size[1] <= p.min[1] + p.size[1] + 0.01
+                    };
                     results_items(w, h, bottom, &r, |item| match item {
                         Item::Panel(rect, _) => {
                             assert!(rect.min[0] >= 0. && rect.min[0] + rect.size[0] <= w + 0.01);
@@ -588,16 +782,21 @@ mod tests {
                                 "{w}x{h} {text}"
                             );
                             assert!(lines as f32 * size <= rect.size[1] + 0.01, "{text} lines");
-                            let p = panel.unwrap();
-                            assert!(
-                                rect.min[1] >= p.min[1]
-                                    && rect.min[1] + rect.size[1] <= p.min[1] + p.size[1] + 0.01,
-                                "{text} outside card"
-                            );
-                            for b in &blocks {
+                            assert!(inside(rect, panel.unwrap()), "{text} outside card");
+                            for b in blocks.iter().chain(&glyphs) {
                                 assert!(rect.intersect(*b).is_none(), "{w}x{h} {text} overlaps");
                             }
                             blocks.push(rect);
+                        }
+                        Item::Glyph(rect, glyph, _) => {
+                            assert!(inside(rect, panel.unwrap()), "{glyph:?} outside card");
+                            for b in blocks.iter().chain(&glyphs) {
+                                assert!(
+                                    rect.intersect(*b).is_none(),
+                                    "{w}x{h} {glyph:?} overlaps {b:?}"
+                                );
+                            }
+                            glyphs.push(rect);
                         }
                         Item::Button(_, rect, ..) => {
                             buttons += 1;
@@ -606,24 +805,37 @@ mod tests {
                                 rect.min[1] + rect.size[1] <= h - 8.,
                                 "{w}x{h} button clipped"
                             );
-                            for b in &blocks {
+                            for b in blocks.iter().chain(&glyphs) {
                                 assert!(rect.intersect(*b).is_none(), "button overlaps");
                             }
                             blocks.push(rect);
                         }
                     });
                     assert_eq!(buttons, 2);
+                    assert!(glyphs.len() >= 8, "stats and lines lead with pictograms");
                 }
             }
         }
-        let rows = [("A ROW", INK), ("ANOTHER ROW", INK), ("THIRD", INK)];
+        let rows = [
+            ("A ROW", INK, Some(Icon::Clock)),
+            ("ANOTHER ROW", INK, None),
+            ("THIRD", INK, Some(Icon::Trophy)),
+        ];
         for (w, h) in [(320., 480.), (1280., 576.), (1440., 900.)] {
             let mut last = 0.;
-            info_rows(w, h, 40., 250., &rows, |item| {
-                if let Item::Panel(r, _) | Item::Text(r, ..) = item {
+            let mut texts: Vec<UiRect> = Vec::new();
+            info_rows(w, h, 40., 250., &rows, |item| match item {
+                Item::Panel(r, _) | Item::Text(r, ..) | Item::Glyph(r, ..) => {
                     assert!(r.min[1] > 250. && r.min[1] + r.size[1] <= h - 150. + 0.01);
                     last = r.min[1] + r.size[1];
+                    if !matches!(item, Item::Panel(..)) {
+                        for t in &texts {
+                            assert!(r.intersect(*t).is_none(), "info glyph overlaps its text");
+                        }
+                        texts.push(r);
+                    }
                 }
+                Item::Button(..) => panic!("info rows have no buttons"),
             });
             assert!(last <= h - 150. + 0.01);
         }

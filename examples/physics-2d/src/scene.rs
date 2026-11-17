@@ -386,6 +386,14 @@ pub(super) fn draw(f: &World) {
             );
         }
     }
+    // Shockwave rings where bodies arrive, hard hits land and goals pop.
+    for ring in f.juice.rings.iter().flatten() {
+        let (radius, alpha) = ring.look();
+        let p = to_screen(ring.at);
+        let r = radius * scale;
+        shapes::glow_ring(p, r, (0.22 * scale).max(4.), faded(ring.color, 0.5 * alpha));
+        shapes::stroke_circle(p, r, 1.5, faded(lighten(ring.color, 0.3), 0.9 * alpha));
+    }
     if let Some((center, age)) = f.ring {
         let p = to_screen(center);
         let k = (1. - age / 0.65).max(0.) * f.ring_intensity;

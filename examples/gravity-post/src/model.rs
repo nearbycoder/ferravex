@@ -19,8 +19,108 @@ use ferravex_play::motion::approach_vec2;
 
 pub(crate) const FEET: f32 = 10.;
 pub(crate) const PAD_HALF: f32 = 32.;
-const HALF_BODY: f32 = 15.;
+pub(crate) const HALF_BODY: f32 = 15.;
 const MAX_TILT: f32 = 65. * std::f32::consts::PI / 180.;
+/// Seconds before the storm deadline at which the warning effect plays.
+const STORM_WARNING: u32 = 30;
+
+/// Why an attempt ended; shown on the recovery card and in the summary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Cause {
+    Hull,
+    Parcel,
+    Storm,
+    Recall,
+}
+impl Cause {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Hull => "Hull destroyed",
+            Self::Parcel => "Parcel broken",
+            Self::Storm => "Storm closed in",
+            Self::Recall => "Recalled",
+        }
+    }
+}
+
+/// One change the latest update accepted, kept only for presentation
+/// effects. Rules never read these.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Event {
+    /// The briefing was accepted.
+    Launch,
+    /// The ship lifted off this pad.
+    Liftoff(usize),
+    /// A safe landing at this downward speed.
+    Touchdown {
+        pad: usize,
+        speed: f32,
+    },
+    /// Hull and parcel integrity lost in one impact.
+    Impact {
+        hull: f32,
+        cargo: f32,
+    },
+    Wreck(Cause),
+    Refuel {
+        pad: usize,
+        amount: f32,
+    },
+    Repair {
+        pad: usize,
+        amount: f32,
+    },
+    Load(usize),
+    Deliver {
+        pad: usize,
+        stamps: u8,
+        credits: u32,
+    },
+    Beacon {
+        fuel: f32,
+    },
+    Refit {
+        slot: usize,
+        cost: u32,
+    },
+    /// A maxed or unaffordable refit was refused.
+    RefitRefused(usize),
+    /// Service found nothing to do on this pad, or the ship was airborne.
+    Idle(Option<usize>),
+    Recover,
+    NextContract,
+    StormWarning,
+    LowFuel,
+}
+
+/// The latest update's presentation events, bounded and cleared every update.
+/// They always compare equal, so whole-game equality is about rule state.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Events([Option<Event>; 6]);
+impl PartialEq for Events {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+impl Events {
+    fn clear(&mut self) {
+        self.0 = [None; 6];
+    }
+    /// Record `event`; a seventh event in one update is dropped.
+    fn push(&mut self, event: Event) {
+        if let Some(slot) = self.0.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(event);
+        }
+    }
+    pub(crate) fn iter(&self) -> impl Iterator<Item = Event> + '_ {
+        self.0.iter().flatten().copied()
+    }
+}
+
+/// The wide card button shared by the briefing, refit and recovery cards.
+fn on_button(p: Vec2) -> bool {
+    (132. ..=640.).contains(&p.x) && (486. ..=527.).contains(&p.y)
+}
 
 /// Contract and career lifecycle; shared host pause/help is separate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,7 +160,8 @@ pub struct Game {
     pub(crate) impact_cooldown: u8,
     pub(crate) thrusting: bool,
     pub(crate) braking: bool,
-    pub(crate) note: &'static str,
+    pub(crate) cause: Option<Cause>,
+    pub(crate) events: Events,
 }
 impl Default for Game {
     fn default() -> Self {
@@ -95,7 +196,8 @@ impl Game {
             impact_cooldown: 0,
             thrusting: false,
             braking: false,
-            note: "Read the route. Launch when ready.",
+            cause: None,
+            events: Events::default(),
         };
         game.reset_contract();
         game
@@ -204,30 +306,36 @@ impl Game {
         self.thrusting = false;
         self.braking = false;
         self.phase = Phase::Briefing;
-        self.note = "Blue depot -> yellow pickup -> green destination. X services a pad.";
+        self.cause = None;
     }
-    fn wreck(&mut self, note: &'static str) -> Cue {
+    fn wreck(&mut self, cause: Cause) -> Cue {
         self.phase = if self.permits > 0 {
             Phase::Wreck
         } else {
             Phase::Grounded
         };
-        self.note = note;
+        self.cause = Some(cause);
         self.thrusting = false;
         self.braking = false;
+        self.events.push(Event::Wreck(cause));
         Cue::Bad
     }
     fn buy(&mut self, i: usize) -> Cue {
         if i >= 3 || self.upgrades[i] >= 2 || self.credits < self.upgrade_cost(i) {
+            if i < 3 {
+                self.events.push(Event::RefitRefused(i));
+            }
             return Cue::None;
         }
-        self.credits -= self.upgrade_cost(i);
+        let cost = self.upgrade_cost(i);
+        self.credits -= cost;
         self.upgrades[i] += 1;
-        self.note = "Refit installed for all later contracts.";
+        self.events.push(Event::Refit { slot: i, cost });
         Cue::Good
     }
     fn service(&mut self) -> Cue {
         let Some(pad) = self.docked else {
+            self.events.push(Event::Idle(None));
             return Cue::None;
         };
         let role = self.planet().roles[pad];
@@ -237,19 +345,23 @@ impl Game {
             self.fuel += fuel;
             self.reserves[pad] -= fuel;
             changed = true;
-            self.note = "Finite pad reserves transferred to the tank.";
+            self.events.push(Event::Refuel { pad, amount: fuel });
         }
         if role == Role::Outpost && !self.repaired[pad] && self.hull < 100. {
+            let before = self.hull;
             self.hull = (self.hull + 30.).min(100.);
             self.repaired[pad] = true;
             changed = true;
-            self.note = "Outpost crew repaired the hull. This repair kit is now spent.";
+            self.events.push(Event::Repair {
+                pad,
+                amount: self.hull - before,
+            });
         }
         if role == Role::Pickup && !self.loaded {
             self.loaded = true;
             self.score += 100;
             changed = true;
-            self.note = "Parcel secured. Extra mass reduces thrust: climb before crossing.";
+            self.events.push(Event::Load(pad));
         }
         if role == Role::Delivery && self.loaded {
             let stamps = if self.cargo >= 90. && self.hull >= 80. {
@@ -272,10 +384,19 @@ impl Game {
             };
             self.thrusting = false;
             self.braking = false;
-            self.note = "Delivered. Another community has heard from home.";
+            self.events.push(Event::Deliver {
+                pad,
+                stamps,
+                credits: 120 + u32::from(stamps) * 20,
+            });
             return if self.index == 7 { Cue::Win } else { Cue::Good };
         }
-        if changed { Cue::Good } else { Cue::None }
+        if changed {
+            Cue::Good
+        } else {
+            self.events.push(Event::Idle(Some(pad)));
+            Cue::None
+        }
     }
     fn damage(&mut self, speed: f32, hard: bool) -> Cue {
         if self.impact_cooldown > 0 {
@@ -283,42 +404,46 @@ impl Game {
         }
         let damage = (if hard { 14. } else { 8. }) + (speed - 10.).max(0.) * 1.3;
         let protection = 1. - f32::from(self.upgrades[2]) * 0.15;
+        let (hull, cargo) = (self.hull, self.cargo);
         self.hull = (self.hull - damage * protection).max(0.);
         if self.loaded {
             self.cargo = (self.cargo - damage * 0.75).max(0.);
         }
         self.impact_cooldown = 45;
-        self.note = "Impact! Slow both axes and level the ship before landing.";
+        self.events.push(Event::Impact {
+            hull: hull - self.hull,
+            cargo: cargo - self.cargo,
+        });
         if self.hull <= 0. {
-            self.wreck("Hull destroyed. A recovery permit can restart this contract.")
+            self.wreck(Cause::Hull)
         } else if self.cargo <= 0. {
-            self.wreck("The parcel broke apart. Its replacement needs a recovery permit.")
+            self.wreck(Cause::Parcel)
         } else {
             Cue::Bad
         }
     }
     /// Advance exactly one 1/60-second tick. Menus wait for input; terminal states are inert.
     pub fn step(&mut self, input: &Input) -> Cue {
+        self.events.clear();
         match self.phase {
             Phase::Certified | Phase::Grounded => return Cue::None,
             Phase::Briefing => {
-                if input.primary
-                    || (input.click
-                        && (132. ..=640.).contains(&input.pointer.x)
-                        && (486. ..=527.).contains(&input.pointer.y))
-                {
+                if input.primary || (input.click && on_button(input.pointer)) {
                     self.phase = Phase::Flight;
-                    self.note = "Launch with Up or Space. Climb above the ridge before tilting.";
+                    self.events.push(Event::Launch);
                     return Cue::Action;
                 }
                 return Cue::None;
             }
             Phase::Wreck => {
-                if input.primary && self.permits > 0 {
+                // The recovery button accepts a click exactly like Space.
+                if (input.primary || (input.click && on_button(input.pointer))) && self.permits > 0
+                {
                     self.permits -= 1;
                     self.score = self.checkpoint.0;
                     self.credits = self.checkpoint.1;
                     self.reset_contract();
+                    self.events.push(Event::Recover);
                     return Cue::Action;
                 }
                 return Cue::None;
@@ -335,14 +460,11 @@ impl Game {
                         }
                     }
                 }
-                if input.primary
-                    || (input.click
-                        && (132. ..=640.).contains(&input.pointer.x)
-                        && (486. ..=527.).contains(&input.pointer.y))
-                {
+                if input.primary || (input.click && on_button(input.pointer)) {
                     self.index += 1;
                     self.checkpoint = (self.score, self.credits);
                     self.reset_contract();
+                    self.events.push(Event::NextContract);
                     return Cue::Action;
                 }
                 return Cue::None;
@@ -351,10 +473,13 @@ impl Game {
         }
         self.ticks += 1;
         if self.ticks >= self.planet().deadline * 60 {
-            return self.wreck("The storm closed the route before the parcel arrived.");
+            return self.wreck(Cause::Storm);
+        }
+        if self.ticks == self.planet().deadline.saturating_sub(STORM_WARNING) * 60 {
+            self.events.push(Event::StormWarning);
         }
         if input.tertiary {
-            return self.wreck("Recovery requested. This contract's progress will be rolled back.");
+            return self.wreck(Cause::Recall);
         }
         self.impact_cooldown = self.impact_cooldown.saturating_sub(1);
         let was_thrust = self.thrusting;
@@ -370,12 +495,14 @@ impl Game {
             return cue;
         }
         let want_thrust = input.up || input.primary_down;
-        if self.docked.is_some() {
+        if let Some(pad) = self.docked {
             if !want_thrust || input.down || self.fuel <= 0. {
                 return cue;
             }
             self.docked = None;
+            self.events.push(Event::Liftoff(pad));
         }
+        let fuel_before = self.fuel;
         let turn = i32::from(input.right) - i32::from(input.left);
         self.angle = (self.angle + turn as f32 * 1.65 * TICK_DT).clamp(-MAX_TILT, MAX_TILT);
         if input.down && self.fuel > 0. {
@@ -399,6 +526,10 @@ impl Game {
             if !was_thrust {
                 cue = Cue::Action;
             }
+        }
+        let low = self.capacity() * 0.2;
+        if fuel_before >= low && self.fuel < low {
+            self.events.push(Event::LowFuel);
         }
         self.velocity += Vec2::new(self.wind(), self.planet().gravity) * TICK_DT;
         self.velocity *= 1. - self.planet().drag * TICK_DT;
@@ -431,6 +562,10 @@ impl Game {
                     && self.velocity.x.abs() <= limits.0
                     && self.angle.abs() <= limits.2
             }) {
+                self.events.push(Event::Touchdown {
+                    pad,
+                    speed: self.velocity.y,
+                });
                 self.pos.y = self.pad(pad).y - FEET;
                 self.velocity = Vec2::ZERO;
                 self.angle = 0.;
@@ -438,14 +573,6 @@ impl Game {
                 self.last_pad = pad;
                 self.thrusting = false;
                 self.braking = false;
-                self.note = match self.planet().roles[pad] {
-                    Role::Pickup => {
-                        "Safe landing. Tap X to load the parcel and draw available fuel."
-                    }
-                    Role::Delivery => "Destination reached. X delivers a carried parcel.",
-                    Role::Outpost => "Outpost reached. X uses its finite fuel and one repair kit.",
-                    Role::Depot => "Back at the depot. X draws any remaining reserve fuel.",
-                };
                 cue = Cue::Good;
             } else {
                 let impact = self.velocity.length();
@@ -464,8 +591,11 @@ impl Game {
             self.beacon[self.index] = true;
             self.score += 250;
             self.credits += 20;
+            let before = self.fuel;
             self.fuel = (self.fuel + 15.).min(self.capacity());
-            self.note = "Survey beacon logged: +250 score, +20 credits, +15 fuel.";
+            self.events.push(Event::Beacon {
+                fuel: self.fuel - before,
+            });
             cue = Cue::Good;
         }
         cue
@@ -549,20 +679,30 @@ impl Game {
             ..Input::default()
         }
     }
-    /// Plain-language career result for the host's paginated ending screen.
+    /// Total delivery stamps earned this career (three per contract at most).
+    pub(crate) fn stamps(&self) -> u32 {
+        self.stamps.iter().map(|&x| u32::from(x)).sum()
+    }
+    /// Survey beacons logged this career.
+    pub(crate) fn beacons(&self) -> usize {
+        self.beacon.iter().filter(|&&x| x).count()
+    }
+    /// One-sentence career result for status readers and the ending screen.
     pub fn summary(&self) -> String {
-        let stamps: u32 = self.stamps.iter().map(|&x| u32::from(x)).sum();
-        let beacons = self.beacon.iter().filter(|&&x| x).count();
         if self.outcome() == Outcome::Won {
             format!(
-                "Courier certified. All 8 communities received their parcels. {stamps}/24 stamps, {beacons}/8 survey beacons, {} credits and {} recovery permits remain. The Dawn Archive preserves your route. Career score {}.",
-                self.credits, self.permits, self.score
+                "Courier certified: 8 deliveries, {}/24 stamps, {}/8 beacons and {} points.",
+                self.stamps(),
+                self.beacons(),
+                self.score
             )
         } else {
             format!(
-                "{} of 8 parcels delivered. {stamps} stamps and {beacons} survey beacons. {} Career score {}. Begin a new career to try another route and refit strategy.",
+                "Grounded after {} of 8 deliveries ({}) with {} points.",
                 self.delivered(),
-                self.note,
+                self.cause
+                    .map_or("no permits", |c| c.label())
+                    .to_lowercase(),
                 self.score
             )
         }
@@ -594,8 +734,10 @@ mod tests {
     }
     #[test]
     fn legal_pilot_delivers_the_complete_eight_world_campaign() {
+        use ferravex_arcade::ArcadeGame;
         let mut game = Game::new();
         let mut replay = Game::new();
+        assert_eq!(game.progress(), Some((1, 8)));
         let mut visited = [false; 8];
         let mut ended = None;
         for tick in 0..180_000 {
@@ -610,6 +752,7 @@ mod tests {
             }
         }
         assert_eq!(game.outcome(), Outcome::Won, "{game:?}");
+        assert_eq!(game.progress(), Some((8, 8)));
         assert!(visited.into_iter().all(|v| v));
         assert_eq!(game.delivered(), 8);
         assert_eq!(game.permits, 3);
@@ -904,6 +1047,34 @@ mod tests {
         assert_eq!(game.credits, 60);
         assert!(!game.beacon[0]);
         assert_eq!(game.permits, 2);
+    }
+    #[test]
+    fn recovery_button_accepts_a_click_exactly_like_space() {
+        let mut game = launched();
+        game.step(&Input {
+            tertiary: true,
+            ..Input::default()
+        });
+        assert_eq!(game.phase, Phase::Wreck);
+        let wrecked = game.clone();
+        game.step(&Input {
+            click: true,
+            pointer: Vec2::new(150., 360.),
+            ..Input::default()
+        });
+        assert_eq!(game, wrecked);
+        let mut keyed = game.clone();
+        keyed.step(&Input {
+            primary: true,
+            ..Input::default()
+        });
+        game.step(&Input {
+            click: true,
+            pointer: Vec2::new(400., 505.),
+            ..Input::default()
+        });
+        assert_eq!(game, keyed);
+        assert_eq!((game.phase, game.permits), (Phase::Briefing, 2));
     }
     #[test]
     fn deadline_and_three_recovery_permits_lead_to_a_frozen_loss() {

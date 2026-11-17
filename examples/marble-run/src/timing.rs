@@ -11,6 +11,31 @@ struct SplitRecord {
     splits: [Option<u64>; MAX_CHECKPOINTS],
 }
 
+/// A checkpoint split: cumulative time since GO at the first accepted visit
+/// and, once this session has completed the course, the signed difference
+/// to that fastest completed run (negative is faster).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Split {
+    pub index: usize,
+    pub time_us: u64,
+    pub delta_us: Option<i128>,
+}
+
+/// How a finish compares with the prior saved/session best.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Comparison {
+    /// No timed summary exists for this finish.
+    Unavailable,
+    /// The first recorded time for this course and content.
+    First,
+    /// Matched the best to the microsecond.
+    Tie,
+    /// A new best; the signed delta to the prior best.
+    NewBest(i128),
+    /// Slower than the prior best by this signed delta.
+    VsBest(i128),
+}
+
 pub(crate) struct TrialRecords {
     slot: Slot<RecordBook>,
     pub book: RecordBook,
@@ -82,42 +107,37 @@ impl TrialRecords {
         }
     }
 
-    pub fn split_label(&self, run: &Run) -> Option<String> {
+    pub fn split(&self, run: &Run) -> Option<Split> {
         let index = run.splits.iter().rposition(Option::is_some)?;
-        let time = run.splits[index]?;
-        let mut label = format!("CP {} SPLIT {:.2}s", index + 1, time as f64 / 1e6);
-        if let Some(previous) = self.reference.and_then(|r| r.splits[index]) {
-            label.push_str(&format!(" / {} SESSION", delta(time, previous)));
-        }
-        Some(label)
+        let time_us = run.splits[index]?;
+        Some(Split {
+            index,
+            time_us,
+            // Widen before subtraction, preserving both signs without unsigned wrap.
+            delta_us: self
+                .reference
+                .and_then(|r| r.splits[index])
+                .map(|previous| i128::from(time_us) - i128::from(previous)),
+        })
     }
 
-    pub fn finish_label(&self) -> String {
+    pub fn comparison(&self) -> Comparison {
         let Some(time) = self.result.and_then(|r| r.time_us) else {
-            return "TIME COMPARISON UNAVAILABLE".into();
+            return Comparison::Unavailable;
         };
         match (time.comparison, time.previous) {
-            (_, None) => "FIRST RECORDED TIME".into(),
-            (RecordComparison::Tie, _) => "MATCHED BEST TIME".into(),
-            (comparison, Some(previous)) => format!(
-                "{} / {}",
+            (_, None) => Comparison::First,
+            (RecordComparison::Tie, _) => Comparison::Tie,
+            (comparison, Some(previous)) => {
+                let delta = i128::from(time.value) - i128::from(previous);
                 if comparison.is_new_best() {
-                    "NEW BEST"
+                    Comparison::NewBest(delta)
                 } else {
-                    "VS BEST"
-                },
-                delta(time.value, previous),
-            ),
+                    Comparison::VsBest(delta)
+                }
+            }
         }
     }
-}
-
-fn delta(time: u64, previous: u64) -> String {
-    // Widen before subtraction, preserving both signs without unsigned wrap.
-    format!(
-        "{:+.2}s",
-        (i128::from(time) - i128::from(previous)) as f64 / 1e6
-    )
 }
 
 #[cfg(test)]
@@ -154,21 +174,21 @@ mod tests {
         run.finished = true;
         records.finish(0, 1, &run);
         records.finish(0, 1, &run);
-        assert_eq!(records.finish_label(), "FIRST RECORDED TIME");
+        assert_eq!(records.comparison(), Comparison::First);
         assert_eq!(records.book.get("aqueduct", 1).unwrap().runs, 1);
         run.elapsed = 29.;
         run.falls = 3;
         records.begin(0, 1);
         records.finish(0, 1, &run);
-        assert_eq!(records.finish_label(), "NEW BEST / -1.00s");
+        assert_eq!(records.comparison(), Comparison::NewBest(-1_000_000));
         assert_eq!(records.book.get("aqueduct", 1).unwrap().score, 3);
         records.begin(0, 1);
         records.finish(0, 1, &run);
-        assert_eq!(records.finish_label(), "MATCHED BEST TIME");
+        assert_eq!(records.comparison(), Comparison::Tie);
         run.elapsed = 31.;
         records.begin(0, 1);
         records.finish(0, 1, &run);
-        assert_eq!(records.finish_label(), "VS BEST / +2.00s");
+        assert_eq!(records.comparison(), Comparison::VsBest(2_000_000));
         assert_eq!(
             records.book.get("aqueduct", 1).unwrap().fastest_us,
             Some(29_000_000)
@@ -183,30 +203,36 @@ mod tests {
         run.elapsed = 30.;
         run.finished = true;
         records.begin(0, 1);
-        assert_eq!(records.split_label(&run).unwrap(), "CP 1 SPLIT 10.00s");
+        assert_eq!(
+            records.split(&run).unwrap(),
+            Split {
+                index: 0,
+                time_us: 10_000_000,
+                delta_us: None
+            }
+        );
         records.finish(0, 1, &run);
         records.begin(0, 1);
         run.splits[0] = Some(9_000_000);
-        assert_eq!(
-            records.split_label(&run).unwrap(),
-            "CP 1 SPLIT 9.00s / -1.00s SESSION"
-        );
+        assert_eq!(records.split(&run).unwrap().delta_us, Some(-1_000_000));
         run.elapsed = 35.; // Faster first split in a slower run is not the reference.
         records.finish(0, 1, &run);
         records.begin(0, 1);
-        assert!(
-            records
-                .split_label(&run)
-                .unwrap()
-                .contains("-1.00s SESSION")
-        );
+        assert_eq!(records.split(&run).unwrap().delta_us, Some(-1_000_000));
         run.splits[1] = Some(20_000_000); // No invented reference for a skipped gate.
-        assert_eq!(records.split_label(&run).unwrap(), "CP 2 SPLIT 20.00s");
+        assert_eq!(
+            records.split(&run).unwrap(),
+            Split {
+                index: 1,
+                time_us: 20_000_000,
+                delta_us: None
+            }
+        );
         records.begin(0, 2);
         run.splits[1] = None;
-        assert_eq!(records.split_label(&run).unwrap(), "CP 1 SPLIT 9.00s");
+        assert_eq!(records.split(&run).unwrap().delta_us, None);
         records.begin(1, 1);
-        assert_eq!(records.split_label(&run).unwrap(), "CP 1 SPLIT 9.00s");
+        assert_eq!(records.split(&run).unwrap().delta_us, None);
     }
 
     #[test]
@@ -236,6 +262,6 @@ mod tests {
             records.book.get("aqueduct", 1).unwrap().fastest_us,
             Some(29_000_000)
         );
-        assert_eq!(records.finish_label(), "NEW BEST / -1.00s");
+        assert_eq!(records.comparison(), Comparison::NewBest(-1_000_000));
     }
 }

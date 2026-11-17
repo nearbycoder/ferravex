@@ -183,7 +183,8 @@ impl Text {
     }
 
     /// Word-wrapped Modern copy, at most `lines` lines; returns the height used.
-    #[allow(clippy::too_many_arguments)]
+    /// Menus now show effects as chips, so nothing wraps today.
+    #[allow(clippy::too_many_arguments, dead_code)]
     pub fn wrapped(
         &mut self,
         at: Vec2,

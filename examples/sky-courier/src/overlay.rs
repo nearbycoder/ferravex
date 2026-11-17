@@ -7,7 +7,8 @@
 use super::flight_ui::Line;
 use super::presentation::{FlightPresentation, GOLD, POP_LIFE};
 use super::*;
-use ferravex_render::text::{TextAlign, TextStyle, draw_text_styled};
+use ferravex_render::icons::{self, Icon, IconStyle};
+use ferravex_render::text::{TextAlign, TextStyle, draw_text_styled, text_width};
 
 const SPEED_LINE: Color = Color::new(0.96, 0.98, 1.0, 1.0);
 const MARKER: Color = Color::new(1.0, 0.82, 0.40, 1.0);
@@ -93,11 +94,36 @@ pub(super) fn gate_glow(presentation: &FlightPresentation, w: f32, h: f32) {
 
 /// Mixed-case overlay copy with a one-pixel outline so it reads over bright
 /// cloud and dark water alike.
-fn centered(text: &str, x: f32, y: f32, size: f32, color: Color) {
-    let style = TextStyle::modern(size, color)
-        .with_outline(Color::new(SHADOW.r, SHADOW.g, SHADOW.b, SHADOW.a * color.a))
-        .with_align(TextAlign::Center);
-    draw_text_styled(text, x, y, style);
+fn outlined(size: f32, color: Color) -> TextStyle {
+    TextStyle::modern(size, color).with_outline(Color::new(
+        SHADOW.r,
+        SHADOW.g,
+        SHADOW.b,
+        SHADOW.a * color.a,
+    ))
+}
+
+/// An outlined icon followed by outlined copy, centred together on `x` with
+/// the text baseline at `y`.
+fn icon_label(kind: Icon, text: &str, x: f32, y: f32, size: f32, color: Color) {
+    let style = outlined(size, color);
+    let glyph = size * 0.95;
+    let gap = size * 0.2;
+    let width = glyph + gap + text_width(text, style);
+    let left = x - width * 0.5;
+    let cy = y - size * 0.32;
+    icons::draw_styled(
+        kind,
+        vec2(left + glyph * 0.5, cy),
+        glyph,
+        IconStyle::new(color).shadow(Color::new(SHADOW.r, SHADOW.g, SHADOW.b, SHADOW.a * color.a)),
+    );
+    draw_text_styled(
+        text,
+        left + glyph + gap,
+        y,
+        style.with_align(TextAlign::Left),
+    );
 }
 
 /// Corner brackets around the current target, or an edge arrow when it is
@@ -139,12 +165,15 @@ pub(super) fn waypoint(projector: &Projector, flight: &Flight, w: f32, h: f32) {
                 color,
             );
         }
-        let label = if flight.next == GATES {
-            Line::format(format_args!("Post · {distance:.0} m"))
+        let label = Line::format(format_args!("{distance:.0} m"));
+        let y = point.y + size + 20.;
+        if flight.next == GATES {
+            // The parcel marks the drop post.
+            icon_label(Icon::Crate, label.as_str(), point.x, y, 16., color);
         } else {
-            Line::format(format_args!("{distance:.0} m"))
-        };
-        centered(label.as_str(), point.x, point.y + size + 20., 16., color);
+            let style = outlined(16., color).with_align(TextAlign::Center);
+            draw_text_styled(label.as_str(), point.x, y, style);
+        }
         return;
     }
     // Off-screen: an arrow on an inset ellipse, pointing toward the target.
@@ -189,7 +218,8 @@ pub(super) fn pops(projector: &Projector, presentation: &FlightPresentation) {
             1.
         };
         let color = Color::new(pop.color.r, pop.color.g, pop.color.b, alpha);
-        centered(
+        icon_label(
+            pop.icon,
             &pop.text,
             point.x,
             point.y - presentation.pop_rise(pop),

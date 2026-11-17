@@ -28,7 +28,7 @@ fn focus_retains_near_ties_and_interacts_with_the_highlighted_crystal() {
     game.interact();
     assert_eq!(game.collected, [true, false, false]);
     assert_eq!(game.target(), Some(Interactable::Crystal(1)));
-    assert!(game.prompt("Q").unwrap().starts_with("Q - Recover"));
+    assert_eq!(game.prompt(), Some(Prompt::Use(Interactable::Crystal(1))));
 }
 
 #[test]
@@ -63,7 +63,7 @@ fn focus_and_objective_inspection_are_read_only_on_zero_tick_frames() {
         let progress = expedition.advance(0.001, || panic!("no actual tick"));
         assert_eq!(progress.completed, 0);
         assert_eq!(expedition.game.target(), Some(Interactable::Crystal(0)));
-        assert!(expedition.game.prompt("Q").is_some());
+        assert!(expedition.game.prompt().is_some());
         assert_eq!(expedition.game.focus.current(), None);
         assert_eq!(expedition.game.objectives.snapshot(), snapshot);
     }
@@ -71,12 +71,9 @@ fn focus_and_objective_inspection_are_read_only_on_zero_tick_frames() {
     assert_eq!(expedition.game.focus.current(), Some(1));
     expedition.restart();
     assert_eq!(expedition.game.focus.current(), None);
-    assert!(
-        expedition
-            .game
-            .notice
-            .contains("All crystals and altars reset")
-    );
+    // A fresh expedition: nothing collected and nothing left on screen.
+    assert_eq!(expedition.game.count(), 0);
+    assert_eq!(expedition.game.notice, Notice::None);
 }
 
 #[test]
@@ -94,20 +91,33 @@ fn blockers_and_progress_follow_restored_objectives_without_mutation() {
     restored.sync_objectives();
     restored.position = at(b'A');
     assert_eq!(restored.crystal_progress(), (1, 3));
-    assert!(restored.prompt("Q").unwrap().contains("1 / 3 recovered"));
-    assert!(restored.objective_hint().contains("2 / 3 crystals remain"));
+    assert_eq!(
+        restored.prompt(),
+        Some(Prompt::Locked(
+            Interactable::Altar(0),
+            Blocker::Crystals(1, 3)
+        ))
+    );
+    assert_eq!(restored.stage(), 1, "two crystals remain");
     let snapshot = restored.objectives.snapshot();
     restored.interact();
     assert_eq!(restored.objectives.snapshot(), snapshot);
-    assert_eq!(restored.notice, restored.prompt("Q").unwrap());
+    // The refusal shows exactly the blocker the prompt showed.
+    let Some(Prompt::Locked(target, blocker)) = restored.prompt() else {
+        panic!("locked altar prompt");
+    };
+    assert_eq!(restored.notice, Notice::Locked(target, blocker));
     for i in 1..3 {
         restored.objective_event(i);
     }
     assert!(restored.target_ready(Interactable::Altar(0)));
-    assert_eq!(restored.prompt("Q").unwrap(), "Q - Awaken altar I");
+    assert_eq!(restored.prompt(), Some(Prompt::Use(Interactable::Altar(0))));
     restored.interact();
     restored.position = at(b'G') + vec2(0., 1.);
-    assert!(restored.prompt("Q").unwrap().contains("1 / 2 awake"));
+    assert_eq!(
+        restored.prompt(),
+        Some(Prompt::Locked(Interactable::Gate, Blocker::Altars(1)))
+    );
     assert!(!restored.open());
     assert_eq!(restored.completed_mask().count_ones(), 4);
 }
@@ -159,10 +169,9 @@ fn hints_follow_live_bindings_unbound_actions_and_reset() {
     }
     let mut game = Game::new();
     game.position = game.crystals[0];
-    assert_eq!(
-        game.prompt(&action_hint(&input, "interact")).unwrap(),
-        "E - Recover crystal"
-    );
+    // The prompt pill draws this hint as its key cap beside the crystal.
+    assert_eq!(game.prompt(), Some(Prompt::Use(Interactable::Crystal(0))));
+    assert_eq!(action_hint(&input, "interact"), "E");
     input
         .rebind(
             "interact",
@@ -176,10 +185,8 @@ fn hints_follow_live_bindings_unbound_actions_and_reset() {
         )
         .unwrap();
     input.rebind("restart", Vec::new()).unwrap();
-    assert_eq!(
-        game.prompt(&action_hint(&input, "interact")).unwrap(),
-        "Q - Recover crystal"
-    );
+    assert_eq!(game.prompt(), Some(Prompt::Use(Interactable::Crystal(0))));
+    assert_eq!(action_hint(&input, "interact"), "Q");
     assert_eq!(action_hint(&input, "confirm"), "Space");
     assert_eq!(action_hint(&input, "restart"), "Unbound");
     input.reset_defaults();

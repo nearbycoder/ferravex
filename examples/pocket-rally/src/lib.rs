@@ -30,14 +30,13 @@ mod world;
 use ferravex_play::particles::{RibbonFacing, Trail, TrailConfig, TrailSample};
 use ferravex_render::effects::{EffectStyle, ParticleRenderer, ParticleStyle, draw_ribbon};
 use ferravex_render::{demo::Demo, prelude::*};
-use hud::{Hints, View, clock};
+use hud::{Hints, View};
 use juice::{Juice, Priority};
 use presentation::lap_comparison;
 use session::{Notice, RaceSession};
 use sim::{Controls, LAPS, Race, Track};
 use style::{Before, Event, Style};
 
-const CREAM: Color = juice::CREAM;
 #[allow(unused_mut)]
 fn conf() -> Conf {
     let mut conf = ferravex_render::window_conf("Pocket Rally / Ferravex");
@@ -145,6 +144,7 @@ async fn game() {
                 player_input.set_paused(true);
             }
             capture.pond(&mut race);
+            capture.reverse(&mut race);
         }
         let touch_mode = player_input.touch_seen();
         let restarting = player_input.pressed("restart")
@@ -245,9 +245,9 @@ async fn game() {
             }
             if session.notice != notice && session.notice == Some(Notice::BackOnTrack) {
                 juice.toast(
-                    "BACK ON TRACK".to_owned(),
                     quips::back_on_track(style.stats.off_track_episodes).to_owned(),
-                    (juice::GREEN, CREAM),
+                    ferravex_render::icons::Icon::Check,
+                    juice::GREEN,
                     1.4,
                     Priority::Info,
                 );
@@ -415,7 +415,18 @@ async fn game() {
                 world::ghost(ghost);
             }
             if let Some(target) = session.recovery_target(&race, &track) {
-                world::recovery_arrow(race.car.pose.position, target);
+                world::recovery_arrow(race.car.pose.position, target, juice.time, juice.motion());
+            } else if !(demo.autoplay && race.driver_reversing())
+                && race.car.velocity.length() > 20.
+                && track.road_cue(&race.car) == sim::RoadCue::WrongWay
+            {
+                let forward = track.project(race.car.pose.position).direction.truncate();
+                world::wrong_way_arrows(
+                    race.car.pose.position,
+                    forward,
+                    juice.time,
+                    juice.motion(),
+                );
             }
         }
         world::car(
@@ -433,23 +444,18 @@ async fn game() {
         hud::flash(&juice, w, h);
         hud::pops(&juice, &style, &race, &view);
         hud::top_bar(&race, &juice, w);
-        let best_label = race.best_time.map(|best| {
-            hud::Line::of(format_args!(
-                "{} {}",
-                if record_error {
-                    "SESSION BEST"
-                } else {
-                    "BEST LAP"
-                },
-                clock(best)
-            ))
+        // The best lap rides under the minimap: a gold star, or a grey star
+        // and an alert when storage failed and it lasts only this session.
+        let best_lap = race.best_time.map(|time| hud::BestLap {
+            time,
+            saved: !record_error,
         });
         hud::minimap(
             &track,
             &race,
             race.ghost(),
             hud::minimap_rect(w),
-            best_label,
+            best_lap,
             juice.time,
         );
         hud::banner(
@@ -462,8 +468,8 @@ async fn game() {
             w,
             ferravex_play::tween::Motion::from_reduced(juice.motion() == 0.),
         );
-        if !paused && let Some(tip) = hud::coach(&race, &session, &style, &hints, attempt) {
-            hud::coach_chip(&tip, w, h, touch_mode);
+        if !paused && let Some(tip) = hud::coach(&race, &track, &session, &style, attempt) {
+            hud::coach_prompt(tip, &hints, view.screen(race.car.pose.position), &juice, w);
         }
         if touch_mode && !player_input.touch_customized() {
             for (control, (_, label)) in touch_layout.iter().zip(presentation::TOUCH_BUTTONS) {
@@ -477,7 +483,7 @@ async fn game() {
                     (rect.w * 0.36).min(36.),
                     Color::new(0.1, 0.2, 0.14, 0.35),
                 );
-                hud::put_centered(label, x, h - 59., hud::modern(16., CREAM), rect.w - 6.);
+                hud::touch_label(label, x, h - 59., rect.w - 6.);
             }
         }
         hud::go_stamp(&juice, w, h);
@@ -490,18 +496,12 @@ async fn game() {
             ferravex_play::tween::Motion::from_reduced(juice.motion() == 0.),
         );
         if session.countdown() > 0 && !session.clock.is_paused() {
-            let record = records
+            let best_race = records
                 .as_ref()
                 .and_then(|records| records.get("race", record_context))
                 .and_then(|record| record.fastest_us)
-                .map(|us| {
-                    hud::Line::of(format_args!(
-                        "BEST RACE {}  ·  GOLD UNDER {:.0}S",
-                        clock(us as f32 / 1_000_000.),
-                        quips::MEDALS[0]
-                    ))
-                });
-            hud::countdown(&session, &juice, &hints, attempt, record, w, h);
+                .map(|us| us as f32 / 1_000_000.);
+            hud::countdown(&session, &juice, &hints, attempt, best_race, w, h);
         }
         if race.finished() {
             hud::results(

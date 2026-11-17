@@ -13,7 +13,7 @@
 //! assert_eq!(kitchen.outcome(), Outcome::Playing);
 //! ```
 use crate::content::*;
-use ferravex_arcade::{Cue, Input, Outcome, Vec2};
+use ferravex_arcade::{Cue, Input, Outcome};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Phase {
     Briefing,
@@ -49,6 +49,145 @@ struct Ledger {
     score: u32,
     served: u32,
 }
+/// Why a station ignored the action key (presentation only).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Why {
+    /// Hands already hold food.
+    Full,
+    /// An ingredient costs more than the cash on hand.
+    Coins,
+    /// Raw food must be prepared at the board first.
+    Prep,
+    /// The bowl already has this ingredient.
+    Twice,
+    /// The bowl is not an exact recipe yet.
+    Recipe,
+    /// The burner already holds a pot.
+    Busy,
+    /// The pot is still cooking.
+    Cooking,
+    /// The pot burned; X clears it.
+    Burnt,
+    /// Salad goes straight to the plate.
+    Cold,
+    /// This dish must cook before plating.
+    Cook,
+    /// No waiting guest ordered this dish.
+    Order,
+    /// Preparing needs the action key held.
+    Hold,
+    /// Food that does not belong at this station.
+    Wrong,
+    /// Empty hands and nothing to take.
+    Nothing,
+}
+/// What the latest update accepted or refused, and where. Rules never read
+/// these; the view turns them into effects at the event's location.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Event {
+    /// The doors opened for a service (first try or retry).
+    Opened,
+    /// A guest sat at table `slot`.
+    Seated(usize),
+    /// The guest at table `slot` left hungry.
+    Left(usize),
+    /// Bought ingredient `i` at its pantry.
+    Bought(usize),
+    /// Finished preparing ingredient `i` at the board.
+    Prepped(usize),
+    /// Added ingredient `i` to the bowl.
+    Added(usize),
+    /// Lifted an exact recipe out of the bowl.
+    Lifted(usize),
+    /// Put a pot on burner `b`.
+    Cooking(usize),
+    /// Burner `b`'s pot is ready.
+    Ready(usize),
+    /// Burner `b`'s pot burned.
+    Burnt(usize),
+    /// Took the ready pot from burner `b`.
+    Took(usize),
+    /// Cleared burned burner `b`.
+    Cleaned(usize),
+    /// Plated a dish.
+    Plated,
+    /// Served the guest at table `slot` for `pay` coins, tip included.
+    Served { slot: usize, pay: u32 },
+    /// Threw away the food in hand.
+    Binned,
+    /// Emptied the mixing bowl.
+    Emptied,
+    /// The action key did nothing at `station`.
+    Refused(Station, Why),
+    /// Installed upgrade `kind` for `cost` coins.
+    Upgraded { kind: usize, cost: u32 },
+    /// Upgrade `kind` is maxed or unaffordable.
+    Declined(usize),
+    /// The recipe book turned to another page.
+    Page,
+    /// A click chose a walking destination.
+    Walk(Cell),
+    /// The service ended with `stars` medals.
+    Complete(u8),
+    /// The service failed.
+    Failed,
+}
+const FEED: usize = 12;
+/// Updates during which a repeated refusal stays quiet.
+const REFUSAL_QUIET: u32 = 30;
+/// Bounded list of the latest update's [`Event`]s. It is presentation state:
+/// equality ignores it, so replays and frozen-state checks compare only the
+/// kitchen itself.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Feed {
+    items: [Event; FEED],
+    len: usize,
+    /// Updates seen, and the last refusal recorded with its update, so a
+    /// mashed key reports one refusal instead of a storm.
+    tick: u32,
+    refused: Option<(Station, Why, u32)>,
+}
+impl Feed {
+    const fn new() -> Self {
+        Self {
+            items: [Event::Opened; FEED],
+            len: 0,
+            tick: 0,
+            refused: None,
+        }
+    }
+    fn clear(&mut self) {
+        self.len = 0;
+        self.tick = self.tick.wrapping_add(1);
+    }
+    fn push(&mut self, event: Event) {
+        if self.len < FEED {
+            self.items[self.len] = event;
+            self.len += 1;
+        }
+    }
+    fn refuse(&mut self, station: Station, why: Why) {
+        let tick = self.tick;
+        if why == Why::Nothing
+            || self.refused.is_some_and(|(s, w, at)| {
+                s == station && w == why && tick.wrapping_sub(at) < REFUSAL_QUIET
+            })
+        {
+            return;
+        }
+        self.refused = Some((station, why, tick));
+        self.push(Event::Refused(station, why));
+    }
+    pub(crate) fn events(&self) -> &[Event] {
+        &self.items[..self.len]
+    }
+}
+impl PartialEq for Feed {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+impl Eq for Feed {}
 /// A bounded seven-shift campaign. Mutations enter through [`Game::step`].
 /// No renderer, storage, wall clock, random source or autoplay privilege is used.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,7 +215,7 @@ pub struct Game {
     pub(crate) medals: [u8; 7],
     pub(crate) retries: u8,
     pub(crate) book: usize,
-    pub(crate) note: &'static str,
+    pub(crate) feed: Feed,
     saved: Ledger,
 }
 impl Default for Game {
@@ -111,7 +250,7 @@ impl Game {
             medals: [0; 7],
             retries: 3,
             book: 0,
-            note: "Fresh produce costs 2 coins. A complete dish pays much more.",
+            feed: Feed::new(),
             saved: Ledger {
                 cash: 48,
                 score: 0,
@@ -165,6 +304,34 @@ impl Game {
     pub(crate) fn pot_burnt(&self, pot: Pot) -> bool {
         pot.ticks >= RECIPES[pot.recipe].cook + self.burn_grace()
     }
+    /// Stars earned across every completed service.
+    pub(crate) fn stars(&self) -> u32 {
+        self.medals.iter().map(|s| u32::from(*s)).sum()
+    }
+    /// Coins a retry of the current service starts with.
+    pub(crate) fn retry_cash(&self) -> u32 {
+        self.saved.cash
+    }
+    /// The ending's title for the stars earned.
+    pub(crate) fn rank(&self) -> &'static str {
+        match self.stars() {
+            20.. => "Neighborhood Legend",
+            15.. => "Beloved Bistro",
+            _ => "Open for Business",
+        }
+    }
+    /// The table of the oldest guest waiting for `recipe` and the coins they
+    /// would pay `ahead` updates from now (the tip shrinks with patience).
+    pub(crate) fn payout(&self, recipe: usize, ahead: u32) -> Option<(usize, u32)> {
+        let (slot, order) = self
+            .orders
+            .iter()
+            .enumerate()
+            .filter_map(|(i, o)| o.filter(|o| o.recipe == recipe).map(|o| (i, o)))
+            .min_by_key(|(_, o)| o.number)?;
+        let tip = 2 + order.patience.saturating_sub(ahead) * 8 / self.content().patience;
+        Some((slot, RECIPES[recipe].value + tip))
+    }
     fn snapshot(&self) -> Ledger {
         Ledger {
             cash: self.cash,
@@ -193,7 +360,7 @@ impl Game {
         self.saved = self.snapshot();
         self.reset_kitchen();
         self.phase = Phase::Service;
-        self.note = "Collect, chop, mix, cook if needed, plate, then serve.";
+        self.feed.push(Event::Opened);
         self.spawn_order();
         Cue::Action
     }
@@ -210,16 +377,22 @@ impl Game {
                 number: self.next_order + 1,
             });
             self.next_order += 1;
+            self.feed.push(Event::Seated(slot));
         }
     }
-    fn fail(&mut self, note: &'static str) -> Cue {
-        self.note = note;
+    fn fail(&mut self) -> Cue {
+        self.feed.push(Event::Failed);
         self.phase = if self.retries > 0 {
             Phase::Setback
         } else {
             Phase::Lost
         };
         Cue::Bad
+    }
+    /// True when the failed or failing service lost too many guests (rather
+    /// than running out of time).
+    pub(crate) fn too_many_missed(&self) -> bool {
+        usize::from(self.missed) + usize::from(self.content().quota) > self.content().menu.len()
     }
     fn complete_shift(&mut self) -> Cue {
         let all = usize::from(self.served) == self.content().menu.len();
@@ -232,7 +405,8 @@ impl Game {
         };
         self.score += 1000 + u32::from(self.medals[self.shift_index]) * 250;
         self.cash += 20;
-        self.note = "Service complete! The neighborhood leaves the lights on.";
+        self.feed
+            .push(Event::Complete(self.medals[self.shift_index]));
         self.phase = if self.shift_index == 6 {
             Phase::Won
         } else {
@@ -245,22 +419,27 @@ impl Game {
         }
     }
     fn buy(&mut self, kind: usize) -> Cue {
-        if kind >= 3 || self.upgrades[kind] >= 2 {
+        if kind >= 3 {
+            return Cue::None;
+        }
+        if self.upgrades[kind] >= 2 {
+            self.feed.push(Event::Declined(kind));
             return Cue::None;
         }
         let cost = upgrade_cost(kind, self.upgrades[kind]);
         if self.cash < cost {
-            self.note = "Keep serving to earn this upgrade.";
+            self.feed.push(Event::Declined(kind));
             return Cue::None;
         }
         self.cash -= cost;
         self.upgrades[kind] += 1;
-        self.note = "Upgrade installed for the next service.";
+        self.feed.push(Event::Upgraded { kind, cost });
         Cue::Good
     }
     /// Execute one 1/60-second update. Edges perform at most one interaction.
     /// Held primary chops only at the board; menus and terminal outcomes do not age food.
     pub fn step(&mut self, input: &Input) -> Cue {
+        self.feed.clear();
         if self.outcome() != Outcome::Playing {
             return Cue::None;
         }
@@ -285,22 +464,15 @@ impl Game {
                 if let Some(choice) = input.slot.filter(|n| *n >= 1 && *n <= 3) {
                     return self.buy(choice - 1);
                 }
-                if input.click {
-                    for i in 0..3 {
-                        if input.pointer.x >= 86. + i as f32 * 270.
-                            && input.pointer.x < 338. + i as f32 * 270.
-                            && input.pointer.y >= 346.
-                            && input.pointer.y <= 442.
-                        {
-                            return self.buy(i);
-                        }
-                    }
+                if input.click
+                    && let Some(i) = upgrade_at(input.pointer)
+                {
+                    return self.buy(i);
                 }
                 if input.primary || (input.click && menu_start(input.pointer)) {
                     self.shift_index += 1;
                     self.phase = Phase::Briefing;
                     self.reset_kitchen();
-                    self.note = "Read the menu, then open the doors.";
                     return Cue::Action;
                 }
                 return Cue::None;
@@ -319,64 +491,69 @@ impl Game {
         for i in 0..2 {
             if self.burners[i].is_some_and(|p| p.ticks == RECIPES[p.recipe].cook) {
                 cue = Cue::Good;
-                self.note = "Ding! A pot is ready. Pick it up before it burns.";
+                self.feed.push(Event::Ready(i));
             }
             if self.burners[i]
                 .is_some_and(|p| p.ticks == RECIPES[p.recipe].cook + self.burn_grace())
             {
                 self.waste = self.waste.saturating_add(1);
                 cue = Cue::Bad;
-                self.note = "A pot burned. Stand by it and press X to clear it.";
+                self.feed.push(Event::Burnt(i));
             }
         }
-        for order in &mut self.orders {
+        for (slot, order) in self.orders.iter_mut().enumerate() {
             if let Some(o) = order {
                 o.patience = o.patience.saturating_sub(1);
                 if o.patience == 0 {
                     *order = None;
                     self.missed += 1;
                     cue = Cue::Bad;
-                    self.note = "A guest left hungry. The quota is still on the board.";
+                    self.feed.push(Event::Left(slot));
                 }
             }
         }
         self.spawn_order();
         let remaining = self.content().menu.len() - usize::from(self.missed);
         if remaining < usize::from(self.content().quota) {
-            return self.fail("Too many guests left. Try the service again.");
+            return self.fail();
         }
         if self.next_order == self.content().menu.len() && self.orders.iter().all(Option::is_none) {
             return self.complete_shift();
         }
         if self.ticks >= self.deadline() {
-            return self.fail("The kitchen closed before the quota was met.");
+            return self.fail();
         }
         if input.tertiary {
             self.book = (self.book + 1) % RECIPES.len();
-            self.note = RECIPES[self.book].note;
+            self.feed.push(Event::Page);
         }
+        // A click on the station the cook already stands at uses it, exactly
+        // like the action key; any other station or floor click walks there.
+        let mut use_click = false;
         if input.click {
-            if input.pointer.x >= 654. && input.pointer.y >= 124. && input.pointer.y < 180. {
+            if let Some(page) = thumb_at(input.pointer) {
+                self.book = page;
+                self.feed.push(Event::Page);
+            } else if input.pointer.x >= 654. && input.pointer.y >= 124. && input.pointer.y < 180. {
                 self.book = (self.book + 1) % RECIPES.len();
+                self.feed.push(Event::Page);
             }
-            for (i, order) in self.orders.iter().enumerate() {
-                if input.pointer.x >= 28. + i as f32 * 204.
-                    && input.pointer.x < 224. + i as f32 * 204.
-                    && input.pointer.y >= 124.
-                    && input.pointer.y < 200.
-                    && let Some(order) = order
-                {
-                    self.book = order.recipe;
-                }
+            if let Some(slot) = table_at(input.pointer)
+                && let Some(order) = self.orders[slot]
+            {
+                self.book = order.recipe;
+                self.feed.push(Event::Page);
             }
-            let cell = Cell::new(
-                ((input.pointer.x - GRID_X) / TILE).floor() as i32,
-                ((input.pointer.y - GRID_Y) / TILE).floor() as i32,
-            );
+            let cell = cell_at(input.pointer);
             if walkable(cell) {
                 self.destination = Some(cell);
+                self.feed.push(Event::Walk(cell));
             } else if let Some(station) = STATIONS.iter().find(|s| s.1 == cell) {
+                use_click = station.2 == self.position;
                 self.destination = Some(station.2);
+                if !use_click {
+                    self.feed.push(Event::Walk(station.2));
+                }
             }
         }
         self.move_wait = self.move_wait.saturating_sub(1);
@@ -440,12 +617,12 @@ impl Game {
             if self.chopped_ticks >= self.chop_ticks() {
                 self.carry = Carry::Chopped(i);
                 self.chopped_ticks = 0;
-                self.note = "Prep complete. Take the ingredient to Mix.";
+                self.feed.push(Event::Prepped(i));
                 return Cue::Good;
             }
             return cue;
         }
-        if input.primary {
+        if input.primary || use_click {
             let accepted = self.interact();
             if accepted != Cue::None {
                 cue = accepted;
@@ -455,41 +632,43 @@ impl Game {
             return if self.served >= self.content().quota {
                 self.complete_shift()
             } else {
-                self.fail("The last guests left before you reached quota.")
+                self.fail()
             };
         }
         cue
     }
     fn interact(&mut self) -> Cue {
         let Some(station) = self.station() else {
-            self.note = "Stand on a station's marked floor tile to use it.";
             return Cue::None;
         };
+        let cue = self.use_station(station);
+        if cue == Cue::None {
+            let why = self.refusal(station);
+            self.feed.refuse(station, why);
+        }
+        cue
+    }
+    fn use_station(&mut self, station: Station) -> Cue {
         match (station, self.carry) {
             (Station::Pantry(i), Carry::Empty) if self.cash >= 2 => {
                 self.cash -= 2;
                 self.carry = Carry::Raw(i);
-                self.note = "Ingredient collected. Hold Space at Chop to prepare it.";
+                self.feed.push(Event::Bought(i));
                 Cue::Action
             }
             (Station::Mix, Carry::Chopped(i)) if self.mixing & (1 << i) == 0 => {
                 self.mixing |= 1 << i;
                 self.carry = Carry::Empty;
-                self.note = "Added to Mix. Empty hands + Space lifts a complete recipe.";
+                self.feed.push(Event::Added(i));
                 Cue::Action
             }
             (Station::Mix, Carry::Empty) => {
                 if let Some(recipe) = recipe_for(self.mixing) {
                     self.carry = Carry::Mixed(recipe);
                     self.mixing = 0;
-                    self.note = if RECIPES[recipe].cook == 0 {
-                        "Salad needs no cooking. Take it directly to Plate."
-                    } else {
-                        "Put the mixed bowl on either empty burner."
-                    };
+                    self.feed.push(Event::Lifted(recipe));
                     Cue::Good
                 } else {
-                    self.note = "The bowl needs a valid recipe. C opens the next recipe.";
                     Cue::None
                 }
             }
@@ -498,14 +677,14 @@ impl Game {
             {
                 self.burners[i] = Some(Pot { recipe, ticks: 0 });
                 self.carry = Carry::Empty;
-                self.note = "Cooking! Prep another dish, but watch the timer.";
+                self.feed.push(Event::Cooking(i));
                 Cue::Action
             }
             (Station::Burner(i), Carry::Empty) => {
                 if let Some(pot) = self.burners[i].filter(|p| self.pot_ready(*p)) {
                     self.carry = Carry::Cooked(pot.recipe);
                     self.burners[i] = None;
-                    self.note = "Cooked just right. Take it to Plate.";
+                    self.feed.push(Event::Took(i));
                     Cue::Good
                 } else {
                     Cue::None
@@ -513,33 +692,26 @@ impl Game {
             }
             (Station::Plate, Carry::Cooked(recipe)) => {
                 self.carry = Carry::Plated(recipe);
-                self.note = "Ready to serve! Take the plate to the Serve window.";
+                self.feed.push(Event::Plated);
                 Cue::Action
             }
             (Station::Plate, Carry::Mixed(recipe)) if RECIPES[recipe].cook == 0 => {
                 self.carry = Carry::Plated(recipe);
-                self.note = "Fresh salad plated. Deliver it at Serve.";
+                self.feed.push(Event::Plated);
                 Cue::Action
             }
             (Station::Serve, Carry::Plated(recipe)) => {
-                let order = self
-                    .orders
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, o)| o.filter(|o| o.recipe == recipe).map(|o| (i, o)))
-                    .min_by_key(|(_, o)| o.number);
-                if let Some((i, order)) = order {
-                    let tip = 2 + order.patience * 8 / self.content().patience;
-                    self.cash += RECIPES[recipe].value + tip;
+                if let Some((slot, pay)) = self.payout(recipe, 0) {
+                    let tip = pay - RECIPES[recipe].value;
+                    self.cash += pay;
                     self.score += 400 + tip * 25;
-                    self.orders[i] = None;
+                    self.orders[slot] = None;
                     self.carry = Carry::Empty;
                     self.served += 1;
                     self.total_served += 1;
-                    self.note = "Served! Fresh ingredients and quick service earn better tips.";
+                    self.feed.push(Event::Served { slot, pay });
                     Cue::Good
                 } else {
-                    self.note = "No guest ordered that dish. Keep it for a later guest or bin it.";
                     Cue::None
                 }
             }
@@ -547,24 +719,47 @@ impl Game {
             _ => Cue::None,
         }
     }
+    /// Why the action key just did nothing at `station` (presentation only).
+    pub(crate) fn refusal(&self, station: Station) -> Why {
+        match (station, self.carry) {
+            (Station::Pantry(_), Carry::Empty) => Why::Coins,
+            (Station::Pantry(_), _) => Why::Full,
+            (Station::Chop, Carry::Raw(_)) => Why::Hold,
+            (Station::Mix, Carry::Raw(_)) | (Station::Plate, Carry::Raw(_)) => Why::Prep,
+            (Station::Mix, Carry::Chopped(_)) => Why::Twice,
+            (Station::Mix, Carry::Empty) if self.mixing != 0 => Why::Recipe,
+            (Station::Mix, Carry::Mixed(_) | Carry::Cooked(_) | Carry::Plated(_)) => Why::Full,
+            (Station::Burner(_), Carry::Mixed(r)) if RECIPES[r].cook == 0 => Why::Cold,
+            (Station::Burner(_), Carry::Mixed(_)) => Why::Busy,
+            (Station::Burner(i), Carry::Empty) => match self.burners[i] {
+                Some(pot) if self.pot_burnt(pot) => Why::Burnt,
+                Some(_) => Why::Cooking,
+                None => Why::Nothing,
+            },
+            (Station::Plate, Carry::Mixed(_)) => Why::Cook,
+            (Station::Serve, Carry::Plated(_)) => Why::Order,
+            (_, Carry::Empty) => Why::Nothing,
+            _ => Why::Wrong,
+        }
+    }
     fn discard(&mut self) -> Cue {
         if self.carry != Carry::Empty {
             self.carry = Carry::Empty;
             self.chopped_ticks = 0;
             self.waste = self.waste.saturating_add(1);
-            self.note = "Discarded. Ingredients are not refunded.";
+            self.feed.push(Event::Binned);
             return Cue::Bad;
         }
         match self.station() {
             Some(Station::Mix) if self.mixing != 0 => {
                 self.mixing = 0;
                 self.waste = self.waste.saturating_add(1);
-                self.note = "Mixing bowl cleared. Start a fresh recipe.";
+                self.feed.push(Event::Emptied);
                 Cue::Bad
             }
             Some(Station::Burner(i)) if self.burners[i].is_some_and(|p| self.pot_burnt(p)) => {
                 self.burners[i] = None;
-                self.note = "Burner cleaned. The next pot gets a fresh start.";
+                self.feed.push(Event::Cleaned(i));
                 Cue::Action
             }
             _ => Cue::None,
@@ -652,42 +847,33 @@ impl Game {
             }
         }
     }
-    /// Completed-career or setback text for the shared host's paginated ending.
+    /// One-sentence ending for status readers; the results card shows icons.
     pub fn summary(&self) -> String {
         if self.phase == Phase::Won {
-            let stars: u32 = self.medals.iter().map(|s| u32::from(*s)).sum();
-            let rank = if stars >= 20 {
-                "Neighborhood Legend"
-            } else if stars >= 15 {
-                "Beloved Bistro"
-            } else {
-                "Open for Business"
-            };
             format!(
-                "The lanterns stay lit. You served {} of 42 guests across all seven services and earned {stars}/21 stars. Your grandmother's kitchen has become the neighborhood's table. Rank: {rank}. Cash left: {}. Score: {}. Try a new career for cleaner service and bigger tips.",
-                self.total_served, self.cash, self.score
+                "{}: {} of 42 guests served, {} of 21 stars and {} coins.",
+                self.rank(),
+                self.total_served,
+                self.stars(),
+                self.cash
             )
         } else {
             format!(
-                "The kitchen went quiet during {}. {} You served {} guests this career. Score: {}. A fresh career brings three service retries; improve your route and keep an eye on the cooking timers.",
+                "The kitchen closed during {} after {} dishes served.",
                 self.content().name,
-                self.note,
-                self.total_served,
-                self.score
+                self.total_served
             )
         }
     }
 }
-fn walkable(cell: Cell) -> bool {
+pub(crate) fn walkable(cell: Cell) -> bool {
     (1..=9).contains(&cell.x) && (1..=4).contains(&cell.y)
-}
-fn menu_start(p: Vec2) -> bool {
-    p.x >= 290. && p.x <= 670. && p.y >= 484. && p.y <= 536.
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ferravex_arcade::Vec2;
     fn active() -> Game {
         let mut game = Game::new();
         game.step(&Input {
@@ -1162,5 +1348,112 @@ mod tests {
         assert_eq!(game.total_served, 4);
         assert_eq!(game.shift(), 2);
         assert_eq!(game.retries, 2);
+    }
+
+    #[test]
+    fn clicking_the_station_underfoot_uses_it_like_the_action_key() {
+        let mut game = active();
+        let cell = STATIONS[0].1;
+        let click = Input {
+            click: true,
+            pointer: Vec2::new(
+                GRID_X + (cell.x as f32 + 0.5) * TILE,
+                GRID_Y + (cell.y as f32 + 0.5) * TILE,
+            ),
+            ..Input::default()
+        };
+        // From across the kitchen a click only walks.
+        game.step(&click);
+        assert_eq!((game.carry, game.cash), (Carry::Empty, 48));
+        for _ in 0..100 {
+            game.step(&Input::default());
+        }
+        assert_eq!(game.station(), Some(Station::Pantry(0)));
+        // Underfoot, the same click buys exactly as the action key would.
+        let mut keyed = game.clone();
+        assert_eq!(game.step(&click), Cue::Action);
+        assert_eq!(press(&mut keyed), Cue::Action);
+        assert_eq!(game, keyed);
+        assert_eq!((game.carry, game.cash), (Carry::Raw(0), 46));
+        // Clicking the board never replaces holding the key to prepare food.
+        at(&mut game, Station::Chop);
+        let board = STATIONS[4].1;
+        let click = Input {
+            click: true,
+            pointer: Vec2::new(
+                GRID_X + (board.x as f32 + 0.5) * TILE,
+                GRID_Y + (board.y as f32 + 0.5) * TILE,
+            ),
+            ..Input::default()
+        };
+        for _ in 0..120 {
+            game.step(&click);
+        }
+        assert_eq!((game.carry, game.chopped_ticks), (Carry::Raw(0), 0));
+    }
+    #[test]
+    fn pointer_reads_recipes_from_tables_and_thumbnails() {
+        let mut game = active();
+        game.orders[1] = Some(Order {
+            recipe: 4,
+            patience: 900,
+            number: 9,
+        });
+        let click = |x: f32, y: f32| Input {
+            click: true,
+            pointer: Vec2::new(x, y),
+            ..Input::default()
+        };
+        game.step(&click(TABLE_X + TABLE_STEP + 60., 170.));
+        assert_eq!(game.book, 4);
+        game.step(&click(THUMB_X + 2. * THUMB_STEP, THUMB_Y));
+        assert_eq!(game.book, 2);
+        // An empty table changes nothing.
+        game.step(&click(TABLE_X + 2. * TABLE_STEP + 60., 170.));
+        assert_eq!(game.book, 2);
+        // The rest of the book's header still turns the page.
+        game.step(&click(900., 176.));
+        assert_eq!(game.book, 3);
+        assert_eq!(game.position, Cell::new(5, 3));
+    }
+    #[test]
+    fn presentation_feed_reports_events_and_quiets_repeated_refusals() {
+        let mut game = Game::new();
+        press(&mut game);
+        assert_eq!(game.feed.events(), &[Event::Opened, Event::Seated(0)]);
+        at(&mut game, Station::Pantry(0));
+        press(&mut game);
+        assert_eq!(game.feed.events(), &[Event::Bought(0)]);
+        // A mashed key at a refusing station reports once per quiet window.
+        let mut refusals = 0;
+        for _ in 0..60 {
+            press(&mut game);
+            refusals += game
+                .feed
+                .events()
+                .iter()
+                .filter(|e| **e == Event::Refused(Station::Pantry(0), Why::Full))
+                .count();
+        }
+        assert_eq!(refusals, 2);
+        // The feed is presentation only: it never makes two kitchens differ.
+        let mut quiet = game.clone();
+        quiet.feed = Feed::new();
+        assert_eq!(game, quiet);
+        // Empty-handed no-ops are not refusals worth reporting.
+        at(&mut game, Station::Plate);
+        game.carry = Carry::Empty;
+        press(&mut game);
+        assert!(game.feed.events().is_empty());
+    }
+    #[test]
+    fn payout_preview_matches_the_coins_paid() {
+        let mut game = active();
+        at(&mut game, Station::Serve);
+        game.carry = Carry::Plated(0);
+        let (_, preview) = game.payout(0, 1).unwrap();
+        let cash = game.cash;
+        press(&mut game);
+        assert_eq!(game.cash, cash + preview);
     }
 }

@@ -245,7 +245,8 @@ fn eliminations_tip_operators_over_with_confetti_and_respect_reduced_motion() {
         assert!(
             lab.juice
                 .pops()
-                .any(|(pop, _)| pop == juice::Pop::Eliminated)
+                .any(|(pop, _)| pop == juice::Pop::Eliminated { bonus: 0 }),
+            "drills pay no qualifier bonus, so the skull pop shows none"
         );
         // The browser host uploads at most 256 instances per mesh.
         let mut per_mesh = vec![0; lab.mesh_data.len()];
@@ -371,27 +372,59 @@ fn hud_draws_every_phase_at_every_size_without_panicking() {
 }
 
 #[test]
+fn elimination_pops_show_the_bonus_a_running_qualifier_paid() {
+    preferences::set_feedback_policy(FeedbackPolicy::default());
+    let mut lab = Lab::new_interactive();
+    lab.update_interactive(TICK, hold(&lab), true, 1, 1.);
+    finish_drills(&mut lab);
+    for _ in 0..COUNTDOWN_TICKS + 2 {
+        lab.update_interactive(TICK, hold(&lab), true, 1, 1.);
+    }
+    assert!(matches!(
+        lab.qualifier_status().phase,
+        QualifierPhase::Running(_)
+    ));
+    // Wait for every operator to be up, then headshot one in clear sight.
+    for _ in 0..640 {
+        if lab.game.players.iter().all(|p| p.is_alive()) {
+            break;
+        }
+        lab.update_interactive(TICK, hold(&lab), true, 1, 1.);
+    }
+    let origin = lab.game.player(0).unwrap().position;
+    lab.game.player_mut(1).unwrap().position = origin + vec3(0., 0., -4.);
+    let score = lab.qualifier_status().score;
+    let shot = aim(&lab, true).unwrap();
+    lab.update_interactive(TICK, shot, true, 1, 1.);
+    assert!(!lab.game.player(1).unwrap().is_alive());
+    let paid = lab.qualifier_status().score - score;
+    assert!(paid >= 150, "headshot plus elimination bonus: {paid}");
+    assert!(
+        lab.juice
+            .pops()
+            .any(|(pop, _)| pop == juice::Pop::Eliminated { bonus: 150 })
+    );
+}
+
+#[test]
 fn results_copy_always_offers_a_record_line_and_a_next_goal() {
     let result = QualifierResult {
         score: 4100,
         ..Default::default()
     };
-    assert_eq!(hud::record_lines(result, None).0, "First record set!");
+    assert_eq!(hud::record_lines(result, None).0, "New record!");
+    assert_eq!(hud::record_lines(result, Some(5000)).0, "5,000 · 900 to go");
+    assert_eq!(hud::record_lines(result, Some(3000)).0, "New best! +1,100");
+    assert_eq!(hud::record_lines(result, Some(4100)).0, "Tied!");
     assert_eq!(
-        hud::record_lines(result, Some(5000)).0,
-        "Best 5,000 / 900 to beat it"
+        hud::next_goal(result),
+        Some((Grade::A, "7,500 · 3,400 to go".to_owned()))
     );
-    assert!(
-        hud::record_lines(result, Some(3000))
-            .0
-            .starts_with("New personal best! +1,100")
-    );
-    assert_eq!(hud::next_goal(result), "Next: A at 7,500 (3,400 to go)");
     let top = QualifierResult {
         score: 20_000,
         ..Default::default()
     };
-    assert!(hud::next_goal(top).starts_with("Top grade"));
+    assert_eq!(hud::next_goal(top), None, "the card shows a crown instead");
     assert_eq!(hud::thousands(1_234_567), "1,234,567");
     assert_eq!(hud::thousands(999), "999");
 }

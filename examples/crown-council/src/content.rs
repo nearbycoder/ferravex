@@ -727,6 +727,21 @@ pub(crate) const PETITIONS: [Petition; 30] = [
     },
 ];
 
+/// The promise (flag bit) whose consequence replaced this council's baseline
+/// petition, if one did. Mirrors the conditions in [`petition`].
+pub(crate) fn echo(turn: usize, flags: u16) -> Option<u16> {
+    let flag = match turn {
+        5 | 24 => SANCTUARY,
+        6 | 27 => LEVEE,
+        12 => CHARTER,
+        14 => LEDGER,
+        16 => SCHOOLS,
+        18 => COURTS,
+        20 => PEACE,
+        _ => return None,
+    };
+    (flags & flag != 0).then_some(flag)
+}
 pub(crate) fn petition(turn: usize, flags: u16) -> Petition {
     let mut p = PETITIONS[turn.min(29)];
     match turn {
@@ -830,4 +845,23 @@ pub(crate) fn petition(turn: usize, flags: u16) -> Petition {
         _ => {}
     }
     p
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn echo_names_exactly_the_promise_behind_each_variant() {
+        let all = [LEVEE, CHARTER, SANCTUARY, LEDGER, COURTS, PEACE, SCHOOLS];
+        for (turn, baseline) in PETITIONS.iter().enumerate() {
+            assert_eq!(echo(turn, 0), None);
+            for flag in all {
+                let changed = petition(turn, flag).title != baseline.title;
+                assert_eq!(echo(turn, flag).is_some(), changed, "turn {turn}");
+                if changed {
+                    assert_eq!(echo(turn, flag), Some(flag));
+                }
+            }
+        }
+    }
 }

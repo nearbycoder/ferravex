@@ -1,9 +1,12 @@
 //! Art direction for the lab: palette, post-processing per state, styled text
-//! helpers, glassy panels and the tool palette's icon buttons.
+//! helpers, glassy panels, pictograms, key caps, meters and the tool palette's
+//! icon-first buttons.
 //!
 //! Everything here is presentation. Text formatting goes through a fixed
 //! stack buffer ([`Line`]) so steady-state frames do not allocate.
+use super::toys::{Goal, Scenario};
 use ferravex_play::tween::{Motion, Spring};
+use ferravex_render::icons::{self as pict, IconStyle};
 use ferravex_render::post::{self, PostFx, Tonemap};
 use ferravex_render::prelude::*;
 use ferravex_render::shapes::{self, Cap, Fill, Join, Shadow, Stroke};
@@ -22,6 +25,7 @@ pub(super) const CYAN: Color = Color::new(0.36, 0.86, 0.90, 1.);
 pub(super) const GOLD: Color = Color::new(1.0, 0.82, 0.40, 1.);
 pub(super) const PINK: Color = Color::new(0.98, 0.47, 0.58, 1.);
 pub(super) const MINT: Color = Color::new(0.52, 0.90, 0.66, 1.);
+pub(super) const RED: Color = Color::new(0.98, 0.36, 0.36, 1.);
 pub(super) const TEXT_SHADOW: Color = Color::new(0., 0., 0., 0.6);
 
 /// Which grade the frame uses. Chosen per scene/state; applied only on change.
@@ -206,7 +210,9 @@ pub(super) fn progress(rect: Rect, value: f32, color: Color, alpha: f32) {
     }
 }
 
-/// Icons for the tool palette, drawn from primitives in a `size` box.
+/// The lab's own pictograms for its tools and bodies, drawn from primitives
+/// in a `size` box. Shared ideas (trophy, clock, rocket…) come from the engine
+/// set through [`Glyph`]; these cover what it lacks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Icon {
     Ball,
@@ -219,6 +225,14 @@ pub(super) enum Icon {
     Play,
     Step,
     Reset,
+    /// Two stacked crates: resting height and the Skyscraper goal.
+    Tower,
+    /// A ball beside a crate: the body count.
+    Shapes,
+    /// Two touching discs: contact pairs.
+    Contact,
+    /// The jointed compound bar.
+    Dumbbell,
 }
 
 pub(super) fn icon(icon: Icon, center: Vec2, size: f32, color: Color) {
@@ -324,16 +338,263 @@ pub(super) fn icon(icon: Icon, center: Vec2, size: f32, color: Color) {
                 stroke,
             );
         }
+        Icon::Tower => {
+            // A little pyramid of crates: two below, one on top.
+            let half = s * 0.4;
+            for (dx, dy) in [(-0.44, 0.46), (0.44, 0.46), (0., -0.46)] {
+                let c = center + vec2(dx * s, dy * s);
+                let r = Rect::new(c.x - half, c.y - half, half * 2., half * 2.);
+                shapes::fill_rounded_rect(r, s * 0.1, color);
+            }
+        }
+        Icon::Shapes => {
+            shapes::fill_circle(center + vec2(-s * 0.4, s * 0.18), s * 0.42, color);
+            let r = Rect::new(center.x + 0.02 * s, center.y - s * 0.66, s * 0.78, s * 0.78);
+            shapes::stroke_rounded_rect(r, s * 0.12, stroke.width * 0.85, color);
+        }
+        Icon::Contact => {
+            for dx in [-0.42, 0.42] {
+                shapes::stroke_circle(
+                    center + vec2(dx * s, s * 0.14),
+                    s * 0.4,
+                    stroke.width * 0.8,
+                    color,
+                );
+            }
+            shapes::fill_circle(center + vec2(0., -s * 0.6), s * 0.14, color);
+        }
+        Icon::Dumbbell => {
+            shapes::polyline(
+                &[center + vec2(-s * 0.55, 0.), center + vec2(s * 0.55, 0.)],
+                stroke,
+            );
+            for dx in [-0.6, 0.6] {
+                shapes::fill_circle(center + vec2(dx * s, 0.), s * 0.32, color);
+            }
+        }
     }
 }
 
-/// Eased hover/press/selection for one palette button.
+/// A pictogram: one of the lab's own [`Icon`]s or a shared engine icon.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Glyph {
+    Tool(Icon),
+    Pict(pict::Icon),
+}
+
+impl From<Icon> for Glyph {
+    fn from(icon: Icon) -> Self {
+        Self::Tool(icon)
+    }
+}
+
+impl From<pict::Icon> for Glyph {
+    fn from(icon: pict::Icon) -> Self {
+        Self::Pict(icon)
+    }
+}
+
+/// Draws any glyph centered in a `size` box.
+pub(super) fn glyph(glyph: impl Into<Glyph>, center: Vec2, size: f32, color: Color) {
+    if color.a <= 0.01 {
+        return;
+    }
+    match glyph.into() {
+        Glyph::Tool(tool) => icon(tool, center, size, color),
+        Glyph::Pict(engine) => pict::draw_styled(
+            engine,
+            center,
+            size,
+            IconStyle::new(color).shadow(Color::new(0., 0., 0., 0.35 * color.a)),
+        ),
+    }
+}
+
+/// The pictogram for a goal, shared by the goal bar, toasts and the card.
+pub(super) fn goal_glyph(goal: Goal) -> Glyph {
+    match goal {
+        Goal::Liftoff => Glyph::Pict(pict::Icon::Rocket),
+        Goal::Skyscraper => Glyph::Tool(Icon::Tower),
+        Goal::Demolition => Glyph::Pict(pict::Icon::Bomb),
+        Goal::DominoRun => Glyph::Tool(Icon::Domino),
+    }
+}
+
+/// Where a goal's celebration lands in the lab (meters).
+pub(super) fn goal_spot(goal: Goal) -> Vec2 {
+    match goal {
+        Goal::Liftoff => vec2(0., 11.),
+        Goal::Skyscraper => vec2(-1.3, 7.5),
+        Goal::Demolition => vec2(0., 4.),
+        Goal::DominoRun => vec2(5., 2.),
+    }
+}
+
+/// The pictogram for a scene, beside its name in the top bar.
+pub(super) fn scene_glyph(scene: Scenario) -> Glyph {
+    match scene {
+        Scenario::Workshop => Glyph::Pict(pict::Icon::Wrench),
+        Scenario::Dominoes => Glyph::Tool(Icon::Domino),
+    }
+}
+
+/// Whether a binding label is short enough for a key cap. Long chords and
+/// `Unbound` stay in Controls instead of crowding the playfield.
+pub(super) fn shows_key(key: &str) -> bool {
+    !key.is_empty() && key.len() <= 6
+}
+
+fn cap_style(alpha: f32) -> TextStyle {
+    TextStyle::modern(8., faded(INK, alpha))
+}
+
+/// Width of [`keycap`] for `key`, or zero when it would not be drawn.
+pub(super) fn keycap_width(key: &str) -> f32 {
+    if shows_key(key) {
+        (text_width(key, cap_style(1.)) + 9.).max(15.)
+    } else {
+        0.
+    }
+}
+
+/// A small raised key cap (`F`, `Space`) with its left edge at `x`, centered
+/// on `cy`. Returns its width (zero when the binding is too long to show).
+pub(super) fn keycap(x: f32, cy: f32, key: &str, alpha: f32) -> f32 {
+    let w = keycap_width(key);
+    if w == 0. || alpha <= 0.01 {
+        return w;
+    }
+    let cap = Rect::new(x, cy - 8.5, w, 15.);
+    let lip = Rect::new(cap.x, cap.y + 2., w, 15.);
+    shapes::fill_rounded_rect(lip, 4., Color::new(0., 0., 0., 0.55 * alpha));
+    shapes::fill_rounded_rect(
+        cap,
+        4.,
+        Fill::vertical(
+            cap,
+            faded(Color::new(0.26, 0.31, 0.40, 1.), alpha),
+            faded(Color::new(0.16, 0.20, 0.27, 1.), alpha),
+        ),
+    );
+    shapes::stroke_rounded_rect(cap, 4., 1., Color::new(1., 1., 1., 0.16 * alpha));
+    let style = cap_style(alpha).with_align(TextAlign::Center);
+    draw_text_styled(
+        key,
+        cap.center().x,
+        style.centered_baseline(cap.center().y),
+        style,
+    );
+    w
+}
+
+/// Width of [`icon_value`].
+pub(super) fn icon_value_width(value: &str, size: f32, style: TextStyle) -> f32 {
+    if value.is_empty() {
+        size
+    } else {
+        size + 5. + text_width(value, style)
+    }
+}
+
+/// The standard stat: an icon then its value, both centered on `cy`, starting
+/// at `x`. The icon takes the text color. Returns the total width.
+pub(super) fn icon_value(
+    mark: impl Into<Glyph>,
+    value: &str,
+    x: f32,
+    cy: f32,
+    size: f32,
+    style: TextStyle,
+) -> f32 {
+    glyph(mark, vec2(x + size * 0.5, cy), size, style.color);
+    if value.is_empty() {
+        return size;
+    }
+    let width = draw_text_styled(value, x + size + 5., style.centered_baseline(cy), style).width;
+    size + 5. + width
+}
+
+/// Goal pips centered on `cy`: finished goals are filled, `current` glows and
+/// the rest are hollow. Returns the row width.
+pub(super) fn pips(
+    x: f32,
+    cy: f32,
+    done: &[bool],
+    current: Option<usize>,
+    color: Color,
+    alpha: f32,
+) -> f32 {
+    let gap = 11.;
+    for (i, &finished) in done.iter().enumerate() {
+        let at = vec2(x + 4. + i as f32 * gap, cy);
+        if finished {
+            shapes::fill_circle(at, 3.6, faded(color, alpha));
+        } else if current == Some(i) {
+            shapes::glow_disc(at, 9., faded(color, 0.35 * alpha));
+            shapes::stroke_circle(at, 3.4, 1.6, faded(color, alpha));
+        } else {
+            shapes::stroke_circle(at, 3., 1.2, faded(MUTED, 0.55 * alpha));
+        }
+    }
+    8. + done.len().saturating_sub(1) as f32 * gap
+}
+
+/// Circular progress: a faint track and an arc clockwise from 12 o'clock.
+pub(super) fn ring_meter(center: Vec2, radius: f32, width: f32, fraction: f32, color: Color) {
+    let fraction = if fraction.is_finite() {
+        fraction.clamp(0., 1.)
+    } else {
+        0.
+    };
+    shapes::stroke_circle(center, radius, width, Color::new(0., 0., 0., 0.4 * color.a));
+    if fraction > 0. {
+        shapes::stroke_arc(
+            center,
+            radius,
+            -std::f32::consts::FRAC_PI_2,
+            fraction * std::f32::consts::TAU,
+            Stroke::new(width, color).cap(Cap::Round),
+        );
+    }
+}
+
+/// A speech-bubble label above `anchor` (its bottom center), clamped to the
+/// screen. Used for tool names that do not fit inside their button.
+pub(super) fn bubble(text: &str, anchor: Vec2, color: Color, alpha: f32) {
+    if alpha <= 0.01 {
+        return;
+    }
+    let style = modern(16., faded(color, alpha));
+    let w = text_width(text, style) + 20.;
+    let x = (anchor.x - w * 0.5).clamp(6., (screen_width() - w - 6.).max(6.));
+    let rect = Rect::new(x, anchor.y - 30., w, 26.);
+    panel(rect, 9., alpha);
+    let tip = anchor.x.clamp(rect.x + 10., rect.x + rect.w - 10.);
+    shapes::fill_triangle(
+        vec2(tip - 6., rect.y + rect.h - 1.),
+        vec2(tip + 6., rect.y + rect.h - 1.),
+        vec2(tip, rect.y + rect.h + 5.),
+        faded(SURFACE, alpha),
+    );
+    draw_text_styled(
+        text,
+        rect.center().x,
+        style.centered_baseline(rect.center().y),
+        style.with_align(TextAlign::Center),
+    );
+}
+
+/// Eased hover/press/selection for one palette button, plus a refusal wobble.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct ToolMotion {
     hover: Spring,
     press: Spring,
     select: Spring,
+    /// Seconds left on a refusal shake and red flash.
+    deny: f32,
 }
+
+const DENY: f32 = 0.45;
 
 impl Default for ToolMotion {
     fn default() -> Self {
@@ -341,6 +602,7 @@ impl Default for ToolMotion {
             hover: Spring::critical(0., 9.),
             press: Spring::critical(0., 18.),
             select: Spring::underdamped(0., 7., 0.55),
+            deny: 0.,
         }
     }
 }
@@ -362,31 +624,68 @@ impl ToolMotion {
         for spring in [&mut self.hover, &mut self.press, &mut self.select] {
             spring.advance(dt, motion);
         }
+        self.deny = (self.deny - dt).max(0.);
     }
 
     /// A click "boing": the selection spring overshoots back into place.
     pub fn kick(&mut self) {
         self.press.snap(1.);
     }
+
+    /// A refused press: the button shakes and blushes red briefly.
+    pub fn deny(&mut self) {
+        self.deny = DENY;
+    }
+
+    /// Refusal envelope, 1 when just refused and 0 when calm.
+    pub fn denied(&self) -> f32 {
+        (self.deny / DENY).clamp(0., 1.)
+    }
 }
 
-/// Paints one tool: rounded key with an icon, label and key hint. Selected
-/// tools glow; disabled tools go flat and quiet.
+/// What one palette button shows: an icon first, its key cap at the right,
+/// and its name only while hovered or selected.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ToolFace<'a> {
+    pub glyph: Icon,
+    pub label: &'a str,
+    pub key: &'a str,
+    pub accent: Color,
+    /// Recharge progress (0..1) drawn as a ring around the icon.
+    pub charge: Option<f32>,
+    /// 0..1 "try me" halo for the tool the current goal needs.
+    pub beckon: f32,
+    /// Horizontal refusal shake in pixels (zero under reduced motion).
+    pub shake: f32,
+}
+
+/// Paints one tool button. Selected tools glow and show their name; disabled
+/// tools go flat and quiet; refused tools blush red. Returns true when the
+/// hovered name does not fit inside and needs a [`bubble`] above.
 pub(super) fn tool_button(
     rect: Rect,
-    glyph: Icon,
-    label: &str,
-    key: &str,
+    face: &ToolFace,
     state: ToolState,
     motion: &ToolMotion,
-    accent: Color,
-) {
+) -> bool {
     let hover = motion.hover.value.clamp(0., 1.);
     let press = motion.press.value.clamp(0., 1.);
     let select = motion.select.value.clamp(0., 1.3);
+    let deny = motion.denied();
     let lift = 2. * hover - 2. * press;
-    let r = Rect::new(rect.x, rect.y - lift, rect.w, rect.h);
+    let r = Rect::new(rect.x + face.shake, rect.y - lift, rect.w, rect.h);
     let radius = 10_f32.min(r.h * 0.5);
+    if face.beckon > 0.01 && state.enabled {
+        let halo = Rect::new(r.x - 3., r.y - 3., r.w + 6., r.h + 6.);
+        post::with_glow(|| {
+            shapes::stroke_rounded_rect(
+                halo,
+                radius + 3.,
+                2.,
+                faded(face.accent, 0.6 * face.beckon),
+            );
+        });
+    }
     if !state.enabled {
         shapes::fill_rounded_rect(r, radius, Color::new(0.11, 0.14, 0.2, 0.7));
         shapes::stroke_rounded_rect(r, radius, 1., LINE);
@@ -398,7 +697,7 @@ pub(super) fn tool_button(
                 .offset(vec2(0., 3. + lift))
                 .blur(10.),
         );
-        let base = shapes::mix(RAISED, accent, 0.85 * select.min(1.));
+        let base = shapes::mix(RAISED, face.accent, 0.85 * select.min(1.));
         let top = shapes::mix(base, Color::new(1., 1., 1., base.a), 0.1 + 0.08 * hover);
         let bottom = shapes::mix(base, Color::new(0., 0., 0., base.a), 0.12 + 0.15 * press);
         shapes::fill_rounded_rect(r, radius, Fill::vertical(r, top, bottom));
@@ -406,9 +705,18 @@ pub(super) fn tool_button(
         if select > 0.05 {
             // Emissive rim: additive, so it feeds the bloom.
             post::with_glow(|| {
-                shapes::stroke_rounded_rect(r, radius, 2., faded(accent, 0.55 * select.min(1.)));
+                shapes::stroke_rounded_rect(
+                    r,
+                    radius,
+                    2.,
+                    faded(face.accent, 0.55 * select.min(1.)),
+                );
             });
         }
+    }
+    if deny > 0. {
+        shapes::fill_rounded_rect(r, radius, faded(RED, 0.3 * deny));
+        shapes::stroke_rounded_rect(r, radius, 1.5, faded(RED, 0.9 * deny));
     }
     let ink = if !state.enabled {
         Color::new(0.45, 0.5, 0.58, 1.)
@@ -417,51 +725,45 @@ pub(super) fn tool_button(
     } else {
         INK
     };
-    let compact = r.w < 96.;
-    let icon_size = (r.h * 0.42).min(18.);
+    let key_w = keycap_width(face.key);
+    let area_x = r.x + 7.;
+    let area_w = (r.w - 14. - if key_w > 0. { key_w + 5. } else { 0. }).max(1.);
+    let icon_size = (r.h * 0.5).min(18.);
     let style = TextStyle::modern(16., ink);
-    let label_w = text_width(label, style);
-    if compact || r.h < 34. {
-        // Icon above, or icon beside a short label in tight spaces.
-        let total = icon_size + 6. + label_w;
-        if total <= r.w - 10. {
-            let x0 = r.center().x - total * 0.5;
-            icon(
-                glyph,
-                vec2(x0 + icon_size * 0.5, r.center().y),
-                icon_size,
-                ink,
-            );
-            draw_text_styled(
-                label,
-                x0 + icon_size + 6.,
-                style.centered_baseline(r.center().y),
-                style,
-            );
-        } else {
-            icon(glyph, r.center(), icon_size * 1.1, ink);
-        }
+    let label_w = text_width(face.label, style);
+    let fits = icon_size + 6. + label_w <= area_w;
+    // Names appear for hovered or selected tools; disabled tools stay icons.
+    let shown = if state.enabled {
+        hover.max(select.min(1.))
     } else {
-        let total = icon_size + 8. + label_w;
-        let x0 = r.center().x - total * 0.5;
-        icon(
-            glyph,
-            vec2(x0 + icon_size * 0.5, r.center().y),
-            icon_size,
-            ink,
-        );
-        draw_text_styled(
-            label,
-            x0 + icon_size + 8.,
-            style.centered_baseline(r.center().y),
-            style,
-        );
-        // Key hint in the corner, quiet.
-        let hint = TextStyle::modern(8., faded(ink, 0.6)).with_align(TextAlign::Right);
-        if !key.is_empty() && key.len() <= 6 {
-            draw_text_styled(key, r.x + r.w - 6., r.y + 11., hint);
-        }
+        0.
+    };
+    let reveal = if fits { shown } else { 0. };
+    let group = icon_size + reveal * (6. + label_w);
+    let x0 = area_x + (area_w - group) * 0.5;
+    let cy = r.center().y;
+    let at = vec2(x0 + icon_size * 0.5, cy);
+    icon(face.glyph, at, icon_size, ink);
+    if let Some(charge) = face.charge {
+        ring_meter(at, icon_size * 0.78, 2., charge, faded(face.accent, 0.9));
     }
+    if reveal > 0.02 {
+        draw_text_styled(
+            face.label,
+            x0 + icon_size + 6.,
+            style.centered_baseline(cy),
+            style.with_color(faded(ink, reveal * reveal)),
+        );
+    }
+    if key_w > 0. {
+        keycap(
+            r.x + r.w - 7. - key_w,
+            cy,
+            face.key,
+            if state.enabled { 0.95 } else { 0.45 },
+        );
+    }
+    !fits && hover > 0.3
 }
 
 #[cfg(test)]

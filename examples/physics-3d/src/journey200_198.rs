@@ -38,7 +38,8 @@ fn narrow_inspector_reserves_complete_fixed_size_fields_and_readable_buttons() {
                 .width;
             let size = 17. * ((button.w - 12.) / advance).min(1.);
             assert!(size >= 14., "{width}: {label} at {size}");
-            assert!(button.y >= panel.y + 44.);
+            // The status row of icon readouts stays reserved above buttons.
+            assert!(button.y >= panel.y + hud::STATUS_ROW - 4.);
             assert!(button.y + button.h <= panel.y + panel.h);
         }
         assert!(scene_rect(width, panel).h >= 190.);

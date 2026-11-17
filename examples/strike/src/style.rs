@@ -6,6 +6,7 @@
 //! classic glyph quads. Strings the browser tests inspect (vitals, replay
 //! footer and the primary menu button fill) stay on the classic `Ui` path.
 use ferravex_play::tween::Motion;
+use ferravex_render::icons::{self, Icon, IconStyle};
 use ferravex_render::prelude::*;
 use ferravex_render::shapes::{self, Fill, Shadow};
 use ferravex_render::text::{self, FontFace, TextAlign, TextStyle};
@@ -126,6 +127,42 @@ pub(super) fn accent(rect: Rect, color: Color, alpha: f32) {
 pub(super) fn headshot_icon(center: Vec2, radius: f32, color: Color) {
     shapes::stroke_circle(center, radius, 1.5, color);
     shapes::fill_circle(center, radius * 0.32, color);
+}
+
+/// A pictogram from the shared icon set with a soft drop shadow, centered on
+/// `center` in a `size` box. Recorded like text so layout tests see it.
+pub(super) fn icon(icon: Icon, center: Vec2, size: f32, color: Color) -> Rect {
+    icons::draw_styled(
+        icon,
+        center,
+        size,
+        IconStyle::new(color).shadow(fade(SHADOW, color.a * 0.8)),
+    );
+    let rect = Rect::new(center.x - size * 0.5, center.y - size * 0.5, size, size);
+    record(rect);
+    rect
+}
+
+/// A pictogram followed by a short value on baseline `y`, starting at `x`
+/// (left aligned). Returns the painted rectangle of the pair.
+pub(super) fn icon_value(
+    icon: Icon,
+    x: f32,
+    y: f32,
+    style: TextStyle,
+    tint: Color,
+    args: std::fmt::Arguments<'_>,
+) -> Rect {
+    let size = style.size * 1.15;
+    let center = vec2(x + size * 0.5, y - style.size * 0.45);
+    let a = self::icon(icon, center, size, tint);
+    let r = line_fmt(x + size + 5., y, style, TextAlign::Left, args);
+    Rect::new(a.x, a.y.min(r.y), r.x + r.w - a.x, a.h.max(r.h))
+}
+
+/// Width [`icon_value`] paints for `text` in `style`.
+pub(super) fn icon_value_width(text: &str, style: TextStyle) -> f32 {
+    style.size * 1.15 + 5. + width(text, style)
 }
 
 /// `Motion` from the shared preferences, read once per frame by callers.

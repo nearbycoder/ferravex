@@ -28,11 +28,13 @@ host runs the same rules through WebAssembly.
 - **1–5** select that hand position. In choice menus these keys accept the
   numbered choice immediately. Cards six and seven remain reachable with arrows.
 - **Space/Enter** plays the selected card or accepts the selected menu choice.
-- **Click a card** to inspect it, then click **PLAY** to use it. Choice-menu
-  buttons accept immediately. **END TURN** matches X.
+- **Click a card** to lift it (the same as its number key), then click the
+  lifted card again to play it (the same as Space). Choice cards accept
+  immediately. The **End turn**, **Skip** and forge **Back** buttons match X.
 - **X/E** ends the combat turn, skips a card reward, or leaves forge/shop without
   buying. Skipping a reward is intentional deck management.
-- **C/Q** inspects the permanent deck. Arrows turn its pages; C, Space or X returns.
+- **C/Q** or the deck button (top left) inspects the permanent deck. Arrows or the
+  side arrows turn its pages; C, Space, X or the close button returns.
 - **H** opens the paginated field guide, **Esc/P** pauses, **F2** changes bindings,
   **M** toggles sound and **R** starts a fresh whole expedition.
 
@@ -42,6 +44,49 @@ shared host provides the title, pause, ending, retry and local records. Scores
 and completed-run records can be saved locally; unfinished expeditions are not
 saved. Autoplay uses legal controls and does not replace personal records.
 
+## Reading the table
+
+The game speaks in icons; words are kept for names. One icon and one color mean
+the same thing everywhere: on cards, status badges, the enemy's intent and the
+popups that rise when something happens.
+
+| Icon | Meaning |
+| --- | --- |
+| Sword | Damage. On a card in battle it shows what would land after strength, weak, vulnerable and armor: green when boosted, red when reduced. `x3` hits three times |
+| Shield | Block (on the left end of a health bar). A squared steel plate is permanent armor |
+| Drop | Poison |
+| Arrow down / up | Weak / strength |
+| Target | Vulnerable |
+| Leaf | Thorns |
+| Heart | Health; a green `+` heals, a red `-` is paid |
+| Bolt | Energy (the gold orb holds this turn's energy; pips count it out) |
+| Card stack | Draw, the draw and discard piles, and the deck button |
+| Flame | Exhaust: a flame-marked card burns until the next battle; the flame pile counts them |
+| Lock / cross | An unplayable card / a Wound shuffled into the discard pile |
+| Struck-through icons | Removed: Clean Slate's afflictions, Mirror Edge's block |
+
+The header shows nine progress pips (the current encounter glows; between
+battles the next captor is already the goal), the place name, a five-word goal,
+owned relics (hover for their names), the purse and the turn hourglass, which
+turns red from turn 30 of the 40 allowed. The enemy's next move floats above its
+head; skulls mark elites and a crown the Regent.
+
+Hovering or selecting a playable card previews it with the real rules: the
+captor's health bar shows a pulsing chunk that would be lost, a gold reticle (or a
+blue halo on the Liberator) marks where it lands, block and status badges show
+their new values, and the energy pips it would spend blink. A skull beside the
+captor's bar means the card is lethal. Hovering **End turn** previews the enemy's
+move on your health bar; a faint chunk stays visible whenever the next move
+would cost health, and a red skull warns when ending the turn would be fatal.
+When nothing playable is left, the **End turn** button glows.
+
+Accepted events are felt where they happen: cards are dealt face down from the
+draw pile and played cards sweep toward their target; hits burst and pop their
+damage between the fighters (big hits shake the table), block, healing, statuses,
+poison and thorns rise as icon popups, exhausted cards flare at the flame pile, a
+new battle announces its captor, and refused commands ring red with the missing
+thing ("Need 2" with a bolt, a coin price, "Full", "Locked").
+
 ## Combat
 
 Begin with 80 HP, 30 coins and ten cards: three Gilt Strikes, three Velvet Guards,
@@ -50,16 +95,16 @@ relic before the first encounter. Each turn starts with three energy and five
 cards, modified by relics. The hand holds at most seven cards.
 
 Unplayed cards enter the discard pile at turn end. An empty draw pile reshuffles
-the discard pile using Ferravex's `RewardRng`. Cards marked **Exhaust** stay out
-for the rest of that battle. The full permanent deck returns for the next fight;
+the discard pile using Ferravex's `RewardRng`. Flame-marked (**Exhaust**) cards
+stay out for the rest of that battle. The full permanent deck returns for the next fight;
 Wounds are removed. The deck inspector shows permanent cards, including upgrades.
 
-The gold intent tells you what the opponent will do. Block absorbs attack damage
+The intent above the opponent tells you what it will do. Block absorbs attack damage
 and expires when your next turn begins. Opponent armor reduces **each hit** after
 strength and status modifiers, so three small hits struggle against heavy armor.
 Strength adds damage to every hit. Weak multiplies attack damage by three
 quarters; vulnerable then multiplies by three halves. Each division rounds down.
-The remaining duration is shown beside the fighter's other statuses.
+The remaining duration is the number on the fighter's status badge.
 
 Poison ignores block and armor. Enemy poison ticks before its intent; your poison
 ticks after its intent, including poison just applied by that intent. A tick
@@ -149,14 +194,18 @@ more but spends both coins and the camp action.
 ```sh
 cargo test -p gilded-deck --offline --locked -j 2
 cargo clippy -p gilded-deck --all-targets --offline --locked -j 2 -- -D warnings
-rustfmt --edition 2024 --check examples/gilded-deck/src/lib.rs examples/gilded-deck/src/main.rs examples/gilded-deck/src/content.rs examples/gilded-deck/src/model.rs examples/gilded-deck/src/view.rs
+rustfmt --edition 2024 --check examples/gilded-deck/src/*.rs
 ```
 
-Eighteen behavioral tests and one executed rustdoc example pass. They cover a
-full legal-input replay, complete legal wins with all three starter relics,
+Twenty-eight behavioral tests and one executed rustdoc example pass. They cover
+a full legal-input replay, complete legal wins with all three starter relics,
 cost rejection, held input, shuffling/exhaust, exact damage/status timing,
 poison kills, thorns/death ordering, reward/camp/shop accounting, permanent
-upgrades, Wound capacity/cleanup, turn limits, deck inspection and pointer bounds.
+upgrades, Wound capacity/cleanup, turn limits, deck inspection, pointer bounds,
+clicks that mirror their keys (lifted card, End turn, Skip, forge Back and Gild,
+choice cards, deck button and pages), the per-update presentation events,
+progress pips, effect requests, the header word budget and one-line guide
+bullets.
 The standard pilot wins at tick **7824**, with **73 HP**, **22 cards**, **3 relics**,
 **268 coins** and **20940 points**. It never writes campaign progress, health,
 cards or enemy state outside ordinary controls.
@@ -166,10 +215,13 @@ together at forty cards. Excess Wounds are refused at that bound. Status stacks,
 strength, thorns, energy and block have explicit caps. There are nine encounters
 and at most forty turns per encounter, so farming cannot keep a run alive forever.
 
-Parent's native frame-1000 review found the elite portrait, hand, selected-card
-text, status panel and intent readable. Suggested further captures: frame120
-for the opening hand, frame3000 for mid-run play, frame7000 for the Regent and
-frame7900 for the ending. Browser staging and combined integration belong to the
-parent. Automated rules tests and a graphical smoke review do not establish
-human balance, physical mobile/gamepad support, audible sound quality or
-cross-platform determinism.
+Presentation never feeds the rules: each update clears and refills a bounded
+list of accepted events (at most 32) that only drawing and effects read, and
+previews run the real rules on a copy. Smoke captures (autoplay frames 60 and
+400 for battle, 262 for a reward, 282 to 330 for camp and shop, `FAST=4` frame
+228 for the forge and 380 for an elite relic, `FAST=8` frame 905 for the Regent,
+`FAST=40` frame 260 for the ending) were reviewed; hover states cannot be
+captured because the smoke pointer stays off-canvas. Browser staging and combined
+integration belong to the parent. Automated rules tests and a graphical smoke
+review do not establish human balance, physical mobile/gamepad support, audible
+sound quality or cross-platform determinism.

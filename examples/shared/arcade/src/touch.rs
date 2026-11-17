@@ -10,6 +10,23 @@ const CHANNELS: [u8; 14] = [0, 2, 3, 1, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
 const LABELS: [&str; 14] = [
     "<", "Up", "Dn", ">", "Act", "X", "C", "1", "2", "3", "4", "5", "Pause", "Guide",
 ];
+/// Pictograms for the dock's direction and menu buttons; keys keep their names.
+const ICONS: [Option<Icon>; 14] = [
+    Some(Icon::ArrowLeft),
+    Some(Icon::ArrowUp),
+    Some(Icon::ArrowDown),
+    Some(Icon::ArrowRight),
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    Some(Icon::Pause),
+    Some(Icon::Question),
+];
 
 pub(crate) struct TouchDock {
     pub inset: f32,
@@ -118,13 +135,22 @@ impl TouchDock {
                 crate::paint::with_alpha(accent, 0.6 * settings.opacity),
             );
             let label = LABELS[i - 1];
-            crate::paint::text_centered(
-                label,
-                r.x + r.w * 0.5,
-                r.y + r.h * 0.5 + 6.,
-                15_f32.min((r.w - 8.) / label.len() as f32 * 1.3),
-                PAPER,
-            );
+            if let Some(icon) = ICONS[i - 1] {
+                crate::icons::draw(
+                    icon,
+                    vec2(r.x + r.w * 0.5, r.y + r.h * 0.5),
+                    20_f32.min(r.w - 12.),
+                    PAPER,
+                );
+            } else {
+                crate::paint::text_centered(
+                    label,
+                    r.x + r.w * 0.5,
+                    r.y + r.h * 0.5 + 6.,
+                    15_f32.min((r.w - 8.) / label.len() as f32 * 1.3),
+                    PAPER,
+                );
+            }
         }
     }
 }

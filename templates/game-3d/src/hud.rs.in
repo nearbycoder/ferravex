@@ -3,13 +3,16 @@
 //!
 //! Restyle the whole UI through [`theme`]. The HUD uses Ferravex's UI kit
 //! (`ferravex::render::ui::kit`): rounded panels, eased buttons and key caps
-//! in the modern text face.
+//! in the modern text face. It speaks in icons (`ferravex::render::icons`)
+//! rather than labels and celebrates with `ferravex::render::juice` effects;
+//! see `docs/VISUAL_LANGUAGE.md` in the Ferravex checkout.
 use crate::Game;
 use ferravex::{
     core::session::SessionState,
     play::tween::{Entrance, Motion},
     render::{
-        preferences,
+        icons::{self, Icon},
+        juice, preferences,
         prelude::*,
         shapes,
         text::{TextAlign, TextStyle, draw_text_styled},
@@ -40,6 +43,8 @@ pub(crate) struct Juice {
     /// Animation time; frozen while paused so effects pause too.
     pub time: f32,
     pub motion: Motion,
+    /// Bursts, confetti and popups, advanced by presentation time.
+    pub effects: juice::Juice,
     last_tick: u64,
     button: ButtonMotion,
 }
@@ -51,6 +56,7 @@ impl Juice {
             won_at: None,
             time: 0.0,
             motion: Motion::Full,
+            effects: juice::Juice::new(),
             last_tick: 0,
             button: ButtonMotion::default(),
         }
@@ -60,16 +66,23 @@ impl Juice {
     pub fn observe(&mut self, game: &Game, alpha: f32, dt: f32) {
         let session = game.session();
         self.motion = Motion::from_reduced(preferences::feedback_policy().reduced_motion());
+        self.effects.set_motion(self.motion);
         if !session.is_paused() {
             self.time += dt;
+            self.effects.update(dt);
         }
         if session.tick() < self.last_tick {
             // A restart: drop the old trail instead of streaking across the arena.
             self.trail = [game.position(); 14];
+            self.effects.clear();
         }
         self.last_tick = session.tick();
         match session.state() {
             SessionState::Won => {
+                if self.won_at.is_none() {
+                    // Felt, not described: celebrate the accepted win once.
+                    self.effects.confetti(vec2(screen_width() * 0.5, 120.0), 90);
+                }
                 self.won_at.get_or_insert(self.time);
             }
             _ => self.won_at = None,
@@ -105,20 +118,26 @@ pub(crate) fn draw(game: &Game, juice: &mut Juice, title: &str, dt: f32) -> bool
     let (width, height) = (screen_width(), screen_height());
     let session = game.session();
 
-    // Title and goal, top left.
+    // Title and goal, top left: a flag in the beacon's color says "go there".
     let size = if width < 560.0 { kit::TYPE_TITLE } else { kit::TYPE_DISPLAY };
     let display = TextStyle::modern(size, theme.ink).with_shadow(theme.shadow);
     draw_text_styled(title, 24.0, 52.0, display);
     let body = TextStyle::modern(kit::TYPE_BODY, theme.muted);
-    draw_text_styled("Reach the gold beacon", 24.0, 80.0, body);
+    icons::draw(Icon::Flag, vec2(33.0, 75.0), 18.0, BEACON);
+    draw_text_styled("Reach the beacon", 48.0, 80.0, body);
 
-    // Run timer, top right. Ticks are exact, so the time is too.
+    // Run timer, top right: a clock icon instead of a label. Ticks are exact,
+    // so the time is too.
     let seconds = session.tick() as f32 * session.dt();
     let chip = Rect::new(width - 132.0, 24.0, 108.0, 40.0);
     kit::panel(chip, &theme);
     let timer = TextStyle::modern(kit::TYPE_BODY, theme.ink).with_align(TextAlign::Center);
     let center = chip.center();
-    draw_text_styled(&format!("{seconds:.2} s"), center.x, timer.centered_baseline(center.y), timer);
+    icons::draw(Icon::Clock, vec2(chip.x + 22.0, center.y), 18.0, theme.muted);
+    draw_text_styled(&format!("{seconds:.2}"), center.x + 12.0, timer.centered_baseline(center.y), timer);
+
+    // Effects play in screen units over the world, under the menus.
+    juice.effects.draw();
 
     // Celebrate the accepted win with a toast that pops in.
     if let Some(since) = juice.since_win() {

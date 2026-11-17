@@ -21,7 +21,10 @@ fn steve_and_the_note_are_optional_secrets_outside_the_objective_graph() {
     let mut expedition = playing();
     expedition.game.position = shy_position() + vec2(-0.3, -0.3);
     assert_eq!(expedition.game.target(), Some(Interactable::Shy));
-    assert!(expedition.game.prompt("E").unwrap().contains("shy crystal"));
+    assert_eq!(
+        expedition.game.prompt(),
+        Some(Prompt::Use(Interactable::Shy))
+    );
     let progress = expedition.advance(1. / 60., use_input);
     assert!(progress.shy);
     assert_eq!(progress.completed, 0);
@@ -34,11 +37,21 @@ fn steve_and_the_note_are_optional_secrets_outside_the_objective_graph() {
 
     expedition.game.position = note_position() + vec2(0.3, 0.3);
     assert_eq!(expedition.game.target(), Some(Interactable::Note));
-    assert!(expedition.game.prompt("E").unwrap().contains("lost note"));
+    assert_eq!(
+        expedition.game.prompt(),
+        Some(Prompt::Use(Interactable::Note))
+    );
     let first = expedition.advance(1. / 60., use_input);
     assert_eq!(first.note, Some(0));
-    assert!(expedition.game.notice.contains("Steve"));
-    assert!(expedition.game.prompt("E").unwrap().contains("page 2"));
+    // The first page is shown in full; it introduces Steve.
+    assert_eq!(expedition.game.notice, Notice::Note(0));
+    assert!(quips::note(0).contains("Steve"));
+    // The prompt now offers page two (its pips light the next page).
+    assert_eq!(expedition.game.note_reads, 1);
+    assert_eq!(
+        expedition.game.prompt(),
+        Some(Prompt::Use(Interactable::Note))
+    );
     expedition.advance(1. / 60., Input::default);
     let second = expedition.advance(1. / 60., use_input);
     assert_eq!(second.note, Some(1));
@@ -146,7 +159,12 @@ fn whispers_escalate_while_stuck_and_reset_on_progress() {
     assert_eq!(hints.len(), 3);
     assert_eq!(expedition.game.hint_level, 3);
     assert_eq!(expedition.game.hints_used, 3);
-    assert!(expedition.game.hint_text().contains("Try "));
+    // The third whisper names a real place.
+    assert!(
+        quips::ZONES
+            .iter()
+            .any(|(name, _)| *name == expedition.game.hint_text())
+    );
     assert!(expedition.game.hint_target().is_some());
     // Progress resets the schedule, but the run remembers hints used.
     expedition.game.position = expedition.game.crystals[0];

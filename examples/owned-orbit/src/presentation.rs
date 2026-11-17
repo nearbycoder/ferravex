@@ -60,7 +60,9 @@ pub(crate) enum Spark {
     Backup {
         at: [f32; 2],
     },
-    Caught,
+    Caught {
+        at: [f32; 2],
+    },
     Release {
         at: [f32; 2],
     },
@@ -292,7 +294,11 @@ impl Presentation {
 
 pub(crate) struct ControlHints {
     pub launch: String,
+    /// Readable steering summary.
     pub movement: String,
+    /// Key caps drawn beside the paddle: steer left / right, or `DRAG`.
+    pub left: String,
+    pub right: String,
     pub pause: String,
     pub restart: String,
 }
@@ -301,6 +307,8 @@ impl Default for ControlHints {
         Self {
             launch: "SPACE / ENTER / TAP".into(),
             movement: "A D / ARROWS / DRAG".into(),
+            left: "A / LEFT".into(),
+            right: "D / RIGHT".into(),
             pause: "ESC".into(),
             restart: "R".into(),
         }
@@ -326,12 +334,20 @@ impl ControlHints {
             (&mut self.launch, "launch"),
             (&mut self.pause, "pause"),
             (&mut self.restart, "restart"),
+            (&mut self.left, "move_left"),
+            (&mut self.right, "move_right"),
         ] {
             label.clear();
             append_hint(label, input, name);
             label.make_ascii_uppercase();
         }
         self.movement.clear();
+        if input.current_device() == HintDevice::Touch {
+            for side in [&mut self.left, &mut self.right] {
+                side.clear();
+                side.push_str("DRAG");
+            }
+        }
         match input.current_device() {
             HintDevice::Touch => self.movement.push_str("DRAG TO STEER"),
             HintDevice::Gamepad => {

@@ -3,11 +3,14 @@
 //! Every selector is a pure function of accepted rules counters, so the same
 //! round always reads the same way and no clock, RNG or render cadence is
 //! involved. Consecutive counters never select the same line twice in a row.
+//!
+//! Callouts shown while the ball is in play are at most three words; the
+//! one-line jokes appear only between holes and on pause.
 use crate::card::{HoleOutcome, ScoreName, Style, Tone};
 
 const ACE: [&str; 6] = [
     "FRAME THAT BALL. MOUNT IT.",
-    "THE CUP NEVER STOOD A CHANCE",
+    "THE CUP NEVER HAD A CHANCE",
     "ONE AND DONE. SHOW-OFF.",
     "SOMEONE CALL THE NEWSPAPER",
     "THE WINDMILL IS JEALOUS",
@@ -17,7 +20,7 @@ const ACE: [&str; 6] = [
 const UNDER: [&str; 7] = [
     "SMOOTH AS A FRESH-MOWN GREEN",
     "THE FLAG SALUTES YOU",
-    "TEXTBOOK. IF THE TEXTBOOK WAS COOL.",
+    "TEXTBOOK. COOL TEXTBOOK.",
     "CRISP. CLEAN. COPPER.",
     "THE CUP SAW YOU COMING",
     "BIRDS EVERYWHERE ARE NODDING",
@@ -28,7 +31,7 @@ const EVEN: [&str; 7] = [
     "RIGHT ON THE NUMBER",
     "THE COURSE NODS POLITELY",
     "NO DRAMA. JUST GOLF.",
-    "PAR: THE SENSIBLE SHOES OF SCORES",
+    "PAR: SENSIBLE SHOES",
     "STEADY HANDS, STEADY CARD",
     "EXACTLY AS PLANNED. PROBABLY.",
     "SOLID. LIKE A STONE WALL.",
@@ -63,46 +66,46 @@ const PICKED_UP: [&str; 5] = [
 ];
 
 const WATER: [&str; 8] = [
-    "THE DUCKS SAY THANK YOU",
-    "YOUR BALL WENT FOR A SWIM",
+    "SPLASH!",
     "GLUB GLUB",
-    "THAT'S A SUBMARINE NOW",
-    "WATER HAZARD 1, YOU 0",
-    "SPLASHDOWN CONFIRMED",
-    "FISH GOT A NEW TOY",
-    "IT WAS THIRSTY, PROBABLY",
+    "KERPLUNK!",
+    "SPLASHDOWN!",
+    "FISH FOOD!",
+    "SWIM TIME!",
+    "DUCK BAIT!",
+    "SUBMARINE!",
 ];
 
 const LIP_OUT: [&str; 6] = [
-    "THE CUP SAID NO",
+    "CUP SAID NO",
     "LIPPED OUT!",
-    "TOO HOT TO DROP!",
-    "IT PEEKED IN AND LEFT",
+    "TOO HOT!",
+    "IN AND OUT!",
     "RIM SHOT!",
-    "SO CLOSE IT HURTS",
+    "SO CLOSE!",
 ];
 
 const NEAR: [&str; 6] = [
     "INCHES!",
     "TAP-IN RANGE",
-    "GIMME? NOT HERE.",
-    "KNOCKING ON THE CUP",
-    "ALMOST HAD IT",
-    "ONE MORE ROLL...",
+    "GIMME? NOPE.",
+    "KNOCK KNOCK",
+    "ALMOST!",
+    "ONE MORE ROLL",
 ];
 
 const BANK: [&str; 5] = [
     "BANK SHOT!",
     "OFF THE RAIL!",
-    "GEOMETRY CLASS PAID OFF",
-    "CALLED IT. SURELY.",
+    "GEOMETRY!",
+    "CALLED IT!",
     "ANGLES!",
 ];
 
 const TRICK: [&str; 4] = [
     "TRICK SHOT!",
     "PINBALL WIZARD!",
-    "THAT WAS ON PURPOSE. RIGHT?",
+    "ON PURPOSE?",
     "RICOCHET ROYALTY!",
 ];
 
@@ -117,16 +120,12 @@ const PAUSE: [&str; 8] = [
     "RUMOR: HOLE 1 CAN BE ACED BACKWARDS",
 ];
 
-const RETURN: [&str; 4] = [
-    "FRESH START (+1)",
-    "WE NEVER SPEAK OF THAT SHOT",
-    "MULLIGAN-ISH (+1)",
-    "TAKE TWO (+1)",
-];
+/// The penalty stroke shows separately as "+1".
+const RETURN: [&str; 4] = ["FRESH START", "NEVER HAPPENED", "MULLIGAN-ISH", "TAKE TWO"];
 
 const STREAK: [&str; 4] = ["ON A ROLL", "HEATING UP", "CAN'T MISS", "COPPER FEVER"];
 
-const SAND: [&str; 4] = ["BEACH DAY", "SANDY!", "SAND TRAP SAYS HI", "THAT'S GRITTY"];
+const SAND: [&str; 4] = ["BEACH DAY", "SANDY!", "SAND TRAP!", "GRITTY!"];
 
 /// Advances by a stride coprime with the table length, so the same table
 /// never repeats on consecutive counters and every line is visited.
@@ -228,6 +227,26 @@ mod tests {
             for line in table.iter() {
                 assert!(line.len() <= 40, "{line}");
                 assert_eq!(line.to_uppercase(), *line);
+            }
+        }
+    }
+
+    #[test]
+    fn in_play_callouts_are_three_words_at_most() {
+        let tables: [&[&str]; 8] = [
+            &WATER, &LIP_OUT, &NEAR, &BANK, &TRICK, &RETURN, &STREAK, &SAND,
+        ];
+        for table in tables {
+            for line in table.iter() {
+                assert!(line.split(' ').count() <= 3, "{line}");
+                assert!(line.len() <= 17, "{line}");
+            }
+        }
+        for banks in 0..12u8 {
+            assert!(streak(banks + 2).split(' ').count() <= 4);
+            let outcome = RoundStats::default().finish_hole(0, 2, 3, false, banks, false);
+            if let Some(line) = style(outcome.style, u32::from(banks)) {
+                assert!(line.split(' ').count() <= 3, "{line}");
             }
         }
     }

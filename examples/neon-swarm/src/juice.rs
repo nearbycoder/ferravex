@@ -6,8 +6,12 @@
 //! timing, scoring or input. Reduced motion clears and blocks shake, kick,
 //! zoom, stretch and rings, and keeps pops/callouts still. Reduced flash only
 //! affects the separate additive particles and flashes owned by Presentation.
+//!
+//! Callouts are one punchy line (at most three words) with an optional badge:
+//! a pictogram and a number, such as a gem and `+50` style. No subtitles.
 use crate::hud::Line;
 use crate::{AMBER, CORAL, CYAN};
+use ferravex_render::icons::Icon;
 use ferravex_render::prelude::{Color, Vec2, vec2};
 
 const POPS: usize = 10;
@@ -20,6 +24,8 @@ pub(crate) const VIOLET: Color = Color::from_rgba(168, 128, 255, 255);
 pub(crate) struct Pop {
     pub at: Vec2,
     pub text: Line,
+    /// Drawn before the text, e.g. a heart before `+22`.
+    pub icon: Option<Icon>,
     pub color: Color,
     pub age: f32,
     pub life: f32,
@@ -57,10 +63,25 @@ pub(crate) enum Priority {
     Epic,
 }
 
+/// A pictogram and a short number shown beside a callout.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Badge {
+    pub icon: Icon,
+    pub text: Line,
+    pub color: Color,
+}
+
+impl Badge {
+    pub fn new(icon: Icon, text: Line, color: Color) -> Self {
+        Self { icon, text, color }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct Callout {
+    /// At most three words.
     pub head: Line,
-    pub sub: Line,
+    pub badge: Option<Badge>,
     pub color: Color,
     pub age: f32,
     pub life: f32,
@@ -250,6 +271,11 @@ impl Juice {
     }
 
     pub fn pop(&mut self, at: Vec2, text: Line, color: Color, size: f32) {
+        self.pop_icon(at, None, text, color, size);
+    }
+
+    /// A rising pop led by `icon`.
+    pub fn pop_icon(&mut self, at: Vec2, icon: Option<Icon>, text: Line, color: Color, size: f32) {
         // Stack simultaneous pops instead of printing them on top of each other.
         let crowd = self
             .pops
@@ -266,6 +292,7 @@ impl Juice {
         self.pops[slot] = Some(Pop {
             at,
             text,
+            icon,
             color,
             age: 0.,
             life: 0.85,
@@ -275,7 +302,7 @@ impl Juice {
 
     /// One announcer slot: higher priority wins; equal or lower priority
     /// replaces a callout only once it has been readable for a moment.
-    pub fn callout(&mut self, head: Line, sub: Line, color: Color, priority: Priority) {
+    pub fn callout(&mut self, head: Line, badge: Option<Badge>, color: Color, priority: Priority) {
         if self
             .callout
             .as_ref()
@@ -291,7 +318,7 @@ impl Juice {
         };
         self.callout = Some(Callout {
             head,
-            sub,
+            badge,
             color,
             age: 0.,
             life,
@@ -333,7 +360,7 @@ mod tests {
         juice.dash(Vec2::Y);
         juice.ring(Vec2::ZERO, 10., 60., 0.4, CYAN);
         juice.pop(Vec2::ZERO, Line::from("+100"), CYAN, 18.);
-        juice.callout(Line::from("ON FIRE"), Line::new(), AMBER, Priority::Combo);
+        juice.callout(Line::from("ON FIRE"), None, AMBER, Priority::Combo);
         juice.age(0.01, true);
         assert!(juice.shake().length() > 0.);
         juice.age(0.5, true);
@@ -368,11 +395,11 @@ mod tests {
     #[test]
     fn callouts_respect_priority_and_storage_stays_bounded() {
         let mut juice = Juice::new();
-        juice.callout(Line::from("OVERSEER"), Line::new(), GOLD, Priority::Epic);
-        juice.callout(Line::from("NOT TODAY!"), Line::new(), CYAN, Priority::Minor);
+        juice.callout(Line::from("OVERSEER"), None, GOLD, Priority::Epic);
+        juice.callout(Line::from("NOT TODAY!"), None, CYAN, Priority::Minor);
         assert_eq!(juice.callout.as_ref().unwrap().head, "OVERSEER");
         juice.age(0.8, false);
-        juice.callout(Line::from("NOT TODAY!"), Line::new(), CYAN, Priority::Minor);
+        juice.callout(Line::from("NOT TODAY!"), None, CYAN, Priority::Minor);
         assert_eq!(juice.callout.as_ref().unwrap().head, "NOT TODAY!");
         for n in 0..100 {
             juice.pop(Vec2::ZERO, crate::hud::line!("+{n}"), CYAN, 18.);

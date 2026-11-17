@@ -26,7 +26,7 @@ mapping when it is too long for the HUD. Default touch hints describe only the
 installed left stick and right-side slow region. The default touch layout has no
 boost region. Customized layouts show their configured touch channels.
 
-Start with **Start flight**; the delivery window stays frozen on the briefing screen. Follow the amber ring. Cleared rings disappear; future rings are muted. The six-part progress strip shows the five gates and final delivery. Navigation reports turn direction, climb/descent and distance to the current target, including a turn-back prompt when a gate is behind you. A gold bracket marks the current target in view, and an edge arrow points to it when it is off-screen or behind you. Accepted gates replenish some boost.
+Start with **Take off**; the delivery window stays frozen on the briefing screen, which shows the route (five rings, then one parcel), the 1:30 window and three hull hearts as icons. Follow the amber ring. Cleared rings disappear; future rings are muted. The progress strip under the clock shows the five gates, then a parcel marker for the delivery. The heading widget's dial points at the current target (mint on course, coral when it is behind you, with a U-turn prompt), beside its distance and climb arrows (one to three heads by altitude gap, mint bars when level). A gold bracket marks the current target in view, and an edge arrow points to it when it is off-screen or behind you. Accepted gates replenish some boost.
 
 ## Tips, streaks and secrets
 
@@ -46,27 +46,33 @@ above the clouds, one sits between the eastern islands). Each pays $50 and
 tops up boost; finding all three pays a $100 scenic-route bonus. They never
 affect gate order and are never marked on the HUD.
 
-Gate passes, hidden rings and impacts get short, rotating callouts ("THREADED
-IT!", "YOU'RE A BOAT NOW") that never repeat back to back. Juice comes only from
-accepted events: ring sparks, rising tip pops, a small FOV kick, a gold edge
-glow on bullseyes, a victory roll on streak milestones and hidden rings, speed
-lines while fast, a recovery blink and confetti on delivery.
+Gate passes, hidden rings and impacts get punchy rotating headlines of at most
+three words ("Threaded it!", "Boat mode!", "Corner office!") over icon chips
+(coin tip, bolt for a boosted pass, flame streak, clock penalty, shield ring)
+that never repeat back to back. Juice comes only from accepted events: ring
+sparks, rising coin and star pops, a small FOV kick, a gold edge glow on
+bullseyes, a victory roll on streak milestones and hidden rings, speed lines
+while fast, a recovery blink, a bursting hull heart, a flashing route segment,
+a popping tip badge and confetti on delivery.
 
-The shift card shows a silly rank (from **PIGEON IN TRAINING** to **LEGEND OF
-THE LETTERBOX**, plus secret and failure titles), the drop grade, tips, best
-streak, flight time, impacts and hidden rings, a customer reaction, your
-personal best and the next goal. Undelivered flights show their tips as unpaid.
+The shift card shows a silly rank (from **Pigeon in Training** to **Legend of
+the Letterbox**, plus secret and failure titles), the drop grade, then icon stats
+for tips, best streak, flight time, hull hearts and hidden rings, a one-line
+customer reaction, your personal best (trophy) and the next rank (crown).
+Undelivered flights show their tips struck out as unpaid.
 
-On the delivery approach, hold Shift (or the right side on touch) and fly through the airspace above the coral cross at no more than 18 metres/second (about 35 knots), aiming for 16 metres altitude. The HUD reports **SLOW DOWN** or **SPEED READY**; the final low pass releases the parcel automatically. The countdown rounds up until the window closes and turns amber for the final 15 seconds.
+On the delivery approach, hold Shift (or the right side on touch) and fly through the airspace above the coral cross at no more than 18 metres/second (about 35 knots), aiming for 16 metres altitude. While too fast, a coral prompt shows the current slow-flight key caps and **Slow**; once slow enough it becomes a mint check over the parcel, and the speed dial's mint band and the altimeter's mint tick show the targets. The final low pass releases the parcel automatically. The countdown rounds up until the window closes and turns amber for the final 15 seconds.
 
 Ocean, island, ceiling, and map-boundary impacts cost one of three hull points and five seconds. Surviving impacts recover you at the previous beacon with temporary collision immunity. Three impacts or running out of time ends the flight. The same recovery rules apply to human and automated play.
 
-The HUD distinguishes accepted boost, cruise, slow flight and boost recharge,
-and reports vertical speed alongside airspeed and altitude. Recovery identifies
-the start or last cleared gate, the five-second penalty and protection remaining.
-The result screen distinguishes hull exhaustion from timeout and reports cleared
-gates, actual simulated flight time and impact penalties separately. It offers a
-retry button. Retry restores the full route, hull, timer and boost, clears
+The gauge footer distinguishes accepted boost (a glowing gold bolt), cruise,
+slow flight (a mint halo on the speed dial) and boost recharge (a coral bolt
+meter), and shows airspeed, altitude and vertical speed as a speed dial, an
+altimeter and a climb arrow with their numbers. Recovery shows the five-second
+penalty and a shield ring for the protection remaining. The result card
+distinguishes hull exhaustion (empty hearts) from timeout (an expired clock) and
+shows cleared gates, actual simulated flight time and impact penalties as icon
+stats. It offers a retry button. Retry restores the full route, hull, timer and boost, clears
 camera/trail/exhaust history, and resets the engine audio. Release held steering,
 climb, boost and slow controls after starting or retrying before applying them
 again. Keyboard/gamepad confirmation held across a result transition must also be
@@ -119,15 +125,16 @@ Current bindings are available in **Game menu → Controls**; the flight HUD doe
 not repeat a permanent key list.
 
 The fullscreen app uses the actual viewport and hides the website toolbar and
-page scroll links. The HUD keeps a small time/gate/hull badge (top left), a tips
-and streak badge (top right), one navigation capsule, one transient callout, a
-single fading coach hint and a 58px telemetry strip. Coach hints ("steer through
-the amber ring", "hold boost", "thread the centre") disappear once you have done
-each thing and stay learned across retries. Delivery guidance appears on
-approach; full bindings and instructions are available from the game menu. The
+page scroll links. The HUD keeps a small clock/hull/route badge (top left), a
+coin and streak badge (top right), one heading widget, one transient callout, a
+single fading coach prompt and a 58px gauge footer. Coach prompts (a ring icon
+with "Fly through", the boost key cap with a bolt and "Hold", a ring and coin
+for "Thread centre") disappear once you have done each thing and stay learned
+across retries. The slow-flight prompt appears on the delivery approach; full
+bindings and instructions are available from the game menu. The
 inline page retains its scrolling links. Menus are cards capped at 420px wide,
-placed slightly high so the aircraft stays visible, with a short block below the
-button for the customer reaction, personal best and next goal.
+placed slightly high so the aircraft stays visible, with three short rows below
+the button for the customer reaction, personal best and next goal.
 
 The private `flight_ui` module is registered by this game's root. Its tests cover
 menu containment, actual logical-pixel button hit regions, long/remapped/unbound

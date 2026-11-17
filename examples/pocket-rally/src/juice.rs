@@ -1,6 +1,10 @@
 //! Presentation-only juice: tire smoke, grass spray, sparks, splashes, confetti,
 //! rising score pops, banner toasts, a follow camera and camera shake.
 //!
+//! Banners carry an icon and at most three words; lap banners add the lap
+//! time and its comparison as icon chips. Each cleared gate throws a small
+//! amber spark burst at its road markers and lights its HUD meter segment.
+//!
 //! Effects are created from accepted race ticks and [`crate::style::Event`]s
 //! and aged by accepted simulation time, so pause freezes them and nothing here
 //! can change the car, gates, timers or records. The results celebration ages
@@ -10,6 +14,7 @@
 //! the countdown fly-in; the camera still follows the car without lookahead
 //! sway. Reduced flash clears and blocks the gold new-best edge glow. Text pops
 //! and toasts are information, so they remain but no longer rise or bounce.
+use crate::presentation::LapCompare;
 use crate::quips;
 use crate::sim::{Race, Track};
 use crate::style::{Event, Rating, Style};
@@ -17,6 +22,7 @@ use ferravex_play::feedback::FeedbackPolicy;
 use ferravex_play::particles::{
     Emitter, EmitterDesc, EmitterTransform, ParticleDesc, ParticleMotion, ParticlePool,
 };
+use ferravex_render::icons::Icon;
 use ferravex_render::prelude::*;
 
 const SEED: u64 = 0x5241_4c4c;
@@ -53,15 +59,25 @@ pub enum Priority {
     Alert,
 }
 
+/// A short banner: an icon and a headline of at most three words.
 #[derive(Clone, Debug)]
 pub struct Toast {
     pub head: String,
-    pub sub: String,
+    pub icon: Icon,
+    /// Lap banners add the lap time and comparison as icon chips.
+    pub lap: Option<LapDetail>,
     pub color: Color,
-    pub sub_color: Color,
     pub age: f32,
     pub life: f32,
     pub priority: Priority,
+}
+
+/// The numbers under a lap banner: lap time, comparison and a clean-lap tick.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LapDetail {
+    pub time: f32,
+    pub compare: LapCompare,
+    pub clean: bool,
 }
 
 impl Toast {
@@ -97,6 +113,10 @@ pub struct Juice {
     pub focus: Vec2,
     /// Latest split (or lap) delta versus the best lap, for the HUD.
     pub last_split: Option<f32>,
+    /// Accepted seconds since the last gate was cleared (HUD meter glow).
+    pub gate_flash: f32,
+    /// The race's next gate at the previous accepted tick.
+    next_gate: usize,
     motion: f32,
     flash_scale: f32,
     tick: u32,
@@ -169,6 +189,8 @@ impl Juice {
             finish_at: None,
             focus: track.points[0],
             last_split: None,
+            gate_flash: f32::INFINITY,
+            next_gate: 1,
             motion: 1.,
             flash_scale: 1.,
             tick: 0,
@@ -266,30 +288,27 @@ impl Juice {
         });
     }
 
-    pub fn toast(
-        &mut self,
-        head: String,
-        sub: String,
-        colors: (Color, Color),
-        life: f32,
-        priority: Priority,
-    ) {
-        if self
-            .toast
-            .as_ref()
-            .is_some_and(|t| t.priority > priority && t.age < t.life - TOAST_FADE)
-        {
-            return;
-        }
-        self.toast = Some(Toast {
+    pub fn toast(&mut self, head: String, icon: Icon, color: Color, life: f32, priority: Priority) {
+        self.show(Toast {
             head,
-            sub,
-            color: colors.0,
-            sub_color: colors.1,
+            icon,
+            lap: None,
+            color,
             age: 0.,
             life,
             priority,
         });
+    }
+
+    fn show(&mut self, toast: Toast) {
+        if self
+            .toast
+            .as_ref()
+            .is_some_and(|t| t.priority > toast.priority && t.age < t.life - TOAST_FADE)
+        {
+            return;
+        }
+        self.toast = Some(toast);
     }
 
     fn kick(&mut self, trauma: f32) {
@@ -348,6 +367,29 @@ impl Juice {
             }
         }
         let at = car.pose.position;
+        if race.next_gate != self.next_gate {
+            // The gate just cleared: sparks at both road markers, where the
+            // amber arrows pointed, and a glow on its HUD meter segment.
+            let (center, tangent) = track.gate(self.next_gate);
+            let normal = vec2(-tangent.y, tangent.x);
+            for side in [-1., 1.] {
+                self.burst(
+                    desc(
+                        AMBER,
+                        CREAM,
+                        tangent * 40.,
+                        vec2(80., 80.),
+                        0.5,
+                        (6., 1.),
+                        3.,
+                    ),
+                    center + normal * 44. * side,
+                    10,
+                );
+            }
+            self.next_gate = race.next_gate;
+            self.gate_flash = 0.;
+        }
         for event in style.events.iter() {
             match event {
                 Event::DriftBanked {
@@ -377,9 +419,9 @@ impl Juice {
                 Event::DriftBotched { lost } => {
                     self.pop(at + vec2(0., -26.), format!("-{lost} BOTCHED"), RED, 18.);
                     self.toast(
-                        "DRIFT BOTCHED".to_owned(),
                         quips::botched(style.stats.botched).to_owned(),
-                        (RED, CREAM),
+                        Icon::Cross,
+                        RED,
                         1.6,
                         Priority::Info,
                     );
@@ -473,10 +515,16 @@ impl Juice {
                         } else {
                             "SPLOOSH!".to_owned()
                         },
-                        quips::splash(style.stats.splashes).to_owned(),
-                        (WATER, CREAM),
+                        Icon::Wave,
+                        WATER,
                         2.6,
                         Priority::Alert,
+                    );
+                    self.pop(
+                        at + vec2(0., -34.),
+                        quips::splash(style.stats.splashes).to_owned(),
+                        WATER,
+                        18.,
                     );
                 }
                 Event::Donut => {
@@ -529,42 +577,38 @@ impl Juice {
         let _ = track;
     }
 
-    /// Lap/off-track banners that depend on the session's lap notice.
-    /// Lap banner; the second-to-last lap announces the final lap. A clean-lap
-    /// quip rides along on ordinary laps (the final-lap line is long enough).
+    /// Lap banner: a flag and a headline over the lap time and comparison
+    /// chips. The second-to-last lap announces the final lap; a clean lap
+    /// swaps "LAP n" for a short co-driver quip and adds a green tick.
     pub fn lap_toast(
         &mut self,
         number: u32,
         time: f32,
         best: bool,
-        comparison: String,
-        quip: Option<&str>,
+        compare: LapCompare,
+        clean_quip: Option<&str>,
         final_lap_next: bool,
     ) {
-        let sub_color = if comparison.starts_with('+') {
-            RED
-        } else if comparison.starts_with("NEW BEST") || comparison.starts_with("FIRST BEST") {
-            GREEN
+        let (head, color) = if final_lap_next {
+            ("FINAL LAP!".to_owned(), AMBER)
+        } else if let Some(quip) = clean_quip {
+            (quip.to_owned(), GREEN)
         } else {
-            CREAM
+            (format!("LAP {number}"), if best { GOLD } else { CREAM })
         };
-        let lap = format!("LAP {number}  {}", crate::hud::clock(time));
-        let (head, sub, color) = if final_lap_next {
-            (
-                "FINAL LAP!".to_owned(),
-                format!("{lap}  ·  {comparison}"),
-                AMBER,
-            )
-        } else if let Some(quip) = quip {
-            (
-                lap,
-                format!("{comparison}  ·  {quip}"),
-                if best { GOLD } else { CREAM },
-            )
-        } else {
-            (lap, comparison, if best { GOLD } else { CREAM })
-        };
-        self.toast(head, sub, (color, sub_color), 2.8, Priority::Lap);
+        self.show(Toast {
+            head,
+            icon: Icon::Flag,
+            lap: Some(LapDetail {
+                time,
+                compare,
+                clean: clean_quip.is_some(),
+            }),
+            color,
+            age: 0.,
+            life: 2.8,
+            priority: Priority::Lap,
+        });
     }
 
     /// Follow the car once per accepted tick (including countdown ticks).
@@ -599,6 +643,7 @@ impl Juice {
                 self.since_go = None;
             }
         }
+        self.gate_flash += dt;
         self.trauma = (self.trauma - dt * 2.2).max(0.);
         self.squash *= (-dt * 10.).exp();
         if self.squash < 0.01 {
@@ -812,7 +857,7 @@ mod tests {
         let frozen = (juice.time, juice.particles.len(), juice.focus);
         juice.advance(0.);
         assert_eq!((juice.time, juice.particles.len(), juice.focus), frozen);
-        juice.toast("A".into(), "B".into(), (CREAM, CREAM), 1., Priority::Info);
+        juice.toast("A".into(), Icon::Flag, CREAM, 1., Priority::Info);
         juice.reset(&track);
         assert!(juice.toast.is_none() && juice.particles.is_empty());
         assert_eq!(juice.focus, track.points[0]);
@@ -821,30 +866,36 @@ mod tests {
     #[test]
     fn higher_priority_banners_are_not_stomped() {
         let mut juice = Juice::new(&Track::new());
-        juice.toast(
-            "SPLASH".into(),
-            String::new(),
-            (WATER, CREAM),
-            2.,
-            Priority::Alert,
-        );
-        juice.toast(
-            "BOTCH".into(),
-            String::new(),
-            (RED, CREAM),
-            2.,
-            Priority::Info,
-        );
+        juice.toast("SPLASH".into(), Icon::Wave, WATER, 2., Priority::Alert);
+        juice.toast("BOTCH".into(), Icon::Cross, RED, 2., Priority::Info);
         assert_eq!(juice.toast.as_ref().unwrap().head, "SPLASH");
         juice.advance(1.9);
-        juice.toast(
-            "BOTCH".into(),
-            String::new(),
-            (RED, CREAM),
-            2.,
-            Priority::Info,
-        );
+        juice.toast("BOTCH".into(), Icon::Cross, RED, 2., Priority::Info);
         assert_eq!(juice.toast.as_ref().unwrap().head, "BOTCH");
+        // Lap banners are a headline plus icon chips, never a sentence.
+        juice.advance(1.);
+        juice.lap_toast(1, 14.99, true, LapCompare::First, None, false);
+        let lap = juice.toast.as_ref().unwrap();
+        assert_eq!((lap.head.as_str(), lap.icon), ("LAP 1", Icon::Flag));
+        assert_eq!(
+            lap.lap,
+            Some(LapDetail {
+                time: 14.99,
+                compare: LapCompare::First,
+                clean: false
+            })
+        );
+        juice.lap_toast(
+            2,
+            15.2,
+            false,
+            LapCompare::Slower(0.21),
+            Some("SPOTLESS!"),
+            true,
+        );
+        let lap = juice.toast.as_ref().unwrap();
+        assert_eq!(lap.head, "FINAL LAP!");
+        assert!(lap.lap.unwrap().clean);
     }
 
     #[test]

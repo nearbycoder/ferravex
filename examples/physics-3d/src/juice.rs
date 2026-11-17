@@ -1,13 +1,16 @@
 //! Presentation-only juice for the yard: impact sparks, crate hit flashes,
-//! spawn and bowl puffs, pulse bursts, camera shake, a cinematic collapse
-//! beat, toasts and world-anchored pops. Created only from accepted lab
-//! events; nothing here can change physics, timing or input.
+//! spawn and bowl puffs, floor shockwave rings, pulse bursts, camera shake, a
+//! cinematic collapse beat, headline toasts and world-anchored pops. Created
+//! only from accepted lab events; nothing here can change physics, timing or
+//! input.
 //!
 //! Sparks and flashes age with accepted simulation time (pausing freezes them
-//! for inspection). Shake, the beat, pops and toasts age with bounded render
-//! time. Reduced motion clears and blocks particles, shake and the collapse
-//! push-in/letterbox; reduced flash clears and blocks hit flashes. Text stays,
-//! without rising. A preference change never revives an old effect.
+//! for inspection). Shake, the beat, rings, pops and toasts age with bounded
+//! render time. Reduced motion clears and blocks particles, shake, rings and
+//! the collapse push-in/letterbox; reduced flash clears and blocks hit flashes
+//! and rings. Text stays, without rising. A preference change never revives an
+//! old effect.
+use super::look::{self, Glyph, Icon};
 use super::quips;
 use super::toys::Goal;
 use super::{Lab, LabFrame};
@@ -16,15 +19,19 @@ use ferravex_play::particles::{
     Emitter, EmitterDesc, EmitterTransform, ParticleDesc, ParticleMotion, ParticlePool,
 };
 use ferravex_render::audio::Surface;
+use ferravex_render::icons::Icon as Pict;
 use ferravex_render::prelude::*;
 use ferravex_render::ui;
 
 const SEED: u64 = 0x5048_5953_3344;
 const POPS: usize = 6;
+const RINGS: usize = 12;
 pub(super) const BEAT: f32 = 1.4;
 pub(super) const GOLD: Color = Color::new(1.0, 0.82, 0.36, 1.0);
 pub(super) const PINK: Color = Color::new(0.94, 0.47, 0.55, 1.0);
 pub(super) const MINT: Color = Color::new(0.55, 0.93, 0.70, 1.0);
+/// Floor point under the authored crate stack, where strikes ring out.
+const STACK_BASE: Vec3 = Vec3::new(-0.6, 0.05, 0.);
 
 #[derive(Clone, Debug)]
 pub(super) struct Pop {
@@ -43,10 +50,32 @@ pub(super) enum Priority {
     Goal,
 }
 
+/// An expanding horizontal shockwave in the yard, in meters.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Ring {
+    pub at: Vec3,
+    pub radius: f32,
+    pub color: Color,
+    pub age: f32,
+    pub life: f32,
+}
+
+impl Ring {
+    /// Current radius (meters) and opacity, easing out as it fades.
+    pub fn look(&self) -> (f32, f32) {
+        let t = (self.age / self.life).clamp(0., 1.);
+        let grow = 1. - (1. - t).powi(3);
+        (self.radius * (0.2 + 0.8 * grow), (1. - t) * (1. - t))
+    }
+}
+
+/// A headline callout: an optional glyph, at most three words and an
+/// optional icon stat (never an explanatory subtitle).
 #[derive(Clone, Debug)]
 pub(super) struct Toast {
     pub head: String,
-    pub sub: String,
+    pub glyph: Option<Glyph>,
+    pub value: Option<(Glyph, String)>,
     pub color: Color,
     pub age: f32,
     pub life: f32,
@@ -67,6 +96,7 @@ pub(super) struct Juice {
     flashes: Vec<f32>,
     known: usize,
     pub pops: [Option<Pop>; POPS],
+    pub rings: [Option<Ring>; RINGS],
     pub toast: Option<Toast>,
     time: f32,
     trauma: f32,
@@ -134,6 +164,7 @@ impl Juice {
             flashes: Vec::new(),
             known: 0,
             pops: Default::default(),
+            rings: [None; RINGS],
             toast: None,
             time: 0.,
             trauma: 0.,
@@ -159,6 +190,42 @@ impl Juice {
         if self.flash_scale == 0. {
             self.flashes.iter_mut().for_each(|f| *f = 0.);
         }
+        if !self.rings_enabled() {
+            self.rings = [None; RINGS];
+        }
+    }
+
+    /// Rings move and glow: either reduced preference suppresses them.
+    fn rings_enabled(&self) -> bool {
+        self.motion > 0. && self.flash_scale > 0.
+    }
+
+    /// A floor shockwave growing to `radius` meters; the oldest ring yields.
+    pub fn ring(&mut self, at: Vec3, radius: f32, color: Color, life: f32) {
+        if !self.rings_enabled() || !at.is_finite() {
+            return;
+        }
+        let slot = self
+            .rings
+            .iter()
+            .position(Option::is_none)
+            .unwrap_or_else(|| {
+                self.rings
+                    .iter()
+                    .enumerate()
+                    .max_by(|a, b| {
+                        let age = |r: &Option<Ring>| r.map_or(0., |r| r.age / r.life);
+                        age(a.1).total_cmp(&age(b.1))
+                    })
+                    .map_or(0, |(i, _)| i)
+            });
+        self.rings[slot] = Some(Ring {
+            at,
+            radius,
+            color,
+            age: 0.,
+            life,
+        });
     }
 
     pub fn known(&self) -> usize {
@@ -171,6 +238,7 @@ impl Juice {
         self.flashes.resize(bodies, 0.);
         self.known = bodies;
         self.pops = Default::default();
+        self.rings = [None; RINGS];
         self.trauma = 0.;
         self.beat = None;
     }
@@ -254,7 +322,15 @@ impl Juice {
         });
     }
 
-    pub fn toast(&mut self, head: &str, sub: String, color: Color, life: f32, priority: Priority) {
+    pub fn toast(
+        &mut self,
+        head: &str,
+        glyph: Option<Glyph>,
+        value: Option<(Glyph, String)>,
+        color: Color,
+        life: f32,
+        priority: Priority,
+    ) {
         if self
             .toast
             .as_ref()
@@ -264,7 +340,8 @@ impl Juice {
         }
         self.toast = Some(Toast {
             head: head.to_owned(),
-            sub,
+            glyph,
+            value,
             color,
             age: 0.,
             life,
@@ -280,10 +357,11 @@ impl Juice {
             self.toast = None;
             self.resets += 1;
             self.toast(
-                "Yard reset",
-                quips::reset(self.resets).to_owned(),
+                quips::reset(self.resets),
+                Some(Glyph::Tool(Icon::Reset)),
+                None,
                 ui::INK,
-                1.8,
+                1.6,
                 Priority::Info,
             );
             return;
@@ -304,11 +382,21 @@ impl Juice {
                     body.previous_position,
                     if events.chaos > 0 { 3 } else { 10 },
                 );
+                // A ring marks a deliberate drop or bowl; CHAOS stays a hail.
+                if events.chaos == 0 {
+                    self.ring(body.previous_position, 1.6, color, 0.5);
+                }
             }
         }
         self.known = count;
+        let mut impact_rings = 0;
         for spark in &events.sparks {
             let strength = (spark.strength / 10.).clamp(0.2, 1.);
+            // Hard hits also thump a small ring where they land.
+            if spark.strength > 6. && impact_rings < 3 {
+                impact_rings += 1;
+                self.ring(spark.at, 0.6 + strength * 0.8, GOLD, 0.35);
+            }
             self.burst(
                 burst_desc(
                     GOLD,
@@ -356,35 +444,41 @@ impl Juice {
             let color = [ui::MUTED, ui::INK, ui::CYAN, GOLD][tier as usize];
             self.toast(
                 head,
-                format!(
-                    "{knocked} crate{} · bowl {} on this stack",
-                    if knocked == 1 { "" } else { "s" },
-                    fun.stack_bowls
-                ),
+                Some(Glyph::Tool(Icon::Bowl)),
+                Some((Glyph::Pict(Pict::Crate), knocked.to_string())),
                 color,
                 2.2,
                 Priority::Alert,
             );
             if tier == 3 {
                 self.kick(0.3);
+                self.ring(STACK_BASE, 3.2, GOLD, 0.7);
             }
         }
         if events.chaos > 0 {
             self.toast(
                 quips::chaos(fun.stats.chaos),
-                format!("+{} shapes inbound", events.chaos),
+                None,
+                Some((Glyph::Tool(Icon::Chaos), format!("+{}", events.chaos))),
                 PINK,
-                1.8,
+                1.6,
                 Priority::Info,
             );
         }
-        if let Some((center, rumble)) = events.collapse {
+        if let Some((center, _rumble)) = events.collapse {
             self.toast(
                 quips::collapse(fun.stats.collapses),
-                format!("Collapse · rumble {rumble}"),
+                Some(Glyph::Pict(Pict::Bomb)),
+                None,
                 GOLD,
-                2.,
+                1.8,
                 Priority::Info,
+            );
+            self.ring(
+                vec3(center.x, 0.05, center.z),
+                3.6,
+                Color::new(0.8, 0.84, 0.9, 0.8),
+                0.8,
             );
             self.kick(0.55);
             if self.motion > 0. {
@@ -410,14 +504,22 @@ impl Juice {
                 MINT,
                 18.,
             );
+            self.ring(vec3(0., 10., 0.), 1.6, MINT, 0.5);
         }
         for goal in &events.goals {
-            let (head, sub) = quips::goal(*goal);
-            self.toast(head, sub.to_owned(), GOLD, 3.2, Priority::Goal);
+            self.toast(
+                quips::goal(*goal),
+                Some(look::goal_glyph(*goal)),
+                None,
+                GOLD,
+                3.,
+                Priority::Goal,
+            );
             let at = match goal {
                 Goal::Airtime => vec3(0., 7., 0.),
                 _ => vec3(-0.6, 3., 0.),
             };
+            self.ring(vec3(at.x, 0.05, at.z), 5., GOLD, 0.9);
             for (color, dx) in [(GOLD, -2.5), (PINK, 0.), (MINT, 2.5)] {
                 self.burst(
                     burst_desc(color, ui::INK, 5., -6., 1.5, 0.2),
@@ -428,8 +530,14 @@ impl Juice {
             self.kick(0.35);
         }
         if events.secret {
-            let (head, sub) = quips::SECRET;
-            self.toast(head, sub.to_owned(), MINT, 4., Priority::Goal);
+            self.toast(
+                quips::SECRET,
+                Some(Glyph::Pict(Pict::Trophy)),
+                None,
+                MINT,
+                3.6,
+                Priority::Goal,
+            );
         }
     }
 
@@ -461,6 +569,14 @@ impl Juice {
             if let Some(pop) = slot {
                 pop.age += dt;
                 if pop.age >= pop.life {
+                    *slot = None;
+                }
+            }
+        }
+        for slot in &mut self.rings {
+            if let Some(ring) = slot {
+                ring.age += dt;
+                if ring.age >= ring.life {
                     *slot = None;
                 }
             }
@@ -508,11 +624,18 @@ mod tests {
         }
         assert!(collapsed && !juice.particles.is_empty());
         assert!(juice.beat().is_some());
+        assert!(juice.rings.iter().any(Option::is_some), "collapse ring");
         let (eye, target) = juice.camera(vec3(10., 10., 10.), Vec3::ZERO);
         assert_ne!((eye, target), (vec3(10., 10., 10.), Vec3::ZERO));
         assert!((0..lab.sandbox.bodies.len()).any(|i| juice.body_flash(i) > 0.));
         juice.apply_policy(FeedbackPolicy::new(true, false, 1.).unwrap());
         assert!(juice.particles.is_empty() && juice.beat().is_none());
+        assert!(juice.rings.iter().all(Option::is_none));
+        juice.ring(Vec3::ZERO, 1., GOLD, 1.);
+        assert!(
+            juice.rings.iter().all(Option::is_none),
+            "blocked while reduced"
+        );
         assert_eq!(
             juice.camera(vec3(10., 10., 10.), Vec3::ZERO),
             (vec3(10., 10., 10.), Vec3::ZERO)
@@ -522,6 +645,7 @@ mod tests {
         assert!((0..lab.sandbox.bodies.len()).all(|i| juice.body_flash(i) == 0.));
         juice.apply_policy(FeedbackPolicy::default());
         assert!(juice.particles.is_empty() && juice.beat().is_none());
+        assert!(juice.rings.iter().all(Option::is_none), "no revival");
     }
 
     #[test]
@@ -532,6 +656,8 @@ mod tests {
         for _ in 0..360 {
             lab.advance(1. / 120., Commands::default());
         }
+        // Goal celebrations outrank bowl calls; keep this test on the call.
+        lab.fun.goals = [true; 4];
         let frame = lab.advance(
             0.,
             Commands {
@@ -541,11 +667,21 @@ mod tests {
         );
         juice.on_frame(&lab, &frame);
         assert!(juice.pops.iter().flatten().count() == 1);
+        assert!(
+            juice.rings.iter().any(Option::is_some),
+            "the bowl rolls out of a ring"
+        );
         let mut calls = 0;
         for _ in 0..400 {
             let frame = lab.advance(1. / 120., Commands::default());
             juice.on_frame(&lab, &frame);
-            calls += usize::from(lab.fun.events.bowl_result.is_some());
+            if let Some(knocked) = lab.fun.events.bowl_result {
+                calls += 1;
+                let toast = juice.toast.as_ref().unwrap();
+                let (_, count) = toast.value.as_ref().unwrap();
+                assert_eq!(count, &knocked.to_string(), "an icon stat, not a sentence");
+                assert!(toast.head.split_whitespace().count() <= 3);
+            }
         }
         assert_eq!(calls, 1);
         let frame = lab.advance(
@@ -557,6 +693,9 @@ mod tests {
         );
         juice.on_frame(&lab, &frame);
         assert!(juice.particles.is_empty() && juice.pops.iter().all(Option::is_none));
-        assert_eq!(juice.toast.as_ref().unwrap().head, "Yard reset");
+        assert!(juice.rings.iter().all(Option::is_none));
+        let toast = juice.toast.as_ref().unwrap();
+        assert_eq!(toast.glyph, Some(Glyph::Tool(Icon::Reset)));
+        assert!(toast.head.split_whitespace().count() <= 3);
     }
 }

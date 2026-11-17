@@ -1,15 +1,17 @@
-//! The yard's voice: loading-dock bowling commentary, short and never mean.
+//! The yard's voice: loading-dock bowling commentary, punchy and never mean.
 //!
 //! Every selector is a pure function of accepted simulation counters, so the
 //! same session reads the same way. Consecutive counters never repeat a line.
+//! Callouts shown during play stay within three words; the one-line rank quip
+//! appears only on the YARD CERTIFIED card.
 use super::toys::Goal;
 
 const BOWL: [&str; 6] = [
     "Roll out!",
     "Fore! Wrong sport.",
-    "Here comes the big one",
+    "Big one!",
     "Bowling, but louder",
-    "Lane one is open",
+    "Lane open!",
     "Special delivery",
 ];
 
@@ -25,43 +27,30 @@ const COLLAPSE: [&str; 8] = [
     "Timber!",
     "Pallet party",
     "Inventory: redistributed",
-    "That's a lot of paperwork",
+    "Paperwork!",
     "Shipping: expedited",
-    "Forklift certification: revoked",
-    "The stack has left the chat",
+    "License revoked",
+    "Stack left",
     "Gravity clocked in",
 ];
 
 const CHAOS: [&str; 5] = [
-    "Delivery for: everyone",
-    "Sixteen packages. No signature.",
-    "The yard regrets nothing",
+    "Delivery for everyone",
+    "No signature!",
+    "No regrets!",
     "Same-day shipping",
-    "Returns department: overwhelmed",
+    "Returns: overwhelmed",
 ];
 
 const RESET: [&str; 5] = [
-    "Fresh stack. Same dreams.",
+    "Fresh stack!",
     "Restocked",
-    "The forklifts worked overtime",
-    "Shelves: suspiciously tidy",
-    "Clean yard. For now.",
+    "Forklift overtime",
+    "Suspiciously tidy",
+    "Clean yard!",
 ];
 
-const PAUSE: [&str; 5] = [
-    "The yard holds its breath",
-    "Inventory check",
-    "Coffee break. Physics paused.",
-    "Freeze! Nobody move.",
-    "One tick at a time",
-];
-
-const RETURNED: [&str; 4] = [
-    "Returned to sender",
-    "Lost & found delivery",
-    "It came back",
-    "Nothing leaves the yard",
-];
+const RETURNED: [&str; 4] = ["Returned!", "Lost & found", "It came back", "No escape!"];
 
 /// Advances by a stride coprime with the table length.
 fn rotate<'a>(table: &[&'a str], counter: u32) -> &'a str {
@@ -89,10 +78,6 @@ pub(super) fn reset(count: u32) -> &'static str {
     rotate(&RESET, count)
 }
 
-pub(super) fn pause(count: u32) -> &'static str {
-    rotate(&PAUSE, count)
-}
-
 pub(super) fn returned(count: u32) -> &'static str {
     rotate(&RETURNED, count)
 }
@@ -108,43 +93,33 @@ pub(super) fn bowl_call(knocked: usize) -> (&'static str, u8) {
     }
 }
 
-pub(super) fn goal(goal: Goal) -> (&'static str, &'static str) {
+/// Celebration headline for a completed goal.
+pub(super) fn goal(goal: Goal) -> &'static str {
     match goal {
-        Goal::Strike => ("Goal: Strike!", "The crates never saw it coming"),
-        Goal::Airtime => ("Goal: Airtime!", "Cleared for takeoff. Not for landing."),
-        Goal::Avalanche => ("Goal: Avalanche!", "The yard will need a minute"),
-        Goal::CleanSweep => ("Goal: Clean sweep!", "Not one crate left standing. Art."),
+        Goal::Strike => "Strike!",
+        Goal::Airtime => "Airtime!",
+        Goal::Avalanche => "Avalanche!",
+        Goal::CleanSweep => "Clean sweep!",
     }
 }
 
-pub(super) const SECRET: (&str, &str) = (
-    "Secret: On a pedestal!",
-    "As it should be. The yard bows to you.",
-);
+pub(super) const SECRET: &str = "On a pedestal!";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Rank {
     pub title: &'static str,
+    /// One short line for the YARD CERTIFIED card.
     pub quip: &'static str,
 }
 
 pub(super) fn rank(goals: usize, secret: bool) -> Rank {
     let (title, quip) = match (goals, secret) {
-        (4, true) => (
-            "Yardmaster General, Pedestal Artist",
-            "Every goal and the pedestal. Frame this.",
-        ),
-        (4, false) => (
-            "Yardmaster General",
-            "Every goal done. Rumor says a corner pedestal is lonely.",
-        ),
-        (3, _) => ("Stack Breaker", "One goal left. The crates are nervous."),
-        (2, _) => ("Pallet Wrangler", "Half the checklist. All of the mess."),
-        (1, _) => (
-            "Forklift Enthusiast",
-            "You've got the knack. And the knock.",
-        ),
-        _ => ("Yard Trainee", "Hard hat on. Let's break something."),
+        (4, true) => ("Yardmaster General, Pedestal Artist", "Frame this."),
+        (4, false) => ("Yardmaster General", "Every goal. Mostly standing."),
+        (3, _) => ("Stack Breaker", "The crates are nervous."),
+        (2, _) => ("Pallet Wrangler", "All of the mess."),
+        (1, _) => ("Forklift Enthusiast", "Got the knock."),
+        _ => ("Yard Trainee", "Hard hat on."),
     };
     Rank { title, quip }
 }
@@ -153,17 +128,11 @@ pub(super) fn rank(goals: usize, secret: bool) -> Rank {
 mod tests {
     use super::*;
 
+    const TABLES: [&[&str]; 6] = [&BOWL, &PULSE, &COLLAPSE, &CHAOS, &RESET, &RETURNED];
+
     #[test]
     fn rotating_tables_never_repeat_back_to_back_and_visit_every_line() {
-        for table in [
-            &BOWL[..],
-            &PULSE,
-            &COLLAPSE,
-            &CHAOS,
-            &RESET,
-            &PAUSE,
-            &RETURNED,
-        ] {
+        for table in TABLES {
             let mut seen = std::collections::BTreeSet::new();
             for counter in 0..table.len() as u32 * 2 {
                 assert_ne!(rotate(table, counter), rotate(table, counter + 1));
@@ -174,7 +143,7 @@ mod tests {
     }
 
     #[test]
-    fn bowl_calls_climb_with_crates_and_ranks_with_goals() {
+    fn bowl_calls_climb_with_crates_and_callouts_keep_the_word_budget() {
         let calls: Vec<_> = [0, 2, 5, 10, 25].map(|n| bowl_call(n).1).into();
         assert!(calls.windows(2).all(|w| w[0] <= w[1]));
         assert_eq!(bowl_call(12).0, "Strike!");
@@ -182,11 +151,20 @@ mod tests {
             (0..=4).map(|goals| rank(goals, false).title).collect();
         assert_eq!(titles.len(), 5);
         assert_ne!(rank(4, true), rank(4, false));
-        for line in Goal::ALL.iter().flat_map(|g| {
-            let (a, b) = goal(*g);
-            [a, b]
-        }) {
-            assert!(line.len() <= 56);
+        let callouts = TABLES
+            .iter()
+            .flat_map(|table| table.iter().copied())
+            .chain(Goal::ALL.iter().map(|g| goal(*g)))
+            .chain([0, 2, 5, 10, 25].map(|n| bowl_call(n).0))
+            .chain([SECRET]);
+        for line in callouts {
+            assert!(line.split_whitespace().count() <= 3, "{line}");
+            assert!(line.chars().count() <= 24, "{line}");
+        }
+        for goals in 0..=4 {
+            for secret in [false, true] {
+                assert!(rank(goals, secret).quip.split_whitespace().count() <= 5);
+            }
         }
     }
 }

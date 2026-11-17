@@ -6,6 +6,10 @@
 //!
 //! Lines wider than the glass scroll as a marquee. Reduced motion stops the
 //! scroll and shrinks the line to fit instead.
+//!
+//! The second row is a [`Row`]: a short number, a row of round lamps or a
+//! draining meter. Shapes drawn on the glass pass under the same lattice, so
+//! they read as lit dots like the lettering.
 use super::layout::DMD_BEZEL;
 use super::*;
 use ferravex_render::shapes::{self, Fill, Shadow};
@@ -23,9 +27,26 @@ pub(super) struct Line<'a> {
     pub color: Color,
 }
 
-/// Draw the display in `rect` (bezel included) with a head and a sub line.
+/// The display's second row.
+pub(super) enum Row<'a> {
+    Empty,
+    Text(Line<'a>),
+    /// `lit` of `total` round lamps, centered.
+    Pips {
+        lit: u8,
+        total: u8,
+        color: Color,
+    },
+    /// A bar of dots filled to `0..=1`.
+    Meter {
+        fill: f32,
+        color: Color,
+    },
+}
+
+/// Draw the display in `rect` (bezel included) with a head line and a row.
 /// `time` drives the marquee; `motion` is zero under reduced motion.
-pub(super) fn draw(rect: Rect, pitch: f32, head: Line, sub: Line, time: f32, motion: f32) {
+pub(super) fn draw(rect: Rect, pitch: f32, head: Line, sub: Row, time: f32, motion: f32) {
     shapes::drop_shadow(
         rect,
         10.,
@@ -65,7 +86,12 @@ pub(super) fn draw(rect: Rect, pitch: f32, head: Line, sub: Line, time: f32, mot
     let sub_base = head_base + (2. + (gap * 0.25).floor() + 7.) * pitch;
     let lip_w = (glass.x - rect.x - 2.).max(0.);
     line(glass, pitch, lip_w, head_base, head, time, motion);
-    line(glass, pitch, lip_w, sub_base, sub, time, motion);
+    match sub {
+        Row::Empty => {}
+        Row::Text(sub) => line(glass, pitch, lip_w, sub_base, sub, time, motion),
+        Row::Pips { lit, total, color } => pips(glass, pitch, sub_base, lit, total, color),
+        Row::Meter { fill, color } => meter(glass, pitch, sub_base, fill, color),
+    }
     // The lattice: thin dark lines between dots.
     let lw = (pitch * 0.34).max(0.6);
     let mut x = glass.x;
@@ -98,6 +124,37 @@ pub(super) fn draw(rect: Rect, pitch: f32, head: Line, sub: Line, time: f32, mot
         rect.x + rect.w - 2. - right,
         glass.h + 2.,
     ));
+}
+
+/// Unlit dots of a lamp or meter: the glass color lifted slightly.
+fn unlit(color: Color) -> Color {
+    mix(OFF_DOT, color, 0.22)
+}
+
+/// Round lamps seven dots tall on the row's band, snapped to the dot grid.
+fn pips(glass: Rect, pitch: f32, baseline: f32, lit: u8, total: u8, color: Color) {
+    let total = total.clamp(1, 9);
+    let (size, gap) = (7. * pitch, 4. * pitch);
+    let width = f32::from(total) * size + f32::from(total - 1) * gap;
+    let left = glass.x + ((glass.w - width) * 0.5 / pitch).floor() * pitch;
+    let cy = baseline - 3.5 * pitch;
+    for i in 0..total {
+        let c = vec2(left + f32::from(i) * (size + gap) + size * 0.5, cy);
+        let on = i < lit;
+        shapes::fill_circle(c, size * 0.5, if on { color } else { unlit(color) });
+    }
+}
+
+/// A bar of dots, centered, filled from the left.
+fn meter(glass: Rect, pitch: f32, baseline: f32, fill: f32, color: Color) {
+    let cols = ((glass.w * 0.6) / pitch).floor();
+    let width = cols * pitch;
+    let left = glass.x + ((glass.w - width) * 0.5 / pitch).floor() * pitch;
+    let top = baseline - 6. * pitch;
+    let height = 5. * pitch;
+    draw_rectangle(left, top, width, height, unlit(color));
+    let lit = (cols * fill.clamp(0., 1.)).ceil() * pitch;
+    draw_rectangle(left, top, lit, height, color);
 }
 
 fn line(glass: Rect, pitch: f32, lip: f32, baseline: f32, line: Line, time: f32, motion: f32) {

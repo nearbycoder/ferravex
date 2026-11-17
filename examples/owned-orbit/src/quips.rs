@@ -3,6 +3,11 @@
 //! Every selector is a pure function of accepted simulation counters, so the
 //! same run always reads the same way: no clock, RNG or render cadence is
 //! involved. Consecutive counters never repeat the previous line.
+//!
+//! Canvas copy follows the show-don't-tell budget: in-play callouts are at
+//! most three words, and the ready, pause and results cards carry at most one
+//! short joke. The sector, drain, rank and next-goal tables also feed the
+//! readable status text, so their wording stays as published.
 
 /// Advances by a stride coprime with the table length, so consecutive counters
 /// never repeat a line and every entry is eventually visited.
@@ -11,13 +16,25 @@ fn rotate<'a>(table: &[&'a str], counter: u32) -> &'a str {
     table[(counter as usize).wrapping_mul(stride) % table.len()]
 }
 
-/// Sector name and a one-line tagline, shown on the ready card and in the HUD.
+/// Sector name and a one-line tagline. The canvas shows the name; the
+/// readable status uses both.
 pub(crate) fn sector(sector: u32) -> (&'static str, &'static str) {
     match sector {
         1 => ("LOW ORBIT", "MIND THE SPACE JUNK. IT MINDS YOU BACK."),
         _ => ("THE ARMORED BELT", "NOW WITH EXTRA BOLTS. SOME HIT TWICE."),
     }
 }
+
+/// The ready card's short sector joke.
+pub(crate) fn tagline(sector: u32) -> &'static str {
+    match sector {
+        1 => "MIND THE SPACE JUNK",
+        _ => "NOW WITH EXTRA BOLTS",
+    }
+}
+
+/// The sector-secured card's line when a ball was lost on the way.
+pub(crate) const NOT_FLAWLESS: &str = "NOT BAD, JANITOR";
 
 const DRAIN: [&str; 8] = [
     "GRAVITY 1, PADDLE 0",
@@ -36,25 +53,26 @@ pub(crate) fn drain(lost: u32) -> &'static str {
 }
 
 const SAVE: [&str; 5] = [
-    "NOPE. NOT TODAY.",
-    "THE BALL GOT A REFUND",
+    "NOPE, NOT TODAY",
+    "REFUNDED!",
     "RETURN TO SENDER",
-    "PHEW! FREEBIE USED.",
-    "SAFETY NET: DEPLOYED",
+    "PHEW!",
+    "SAFETY NET!",
 ];
 
-/// `saves` counts opening ball saves this run, including this one.
+/// The ball-save callout (with a shield). `saves` counts opening ball saves
+/// this run, including this one.
 pub(crate) fn save(saves: u32) -> &'static str {
     rotate(&SAVE, saves.saturating_sub(1))
 }
 
 const RETRY: [&str; 6] = [
-    "THE PANELS REMEMBER NOTHING",
+    "THE PANELS FORGOT YOU",
     "SAME ORBIT, NEW YOU",
-    "THIS IS THE ONE. PROBABLY.",
+    "THIS ONE. PROBABLY.",
     "DUST OFF THAT PADDLE",
-    "ROUND TWO. OR TWELVE. WHO'S COUNTING?",
-    "THE BALL MISSED YOU TOO",
+    "ROUND TWO. OR TWELVE.",
+    "THE BALL MISSED YOU",
 ];
 
 /// `runs` counts completed runs in this session.
@@ -63,11 +81,11 @@ pub(crate) fn retry(runs: u32) -> &'static str {
 }
 
 const PAUSE: [&str; 5] = [
-    "THE PANELS ARE ALSO ON BREAK",
-    "THE BALL IS HOVERING POLITELY",
+    "THE PANELS ARE ON BREAK TOO",
+    "THE BALL HOVERS POLITELY",
     "SPACE IS PATIENT. MOSTLY.",
     "STRETCH THOSE THUMBS",
-    "ORBIT ON HOLD. PLEASE ENJOY THE MUZAK.",
+    "PLEASE ENJOY THE MUZAK",
 ];
 
 pub(crate) fn pause(seed: u32) -> &'static str {
@@ -83,7 +101,7 @@ const VOLLEY_TITLES: [&str; 7] = [
     "ORBITAL MELTDOWN!",
     "PHYSICS IS CRYING!",
     "SUPERNOVA!",
-    "PLEASE STOP. IT'S TOO POWERFUL.",
+    "TOO POWERFUL!",
 ];
 
 /// The callout for a volley milestone, if `hits` is one.
@@ -98,16 +116,6 @@ pub(crate) fn volley(hits: u32) -> Option<&'static str> {
 /// Is `hits` a milestone that deserves a callout?
 pub(crate) fn is_volley_milestone(hits: u32) -> bool {
     volley(hits).is_some()
-}
-
-const LAST_PANEL: [&str; 3] = [
-    "IT KNOWS. IT'S NERVOUS.",
-    "ONE PANEL. ALL THE PRESSURE.",
-    "FINISH HIM. GENTLY.",
-];
-
-pub(crate) fn last_panel(sector: u32) -> &'static str {
-    LAST_PANEL[(sector as usize + 2) % LAST_PANEL.len()]
 }
 
 /// What a finished run gets called on the results card.
@@ -207,11 +215,26 @@ mod tests {
     }
 
     #[test]
+    fn in_play_callouts_stay_within_three_words_and_card_jokes_stay_short() {
+        let words = |line: &str| line.split_whitespace().count();
+        for line in VOLLEY_TITLES.iter().chain(&SAVE) {
+            assert!(words(line) <= 3, "{line}");
+        }
+        for line in RETRY
+            .iter()
+            .chain(&PAUSE)
+            .chain(&[tagline(1), tagline(2), NOT_FLAWLESS])
+        {
+            assert!(words(line) <= 6 && line.len() <= 30, "{line}");
+        }
+    }
+
+    #[test]
     fn volley_milestones_escalate_and_ordinary_counts_stay_quiet() {
         assert_eq!(volley(3), Some("TRIPLE TAP!"));
         assert_eq!(volley(4), None);
-        assert_eq!(volley(25), Some("PLEASE STOP. IT'S TOO POWERFUL."));
-        assert_eq!(volley(30), Some("PLEASE STOP. IT'S TOO POWERFUL."));
+        assert_eq!(volley(25), Some("TOO POWERFUL!"));
+        assert_eq!(volley(30), Some("TOO POWERFUL!"));
         assert!(!is_volley_milestone(31));
         let titles: BTreeSet<_> = VOLLEY_MILESTONES
             .iter()

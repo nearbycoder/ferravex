@@ -1,28 +1,34 @@
 //! Presentation-only juice for the 2D lab: impact sparks, hit flashes, spawn
-//! pop-ins, pulse bursts, camera shake, a cinematic collapse beat, toasts and
-//! world-anchored pops. Everything is created from accepted lab events (see
-//! [`super::toys::FunEvents`]) and nothing here can change physics or timing.
+//! pop-ins, shockwave rings, pulse bursts, camera shake, a cinematic collapse
+//! beat, headline toasts and world-anchored pops. Everything is created from
+//! accepted lab events (see [`super::toys::FunEvents`]) and nothing here can
+//! change physics or timing.
 //!
 //! Sparks, flashes and pop-ins age with accepted simulation time, so pausing
-//! freezes them in place for inspection. Shake, the collapse beat, pops and
-//! toasts age with bounded render time so text never sticks while paused.
+//! freezes them in place for inspection. Shake, the collapse beat, rings, pops
+//! and toasts age with bounded render time so feedback never sticks while
+//! paused.
 //!
-//! Reduced motion clears and blocks particles, shake, pop-ins and the collapse
-//! zoom/letterbox. Reduced flash clears and blocks hit flashes. Text remains,
-//! but it no longer rises. Changing a preference never revives an old effect.
+//! Reduced motion clears and blocks particles, shake, pop-ins, rings and the
+//! collapse zoom/letterbox. Reduced flash clears and blocks hit flashes and
+//! rings. Text remains, but it no longer rises. Changing a preference never
+//! revives an old effect.
+use super::look::{self, Glyph, Icon};
 use super::quips;
-use super::toys::{FunEvents, Goal, Scenario};
+use super::toys::{FunEvents, Scenario};
 use super::{Lab, Shape};
 use ferravex_play::feedback::FeedbackPolicy;
 use ferravex_play::particles::{
     Emitter, EmitterDesc, EmitterTransform, ParticleDesc, ParticleMotion, ParticlePool,
 };
 use ferravex_render::audio::Surface;
+use ferravex_render::icons::Icon as Pict;
 use ferravex_render::prelude::*;
 use ferravex_render::ui;
 
 const SEED: u64 = 0x5048_5953_3244;
 const POPS: usize = 6;
+const RINGS: usize = 12;
 pub(super) const BEAT: f32 = 1.3;
 pub(super) const GOLD: Color = Color::new(1.0, 0.82, 0.36, 1.0);
 pub(super) const PINK: Color = Color::new(0.94, 0.47, 0.55, 1.0);
@@ -45,10 +51,32 @@ pub(super) enum Priority {
     Goal,
 }
 
+/// An expanding world-space shockwave, in meters.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Ring {
+    pub at: Vec2,
+    pub radius: f32,
+    pub color: Color,
+    pub age: f32,
+    pub life: f32,
+}
+
+impl Ring {
+    /// Current radius (meters) and opacity, easing out as it fades.
+    pub fn look(&self) -> (f32, f32) {
+        let t = (self.age / self.life).clamp(0., 1.);
+        let grow = 1. - (1. - t).powi(3);
+        (self.radius * (0.2 + 0.8 * grow), (1. - t) * (1. - t))
+    }
+}
+
+/// A headline callout: an optional glyph, at most three words and an
+/// optional icon stat (never an explanatory subtitle).
 #[derive(Clone, Debug)]
 pub(super) struct Toast {
     pub head: String,
-    pub sub: String,
+    pub glyph: Option<Glyph>,
+    pub value: Option<(Glyph, String)>,
     pub color: Color,
     pub age: f32,
     pub life: f32,
@@ -71,7 +99,10 @@ pub(super) struct Juice {
     pop_in: Vec<f32>,
     known: usize,
     pub pops: [Option<Pop>; POPS],
+    pub rings: [Option<Ring>; RINGS],
     pub toast: Option<Toast>,
+    /// The scene of the previous rebuild, to tell a swap from a plain reset.
+    scene: Scenario,
     time: f32,
     trauma: f32,
     /// Seconds since the latest collapse beat began, if one is playing.
@@ -140,7 +171,9 @@ impl Juice {
             pop_in: Vec::new(),
             known: 0,
             pops: Default::default(),
+            rings: [None; RINGS],
             toast: None,
+            scene: Scenario::Workshop,
             time: 0.,
             trauma: 0.,
             beat: None,
@@ -167,6 +200,14 @@ impl Juice {
         if self.flash_scale == 0. {
             self.flashes.iter_mut().for_each(|f| *f = 0.);
         }
+        if !self.rings_enabled() {
+            self.rings = [None; RINGS];
+        }
+    }
+
+    /// Rings move and glow: either reduced preference suppresses them.
+    fn rings_enabled(&self) -> bool {
+        self.motion > 0. && self.flash_scale > 0.
     }
 
     /// Bodies already introduced (and puffed) by presentation.
@@ -183,6 +224,7 @@ impl Juice {
         self.pop_in.resize(bodies, 0.);
         self.known = bodies;
         self.pops = Default::default();
+        self.rings = [None; RINGS];
         self.trauma = 0.;
         self.beat = None;
     }
@@ -271,7 +313,43 @@ impl Juice {
         });
     }
 
-    pub fn toast(&mut self, head: &str, sub: String, color: Color, life: f32, priority: Priority) {
+    /// A world shockwave growing to `radius` meters; the oldest ring yields.
+    pub fn ring(&mut self, at: Vec2, radius: f32, color: Color, life: f32) {
+        if !self.rings_enabled() || !at.is_finite() {
+            return;
+        }
+        let slot = self
+            .rings
+            .iter()
+            .position(Option::is_none)
+            .unwrap_or_else(|| {
+                self.rings
+                    .iter()
+                    .enumerate()
+                    .max_by(|a, b| {
+                        let age = |r: &Option<Ring>| r.map_or(0., |r| r.age / r.life);
+                        age(a.1).total_cmp(&age(b.1))
+                    })
+                    .map_or(0, |(i, _)| i)
+            });
+        self.rings[slot] = Some(Ring {
+            at,
+            radius,
+            color,
+            age: 0.,
+            life,
+        });
+    }
+
+    pub fn toast(
+        &mut self,
+        head: &str,
+        glyph: Option<Glyph>,
+        value: Option<(Glyph, String)>,
+        color: Color,
+        life: f32,
+        priority: Priority,
+    ) {
         if self
             .toast
             .as_ref()
@@ -281,7 +359,8 @@ impl Juice {
         }
         self.toast = Some(Toast {
             head: head.to_owned(),
-            sub,
+            glyph,
+            value,
             color,
             age: 0.,
             life,
@@ -296,18 +375,14 @@ impl Juice {
         if reset {
             self.rebuild(lab.sandbox.bodies.len());
             self.resets += 1;
-            let head = if fun.scenario == Scenario::Dominoes {
-                "DOMINO RUN"
+            // A swap names the new scene; a plain reset gets a quip.
+            let (head, glyph) = if fun.scenario != self.scene {
+                (fun.scenario.name(), look::scene_glyph(fun.scenario))
             } else {
-                "WORKSHOP"
+                (quips::reset(self.resets), Glyph::Tool(Icon::Reset))
             };
-            self.toast(
-                head,
-                quips::reset(self.resets).to_owned(),
-                ui::INK,
-                1.8,
-                Priority::Info,
-            );
+            self.scene = fun.scenario;
+            self.toast(head, Some(glyph), None, ui::INK, 1.6, Priority::Info);
             return;
         }
         // Newly spawned bodies pop in with a small puff.
@@ -329,10 +404,15 @@ impl Juice {
                     body.previous_position,
                     if events.chaos > 0 { 4 } else { 10 },
                 );
+                // A ring marks a deliberate drop; CHAOS arrivals stay a hail.
+                if events.chaos == 0 {
+                    self.ring(body.previous_position, 1.3, color, 0.45);
+                }
             }
         }
         self.known = count;
 
+        let mut impact_rings = 0;
         for spark in &events.sparks {
             let color = surface_color(spark.surface);
             let strength = (spark.strength / 10.).clamp(0.2, 1.);
@@ -341,6 +421,11 @@ impl Juice {
                 spark.at,
                 (4. + strength * 10.) as u32,
             );
+            // Hard hits also thump a small ring where they land.
+            if spark.strength > 6. && impact_rings < 3 {
+                impact_rings += 1;
+                self.ring(spark.at, 0.5 + strength * 0.6, GOLD, 0.3);
+            }
             if spark.strength > 9. {
                 self.kick(0.18);
             }
@@ -366,20 +451,23 @@ impl Juice {
         if events.chaos > 0 {
             self.toast(
                 quips::chaos(fun.stats.chaos),
-                format!("+{} SHAPES INBOUND", events.chaos),
+                None,
+                Some((Glyph::Tool(Icon::Chaos), format!("+{}", events.chaos))),
                 PINK,
-                1.8,
+                1.6,
                 Priority::Info,
             );
         }
-        if let Some((center, rumble)) = events.collapse {
+        if let Some((center, _rumble)) = events.collapse {
             self.toast(
                 quips::collapse(fun.stats.collapses),
-                format!("COLLAPSE · RUMBLE {rumble}"),
+                Some(Glyph::Pict(Pict::Bomb)),
+                None,
                 GOLD,
-                2.,
+                1.8,
                 Priority::Alert,
             );
+            self.ring(center, 3.2, Color::new(0.8, 0.84, 0.9, 0.8), 0.7);
             self.kick(0.6);
             if self.motion > 0. {
                 self.beat = Some((center, 0.));
@@ -400,10 +488,11 @@ impl Juice {
         if let Some((at, top)) = events.tower {
             self.pop(
                 at + vec2(0., 1.),
-                format!("{} {:.1} M", quips::tower(top as u32), top),
+                format!("{} {:.1} m", quips::tower(top as u32), top),
                 GOLD,
                 20.,
             );
+            self.ring(at, 1.2, GOLD, 0.5);
         }
         if events.returned > 0 {
             self.pop(
@@ -412,6 +501,7 @@ impl Juice {
                 MINT,
                 18.,
             );
+            self.ring(vec2(0., 12.), 1.4, MINT, 0.5);
         }
         if let Some(down) = events.dominoes_down
             && down == fun.domino_count()
@@ -420,21 +510,24 @@ impl Juice {
             let seconds = fun.domino_seconds().unwrap_or(0.);
             self.toast(
                 quips::domino(fun.stats.collapses + down as u32),
-                format!("FULL RUN · {down}/{down} IN {seconds:.2} S"),
+                Some(Glyph::Tool(Icon::Domino)),
+                Some((Glyph::Pict(Pict::Clock), format!("{seconds:.2} s"))),
                 MINT,
                 2.4,
                 Priority::Alert,
             );
         }
         for goal in &events.goals {
-            let (head, sub) = quips::goal(*goal);
-            self.toast(head, sub.to_owned(), GOLD, 3.2, Priority::Goal);
-            let at = match goal {
-                Goal::Liftoff => vec2(0., 11.),
-                Goal::Skyscraper => vec2(-1.3, 7.5),
-                Goal::Demolition => vec2(0., 4.),
-                Goal::DominoRun => vec2(5., 2.),
-            };
+            self.toast(
+                quips::goal(*goal),
+                Some(look::goal_glyph(*goal)),
+                None,
+                GOLD,
+                3.,
+                Priority::Goal,
+            );
+            let at = look::goal_spot(*goal);
+            self.ring(at, 4., GOLD, 0.8);
             for (color, dx) in [(GOLD, -3.), (PINK, 0.), (MINT, 3.)] {
                 self.burst(
                     burst_desc(color, ui::INK, 6., -6., 1.4, 0.16),
@@ -445,8 +538,15 @@ impl Juice {
             self.kick(0.35);
         }
         if events.secret {
-            let (head, sub) = quips::SECRET;
-            self.toast(head, sub.to_owned(), MINT, 4., Priority::Goal);
+            self.toast(
+                quips::SECRET,
+                Some(Glyph::Pict(Pict::Rocket)),
+                None,
+                MINT,
+                3.6,
+                Priority::Goal,
+            );
+            self.ring(vec2(0., 12.), 5., MINT, 0.9);
             for dx in [-6., -2., 2., 6.] {
                 self.burst(
                     burst_desc(MINT, GOLD, 6., -4., 1.6, 0.18),
@@ -490,6 +590,14 @@ impl Juice {
             if let Some(pop) = slot {
                 pop.age += dt;
                 if pop.age >= pop.life {
+                    *slot = None;
+                }
+            }
+        }
+        for slot in &mut self.rings {
+            if let Some(ring) = slot {
+                ring.age += dt;
+                if ring.age >= ring.life {
                     *slot = None;
                 }
             }
@@ -545,18 +653,31 @@ mod tests {
         assert!(sparked && !juice.particles.is_empty());
         assert!(juice.beat().is_some() && juice.shake() != Vec2::ZERO);
         assert!(juice.toast.is_some());
+        assert!(juice.rings.iter().any(Option::is_some), "collapse ring");
         assert!((0..lab.sandbox.bodies.len()).any(|i| juice.body_flash(i) > 0.));
 
         juice.apply_policy(FeedbackPolicy::new(true, false, 1.).unwrap());
         assert!(juice.particles.is_empty());
+        assert!(juice.rings.iter().all(Option::is_none));
+        juice.ring(Vec2::ZERO, 1., GOLD, 1.);
+        assert!(
+            juice.rings.iter().all(Option::is_none),
+            "blocked while reduced"
+        );
         assert_eq!(juice.shake(), Vec2::ZERO);
         assert!(juice.beat().is_none());
         assert!((0..lab.sandbox.bodies.len()).all(|i| juice.body_scale(i) == 1.));
         assert!(juice.toast.is_some(), "text stays readable");
         juice.apply_policy(FeedbackPolicy::new(false, true, 1.).unwrap());
         assert!((0..lab.sandbox.bodies.len()).all(|i| juice.body_flash(i) == 0.));
+        juice.ring(Vec2::ZERO, 1., GOLD, 1.);
+        assert!(
+            juice.rings.iter().all(Option::is_none),
+            "reduced flash blocks rings"
+        );
         juice.apply_policy(FeedbackPolicy::default());
         assert!(juice.particles.is_empty() && juice.beat().is_none());
+        assert!(juice.rings.iter().all(Option::is_none), "no revival");
         assert!((0..lab.sandbox.bodies.len()).all(|i| juice.body_flash(i) == 0.));
     }
 
@@ -568,7 +689,7 @@ mod tests {
         juice.on_frame(&lab, false);
         assert!(!juice.particles.is_empty(), "spawn puffs");
         let particles = juice.particles.len();
-        juice.toast("A", String::new(), ui::INK, 1., Priority::Info);
+        juice.toast("A", None, None, ui::INK, 1., Priority::Info);
         for _ in 0..30 {
             juice.advance_render(0.1);
             juice.advance_sim(0.);
@@ -586,18 +707,71 @@ mod tests {
     #[test]
     fn goal_toasts_outrank_routine_callouts_and_reset_clears_world_effects() {
         let mut juice = Juice::new();
-        juice.toast("GOAL", String::new(), GOLD, 3., Priority::Goal);
-        juice.toast("CHAOS", String::new(), PINK, 2., Priority::Info);
+        juice.toast("GOAL", None, None, GOLD, 3., Priority::Goal);
+        juice.toast("CHAOS", None, None, PINK, 2., Priority::Info);
         assert_eq!(juice.toast.as_ref().unwrap().head, "GOAL");
         for _ in 0..28 {
             juice.advance_render(0.1);
         }
-        juice.toast("CHAOS", String::new(), PINK, 2., Priority::Info);
+        juice.toast("CHAOS", None, None, PINK, 2., Priority::Info);
         assert_eq!(juice.toast.as_ref().unwrap().head, "CHAOS");
         let lab = chaos_lab();
         juice.on_frame(&lab, false);
+        let chaos = juice.toast.as_ref().unwrap();
+        assert_eq!(
+            chaos.value.as_ref().unwrap().1,
+            "+14",
+            "an icon stat, not a sentence"
+        );
         juice.on_frame(&Lab::new(), true);
         assert!(juice.particles.is_empty() && juice.beat().is_none());
         assert!(juice.pops.iter().all(Option::is_none));
+        assert!(juice.rings.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn drops_ring_where_they_land_and_scene_swaps_name_the_scene() {
+        let mut juice = Juice::new();
+        let mut lab = Lab::new();
+        juice.rebuild(lab.sandbox.bodies.len());
+        lab.update_toys(
+            1. / TICK_HZ,
+            LabInput {
+                drop: Some((vec2(2., 9.), false)),
+                ..Default::default()
+            },
+            ToyInput::default(),
+        );
+        juice.on_frame(&lab, false);
+        let ring = juice.rings.iter().flatten().next().expect("spawn ring");
+        assert_eq!(ring.at, vec2(2., 9.));
+        let (radius, alpha) = ring.look();
+        assert!(radius > 0. && alpha > 0.9);
+        for _ in 0..10 {
+            juice.advance_render(0.1);
+        }
+        assert!(juice.rings.iter().all(Option::is_none), "rings expire");
+        lab.update_toys(
+            0.,
+            LabInput::default(),
+            ToyInput {
+                scene: true,
+                ..Default::default()
+            },
+        );
+        juice.on_frame(&lab, true);
+        assert_eq!(juice.toast.as_ref().unwrap().head, "Domino run");
+        lab.update_toys(
+            0.,
+            LabInput {
+                reset: true,
+                ..Default::default()
+            },
+            ToyInput::default(),
+        );
+        juice.on_frame(&lab, true);
+        let toast = juice.toast.as_ref().unwrap();
+        assert_ne!(toast.head, "Domino run", "a plain reset gets a quip");
+        assert!(toast.head.split_whitespace().count() <= 3);
     }
 }

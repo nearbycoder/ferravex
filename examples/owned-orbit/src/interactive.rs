@@ -233,6 +233,11 @@ mod tests {
         let mut hints = ControlHints::default();
         hints.update(&input);
         assert_eq!(hints.launch, "SPACE / ENTER / MOUSE 1");
+        // Steering key caps beside the paddle come from the same bindings.
+        assert_eq!(
+            (hints.left.as_str(), hints.right.as_str()),
+            ("A / LEFT", "D / RIGHT")
+        );
         input
             .rebind("launch", vec![Binding::digital(InputCode::Key(74))])
             .unwrap();
@@ -246,6 +251,7 @@ mod tests {
         assert_eq!(hints.launch, "J");
         assert_eq!(hints.pause, "P");
         assert!(hints.movement.starts_with("J /"));
+        assert_eq!(hints.left, "J");
         input.rebind("launch", Vec::new()).unwrap();
         hints.update(&input);
         assert_eq!(hints.launch, "UNBOUND");

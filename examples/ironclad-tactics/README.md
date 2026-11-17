@@ -19,13 +19,26 @@ The shared host supplies title/start, pause, help, remapping, sound, whole-campa
 | Arrows or WASD, tapped | Move targeting cursor; does not spend AP |
 | Click board | Select friendly machine, shoot an enemy, interact with objective, or move |
 | Click squad card | Select that machine |
+| Click an order row | Same as Space (order), X (skill) or C (end turn) |
+| Click a patient button | With MICA selected: aim at that machine and repair it, exactly like cursor + X |
 | X/E | Selected machine's specialist skill |
 | C/Q or 4 | End the entire squad turn |
-| Space/X after setback | Spend one retry and restart the current operation |
-| C after setback | Concede the campaign |
+| Space/X or click Retry after setback | Spend one retry and restart the current operation |
+| C or click Concede after setback | Concede the campaign |
+| Click an upgrade card | Same as its 1 / 2 / 3 key at debrief |
 | Esc/P / H / M / R / F2 | Host pause / help / sound / whole-campaign restart / remap |
 
-Aim at an ally **with the cursor** and press X to repair it while MICA remains selected. Clicking an ally selects it. If no living ally occupies the cursor, MICA repairs herself. The sidebar also provides click targets for executing the cursor order, using the skill and ending the turn.
+Aim at an ally **with the cursor** and press X to repair it while MICA remains selected, or click that ally's patient button in MICA's skill row. Clicking an ally on the board selects it. If no living ally occupies the cursor, MICA repairs herself.
+
+## Reading the screen
+
+The play screen speaks in icons, meters and previews rather than sentences.
+
+- **Header:** six progress pips (one per operation) and the operation's name. Under it, the objective as a one-word verb and an icon chain: enemy chassis tokens (red, hollow in reserve, crossed out when disabled), the operator and extraction flag, a relay bell with guard pips, furnace flames or the engine gear, each lit teal once done. On the right, an hourglass with the turn number and a segmented deadline track (red triangles mark reserve arrivals, a teal one the hold's final turn), then the campaign's three retries.
+- **Squad cards:** the machine's skill as its badge (shield brace, eye focus, wrench repair; the badge lights while brace or focus is active), the key cap that selects it, action-point pips, a hull meter whose end blinks red for announced enemy fire, range (target) and cannon damage (bomb), and MICA's two kits.
+- **Order rows:** Space shows the cursor's order (pin move, bomb fire, hand select, or the objective's icon) with its AP pips and outcome (damage, a skull for a kill, or the refusal's icon); X shows the skill and its effect; C shows the total hull the announced enemy fire will cost (heart), or a check when the squad is safe.
+- **Board previews:** the selected machine's reachable tiles are tinted; hovering (or the cursor) previews the route and its AP cost, a shot's sight line and damage (the enemy's hull blinks; a skull marks a kill), or the reason it would be refused (bolt, target or crossed eye). Hovering an enemy shows every tile its cannon reaches. Guard rings around an activated relay turn red when contested. The AP an order would spend blinks on the card.
+- **Feedback:** routes glide, shots leave tracers with sparks and damage popups, kills burst with a skull, hits flash the machine and pop a heart, dodged shots say "Miss", reserve arrivals ring red, and each new turn raises a banner. After an operation ends, its last moment stays on the board before the debrief (medals, survivors, speed, upgrade cards) or setback card (reason icon, retries, score at stake) slides in.
 
 ## Squad and rules
 
@@ -73,7 +86,7 @@ cargo clippy -p ironclad-tactics --all-targets --offline --locked -j 2 -- -D war
 cargo run -p ironclad-tactics --offline --locked -j 2 -- --headless
 ```
 
-Executed: **14 behavioral tests and 1 runnable rustdoc example passed**, strict all-target Clippy passed, and owned Rust files passed formatting. Tests cover authored content, AP/path costs, idle/invalid inputs, symmetric LOS, cover, shot rewards, focus/repair/brace resources, fixed enemy fire, enemy movement, occupied reserve entries, loss/retry/score rollback, objective contests/deadlines, upgrade caps, controller edge cases, full campaign completion, deterministic command replay and terminal-state invariance.
+Executed: **26 behavioral tests and 1 runnable rustdoc example passed**, strict all-target Clippy passed, and owned Rust files passed formatting. Tests cover authored content, AP/path costs, idle/invalid inputs, symmetric LOS, cover, shot rewards, focus/repair/brace resources, fixed enemy fire, enemy movement, occupied reserve entries, loss/retry/score rollback, objective contests/deadlines, upgrade caps, controller edge cases, full campaign completion, deterministic command replay and terminal-state invariance. Presentation tests cover progress pips at the first and last operation, effects requested for deploys, shots and hits (and none on idle ticks), the delayed operation card, previews that match what the rules then do, sidebar/patient/setback clicks that mirror their keys, the one-tick event list, the header copy and the four-bullet guide.
 
 The headless controller submits ordinary selection, cursor, click, skill and end-turn inputs to `Game::step`; it neither modifies game state nor grants invulnerability. Its complete run reaches all six operations, keeps all three retries, earns 18 medals, and wins at model tick **2420** with **14,175** points. Mission starts occur at ticks 0, 311, 821, 1171, 1631 and 1991.
 
@@ -83,6 +96,6 @@ Parent native smoke commands can use:
 cargo run -p ironclad-tactics --offline --locked -j 2 -- --autoplay --smoke-frames 240 --screenshot target/games20/ironclad-tactics-240.png
 ```
 
-Useful model-tick capture windows are 180 (first board), 500 (rescue), 1000 (relay), 1400 (bridge), 2100 (final battle) and 2500 (ending). Native frame counts and model ticks can differ. The parent inspected an actual native frame-240 screenshot and reported readable board, AP panels, intentions, labels and footer.
+Useful model-tick capture windows are 180 (first board), 500 (rescue), 1000 (relay), 1400 (bridge), 2100 (final battle) and 2500 (ending). Native frame counts and model ticks can differ. The autoplay controller chooses upgrades within ten ticks, so autoplay captures rarely show the debrief card, which arrives half a second after an operation ends.
 
 Limits: automated legal-input completion demonstrates one successful build and route, not exhaustive human balance testing. Individual mechanic tests use isolated fixtures; the complete-campaign test starts from `Game::new()` and uses only legal commands. Browser/Wasm, touch devices, native audio, remapping and shared persistence are integration checks owned by the parent and were not separately exercised by this implementation agent. No workspace build or shared staging was run.

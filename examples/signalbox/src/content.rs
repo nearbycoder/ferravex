@@ -21,14 +21,6 @@ impl Service {
             Self::Freight => 0.68,
         }
     }
-
-    pub(crate) fn name(self) -> &'static str {
-        match self {
-            Self::Local => "Local",
-            Self::Mail => "Mail",
-            Self::Freight => "Freight",
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug)]

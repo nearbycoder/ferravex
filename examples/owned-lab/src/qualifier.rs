@@ -20,12 +20,12 @@ pub const BELL: Vec3 = Vec3::new(0., 3.3, -1.);
 const BELL_RADIUS: f32 = 0.6;
 const BODY_POINTS: u32 = 100;
 const HEAD_POINTS: u32 = 250;
-const ELIMINATION_BONUS: u32 = 150;
-const BELL_BONUS: u32 = 500;
+pub(crate) const ELIMINATION_BONUS: u32 = 150;
+pub(crate) const BELL_BONUS: u32 = 500;
 /// Streak window in seconds; a miss also breaks the streak.
 const STREAK_WINDOW: f32 = 4.;
-const HITS_PER_TIER: u32 = 3;
-const MAX_MULTIPLIER: u32 = 4;
+pub(crate) const HITS_PER_TIER: u32 = 3;
+pub(crate) const MAX_MULTIPLIER: u32 = 4;
 /// Minimum score for S, A, B and C. Anything lower is a D.
 pub const GRADE_THRESHOLDS: [u32; 4] = [12000, 7500, 4000, 1500];
 

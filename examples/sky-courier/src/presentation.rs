@@ -3,10 +3,12 @@
 //! Juice is created only from accepted simulation events (gates, hidden rings,
 //! impacts, outcomes) and aged by accepted simulation time, so pausing freezes
 //! it. Reduced motion clears and blocks sparks, rising pops, FOV kicks, speed
-//! lines, ring spin and the results orbit; reduced flash clears the gate glow
-//! and impact edge. Text pops remain readable under both.
+//! lines, ring spin, HUD pops and the results orbit; reduced flash clears the
+//! gate glow, HUD flashes and impact edge. Icon pops remain readable under both.
+use super::flight_ui::HudFx;
 use super::*;
 use ferravex_play::particles::{EmitterDesc, ParticleDesc, ParticleMotion, SpawnShape};
+use ferravex_render::icons::Icon;
 
 const POPS: usize = 6;
 pub(super) const POP_LIFE: f32 = 1.1;
@@ -15,10 +17,11 @@ pub(super) const MINT: Color = Color::new(0.56, 0.92, 0.74, 1.0);
 const SPARK_SEED: u64 = 0x534b_5350;
 const ROLL: f32 = 0.75;
 
-/// A world-anchored rising tip label.
+/// A world-anchored rising tip: an icon and a short number such as `+40`.
 #[derive(Clone, Debug)]
 pub(super) struct Pop {
     pub at: Vec3,
+    pub icon: Icon,
     pub text: String,
     pub color: Color,
     pub age: f32,
@@ -53,6 +56,11 @@ pub(super) struct FlightPresentation {
     pub(super) ambient: f32,
     /// Render seconds on the briefing screen, for the idle bob.
     idle: f32,
+    /// HUD emphasis after accepted tips, hull loss and cleared gates: 1 on
+    /// the event, fading on accepted time (see [`HudFx`]).
+    hud_tips: f32,
+    hud_hull: f32,
+    hud_gate: f32,
 }
 
 impl FlightPresentation {
@@ -104,6 +112,9 @@ impl FlightPresentation {
             flash: 1.,
             ambient: 0.,
             idle: 0.,
+            hud_tips: 0.,
+            hud_hull: 0.,
+            hud_gate: 0.,
         }
     }
 
@@ -119,6 +130,9 @@ impl FlightPresentation {
         self.celebrate = 0.;
         self.roll = 0.;
         self.idle = 0.;
+        self.hud_tips = 0.;
+        self.hud_hull = 0.;
+        self.hud_gate = 0.;
     }
 
     fn clear_particles(&mut self) {
@@ -154,7 +168,7 @@ impl FlightPresentation {
             .expect("finite accepted event position");
     }
 
-    fn pop(&mut self, at: Vec3, text: String, color: Color) {
+    fn pop(&mut self, at: Vec3, icon: Icon, text: String, color: Color) {
         let slot = self
             .pops
             .iter()
@@ -171,6 +185,7 @@ impl FlightPresentation {
             });
         self.pops[slot] = Some(Pop {
             at,
+            icon,
             text,
             color,
             age: 0.,
@@ -200,7 +215,14 @@ impl FlightPresentation {
                 if quips::streak(pass.multiplier).is_some() && self.motion > 0. {
                     self.roll = ROLL;
                 }
-                self.pop(at + Vec3::Y * 11., format!("+${}", pass.tip), GOLD);
+                self.pop(
+                    at + Vec3::Y * 11.,
+                    Icon::Coin,
+                    format!("+{}", pass.tip),
+                    GOLD,
+                );
+                self.hud_tips = 1.;
+                self.hud_gate = 1.;
             } else if let Some(drop) = ledger.drop {
                 for color in [CORAL, GOLD, MINT, CREAM] {
                     self.burst(spark_desc(color, color, 16., 1.6, 1.3), at, 30);
@@ -208,9 +230,11 @@ impl FlightPresentation {
                 self.gate_glow = flash;
                 self.pop(
                     at + Vec3::Y * 9.,
-                    format!("+${}", drop.tip + drop.early),
+                    Icon::Coin,
+                    format!("+{}", drop.tip + drop.early),
                     GOLD,
                 );
+                self.hud_tips = 1.;
             }
         }
         for (index, ring) in courier::BONUS_RINGS.iter().enumerate() {
@@ -229,7 +253,8 @@ impl FlightPresentation {
                 } else {
                     0
                 };
-            self.pop(*ring + Vec3::Y * 8., format!("+${tip}"), MINT);
+            self.pop(*ring + Vec3::Y * 8., Icon::Star, format!("+{tip}"), MINT);
+            self.hud_tips = 1.;
         }
     }
 
@@ -261,6 +286,18 @@ impl FlightPresentation {
     /// Screen-space pops and the results orbit read this; zero when reduced.
     pub(super) fn pop_rise(&self, pop: &Pop) -> f32 {
         pop.age * 46. * self.motion
+    }
+
+    /// HUD emphasis and idle-pulse inputs for this frame.
+    pub(super) fn hud_fx(&self) -> HudFx {
+        HudFx {
+            tips: self.hud_tips,
+            hull: self.hud_hull,
+            gate: self.hud_gate,
+            clock: self.clock,
+            motion: self.motion,
+            flash: self.flash,
+        }
     }
 
     pub(super) fn update(
@@ -327,7 +364,11 @@ impl FlightPresentation {
         }
         self.gate_glow = (self.gate_glow - frame.seconds * 2.5).max(0.);
         self.roll = (self.roll - frame.seconds).max(0.);
+        self.hud_tips = (self.hud_tips - frame.seconds * 1.6).max(0.);
+        self.hud_gate = (self.hud_gate - frame.seconds * 1.2).max(0.);
+        self.hud_hull = (self.hud_hull - frame.seconds * 1.4).max(0.);
         if frame.damaged {
+            self.hud_hull = 1.;
             // A recovery is discontinuous even when it moved less than 35 m.
             // Preserve the fading old segment, but never bridge it to respawn.
             for trail in &mut self.wing_trails {
@@ -844,16 +885,26 @@ mod tests {
         assert!(!presentation.sparks.is_empty());
         assert!(view.fov_y > 55_f32.to_radians(), "a gate kicks the FOV");
         let pop = presentation.pops.iter().flatten().next().expect("tip pop");
-        assert_eq!(pop.text, format!("+${}", pass.tip));
+        assert_eq!(
+            (pop.icon, pop.text.as_str()),
+            (Icon::Coin, &*format!("+{}", pass.tip))
+        );
+        let hud = presentation.hud_fx();
+        assert!(
+            hud.tips > 0.9 && hud.gate > 0.9,
+            "the tip badge and route strip pulse"
+        );
         assert!(presentation.gate_glow > 0., "autopilot threads a bullseye");
         // Pause freezes every juice timer, however long the render frame.
         run.session.set_paused(true);
         let ages: Vec<_> = presentation.pops.iter().flatten().map(|p| p.age).collect();
         let (glow, sparks) = (presentation.gate_glow, presentation.sparks.len());
+        let hud = presentation.hud_fx();
         let frame = run.advance(5., Input::default(), true);
         presentation.update(&run, &frame, 5., |_, _| panic!("paused cue"));
         let after: Vec<_> = presentation.pops.iter().flatten().map(|p| p.age).collect();
         assert_eq!(after, ages);
+        assert_eq!(presentation.hud_fx(), hud, "HUD pulses freeze in pause");
         assert_eq!(
             (presentation.gate_glow, presentation.sparks.len()),
             (glow, sparks)
@@ -914,6 +965,9 @@ mod tests {
         assert_eq!(frame.bonus, 0, "collected once");
         presentation.update(&run, &frame, 1. / 120., |_, _| panic!("no repeat cue"));
         let pop = presentation.pops.iter().flatten().next().unwrap();
-        assert_eq!(pop.text, format!("+${}", courier::BONUS_TIP));
+        assert_eq!(
+            (pop.icon, pop.text.as_str()),
+            (Icon::Star, &*format!("+{}", courier::BONUS_TIP))
+        );
     }
 }

@@ -102,17 +102,19 @@ for(const [w,h] of sizes) {
 }
 
 // Walk the authored corridor into the closed seal, then back/left to altar I.
-// Rejection keeps progress locked and paints the identical blocker twice.
+// Rejection keeps progress locked. The locked prompt is pictograms (a warm lock
+// beside the missing crystal sockets) and the refusal shakes that same prompt
+// instead of printing a second, warm sentence in the old notice band.
 let blockerBaseline;
 for(const [w,h] of sizes) {
   const r=runtime(w,h);r.key(0xff0d);
   const hold=(code,ticks)=>{r.e.ferravex_key(code,1);for(let i=0;i<ticks;i++)r.frame();r.e.ferravex_key(code,0);r.frame();};
   hold(119,600);hold(115,69);hold(97,104);r.key(101);
   const promptTop=Math.max(114,Math.min(h*.55,h-230));
-  const notice=r.glyphs(warm,h-150,h-78,false);
+  const notice=r.glyphs(warm,h-150,h-78,false,false);
   const prompt=r.glyphs(warm,promptTop,promptTop+72,false);
-  if(blockerBaseline===undefined)blockerBaseline=notice;
-  assert.equal(notice,blockerBaseline,'every rejected-use notice glyph survives narrow wrapping');
-  assert.equal(prompt,blockerBaseline,'nearby locked altar paints the complete matching blocker');
-  console.log(`${w}x${h} walked locked-altar prompt and rejected-use notice passed`,{prompt,notice});
+  assert.equal(notice,0,'a refused use adds no warm sentence: the prompt itself refuses');
+  if(blockerBaseline===undefined)blockerBaseline=prompt;
+  assert.equal(prompt,blockerBaseline,'the walked locked-altar prompt paints the identical warm blocker at every size');
+  console.log(`${w}x${h} walked locked-altar prompt and wordless refusal passed`,{prompt,notice});
 }

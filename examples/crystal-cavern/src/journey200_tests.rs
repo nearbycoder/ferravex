@@ -14,7 +14,7 @@ struct Observation {
     velocity: Vec2,
     yaw: f32,
     elapsed: f32,
-    notice: String,
+    notice: Notice,
     notice_time: f32,
     collected: [bool; 3],
     switches: u8,
@@ -29,7 +29,7 @@ fn observe(game: &Game) -> Observation {
         velocity: game.velocity,
         yaw: game.yaw,
         elapsed: game.elapsed,
-        notice: game.notice.clone(),
+        notice: game.notice,
         notice_time: game.notice_time,
         collected: game.collected,
         switches: game.switches,
@@ -397,7 +397,10 @@ fn walking_to_the_closed_seal_cannot_skip_the_puzzle_and_active_retry_recovers()
     assert_eq!(expedition.session.tick(), 608);
     assert_eq!(expedition.game.position, position);
     assert_eq!(expedition.game.objectives.snapshot(), objectives);
-    assert!(expedition.game.notice.contains("Seal locked"));
+    assert_eq!(
+        expedition.game.notice,
+        Notice::Locked(Interactable::Gate, Blocker::Altars(0))
+    );
     assert_eq!(
         expedition.game.elapsed,
         (0..8).fold(before, |time, _| time + TICK as f32)

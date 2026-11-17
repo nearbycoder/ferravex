@@ -48,6 +48,12 @@
     #crosshair::before { width: 2px; height: 22px; background: linear-gradient(#f4ead6 0 7px, transparent 7px 15px, #f4ead6 15px); }
     #crosshair::after { width: 22px; height: 2px; background: linear-gradient(90deg, #f4ead6 0 7px, transparent 7px 15px, #f4ead6 15px); }
     #vitals .empty { color: #f08a6e; font-weight: 600; }
+    #vitals svg, #score svg { width: 1em; height: 1em; fill: currentColor; vertical-align: -.14em; margin-right: 6px; }
+    #vitals .empty kbd { font: 600 .75rem/1 system-ui, sans-serif; border: 1px solid currentColor; border-radius: 4px; padding: 1px 5px; margin-left: 2px; }
+    #vitals .reload svg { animation: hud-spin .9s linear infinite; }
+    #score .gap { display: inline-block; width: 14px; }
+    @keyframes hud-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { #vitals .reload svg { animation: none; } }
     #menu-best { color: #e8c493; font-weight: 600; }
     #menu-best:empty { display: none; }
     #training { position: absolute; left: 16px; top: 16px; max-width: min(400px, calc(100% - 32px)); padding: 10px 14px; background: #101c22eb; border: 1px solid #657b80; border-radius: 4px; pointer-events: none; }

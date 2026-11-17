@@ -14,6 +14,8 @@ use ferravex_render::text::{TextAlign, TextStyle, draw_text_styled, text_width};
 use ferravex_render::ui::{Ui, UiRect, kit};
 use std::fmt::Write;
 
+use crate::glyph::{self, Glyph, Item};
+
 pub(super) const INK: Color = super::INK;
 pub(super) const CREAM: Color = super::CREAM;
 /// Primary control fill. Browser tests look for this exact color.
@@ -164,11 +166,17 @@ pub(super) enum Look {
 }
 
 const BUTTON_IDS: usize = 18;
+/// Seconds a refused control shakes and glows red.
+const REFUSE_TIME: f32 = 0.4;
 
 /// Eased per-control hover/press/focus amounts and menu timers.
 pub(super) struct Anim {
     buttons: [kit::ButtonMotion; BUTTON_IDS],
     pending: [Option<Paint>; BUTTON_IDS],
+    /// Seconds left on each control's refusal shake/flash.
+    refused: [f32; BUTTON_IDS],
+    /// Reduced flash swaps the red fill flash for an outline.
+    pub reduced_flash: bool,
     pub motion: Motion,
     pub dt: f32,
     /// Seconds the current overlay (pause/results) has been shown.
@@ -197,6 +205,8 @@ impl Anim {
         Self {
             buttons: [kit::ButtonMotion::default(); BUTTON_IDS],
             pending: [None; BUTTON_IDS],
+            refused: [0.; BUTTON_IDS],
+            reduced_flash: false,
             motion: Motion::Full,
             dt: 0.,
             overlay: 0.,
@@ -241,6 +251,30 @@ impl Anim {
         for counter in [&mut self.coins, &mut self.hearts, &mut self.stopped] {
             counter.advance(self.dt, motion);
         }
+        for left in &mut self.refused {
+            *left = (*left - self.dt).max(0.);
+        }
+    }
+
+    /// Start a refusal shake and red flash on control `id`.
+    pub fn refuse(&mut self, id: u64) {
+        if let Some(index) = slot(id) {
+            self.refused[index] = REFUSE_TIME;
+        }
+    }
+
+    /// Horizontal shake offset and flash amount (0..=1) for control `id`.
+    pub fn refusal(&self, id: u64) -> (f32, f32) {
+        let Some(left) = slot(id).map(|i| self.refused[i]).filter(|left| *left > 0.) else {
+            return (0., 0.);
+        };
+        let t = left / REFUSE_TIME;
+        let shake = if self.motion.is_reduced() {
+            0.
+        } else {
+            (left * 55.).sin() * 6. * t
+        };
+        (shake, t)
     }
 
     /// Staggered fade-up for overlay item `index`.
@@ -288,7 +322,18 @@ impl Anim {
             }
             None => (0., 0., 0.),
         };
+        let (shake, flash) = self.refusal(id);
+        let rect = Rect::new(rect.x + shake, rect.y, rect.w, rect.h);
         paint_button(rect, enabled, look, hover, press, focus);
+        if flash > 0. {
+            let radius = 10_f32.min(rect.h * 0.5);
+            let red = Color::new(0.86, 0.27, 0.2, 1.);
+            if self.reduced_flash {
+                shapes::stroke_rounded_rect(grow(rect, 2.), radius + 2., 3., red);
+            } else {
+                shapes::fill_rounded_rect(rect, radius, alpha(red, 0.45 * flash));
+            }
+        }
         Some(rect)
     }
 }
@@ -404,10 +449,13 @@ pub(super) fn frame(dt: f32, campaign: &super::Campaign) {
             _ => 0,
         }
     };
+    let policy = ferravex_render::preferences::feedback_policy();
     UI_ANIM.with(|anim| {
-        anim.borrow_mut().frame(
+        let mut anim = anim.borrow_mut();
+        anim.reduced_flash = policy.reduced_flash();
+        anim.frame(
             dt,
-            Motion::from(ferravex_render::preferences::feedback_policy()),
+            Motion::from(policy),
             overlay,
             !campaign.game.active,
             !campaign.session.is_started(),
@@ -415,18 +463,37 @@ pub(super) fn frame(dt: f32, campaign: &super::Campaign) {
     });
 }
 
+/// Shake and flash control `id` red: the HUD's answer to a refused action.
+pub(super) fn refuse(id: u64) {
+    UI_ANIM.with(|anim| anim.borrow_mut().refuse(id));
+}
+
+/// Presentation seconds since the HUD started (idle pulses and bobs).
+pub(super) fn clock() -> f32 {
+    UI_ANIM.with(|anim| {
+        let anim = anim.borrow();
+        if anim.motion.is_reduced() {
+            0.
+        } else {
+            anim.clock
+        }
+    })
+}
+
 #[derive(Clone, Copy)]
 struct Paint {
     id: u64,
     rect: Rect,
     label: StackStr<96>,
+    /// Pictograms drawn before the label, such as a coin before a price.
+    glyphs: [Option<Glyph>; 2],
     enabled: bool,
     size: f32,
     look: Look,
 }
 
-pub(super) fn control(ui: &mut Ui, id: u64, rect: Rect, label: &str, enabled: bool, size: f32) {
-    let look = if id == 4 {
+fn look_for(id: u64) -> Look {
+    if id == 4 {
         Look::Hero
     } else if id == 10 {
         Look::Toggle(false)
@@ -434,19 +501,42 @@ pub(super) fn control(ui: &mut Ui, id: u64, rect: Rect, label: &str, enabled: bo
         Look::Quiet
     } else {
         Look::Primary
-    };
-    control_look(ui, id, rect, label, enabled, size, look);
+    }
+}
+
+/// A control whose face is up to two pictograms followed by a short label
+/// (a number, a key word or nothing).
+pub(super) fn control_glyphs(
+    ui: &mut Ui,
+    id: u64,
+    rect: Rect,
+    glyphs: [Option<Glyph>; 2],
+    label: &str,
+    enabled: bool,
+    size: f32,
+) {
+    control_look(ui, id, rect, glyphs, label, enabled, size, look_for(id));
 }
 
 /// An on/off control (fast-forward): gold when `on`, green otherwise.
-pub(super) fn toggle(ui: &mut Ui, id: u64, rect: Rect, label: &str, on: bool, size: f32) {
-    control_look(ui, id, rect, label, true, size, Look::Toggle(on));
+pub(super) fn toggle(
+    ui: &mut Ui,
+    id: u64,
+    rect: Rect,
+    glyphs: [Option<Glyph>; 2],
+    label: &str,
+    on: bool,
+    size: f32,
+) {
+    control_look(ui, id, rect, glyphs, label, true, size, Look::Toggle(on));
 }
 
+#[allow(clippy::too_many_arguments)]
 fn control_look(
     ui: &mut Ui,
     id: u64,
     rect: Rect,
+    glyphs: [Option<Glyph>; 2],
     label: &str,
     enabled: bool,
     size: f32,
@@ -460,6 +550,7 @@ fn control_look(
                 id,
                 rect,
                 label: sfmt!("{label}"),
+                glyphs,
                 enabled,
                 size,
                 look,
@@ -478,6 +569,7 @@ pub(super) fn paint(ui: &mut Ui) {
                 id,
                 rect,
                 label,
+                glyphs,
                 enabled,
                 size,
                 look,
@@ -490,17 +582,39 @@ pub(super) fn paint(ui: &mut Ui) {
                 },
             );
             // `button` only reads Ui when painting; the shape uses screen pixels.
-            anim.button(ui, true, id, screen, label.as_str(), enabled, look);
+            let Some(shown) = anim.button(ui, true, id, screen, label.as_str(), enabled, look)
+            else {
+                continue;
+            };
             let (_, ink) = colors(enabled, look);
             let a = anim.enter(0);
-            let style = body(size * scale, ink);
-            text_fit(
-                label.as_str(),
-                screen.center().x,
-                style.centered_baseline(screen.center().y + a.offset[1] * scale * 0.15),
-                style,
-                screen.w - 12. * scale,
+            let center = vec2(
+                shown.center().x,
+                shown.center().y + a.offset[1] * scale * 0.15,
             );
+            if glyphs.iter().any(Option::is_some) {
+                let mut items = [Item::Gap(0.); 3];
+                let mut n = 0;
+                for glyph in glyphs.into_iter().flatten() {
+                    items[n] = Item::Glyph(glyph, ink);
+                    n += 1;
+                }
+                if !label.as_str().is_empty() {
+                    items[n] = Item::Text(label.as_str(), ink);
+                    n += 1;
+                }
+                let alpha = if enabled { 1. } else { 0.75 };
+                glyph::row(&items[..n], center, size * scale, alpha);
+            } else {
+                let style = body(size * scale, ink);
+                text_fit(
+                    label.as_str(),
+                    center.x,
+                    style.centered_baseline(center.y),
+                    style,
+                    screen.w - 12. * scale,
+                );
+            }
         }
     });
 }

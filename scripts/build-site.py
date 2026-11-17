@@ -43,6 +43,7 @@ DOCS = [
  ('gameplay-recipes','Compose game loops','Gameplay','docs/GAMEPLAY_RECIPES.md'),
  ('ai','AI and navigation','Gameplay','docs/AI.md'),
  ('ui','HUD and menus','Gameplay','docs/UI.md'),
+ ('visual-language','Visual language: show, don\'t tell','Gameplay','docs/VISUAL_LANGUAGE.md'),
  ('replays','Replays, ghosts and debugging','Gameplay','docs/REPLAYS.md'),
  ('quality-series','Shared game-quality systems','Gameplay','docs/QUALITY_SERIES.md'),
  ('journey-200-gameplay','Compose a gameplay scenario','Recipes','docs/JOURNEY_200_GAMEPLAY.md'),
@@ -259,6 +260,9 @@ def markdown(text,source):
    ordered=bool(re.match(r'^\s*\d+\.',line));tag='ol' if ordered else 'ul';items=[]
    while i<len(lines) and re.match(r'^\s*(?:[-*]|\d+\.)\s+',lines[i]):
     items.append(re.sub(r'^\s*(?:[-*]|\d+\.)\s+','',lines[i]));i+=1
+    # Wrapped Markdown continues an item on indented lines; fold them in.
+    while i<len(lines) and lines[i].strip() and lines[i][:1].isspace() and not re.match(r'^\s*(?:[-*]|\d+\.)\s+',lines[i]):
+     items[-1]+=' '+lines[i].strip();i+=1
    out.append(f'<{tag}>'+''.join('<li>'+inline(t,source)+'</li>' for t in items)+f'</{tag}>');continue
   if re.match(r'^\s*---+\s*$',line):out.append('<hr>');i+=1;continue
   paragraph=[line];i+=1
@@ -386,13 +390,15 @@ def home():
  def media_tile(key,href,caption):
   return f'<a class="bento-tile" href="{href}">{loop_media(by_id(key),caption,play="visible")}<span class="bento-cap"><strong>{esc(caption)}</strong></span></a>' if any(g['id']==key for g in GAMES) else ''
  ui=('<a class="bento-tile ui-tile" href="/docs/responsive-games/"><span class="loop"><img src="/media/engine/ui-kit.webp" alt="Ferravex UI kit: pixel fonts, menus, meters and glow effects" width="1600" height="1000" loading="lazy" decoding="async"></span><span class="bento-cap"><strong>A UI kit made for games.</strong></span></a>') if (MEDIA/'engine/ui-kit.webp').is_file() else ''
+ icon_set=('<a class="bento-tile ui-tile" href="/docs/visual-language/"><span class="loop"><img src="/media/engine/icons.webp" alt="Ninety-two two-tone Ferravex icons: play, heart, coin, clock, ship, train, sprout and more" width="1600" height="1000" loading="lazy" decoding="async"></span><span class="bento-cap"><strong>92 icons. Zero paragraphs.</strong></span></a>') if (MEDIA/'engine/icons.webp').is_file() else ''
  stat=lambda big,small,href:f'<a class="stat" href="{href}"><strong>{big}</strong><span>{small}</span></a>'
  kib=wasm_kib()
  stats=(f'<section class="proof" aria-label="Ferravex at a glance"><div class="container stats">{stat(n,"games, playable now","/examples/")}{stat(0,"third-party crates","/docs/dependencies/")}'
   +(stat(f'{kib}<small>KB</small>','median game download, gzip','/docs/performance/') if kib else stat('100%','Rust and std','/docs/dependencies/'))
   +f'{stat("2D+3D","one toolkit","/features/")}</div></section>')
  engine=(f'<div class="bento">{slider}{media_tile("physics-3d","/docs/rigid-bodies/","Physics that pushes back.")}</div>'
-  f'<div class="bento">{ui}{media_tile("neon-swarm","/docs/effects/","Particles, trails, juice.")}</div>')
+  f'<div class="bento">{ui}{media_tile("neon-swarm","/docs/effects/","Particles, trails, juice.")}</div>'
+  f'<div class="bento">{icon_set}{media_tile("stormbound","/docs/visual-language/","Every hit, felt where it lands.")}</div>')
  body=f'''<main id="main" class="home">
  <section class="hero-wall" aria-label="Featured gameplay"><div class="wall"><div class="wall-main" data-rotator>{"".join(slides)}<div class="hero-copy"><p class="hero-kicker">Rust game engine · std only</p><h1>Built from scratch.<span>Ready to play.</span></h1><p class="hero-lede">An original engine for 2D and 3D games with zero third-party crates. All {n} games run right here in your browser.</p><div class="button-row"><a class="button" href="/examples/">{ICON_PLAY}Play now</a><a class="button ghost" href="/docs/getting-started/">Start building <span aria-hidden="true">↗</span></a></div></div><div class="hero-rail" aria-label="Featured games">{"".join(rail)}</div>{MOTION_TOGGLE}</div><div class="wall-side">{side}</div></div></section>
  {stats}
@@ -522,6 +528,12 @@ def self_test():
    self.assertIn('class="language-rust"',body)
    self.assertIn('assert!(1 &lt; 2)',body)
    self.assertNotIn('rust,check',body)
+
+  def test_wrapped_list_items_stay_in_their_item(self):
+   body,_=markdown('1. **First.** Starts here\n   and wraps.\n2. Second item.\n\n- Bullet\n  continues.\n- Next','README.md')
+   self.assertEqual(body.count('<li>'),4);self.assertNotIn('<p>',body)
+   self.assertIn('<li><strong>First.</strong> Starts here and wraps.</li>',body)
+   self.assertIn('<li>Bullet continues.</li>',body)
 
   def test_comments_controls_and_code_labels(self):
    body,_=markdown('<!-- status:start --> **Ready.** Shipped. <!-- status:end -->\n\n<!-- hidden -->\n\n```sh\nls\n```','README.md')

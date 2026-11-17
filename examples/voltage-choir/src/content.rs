@@ -3,15 +3,28 @@
 
 pub(crate) const TRACK_COUNT: usize = 6;
 pub(crate) const MAX_NOTES: usize = 768;
-pub(crate) const LANE_NAMES: [&str; 4] = ["Left", "Down", "Up", "Right"];
 /// Letter keys that mirror the arrow keys, shown on key caps.
 pub(crate) const LANE_KEYS: [&str; 4] = ["A", "S", "W", "D"];
+
+/// What a song card teaches before its count-in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Lesson {
+    Tap,
+    Chord,
+    Rest,
+    Fast,
+    Encore,
+    Finale,
+}
 
 pub(crate) struct Track {
     pub title: &'static str,
     pub venue: &'static str,
+    /// The song card's one-to-three-word headline.
     pub story: &'static str,
-    pub lesson: &'static str,
+    pub lesson: Lesson,
+    /// The pattern the song card's demo highway loops.
+    pub demo: usize,
     pub beat_ticks: u32,
     pub target: u32,
     pub patterns: &'static [[u8; 8]],
@@ -107,8 +120,9 @@ pub(crate) const TRACKS: [Track; TRACK_COUNT] = [
         venue: "Rooftop Workshop",
         beat_ticks: 36,
         target: 600,
-        story: "Single notes.",
-        lesson: "Tap as notes reach the bright line.",
+        story: "Single notes",
+        lesson: Lesson::Tap,
+        demo: 0,
         patterns: &SPARK,
         arrangement: &[0, 1, 0, 2, 0, 1, 2, 3, 0, 2, 1, 3],
         melody: [
@@ -121,8 +135,9 @@ pub(crate) const TRACKS: [Track; TRACK_COUNT] = [
         venue: "Midnight Tram",
         beat_ticks: 30,
         target: 620,
-        story: "Notes and chords.",
-        lesson: "Linked notes: press both lanes together.",
+        story: "Chords",
+        lesson: Lesson::Chord,
+        demo: 3,
         patterns: &COPPER,
         arrangement: &[0, 1, 0, 2, 3, 4, 0, 1, 5, 2, 3, 4, 0, 1, 2, 3],
         melody: [
@@ -135,8 +150,9 @@ pub(crate) const TRACKS: [Track; TRACK_COUNT] = [
         venue: "Winter Garden",
         beat_ticks: 30,
         target: 650,
-        story: "Offbeats and rests.",
-        lesson: "Extra taps break your combo.",
+        story: "Offbeats and rests",
+        lesson: Lesson::Rest,
+        demo: 0,
         patterns: &GLASS,
         arrangement: &[0, 1, 0, 3, 2, 4, 0, 1, 5, 3, 2, 4, 0, 1, 3, 5, 2, 4, 0, 1],
         melody: [
@@ -149,8 +165,9 @@ pub(crate) const TRACKS: [Track; TRACK_COUNT] = [
         venue: "Electric Arcade",
         beat_ticks: 24,
         target: 650,
-        story: "Fast lane changes.",
-        lesson: "Read ahead of the judgment line.",
+        story: "Fast changes",
+        lesson: Lesson::Fast,
+        demo: 0,
         patterns: &NIGHT,
         arrangement: &[0, 1, 5, 0, 2, 3, 4, 1, 0, 1, 3, 5, 2, 4, 3, 0, 1, 5, 2, 4],
         melody: [
@@ -163,8 +180,9 @@ pub(crate) const TRACKS: [Track; TRACK_COUNT] = [
         venue: "Northlight Tower",
         beat_ticks: 24,
         target: 680,
-        story: "Build and use Encore.",
-        lesson: "X at 100 charge: eight beats of protection.",
+        story: "Encore",
+        lesson: Lesson::Encore,
+        demo: 4,
         patterns: &AURORA,
         arrangement: &[
             0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 4, 5, 2, 3, 6, 7, 4, 5, 0, 1, 2, 6, 3, 7,
@@ -179,8 +197,9 @@ pub(crate) const TRACKS: [Track; TRACK_COUNT] = [
         venue: "The Whole City",
         beat_ticks: 24,
         target: 700,
-        story: "Final track: mixed patterns.",
-        lesson: "Combine accurate taps, chords and Encore.",
+        story: "Grand finale",
+        lesson: Lesson::Finale,
+        demo: 2,
         patterns: &CHOIR,
         arrangement: &[
             0, 1, 2, 3, 4, 5, 6, 7, 0, 2, 1, 3, 5, 4, 6, 7, 2, 3, 0, 1, 4, 5, 6, 7, 0, 1, 2, 3, 4,

@@ -9,7 +9,8 @@
 //! - `GOLF_HOLE=N` starts the round on hole `N` (1-based).
 //! - `GOLF_SKIP_WELCOME=1` starts on the course instead of the title card.
 //! - `GOLF_SHOT=DEG,POWER` fires one scripted putt at the first aiming tick.
-//! - `GOLF_PAUSE_AT=N` / `GOLF_CARD_AT=N` open pause or the card on frame `N`.
+//! - `GOLF_PAUSE_AT=N` / `GOLF_CARD_AT=N` / `GOLF_PRACTICE_AT=N` open pause,
+//!   the card or the practice picker on frame `N`.
 //! - `GOLF_FAKE_BEST=STROKES` pretends a stored full-round best existed.
 //! - `GOLF_FOCUS=1` keeps a capture running when the window loses focus.
 //! - `GOLF_PLAYER_CARD=1` shows the demo's results card as a player's (unsaved).
@@ -21,6 +22,7 @@ use ferravex_render::prelude::Conf;
 pub enum Action {
     Pause,
     Card,
+    Practice,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -36,6 +38,7 @@ pub struct Capture {
     shot: Option<(f32, f32)>,
     pause_at: Option<u32>,
     card_at: Option<u32>,
+    practice_at: Option<u32>,
 }
 
 #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
@@ -82,6 +85,7 @@ impl Capture {
                 }),
                 pause_at: number("GOLF_PAUSE_AT"),
                 card_at: number("GOLF_CARD_AT"),
+                practice_at: number("GOLF_PRACTICE_AT"),
             }
         }
         #[cfg(not(all(debug_assertions, not(target_arch = "wasm32"))))]
@@ -102,6 +106,8 @@ impl Capture {
             Some(Action::Pause)
         } else if self.card_at == Some(self.frame) {
             Some(Action::Card)
+        } else if self.practice_at == Some(self.frame) {
+            Some(Action::Practice)
         } else {
             None
         }

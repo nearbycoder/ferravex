@@ -12,6 +12,7 @@
 //! assert_eq!(game.outcome(), Outcome::Playing);
 //! ```
 use crate::content::{ROOMS, Room};
+use crate::layout::{self, Button};
 use ferravex_arcade::{Cue, Input, Outcome};
 use ferravex_play::navigation::Cell;
 
@@ -20,7 +21,11 @@ pub(crate) const ROWS: u32 = 7;
 pub(crate) const CAPACITY: usize = 32;
 const HISTORY: usize = 32;
 const STEP_LIMIT: u16 = 160;
-const CADENCE: u16 = 18;
+pub(crate) const CADENCE: u16 = 18;
+/// Presentation events one update can record.
+const EVENTS: usize = 8;
+/// Visited cells remembered for the robot's trail.
+const PATH: usize = 48;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Op {
@@ -43,15 +48,15 @@ impl Op {
         Self::Repeat2,
         Self::Repeat3,
     ];
-    pub(crate) fn name(self) -> &'static str {
+    /// One-word palette caption; the repeat count is drawn in its glyph.
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Forward => "Forward",
-            Self::Left => "Turn left",
-            Self::Right => "Turn right",
+            Self::Left => "Left",
+            Self::Right => "Right",
             Self::Grab => "Grab",
             Self::Drop => "Drop",
-            Self::Repeat2 => "Repeat 2",
-            Self::Repeat3 => "Repeat 3",
+            Self::Repeat2 | Self::Repeat3 => "Repeat",
         }
     }
     pub(crate) fn code(self) -> char {
@@ -65,31 +70,6 @@ impl Op {
             Self::Repeat3 => '3',
         }
     }
-    pub(crate) fn description(self) -> &'static str {
-        match self {
-            Self::Forward => {
-                "Move one floor tile in the arrow's direction. Walls, pits and closed gates stop the run."
-            }
-            Self::Left => {
-                "Turn ninety degrees left without moving. The next Forward uses the new direction."
-            }
-            Self::Right => {
-                "Turn ninety degrees right without moving. The next Forward uses the new direction."
-            }
-            Self::Grab => {
-                "Pick up the parcel on the robot's current tile. Only one parcel fits in the arms."
-            }
-            Self::Drop => {
-                "Put the parcel on this tile. A matching numbered dock accepts it permanently."
-            }
-            Self::Repeat2 => {
-                "Execute the previous simple instruction two more times. Each copy is a separate step."
-            }
-            Self::Repeat3 => {
-                "Execute the previous simple instruction three more times. Repeats cannot create an endless loop."
-            }
-        }
-    }
     fn from_code(code: u8) -> Self {
         match code {
             b'F' => Self::Forward,
@@ -101,6 +81,211 @@ impl Op {
             b'3' => Self::Repeat3,
             _ => panic!("authored instruction"),
         }
+    }
+}
+
+/// Why an attempt stopped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FaultKind {
+    Edge,
+    Wall,
+    Pit,
+    GateA,
+    GateB,
+    ArmsFull,
+    NoParcel,
+    EmptyArms,
+    Occupied,
+    WrongDock,
+    StepLimit,
+    TapeEnded,
+    NoPrevious,
+}
+impl FaultKind {
+    /// Status-reader explanation.
+    fn message(self) -> &'static str {
+        match self {
+            Self::Edge => "The robot reached the workbench edge. C edits the tape.",
+            Self::Wall => "A wall blocks Forward. C returns to the editor.",
+            Self::Pit => "The route enters a pit. C restores the workbench.",
+            Self::GateA => "Gate A is closed. Step on switch a first.",
+            Self::GateB => "Gate B is closed. Step on switch b first.",
+            Self::ArmsFull => "Arms already full. Drop the carried parcel first.",
+            Self::NoParcel => "There is no parcel on this tile. Move onto one before Grab.",
+            Self::EmptyArms => "Empty arms cannot Drop. Grab a parcel first.",
+            Self::Occupied => "Another parcel occupies this tile. Drop elsewhere.",
+            Self::WrongDock => "Wrong numbered dock. Carry the parcel to its matching number.",
+            Self::StepLimit => "Execution budget exhausted. C edits a shorter program.",
+            Self::TapeEnded => "Tape ended before every delivery. C returns to the editor.",
+            Self::NoPrevious => "A repeat needs an earlier simple instruction.",
+        }
+    }
+    /// One- or two-word popup shown where the fault happened.
+    pub(crate) fn word(self) -> &'static str {
+        match self {
+            Self::Edge => "Edge",
+            Self::Wall => "Wall",
+            Self::Pit => "Pit",
+            Self::GateA => "Gate A",
+            Self::GateB => "Gate B",
+            Self::ArmsFull => "Arms full",
+            Self::NoParcel => "No parcel",
+            Self::EmptyArms => "Empty arms",
+            Self::Occupied => "Occupied",
+            Self::WrongDock => "Wrong dock",
+            Self::StepLimit => "Too long",
+            Self::TapeEnded => "Tape end",
+            Self::NoPrevious => "Repeat what?",
+        }
+    }
+    /// The robot tried to move into the fault cell.
+    pub(crate) fn blocked_move(self) -> bool {
+        matches!(
+            self,
+            Self::Edge | Self::Wall | Self::Pit | Self::GateA | Self::GateB
+        )
+    }
+}
+
+/// Where and why the current attempt faulted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Fault {
+    pub kind: FaultKind,
+    /// The blocked target for moves, otherwise the robot's tile.
+    pub at: Cell,
+    /// The tape cell that was executing (the append cell when the tape ran out).
+    pub pc: Option<usize>,
+}
+
+/// Something an update accepted or refused, kept for that update only so the
+/// presentation can react where it happened. Rules never read it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Event {
+    Wrote {
+        index: usize,
+        op: Op,
+    },
+    Deleted {
+        index: usize,
+    },
+    Undid,
+    Cleared {
+        len: usize,
+    },
+    Cursor {
+        index: usize,
+    },
+    Palette {
+        index: usize,
+    },
+    /// A write was refused because the tape budget is full.
+    TapeFull {
+        index: usize,
+    },
+    /// A locked instruction tile was clicked.
+    Locked {
+        index: usize,
+    },
+    /// Running was refused because the tape is empty.
+    EmptyRun,
+    Started,
+    Paused {
+        paused: bool,
+    },
+    Moved {
+        from: Cell,
+        to: Cell,
+    },
+    Turned {
+        at: Cell,
+    },
+    Repeat {
+        index: usize,
+        times: u8,
+    },
+    Switch {
+        at: Cell,
+        gate: u8,
+    },
+    Grabbed {
+        at: Cell,
+        parcel: usize,
+    },
+    Dropped {
+        at: Cell,
+        parcel: usize,
+        delivered: bool,
+    },
+    Fault(Fault),
+    Solved {
+        stars: u8,
+    },
+    Stopped,
+    NextRoom,
+    Hint {
+        open: bool,
+    },
+}
+
+/// Presentation memory: this update's events, the motion of the latest
+/// executed instruction, the attempt's trail and its fault. Rules never read it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Look {
+    events: [Option<Event>; EVENTS],
+    /// Where the robot stood, and faced, before the latest executed instruction.
+    pub from: Cell,
+    pub from_facing: u8,
+    /// Updates since that instruction (saturating).
+    pub age: u16,
+    pub fault: Option<Fault>,
+    path: [Cell; PATH],
+    path_len: usize,
+}
+impl Look {
+    fn new() -> Self {
+        let origin = Cell { x: 0, y: 0 };
+        Self {
+            events: [None; EVENTS],
+            from: origin,
+            from_facing: 1,
+            age: u16::MAX,
+            fault: None,
+            path: [origin; PATH],
+            path_len: 0,
+        }
+    }
+    fn tick(&mut self) {
+        self.events = [None; EVENTS];
+        self.age = self.age.saturating_add(1);
+    }
+    fn push(&mut self, event: Event) {
+        if let Some(slot) = self.events.iter_mut().find(|e| e.is_none()) {
+            *slot = Some(event);
+        }
+    }
+    /// Events accepted or refused by the latest update.
+    pub(crate) fn events(&self) -> impl Iterator<Item = Event> + '_ {
+        self.events.iter().flatten().copied()
+    }
+    fn restart(&mut self, at: Cell, facing: u8) {
+        self.from = at;
+        self.from_facing = facing;
+        self.age = u16::MAX;
+        self.fault = None;
+        self.path[0] = at;
+        self.path_len = 1;
+    }
+    fn visit(&mut self, cell: Cell) {
+        if self.path_len == PATH {
+            self.path.rotate_left(1);
+            self.path_len -= 1;
+        }
+        self.path[self.path_len] = cell;
+        self.path_len += 1;
+    }
+    /// Cells visited by this attempt, oldest first, ending at the robot.
+    pub(crate) fn path(&self) -> &[Cell] {
+        &self.path[..self.path_len]
     }
 }
 
@@ -137,6 +322,11 @@ impl Default for Parcel {
     }
 }
 
+/// Points banked once for a solved room.
+pub(crate) fn points(medal: u8, steps: u16) -> u32 {
+    u32::from(medal) * 500 + 500 + 100_u32.saturating_sub(u32::from(steps))
+}
+
 /// A complete factory restoration. All changes pass through [`Game::step`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Game {
@@ -163,8 +353,10 @@ pub struct Game {
     pub(crate) show_hint: bool,
     pub(crate) stars: [u8; 12],
     score: u32,
+    /// Last accepted action in words, published to status readers only.
     pub(crate) notice: &'static str,
     pub(crate) solved_ticks: u16,
+    pub(crate) look: Look,
 }
 impl Default for Game {
     fn default() -> Self {
@@ -200,6 +392,7 @@ impl Game {
             score: 0,
             notice: "Choose an instruction, then Space to write it.",
             solved_ticks: 0,
+            look: Look::new(),
         };
         game.reset_board();
         game
@@ -234,6 +427,25 @@ impl Game {
     }
     pub(crate) fn content(&self) -> &'static Room {
         &ROOMS[self.level]
+    }
+    /// Three-star program length.
+    pub(crate) fn par(&self) -> usize {
+        self.content().solution.len()
+    }
+    pub(crate) fn can_undo(&self) -> bool {
+        self.history_len > 0
+    }
+    /// Stars a solve would earn now with a tape of `len` instructions.
+    pub(crate) fn medal(&self, len: usize) -> u8 {
+        let par = self.par();
+        let medal = if len <= par && self.failures == 0 && !self.hinted {
+            3
+        } else if len <= par + 4 && self.failures <= 2 {
+            2
+        } else {
+            1
+        };
+        if self.hinted { medal.min(2) } else { medal }
     }
     pub(crate) fn unlocked(&self) -> usize {
         if self.level < 4 {
@@ -284,6 +496,7 @@ impl Game {
         self.repeats = 0;
         self.steps = 0;
         self.timer = 0;
+        self.look.restart(self.robot, self.facing);
     }
     fn remember(&mut self) {
         if self.history_len == HISTORY {
@@ -297,6 +510,9 @@ impl Game {
         let append = self.tape.cursor == self.tape.len;
         if append && self.tape.len == self.content().budget {
             self.notice = "Tape budget reached. Replace a cell, delete, or compress with repeats.";
+            self.look.push(Event::TapeFull {
+                index: self.tape.len.saturating_sub(1),
+            });
             return Cue::Bad;
         }
         let op = Op::ALL[self.palette];
@@ -304,12 +520,14 @@ impl Game {
             return Cue::None;
         }
         self.remember();
-        self.tape.ops[self.tape.cursor] = op;
+        let index = self.tape.cursor;
+        self.tape.ops[index] = op;
         if append {
             self.tape.len += 1;
         }
-        self.tape.cursor = (self.tape.cursor + 1).min(self.tape.len);
+        self.tape.cursor = (index + 1).min(self.tape.len);
         self.notice = "Instruction written. 1 runs; 2 executes one step.";
+        self.look.push(Event::Wrote { index, op });
         Cue::Action
     }
     fn delete(&mut self) -> Cue {
@@ -323,11 +541,13 @@ impl Game {
         self.tape.ops[self.tape.len] = Op::Forward;
         self.tape.cursor = at;
         self.notice = "Instruction removed. 3 undoes an edit.";
+        self.look.push(Event::Deleted { index: at });
         Cue::Action
     }
     fn begin(&mut self, running: bool) -> Cue {
         if self.tape.len == 0 {
             self.notice = "Write at least one instruction before running.";
+            self.look.push(Event::EmptyRun);
             return Cue::Bad;
         }
         self.reset_board();
@@ -339,59 +559,80 @@ impl Game {
             Phase::Paused
         };
         self.notice = "Follow the bright instruction marker. C returns to the editor.";
+        self.look.push(Event::Started);
         if running { Cue::Action } else { self.execute() }
     }
-    fn fault(&mut self, message: &'static str) -> Cue {
+    fn fault(&mut self, kind: FaultKind, at: Cell, pc: Option<usize>) -> Cue {
         self.phase = Phase::Fault;
         self.failures = self.failures.saturating_add(1);
-        self.notice = message;
+        self.notice = kind.message();
+        let fault = Fault { kind, at, pc };
+        self.look.fault = Some(fault);
+        self.look.push(Event::Fault(fault));
         Cue::Bad
     }
-    fn simple(&mut self, op: Op) -> Result<(), &'static str> {
+    fn simple(&mut self, op: Op) -> Result<(), (FaultKind, Cell)> {
+        let here = self.robot;
         match op {
             Op::Forward => {
                 let (dx, dy) = [(0, -1), (1, 0), (0, 1), (-1, 0)][self.facing as usize];
                 let x = self.robot.x as i32 + dx;
                 let y = self.robot.y as i32 + dy;
                 if x < 0 || y < 0 || x >= COLS as i32 || y >= ROWS as i32 {
-                    return Err("The robot reached the workbench edge. C edits the tape.");
+                    return Err((FaultKind::Edge, here));
                 }
                 let next = Cell {
                     x: x as u32,
                     y: y as u32,
                 };
                 match self.tile(next) {
-                    b'#' => return Err("A wall blocks Forward. C returns to the editor."),
-                    b'~' => return Err("The route enters a pit. C restores the workbench."),
-                    b'A' if self.switches & 1 == 0 => {
-                        return Err("Gate A is closed. Step on switch a first.");
+                    b'#' => return Err((FaultKind::Wall, next)),
+                    b'~' => return Err((FaultKind::Pit, next)),
+                    b'A' if self.switches & 1 == 0 => return Err((FaultKind::GateA, next)),
+                    b'B' if self.switches & 2 == 0 => return Err((FaultKind::GateB, next)),
+                    switch @ (b'a' | b'b') => {
+                        let bit = 1 << (switch - b'a');
+                        if self.switches & bit == 0 {
+                            self.look.push(Event::Switch {
+                                at: next,
+                                gate: switch.to_ascii_uppercase(),
+                            });
+                        }
+                        self.switches |= bit;
                     }
-                    b'B' if self.switches & 2 == 0 => {
-                        return Err("Gate B is closed. Step on switch b first.");
-                    }
-                    b'a' => self.switches |= 1,
-                    b'b' => self.switches |= 2,
                     _ => {}
                 }
                 self.robot = next;
+                self.look.visit(next);
+                self.look.push(Event::Moved {
+                    from: here,
+                    to: next,
+                });
             }
-            Op::Left => self.facing = (self.facing + 3) % 4,
-            Op::Right => self.facing = (self.facing + 1) % 4,
+            Op::Left => {
+                self.facing = (self.facing + 3) % 4;
+                self.look.push(Event::Turned { at: here });
+            }
+            Op::Right => {
+                self.facing = (self.facing + 1) % 4;
+                self.look.push(Event::Turned { at: here });
+            }
             Op::Grab => {
                 if self.carrying.is_some() {
-                    return Err("Arms already full. Drop the carried parcel first.");
+                    return Err((FaultKind::ArmsFull, here));
                 }
                 self.carrying = self
                     .parcels
                     .iter()
                     .position(|p| p.present && !p.delivered && p.pos == self.robot);
-                if self.carrying.is_none() {
-                    return Err("There is no parcel on this tile. Move onto one before Grab.");
-                }
+                let Some(parcel) = self.carrying else {
+                    return Err((FaultKind::NoParcel, here));
+                };
+                self.look.push(Event::Grabbed { at: here, parcel });
             }
             Op::Drop => {
                 let Some(i) = self.carrying else {
-                    return Err("Empty arms cannot Drop. Grab a parcel first.");
+                    return Err((FaultKind::EmptyArms, here));
                 };
                 if self
                     .parcels
@@ -399,15 +640,20 @@ impl Game {
                     .enumerate()
                     .any(|(j, p)| j != i && p.present && !p.delivered && p.pos == self.robot)
                 {
-                    return Err("Another parcel occupies this tile. Drop elsewhere.");
+                    return Err((FaultKind::Occupied, here));
                 }
                 let tile = self.tile(self.robot);
                 if (b'x'..=b'z').contains(&tile) && (tile - b'x') as usize != i {
-                    return Err("Wrong numbered dock. Carry the parcel to its matching number.");
+                    return Err((FaultKind::WrongDock, here));
                 }
                 self.parcels[i].pos = self.robot;
                 self.parcels[i].delivered = tile == b'x' + i as u8;
                 self.carrying = None;
+                self.look.push(Event::Dropped {
+                    at: here,
+                    parcel: i,
+                    delivered: self.parcels[i].delivered,
+                });
             }
             Op::Repeat2 | Op::Repeat3 => unreachable!("repeat is control flow"),
         }
@@ -415,12 +661,15 @@ impl Game {
     }
     fn execute(&mut self) -> Cue {
         if self.steps >= STEP_LIMIT {
-            return self.fault("Execution budget exhausted. C edits a shorter program.");
+            return self.fault(FaultKind::StepLimit, self.robot, self.last_pc);
         }
         if self.pc >= self.tape.len && self.repeats == 0 {
-            return self.fault("Tape ended before every delivery. C returns to the editor.");
+            return self.fault(FaultKind::TapeEnded, self.robot, Some(self.tape.len));
         }
         self.steps += 1;
+        self.look.from = self.robot;
+        self.look.from_facing = self.facing;
+        self.look.age = 0;
         let op = if self.repeats > 0 {
             self.repeats -= 1;
             self.previous.expect("repeat has previous action")
@@ -432,14 +681,18 @@ impl Game {
         };
         if matches!(op, Op::Repeat2 | Op::Repeat3) {
             if self.previous.is_none() {
-                return self.fault("A repeat needs an earlier simple instruction.");
+                return self.fault(FaultKind::NoPrevious, self.robot, self.last_pc);
             }
             self.repeats = if op == Op::Repeat2 { 2 } else { 3 };
             self.notice = "Repeat expands into separate, visible robot steps.";
+            self.look.push(Event::Repeat {
+                index: self.last_pc.unwrap_or_default(),
+                times: self.repeats,
+            });
             return Cue::Action;
         }
-        if let Err(message) = self.simple(op) {
-            return self.fault(message);
+        if let Err((kind, at)) = self.simple(op) {
+            return self.fault(kind, at, self.last_pc);
         }
         self.previous = Some(op);
         self.notice = match op {
@@ -450,18 +703,9 @@ impl Game {
             _ => unreachable!(),
         };
         if self.delivered() == self.goals() {
-            let par = self.content().solution.len();
-            let medal = if self.tape.len <= par && self.failures == 0 && !self.hinted {
-                3
-            } else if self.tape.len <= par + 4 && self.failures <= 2 {
-                2
-            } else {
-                1
-            };
-            let medal = if self.hinted { medal.min(2) } else { medal };
+            let medal = self.medal(self.tape.len);
             self.stars[self.level] = medal;
-            self.score +=
-                u32::from(medal) * 500 + 500 + 100_u32.saturating_sub(u32::from(self.steps));
+            self.score += points(medal, self.steps);
             self.solved_ticks = 0;
             self.phase = if self.level == 11 {
                 Phase::Complete
@@ -469,6 +713,7 @@ impl Game {
                 Phase::Solved
             };
             self.notice = "All parcels delivered. The next workbench is ready.";
+            self.look.push(Event::Solved { stars: medal });
             return if self.phase == Phase::Complete {
                 Cue::Win
             } else {
@@ -484,6 +729,7 @@ impl Game {
         self.reset_board();
         self.phase = Phase::Editing;
         self.notice = "Workbench restored. Your program is kept for editing.";
+        self.look.push(Event::Stopped);
         Cue::Action
     }
     fn next(&mut self) -> Cue {
@@ -499,45 +745,58 @@ impl Game {
         self.solved_ticks = 0;
         self.reset_board();
         self.notice = "A new workbench. Write, test and refine your route.";
+        self.look.push(Event::NextRoom);
         Cue::Good
     }
-    fn pointer_slot(input: &Input) -> Option<usize> {
-        if !input.click {
-            return input.slot;
+    /// Cells the room's reference program visits from the restored board.
+    /// The hint draws this route; it simulates a copy and changes nothing.
+    pub(crate) fn reference_route(&self) -> Self {
+        let mut sim = self.clone();
+        sim.reset_board();
+        sim.tape = Tape::default();
+        for code in self.content().solution.bytes() {
+            sim.tape.ops[sim.tape.len] = Op::from_code(code);
+            sim.tape.len += 1;
         }
-        let p = input.pointer;
-        if (526. ..=936.).contains(&p.x) && (528. ..558.).contains(&p.y) {
-            return Some((((p.x - 526.) / 82.) as usize + 1).min(5));
+        sim.phase = Phase::Running;
+        while sim.phase == Phase::Running {
+            sim.execute();
         }
-        input.slot
+        sim
     }
     /// Apply exactly one fixed 60 Hz tick. All controls are ordinary player actions.
     pub fn step(&mut self, input: &Input) -> Cue {
         if self.phase == Phase::Complete {
             return Cue::None;
         }
+        self.look.tick();
         if self.phase == Phase::Solved {
             self.solved_ticks = self.solved_ticks.saturating_add(1);
-            return if input.primary
-                || (input.click
-                    && (540. ..=930.).contains(&input.pointer.x)
-                    && (494. ..558.).contains(&input.pointer.y))
-            {
+            return if input.primary || (input.click && layout::NEXT.contains(input.pointer)) {
                 self.next()
             } else {
                 Cue::None
             };
         }
-        if input.tertiary {
+        // A click on a drawn button acts exactly like its key.
+        let button = if input.click {
+            Button::at(input.pointer)
+        } else {
+            None
+        };
+        if input.tertiary || button == Some(Button::Stop) {
             return self.stop();
         }
-        let slot = Self::pointer_slot(input);
+        let slot = button.and_then(Button::slot).or(input.slot);
         if slot == Some(5) {
             self.hinted = true;
             self.show_hint = !self.show_hint;
             if self.phase == Phase::Running {
                 self.phase = Phase::Paused;
             }
+            self.look.push(Event::Hint {
+                open: self.show_hint,
+            });
             return Cue::Action;
         }
         match self.phase {
@@ -556,6 +815,9 @@ impl Game {
                         Phase::Running
                     };
                     self.timer = 0;
+                    self.look.push(Event::Paused {
+                        paused: self.phase == Phase::Paused,
+                    });
                     return Cue::Action;
                 }
                 if slot == Some(2) {
@@ -581,46 +843,65 @@ impl Game {
                 self.history_len -= 1;
                 self.tape = self.history[self.history_len];
                 self.notice = "Previous tape edit restored.";
+                self.look.push(Event::Undid);
                 return Cue::Action;
             }
             Some(4) if self.tape.len > 0 => {
+                let len = self.tape.len;
                 self.remember();
                 self.tape = Tape::default();
                 self.notice = "Tape cleared. Undo can recover it.";
+                self.look.push(Event::Cleared { len });
                 return Cue::Action;
             }
             _ => {}
         }
         if input.click {
             let p = input.pointer;
-            if (526. ..=936.).contains(&p.x) && (160. ..448.).contains(&p.y) {
-                let column = ((p.x - 526.) / 205.) as usize;
-                let row = ((p.y - 160.) / 18.) as usize;
-                let index = column * 16 + row;
-                if index <= self.tape.len && index < CAPACITY {
-                    self.tape.cursor = index;
-                    return Cue::Action;
-                }
-            }
-            if (526. ..=936.).contains(&p.x) && (470. ..510.).contains(&p.y) {
-                self.palette = (self.palette + 1) % self.unlocked();
+            if let Some(index) = layout::tape_at(p)
+                && index <= self.tape.len
+            {
+                self.tape.cursor = index;
+                self.look.push(Event::Cursor { index });
                 return Cue::Action;
+            }
+            // A palette tile chooses its instruction and writes it, as
+            // Left/Right followed by Space would.
+            if let Some(index) = layout::palette_at(p) {
+                if index < self.unlocked() {
+                    self.palette = index;
+                    return self.write();
+                }
+                self.look.push(Event::Locked { index });
+                return Cue::None;
             }
         }
         if input.left_pressed {
             self.palette = (self.palette + self.unlocked() - 1) % self.unlocked();
+            self.look.push(Event::Palette {
+                index: self.palette,
+            });
             return Cue::Action;
         }
         if input.right_pressed {
             self.palette = (self.palette + 1) % self.unlocked();
+            self.look.push(Event::Palette {
+                index: self.palette,
+            });
             return Cue::Action;
         }
         if input.up_pressed && self.tape.cursor > 0 {
             self.tape.cursor -= 1;
+            self.look.push(Event::Cursor {
+                index: self.tape.cursor,
+            });
             return Cue::Action;
         }
         if input.down_pressed && self.tape.cursor < self.tape.len {
             self.tape.cursor += 1;
+            self.look.push(Event::Cursor {
+                index: self.tape.cursor,
+            });
             return Cue::Action;
         }
         if input.secondary {
@@ -690,18 +971,21 @@ impl Game {
             _ => Input::default(),
         }
     }
-    /// Complete campaign report used by the shared ending screen and headless CLI.
+    /// Stars earned across all rooms.
+    pub(crate) fn total_stars(&self) -> u32 {
+        self.stars.iter().map(|&s| u32::from(s)).sum()
+    }
+    /// Rooms restored so far.
+    pub(crate) fn restored(&self) -> usize {
+        self.stars.iter().filter(|&&s| s > 0).count()
+    }
+    /// One-sentence campaign report for the ending and the headless CLI.
     pub fn summary(&self) -> String {
         format!(
-            "{} of 12 workbenches restored. {} stars out of 36. {} points. {}",
-            self.stars.iter().filter(|&&s| s > 0).count(),
-            self.stars.iter().map(|&s| u32::from(s)).sum::<u32>(),
-            self.score,
-            if self.phase == Phase::Complete {
-                "The Daybreak Engine turns again. Tin Automata's couriers carry light through the glass city."
-            } else {
-                "Every failed program can be revised. Follow the instruction pointer and try another route."
-            }
+            "{} of 12 workbenches restored with {} of 36 stars and {} points.",
+            self.restored(),
+            self.total_stars(),
+            self.score
         )
     }
 }
@@ -1158,36 +1442,184 @@ mod tests {
         }
         assert_eq!(game.score, score);
     }
+    fn click(game: &mut Game, at: ferravex_arcade::Vec2) -> Cue {
+        game.step(&Input {
+            click: true,
+            pointer: at,
+            ..Input::default()
+        })
+    }
     #[test]
-    fn pointer_selection_and_toolbar_match_drawn_geometry() {
+    fn pointer_targets_match_drawn_geometry_and_mirror_keys() {
+        use crate::layout::{Button, palette, tape};
         let mut game = Game::new();
         enter(&mut game, "FLR");
-        game.step(&Input {
-            click: true,
-            pointer: vec2(560., 181.),
-            ..Input::default()
-        });
+        click(&mut game, tape(1).center());
         assert_eq!(game.tape.cursor, 1);
-        let before = game.palette;
-        game.step(&Input {
-            click: true,
-            pointer: vec2(700., 488.),
-            ..Input::default()
-        });
-        assert_eq!(game.palette, (before + 1) % 5);
-        game.step(&Input {
-            click: true,
-            pointer: vec2(640., 544.),
-            ..Input::default()
-        });
+        // Clicking empty cells past the append cell does nothing.
+        click(&mut game, tape(9).center());
+        assert_eq!(game.tape.cursor, 1);
+        // A palette tile selects its instruction and writes it like Space.
+        assert_eq!(click(&mut game, palette(3).center()), Cue::Action);
+        assert_eq!(game.palette, 3);
+        assert_eq!(game.tape.ops[..3], [Op::Forward, Op::Grab, Op::Right]);
+        assert_eq!(game.tape.cursor, 2);
+        click(&mut game, tape(3).center());
+        click(&mut game, palette(4).center());
+        assert_eq!(game.tape.len, 4);
+        assert_eq!(game.tape.ops[3], Op::Drop);
+        // Repeats are locked in the first room: nothing changes.
+        let before = game.clone();
+        assert_eq!(click(&mut game, palette(5).center()), Cue::None);
+        assert_eq!((game.tape, game.palette), (before.tape, before.palette));
+        // Buttons mirror 2 and C.
+        click(&mut game, Button::Step.rect().center());
         assert_eq!(game.phase, Phase::Paused);
         assert_eq!(game.steps, 1);
+        assert_eq!(game.robot, Cell { x: 2, y: 3 });
+        let tape_before = game.tape;
+        assert_eq!(click(&mut game, Button::Stop.rect().center()), Cue::Action);
+        assert_eq!(game.phase, Phase::Editing);
+        assert_eq!(game.robot, Cell { x: 1, y: 3 });
+        assert_eq!(game.tape, tape_before);
+        assert_eq!(game.steps, 0);
+        click(&mut game, Button::Clear.rect().center());
+        assert_eq!(game.tape.len, 0);
+        click(&mut game, Button::Undo.rect().center());
+        assert_eq!(game.tape, tape_before);
+        click(&mut game, Button::Hint.rect().center());
+        assert!(game.show_hint && game.hinted);
         let tape = game.tape;
-        game.step(&Input {
-            click: true,
-            pointer: vec2(-50., -50.),
-            ..Input::default()
-        });
+        click(&mut game, vec2(-50., -50.));
         assert_eq!(game.tape, tape);
+    }
+    #[test]
+    fn solved_room_continues_from_the_next_button_or_space() {
+        use crate::layout::NEXT;
+        let mut game = Game::new();
+        solve(&mut game);
+        click(&mut game, vec2(NEXT.x - 20., NEXT.y + 10.));
+        assert_eq!(game.room(), 1);
+        click(&mut game, NEXT.center());
+        assert_eq!(game.room(), 2);
+        assert_eq!(game.phase, Phase::Editing);
+        solve(&mut game);
+        game.step(&press());
+        assert_eq!(game.room(), 3);
+    }
+    #[test]
+    fn presentation_events_record_accepted_actions_for_one_update() {
+        let mut game = Game::new();
+        game.step(&press());
+        assert_eq!(
+            game.look.events().collect::<Vec<_>>(),
+            [Event::Wrote {
+                index: 0,
+                op: Op::Forward
+            }]
+        );
+        game.step(&Input::default());
+        assert_eq!(game.look.events().count(), 0);
+        enter(&mut game, "G");
+        game.step(&button(2));
+        let events: Vec<_> = game.look.events().collect();
+        assert_eq!(
+            events,
+            [
+                Event::Started,
+                Event::Moved {
+                    from: Cell { x: 1, y: 3 },
+                    to: Cell { x: 2, y: 3 }
+                }
+            ]
+        );
+        assert_eq!(game.look.from, Cell { x: 1, y: 3 });
+        assert_eq!(game.look.age, 0);
+        game.step(&button(2));
+        assert_eq!(
+            game.look.events().collect::<Vec<_>>(),
+            [Event::Grabbed {
+                at: Cell { x: 2, y: 3 },
+                parcel: 0
+            }]
+        );
+        assert_eq!(game.look.path(), [Cell { x: 1, y: 3 }, Cell { x: 2, y: 3 }]);
+        // The tape runs out: the fault names the append cell and the robot.
+        game.step(&button(2));
+        let fault = Fault {
+            kind: FaultKind::TapeEnded,
+            at: Cell { x: 2, y: 3 },
+            pc: Some(2),
+        };
+        assert_eq!(
+            game.look.events().collect::<Vec<_>>(),
+            [Event::Fault(fault)]
+        );
+        assert_eq!(game.look.fault, Some(fault));
+        assert!(game.notice.contains("Tape ended"));
+        game.step(&press());
+        assert_eq!(game.look.fault, None);
+        assert_eq!(game.look.path(), [Cell { x: 1, y: 3 }]);
+        // A blocked move faults at the wall it hit, on the executing cell.
+        let mut game = Game::new();
+        enter(&mut game, "LFFF");
+        for _ in 0..4 {
+            game.step(&button(2));
+        }
+        let fault = game.look.fault.expect("wall fault");
+        assert_eq!(fault.kind, FaultKind::Wall);
+        assert_eq!(fault.at, Cell { x: 1, y: 0 });
+        assert_eq!(fault.pc, Some(3));
+        assert!(fault.kind.blocked_move());
+        // Refusals are recorded without changing the tape.
+        let mut game = Game::new();
+        for _ in 0..11 {
+            game.step(&press());
+        }
+        assert_eq!(game.tape.len, 10);
+        assert_eq!(
+            game.look.events().collect::<Vec<_>>(),
+            [Event::TapeFull { index: 9 }]
+        );
+    }
+    #[test]
+    fn switch_events_name_their_gate_once_and_the_route_hint_is_read_only() {
+        let mut game = Game::new();
+        game.level = 6;
+        game.reset_board();
+        enter(&mut game, "FGFF");
+        let mut switched = 0;
+        for _ in 0..4 {
+            game.step(&button(2));
+            switched += game
+                .look
+                .events()
+                .filter(|e| matches!(e, Event::Switch { gate: b'A', .. }))
+                .count();
+        }
+        assert_eq!(switched, 1);
+        let before = game.clone();
+        let route = game.reference_route();
+        assert_eq!(game, before);
+        assert_eq!(route.phase, Phase::Solved);
+        let path = route.look.path();
+        assert_eq!(path.first(), Some(&Cell { x: 1, y: 3 }));
+        assert_eq!(path.last(), Some(&Cell { x: 7, y: 3 }));
+        assert_eq!(path.len(), 7);
+    }
+    #[test]
+    fn medal_forecast_matches_the_awarded_medal() {
+        let mut game = Game::new();
+        enter(&mut game, "FGFFFFD");
+        assert_eq!(game.medal(game.tape.len), 3);
+        assert_eq!(game.medal(game.par() + 4), 2);
+        assert_eq!(game.medal(game.par() + 5), 1);
+        game.step(&button(1));
+        for _ in 0..400 {
+            game.step(&Input::default());
+        }
+        assert_eq!(game.phase, Phase::Solved);
+        assert_eq!(game.stars[0], 3);
+        assert_eq!(game.score(), points(3, 7));
     }
 }

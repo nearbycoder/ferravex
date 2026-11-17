@@ -15,14 +15,6 @@ impl Weather {
             Self::Frost => "Frost",
         }
     }
-    pub fn advice(self) -> &'static str {
-        match self {
-            Self::Sun => "Water growing crops before bed.",
-            Self::Rain => "Rain waters every plot for free.",
-            Self::Heat => "Dry plants take double stress.",
-            Self::Frost => "Cold frames let crops grow tonight.",
-        }
-    }
 }
 pub(crate) struct Crop {
     pub name: &'static str,
@@ -148,8 +140,3 @@ pub(crate) const MORNINGS: [Morning; 14] = [
 ];
 pub(crate) const TOOL_NAMES: [&str; 3] = ["Brass Can", "Work Boots", "Cold Frames"];
 pub(crate) const TOOL_PRICES: [u32; 3] = [45, 55, 70];
-pub(crate) const TOOL_DETAILS: [&str; 3] = [
-    "Water the selected plot, its right neighbor and its lower neighbor for one energy.",
-    "Gain six extra energy every morning, including the day you buy these boots.",
-    "All watered crops keep growing through the day-ten frost. No glass maintenance needed.",
-];

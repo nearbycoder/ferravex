@@ -79,15 +79,6 @@ impl Goal {
             Self::DominoRun => "Domino run",
         }
     }
-
-    pub fn brief(self) -> &'static str {
-        match self {
-            Self::Liftoff => "Pulse something past the 11 m line.",
-            Self::Skyscraper => "Rest something 7.5 m up. Gravity disagrees.",
-            Self::Demolition => "50 bonks in one second. Try CHAOS.",
-            Self::DominoRun => "Topple all 11 dominoes in the domino run.",
-        }
-    }
 }
 
 /// One accepted impact worth a spark, in world meters.
@@ -645,7 +636,7 @@ mod tests {
         while paused.sandbox.spawn(vec2(0., 10.), true) {}
         paused.update_toys(0., LabInput::default(), toys);
         assert_eq!(paused.sandbox.bodies.len(), MAX_BODIES);
-        assert!(paused.feedback.starts_with("Body limit reached"));
+        assert_eq!(paused.notice, crate::Notice::ChaosFull);
     }
 
     #[test]

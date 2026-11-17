@@ -88,18 +88,47 @@ fn retry_hint_for(input: &PlayerInput, device: HintDevice) -> String {
     }
 }
 
-pub(crate) fn lap_comparison(comparison: Option<RecordDelta>, best: bool) -> String {
+/// How a completed lap compares with the previous best. The lap banner draws
+/// it as a star and a signed number instead of a sentence.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum LapCompare {
+    /// The first recorded lap is the best so far.
+    First,
+    /// Exactly matched the best.
+    Tie,
+    /// A new best, faster by this many seconds.
+    Faster(f32),
+    /// Slower than the best by this many seconds.
+    Slower(f32),
+    /// A new best without a recorded delta.
+    Best,
+    /// Nothing to compare.
+    None,
+}
+
+impl LapCompare {
+    /// Whether the comparison celebrates a best lap (gold star chip).
+    pub(crate) fn is_best(self) -> bool {
+        matches!(self, Self::First | Self::Faster(_) | Self::Best)
+    }
+}
+
+pub(crate) fn lap_comparison(comparison: Option<RecordDelta>, best: bool) -> LapCompare {
     let Some(comparison) = comparison else {
-        return if best { "NEW BEST" } else { "LAP COMPLETE" }.to_owned();
+        return if best {
+            LapCompare::Best
+        } else {
+            LapCompare::None
+        };
     };
     match (comparison.comparison, comparison.delta) {
-        (_, None) => "FIRST BEST".to_owned(),
-        (RecordComparison::Tie, _) => "TIED BEST".to_owned(),
+        (_, None) => LapCompare::First,
+        (RecordComparison::Tie, _) => LapCompare::Tie,
         (RecordComparison::NewBest, Some(delta)) => {
-            format!("NEW BEST  {:+.2}s", delta as f64 / 1_000_000.)
+            LapCompare::Faster((delta as f64 / 1_000_000.).abs() as f32)
         }
         (RecordComparison::Worse, Some(delta)) => {
-            format!("{:+.2}s TO BEST", delta as f64 / 1_000_000.)
+            LapCompare::Slower((delta as f64 / 1_000_000.) as f32)
         }
     }
 }
@@ -377,11 +406,12 @@ mod tests {
         let first = book
             .record_with_summary("lap", 0, 0, Some(20_000_000))
             .unwrap();
-        assert_eq!(lap_comparison(first.time_us, true), "FIRST BEST");
+        assert_eq!(lap_comparison(first.time_us, true), LapCompare::First);
+        assert!(LapCompare::First.is_best());
         for (micros, expected) in [
-            (20_000_000, "TIED BEST"),
-            (19_500_000, "NEW BEST  -0.50s"),
-            (21_250_000, "+1.25s TO BEST"),
+            (20_000_000, LapCompare::Tie),
+            (19_500_000, LapCompare::Faster(0.5)),
+            (21_250_000, LapCompare::Slower(1.25)),
         ] {
             let summary = book.compare("lap", 0, 0, Some(micros)).unwrap();
             assert_eq!(
@@ -389,5 +419,8 @@ mod tests {
                 expected
             );
         }
+        assert!(!LapCompare::Tie.is_best() && !LapCompare::Slower(1.).is_best());
+        assert_eq!(lap_comparison(None, true), LapCompare::Best);
+        assert_eq!(lap_comparison(None, false), LapCompare::None);
     }
 }

@@ -13,49 +13,47 @@ pub(super) enum DeathCause {
     Fissure,
 }
 
+// Fall and lantern lines are play-screen callouts: three words at most, in
+// capitals, so they read at a glance. Longer jokes live on pause/results.
 const SPIKES: [&str; 8] = [
-    "Spikes 1, you 0.",
-    "That one had a point.",
-    "Ouch. Also: ouch.",
-    "The spikes send their regards.",
-    "Stick the landing, not the spikes.",
-    "Poked. Respectfully.",
-    "Sharp observation: don't.",
-    "That's going in the blooper reel.",
+    "OUCH!",
+    "POKED!",
+    "POINT TAKEN",
+    "YOWCH!",
+    "PINCUSHION!",
+    "SHARP!",
+    "NOT THE TOES!",
+    "BLOOPER REEL",
 ];
 
 const FISSURE: [&str; 8] = [
-    "The floor is lava. Literally.",
-    "Gravity: still undefeated.",
-    "A bold step into nothing.",
-    "The dark says hi.",
-    "Mind the gap. Please.",
-    "You fell for it.",
-    "Warm down there, isn't it?",
-    "The fissure thanks you.",
+    "SIZZLE!",
+    "GRAVITY WINS",
+    "INTO THE DARK",
+    "WHOOPS!",
+    "MIND THE GAP",
+    "FELL FOR IT",
+    "TOASTY!",
+    "BYE-BYE!",
 ];
 
 /// Lines for a stubborn section: three or more falls since the last lantern.
 const STUBBORN: [&str; 6] = [
-    "Persistence is a flame too.",
-    "Practice makes platforms.",
-    "This is the one. Probably.",
-    "The lantern believes in you.",
-    "Same spot? Bold strategy.",
-    "Determination: maximum.",
+    "KEEP BURNING",
+    "ONE MORE TRY",
+    "YOU GOT THIS",
+    "NEVER GIVE UP",
+    "BOLD STRATEGY",
+    "DETERMINED!",
 ];
 
-const LANTERN: [&str; 4] = [
-    "Respawn saved. Fall with confidence.",
-    "The dark is now slightly less dark.",
-    "Checkpoint get. Nothing can stop you now.",
-    "Warm hands, saved progress.",
-];
+const LANTERN: [&str; 4] = ["SPOT SAVED!", "CHECKPOINT!", "WARM HANDS!", "SAVED!"];
 
+/// One line, once, on the pause card.
 const PAUSE: [&str; 5] = [
     "The embers will wait. Probably.",
     "Stretch those thumbs.",
-    "The spikes are also taking five.",
+    "The spikes are taking five too.",
     "Time is frozen. Very spooky.",
     "Hydrate. The lantern insists.",
 ];
@@ -168,16 +166,6 @@ pub(super) fn rank(run: RunSummary) -> Rank {
     Rank { title, quip }
 }
 
-/// Mixed-case medal name for Modern-face copy.
-pub(super) fn medal_label(medal: Medal) -> &'static str {
-    match medal {
-        Medal::Gold => "Gold",
-        Medal::Silver => "Silver",
-        Medal::Bronze => "Bronze",
-        Medal::Unranked => "No medal",
-    }
-}
-
 pub(super) fn medal_name(medal: Medal) -> &'static str {
     match medal {
         Medal::Gold => "GOLD",
@@ -187,13 +175,13 @@ pub(super) fn medal_name(medal: Medal) -> &'static str {
     }
 }
 
-/// The authored target above `medal`, as (name, seconds), if one exists.
-pub(super) fn next_medal(medal: Medal, targets: [f32; 3]) -> Option<(&'static str, f32)> {
+/// The authored target above `medal`, as (medal, seconds), if one exists.
+pub(super) fn next_medal(medal: Medal, targets: [f32; 3]) -> Option<(Medal, f32)> {
     match medal {
         Medal::Gold => None,
-        Medal::Silver => Some(("gold", targets[0])),
-        Medal::Bronze => Some(("silver", targets[1])),
-        Medal::Unranked => Some(("bronze", targets[2])),
+        Medal::Silver => Some((Medal::Gold, targets[0])),
+        Medal::Bronze => Some((Medal::Silver, targets[1])),
+        Medal::Unranked => Some((Medal::Bronze, targets[2])),
     }
 }
 
@@ -232,6 +220,26 @@ mod tests {
             let visited: std::collections::BTreeSet<_> =
                 (0..table.len() as u32).map(|n| rotate(table, n)).collect();
             assert_eq!(visited.len(), table.len());
+        }
+    }
+
+    #[test]
+    fn play_callouts_respect_the_three_word_budget() {
+        for table in [
+            &SPIKES[..],
+            &FISSURE[..],
+            &STUBBORN[..],
+            &LANTERN[..],
+            &CLOSE_CALL[..],
+        ] {
+            for line in table {
+                assert!(line.split_whitespace().count() <= 3, "{line}");
+                assert_eq!(*line, line.to_uppercase(), "callouts are capitals: {line}");
+            }
+        }
+        // Pause and results jokes stay on a single short line.
+        for line in PAUSE {
+            assert!(line.len() <= 34, "{line}");
         }
     }
 
@@ -287,7 +295,7 @@ mod tests {
         }
         assert_eq!(
             next_medal(Medal::Silver, [12., 18., 30.]),
-            Some(("gold", 12.))
+            Some((Medal::Gold, 12.))
         );
         assert_eq!(next_medal(Medal::Gold, [12., 18., 30.]), None);
     }

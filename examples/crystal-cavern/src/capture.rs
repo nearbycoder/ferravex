@@ -11,6 +11,11 @@
 //! - `CAVERN_STAGE_PICKUP=N` stops the pilot on frame `N`, stands it facing
 //!   crystal `CAVERN_STAGE_CRYSTAL` (default 0) and presses use 20 frames later,
 //!   so a real accepted pickup can be framed for gallery captures.
+//! - `CAVERN_STAGE_LOCKED=N` stops the pilot on frame `N` beside altar I before
+//!   its crystals are in, and presses use 20 frames later (a real rejected use),
+//!   so the locked prompt and the refusal can be reviewed.
+//! - `CAVERN_STAGE_NOTE=N` stops the pilot on frame `N` beside Wendell's note
+//!   and reads it 20 frames later (a real accepted use).
 use super::{Conf, Expedition, Progress, vec2};
 
 fn number<T: std::str::FromStr>(name: &str) -> Option<T> {
@@ -37,6 +42,8 @@ pub(super) struct Capture {
     fake_best: Option<f32>,
     stage_pickup: Option<u32>,
     stage_crystal: usize,
+    stage_locked: Option<u32>,
+    stage_note: Option<u32>,
 }
 
 impl Capture {
@@ -51,6 +58,8 @@ impl Capture {
             fake_best: number("CAVERN_FAKE_BEST"),
             stage_pickup: number("CAVERN_STAGE_PICKUP"),
             stage_crystal: number::<usize>("CAVERN_STAGE_CRYSTAL").unwrap_or(0).min(2),
+            stage_locked: number("CAVERN_STAGE_LOCKED"),
+            stage_note: number("CAVERN_STAGE_NOTE"),
         }
     }
 
@@ -81,6 +90,22 @@ impl Capture {
             let delta = crystal - game.position;
             game.yaw = delta.x.atan2(-delta.y);
         }
+        let staged = if self.stage_locked == Some(self.frame) {
+            Some((super::at(b'A'), vec2(1.2, 0.35)))
+        } else if self.stage_note == Some(self.frame) {
+            Some((super::note_position(), vec2(0.9, 0.6)))
+        } else {
+            None
+        };
+        if let Some((spot, offset)) = staged {
+            let game = &mut expedition.game;
+            expedition.autoplay = false;
+            game.position = spot + offset;
+            game.velocity = vec2(0., 0.);
+            game.walked = game.walked.max(10.);
+            let delta = spot - game.position;
+            game.yaw = delta.x.atan2(-delta.y);
+        }
         if self.secrets_at == Some(self.frame) {
             expedition.game.shy_found = true;
             expedition.game.note_reads = expedition.game.note_reads.max(1);
@@ -92,9 +117,12 @@ impl Capture {
         None
     }
 
-    /// True on the staged pickup's use frame.
+    /// True on the staged pickup's (or locked altar's) use frame.
     pub fn use_now(&self) -> bool {
-        self.stage_pickup.is_some_and(|at| self.frame == at + 20)
+        [self.stage_pickup, self.stage_locked, self.stage_note]
+            .into_iter()
+            .flatten()
+            .any(|at| self.frame == at + 20)
     }
 
     pub fn fake_best(&self) -> Option<f32> {

@@ -15,7 +15,7 @@
 //! assert_eq!(game.result(), Outcome::Playing);
 //! ```
 
-use crate::content::{CHARTERS, GOODS, NEWS, PORTS};
+use crate::content::{CHARTERS, PORTS};
 use ferravex_arcade::{Cue, Input, Outcome};
 use ferravex_math::Vec2;
 use ferravex_play::gameplay::inventory::{Inventory, Stack};
@@ -24,6 +24,147 @@ pub(crate) const DAY_TICKS: u32 = 180;
 pub(crate) const DEADLINE: u32 = 42;
 pub(crate) const DEBT: u32 = 900;
 pub(crate) const SUPPLY_CAP: u32 = 12;
+/// Shipyard prices: swift canvas, cargo expansion, brass plating.
+pub(crate) const REFITS: [u32; 3] = [85, 70, 70];
+/// The chart's route switch (the X button): sheltered left of this x, open
+/// sea right of it.
+pub(crate) const ROUTE_SPLIT: f32 = 808.;
+/// Sail-plan tiles at sea (full sail, reefed): left edges, width and rows.
+pub(crate) const SAIL_TILES: [f32; 2] = [658., 796.];
+pub(crate) const SAIL_TILE_W: f32 = 130.;
+pub(crate) const SAIL_TILE_Y: [f32; 2] = [240., 332.];
+/// Price effect of a week's forecast on a good (crowns per crate).
+pub(crate) fn forecast_shift(week: usize, good: usize) -> i32 {
+    match (week, good) {
+        (1, 1) | (2, 2) | (4, 0) | (5, 1) => 5,
+        (3, 0) => -4,
+        _ => 0,
+    }
+}
+
+/// Something one tick accepted (or refused), recorded for presentation.
+///
+/// Rules never read these; [`Game::tick`] clears the list first, so the host's
+/// effects hook sees exactly the events of the update that just ran.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Event {
+    /// The chart selection moved to this port.
+    Chose(usize),
+    Bought {
+        good: usize,
+        price: u32,
+    },
+    Sold {
+        good: usize,
+        price: u32,
+    },
+    Provisioned {
+        days: u32,
+        price: u32,
+    },
+    Repaired {
+        hull: u32,
+        price: u32,
+    },
+    Delivered {
+        port: usize,
+        reward: u32,
+    },
+    Refitted(usize),
+    Settled,
+    Route {
+        sheltered: bool,
+    },
+    Departed {
+        from: usize,
+    },
+    Reefed(bool),
+    /// One sea day's provisions were eaten.
+    Ate,
+    Starved {
+        damage: u32,
+    },
+    Squall {
+        damage: u32,
+        at: Vec2,
+    },
+    Docked {
+        port: usize,
+        first: bool,
+    },
+    /// A new week began: fresh forecast and restocked markets.
+    Week(usize),
+    Waited,
+    Refused(Refusal),
+    Lost(Loss),
+}
+
+/// Why a command was rejected without changing any state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Refusal {
+    SoldOut,
+    HoldFull,
+    /// Crowns missing for the selected purchase.
+    Crowns(u32),
+    PantryFull,
+    HullSound,
+    NotCargo,
+    NoneAboard,
+    WarehouseFull,
+    AllSealed,
+    /// The charter is delivered at this port.
+    WrongPort(usize),
+    /// Crates still missing for the charter.
+    Missing(u32),
+    Installed,
+    NotHaven,
+    Unsealed,
+    SamePort,
+    NoFood,
+}
+
+/// How a voyage ended in failure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Loss {
+    Season,
+    Starved,
+    Sank,
+    Broke,
+}
+
+impl Loss {
+    /// One sentence for the results summary.
+    pub(crate) fn text(self) -> &'static str {
+        match self {
+            Loss::Season => "The season closed before the debt was paid.",
+            Loss::Starved => "Your hungry crew could no longer keep the ship afloat.",
+            Loss::Sank => "Saltwind sank in an open-sea squall.",
+            Loss::Broke => "With no food, cargo or coin, the crew disbanded.",
+        }
+    }
+}
+
+/// The bounded event list of the most recent tick (presentation only).
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Feed {
+    items: [Option<Event>; 8],
+    len: usize,
+}
+
+impl Feed {
+    fn clear(&mut self) {
+        *self = Self::default();
+    }
+    fn push(&mut self, event: Event) {
+        if let Some(slot) = self.items.get_mut(self.len) {
+            *slot = Some(event);
+            self.len += 1;
+        }
+    }
+    pub(crate) fn iter(&self) -> impl Iterator<Item = Event> + '_ {
+        self.items[..self.len].iter().flatten().copied()
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Passage {
@@ -58,11 +199,11 @@ pub struct Game {
     pub(crate) sheltered: bool,
     pub(crate) passage: Option<Passage>,
     pub(crate) score: u32,
-    pub(crate) notice: String,
-    pub(crate) notice_ticks: u32,
     pub(crate) result: Outcome,
-    pub(crate) loss: &'static str,
+    pub(crate) loss: Option<Loss>,
     pub(crate) total_trades: u32,
+    /// Accepted events of the latest tick, for effects only.
+    pub(crate) events: Feed,
 }
 
 impl Default for Game {
@@ -91,11 +232,10 @@ impl Game {
             sheltered: true,
             passage: None,
             score: 0,
-            notice: "Your first charter: buy 3 grain at Market [2], then sail to Brinewatch on Chart [1].".into(),
-            notice_ticks: 600,
             result: Outcome::Playing,
-            loss: "",
+            loss: None,
             total_trades: 0,
+            events: Feed::default(),
         }
     }
 
@@ -130,16 +270,8 @@ impl Game {
         ((self.day - 1) / 7).min(5) as usize
     }
 
-    pub(crate) fn news(&self) -> &'static str {
-        NEWS[self.week()]
-    }
-
-    fn price_at(&self, port: usize, good: usize) -> u32 {
-        let weather = match (self.week(), good) {
-            (1, 1) | (2, 2) | (4, 0) | (5, 1) => 5,
-            (3, 0) => -4,
-            _ => 0,
-        };
+    pub(crate) fn price_at(&self, port: usize, good: usize) -> u32 {
+        let weather = forecast_shift(self.week(), good);
         let scarcity = 8 - self.stock[port][good] as i32;
         (PORTS[port].prices[good] as i32 + weather + scarcity).max(5) as u32
     }
@@ -212,35 +344,35 @@ impl Game {
         ]
     }
 
-    fn tell(&mut self, text: impl Into<String>) {
-        self.notice = text.into();
-        self.notice_ticks = 360;
+    fn refuse(&mut self, why: Refusal) -> Cue {
+        self.events.push(Event::Refused(why));
+        Cue::None
     }
 
-    fn lose(&mut self, reason: &'static str) -> Cue {
+    fn lose(&mut self, loss: Loss) -> Cue {
         self.result = Outcome::Lost;
-        self.loss = reason;
-        self.tell(reason);
+        self.loss = Some(loss);
+        self.events.push(Event::Lost(loss));
         Cue::Bad
     }
 
     fn advance_day(&mut self, at_sea: bool) -> Cue {
         self.day += 1;
         if self.day > DEADLINE {
-            return self.lose(
-                "The season closed. The banker repossessed Saltwind before you settled the debt.",
-            );
+            return self.lose(Loss::Season);
         }
         if at_sea {
             if self.provisions > 0 {
                 self.provisions -= 1;
+                self.events.push(Event::Ate);
             } else {
+                let before = self.hull;
                 self.hull = self.hull.saturating_sub(22);
-                self.tell(
-                    "No food! Exhausted sailors leave the ship taking on water: -22 hull per day.",
-                );
+                self.events.push(Event::Starved {
+                    damage: before - self.hull,
+                });
                 if self.hull == 0 {
-                    return self.lose("Your hungry crew could no longer keep the ship afloat.");
+                    return self.lose(Loss::Starved);
                 }
             }
         }
@@ -250,6 +382,7 @@ impl Game {
                     *amount = (*amount + 2).min(12);
                 }
             }
+            self.events.push(Event::Week(self.week()));
         }
         Cue::None
     }
@@ -259,16 +392,13 @@ impl Game {
             good @ 0..=2 => {
                 let price = self.buy_price(good);
                 if self.stock[self.harbor][good] == 0 {
-                    self.tell("That market stall is empty. Weekly caravans restore two crates.");
-                    return Cue::None;
+                    return self.refuse(Refusal::SoldOut);
                 }
                 if self.cargo_total() >= self.capacity() {
-                    self.tell("The hold is full. Sell cargo or fit a larger hold at the shipyard.");
-                    return Cue::None;
+                    return self.refuse(Refusal::HoldFull);
                 }
                 if self.coins < price {
-                    self.tell("Not enough crowns for this crate.");
-                    return Cue::None;
+                    return self.refuse(Refusal::Crowns(price - self.coins));
                 }
                 if self
                     .inventory
@@ -284,44 +414,39 @@ impl Game {
                 self.coins -= price;
                 self.stock[self.harbor][good] -= 1;
                 self.total_trades += 1;
-                self.tell(format!(
-                    "Bought 1 {} for {price} crowns. Cargo {}/{}.",
-                    GOODS[good],
-                    self.cargo_total(),
-                    self.capacity()
-                ));
+                self.events.push(Event::Bought { good, price });
             }
             3 => {
                 if self.provisions == SUPPLY_CAP {
-                    self.tell("The pantry is full: twelve days of provisions.");
-                    return Cue::None;
+                    return self.refuse(Refusal::PantryFull);
                 }
                 let amount = (SUPPLY_CAP - self.provisions).min(6).min(self.coins / 2);
                 let price = amount * 2;
                 if amount == 0 {
-                    self.tell("Food costs 2 crowns per day; sell a crate to provision the crew.");
-                    return Cue::None;
+                    return self.refuse(Refusal::Crowns(2 - self.coins));
                 }
                 self.coins -= price;
                 self.provisions += amount;
-                self.tell(format!("Loaded {amount} days of food for {price} crowns."));
+                self.events.push(Event::Provisioned {
+                    days: amount,
+                    price,
+                });
             }
             4 => {
                 if self.hull == 100 {
-                    self.tell("The hull is already sound.");
-                    return Cue::None;
+                    return self.refuse(Refusal::HullSound);
                 }
                 let amount = (100 - self.hull).min(30);
                 let price = amount.div_ceil(2);
                 if self.coins < price {
-                    self.tell("Repairs cost 1 crown per 2 hull. Sell cargo first.");
-                    return Cue::None;
+                    return self.refuse(Refusal::Crowns(price - self.coins));
                 }
                 self.coins -= price;
                 self.hull += amount;
-                self.tell(format!(
-                    "The shipwright restored {amount} hull for {price} crowns."
-                ));
+                self.events.push(Event::Repaired {
+                    hull: amount,
+                    price,
+                });
             }
             _ => return Cue::None,
         }
@@ -330,17 +455,14 @@ impl Game {
 
     fn sell(&mut self) -> Cue {
         if self.row > 2 {
-            self.tell("Food and repair work cannot be resold.");
-            return Cue::None;
+            return self.refuse(Refusal::NotCargo);
         }
         let good = self.row;
         if self.cargo(good) == 0 {
-            self.tell("You have no crates of this good.");
-            return Cue::None;
+            return self.refuse(Refusal::NoneAboard);
         }
         if self.stock[self.harbor][good] >= 16 {
-            self.tell("The warehouse is full; sail to another market.");
-            return Cue::None;
+            return self.refuse(Refusal::WarehouseFull);
         }
         let price = self.sell_price(good);
         if self.inventory.remove(good as u32, 1).is_err() {
@@ -349,31 +471,21 @@ impl Game {
         self.coins += price;
         self.stock[self.harbor][good] += 1;
         self.total_trades += 1;
-        self.tell(format!(
-            "Sold 1 {} for {price} crowns. Local buy/sell spread prevents free profit.",
-            GOODS[good]
-        ));
+        self.events.push(Event::Sold { good, price });
         Cue::Action
     }
 
     fn deliver(&mut self) -> Cue {
         let Some(contract) = CHARTERS.get(self.charter).copied() else {
-            self.tell("All six charters are sealed. Settle 900 crowns at Haven's shipyard [4].");
-            return Cue::None;
+            return self.refuse(Refusal::AllSealed);
         };
         if self.harbor != contract.destination {
-            self.tell(format!(
-                "This charter must be delivered at {}.",
-                PORTS[contract.destination].name
-            ));
-            return Cue::None;
+            return self.refuse(Refusal::WrongPort(contract.destination));
         }
         if self.cargo(contract.good) < contract.amount {
-            self.tell(format!(
-                "Need {} {} crates in the hold to seal this charter.",
-                contract.amount, GOODS[contract.good]
+            return self.refuse(Refusal::Missing(
+                contract.amount - self.cargo(contract.good),
             ));
-            return Cue::None;
         }
         if self
             .inventory
@@ -386,69 +498,52 @@ impl Game {
         self.charter += 1;
         self.score += 300 + contract.reward;
         self.selected_port = CHARTERS.get(self.charter).map_or(0, |c| c.destination);
-        self.tell(contract.arrival);
+        self.events.push(Event::Delivered {
+            port: self.harbor,
+            reward: contract.reward,
+        });
         Cue::Good
     }
 
     fn shipyard(&mut self) -> Cue {
         if self.row == 3 {
             if self.harbor != 0 {
-                self.tell("The banker keeps her office at Haven. Sail home to settle.");
-                return Cue::None;
+                return self.refuse(Refusal::NotHaven);
             }
             if self.charter < CHARTERS.len() {
-                self.tell("Your charter bond requires all six deliveries before the ship can be released.");
-                return Cue::None;
+                return self.refuse(Refusal::Unsealed);
             }
             if self.coins < DEBT {
-                self.tell(format!(
-                    "You still need {} crowns. Trade surplus cargo before the season ends.",
-                    DEBT - self.coins
-                ));
-                return Cue::None;
+                return self.refuse(Refusal::Crowns(DEBT - self.coins));
             }
             self.coins -= DEBT;
             self.score += self.coins * 2 + (DEADLINE - self.day) * 20 + self.hull * 5;
             self.result = Outcome::Won;
-            self.tell(
-                "The lien is torn in two. Saltwind is yours, and every island knows your name.",
-            );
+            self.events.push(Event::Settled);
             return Cue::Win;
         }
         if self.row >= 3 {
             return Cue::None;
         }
-        let cost = [85, 70, 70][self.row];
+        let cost = REFITS[self.row];
         if self.upgrades[self.row] {
-            self.tell("That upgrade is already installed.");
-            return Cue::None;
+            return self.refuse(Refusal::Installed);
         }
         if self.coins < cost {
-            self.tell(format!(
-                "This refit needs {cost} crowns. Keep enough aside for cargo and debt."
-            ));
-            return Cue::None;
+            return self.refuse(Refusal::Crowns(cost - self.coins));
         }
         self.coins -= cost;
         self.upgrades[self.row] = true;
-        self.tell(
-            [
-                "New sails fitted. Every passage is one day shorter (minimum two).",
-                "Expanded hold fitted: twelve crates of cargo.",
-                "Brass plating fitted: storm damage reduced by three.",
-            ][self.row],
-        );
+        self.events.push(Event::Refitted(self.row));
         Cue::Good
     }
 
     fn depart(&mut self) -> Cue {
         if self.selected_port >= PORTS.len() || self.selected_port == self.harbor {
-            self.tell("Choose another island on the chart.");
-            return Cue::None;
+            return self.refuse(Refusal::SamePort);
         }
         if self.provisions == 0 {
-            self.tell("Provision the crew at Market [2] before leaving port.");
-            return Cue::None;
+            return self.refuse(Refusal::NoFood);
         }
         let days = self.voyage_days(self.selected_port);
         self.passage = Some(Passage {
@@ -461,21 +556,27 @@ impl Game {
             sheltered: self.sheltered,
             reefed: false,
         });
-        self.tell(format!(
-            "Underway to {}. Estimated {days} days. Up/down steer; Space reefs sails in storms.",
-            PORTS[self.selected_port].name
-        ));
+        self.events.push(Event::Departed { from: self.harbor });
         Cue::Action
     }
 
     fn sail(&mut self, input: &Input) -> Cue {
         let mut passage = self.passage.expect("underway");
+        // The sail-plan tiles switch to the plan they show, like Space.
+        let tile = |k: usize| {
+            let x = SAIL_TILES[k];
+            (x..x + SAIL_TILE_W).contains(&input.pointer.x)
+                && (SAIL_TILE_Y[0]..SAIL_TILE_Y[1]).contains(&input.pointer.y)
+        };
+        let plan = input.click && tile(usize::from(!passage.reefed));
         if input.primary
+            || plan
             || (input.click
                 && (658.0..926.0).contains(&input.pointer.x)
                 && (478.0..509.0).contains(&input.pointer.y))
         {
             passage.reefed = !passage.reefed;
+            self.events.push(Event::Reefed(passage.reefed));
         }
         let steer = i32::from(input.down) - i32::from(input.up);
         passage.offset = (passage.offset + steer as f32 * 0.6).clamp(-55., 55.);
@@ -505,11 +606,10 @@ impl Game {
             let damage = damage.saturating_sub(if self.upgrades[2] { 3 } else { 0 });
             if damage > 0 {
                 self.hull = self.hull.saturating_sub(damage);
-                self.tell(format!("A squall tears at the ship: -{damage} hull. Reef sails or steer around storm rings."));
+                self.events.push(Event::Squall { damage, at: pos });
                 cue = Cue::Bad;
                 if self.hull == 0 {
-                    return self
-                        .lose("Saltwind sank in the outer sea. Her charters never reached home.");
+                    return self.lose(Loss::Sank);
                 }
             }
         }
@@ -524,16 +624,17 @@ impl Game {
             }
             self.harbor = passage.to;
             self.passage = None;
-            if !self.visited[self.harbor] {
+            let first = !self.visited[self.harbor];
+            if first {
                 self.visited[self.harbor] = true;
                 self.score += 75;
             }
             self.page = 2;
             self.row = 0;
-            self.tell(format!(
-                "Docked at {}. Open Charters [3] to deliver; Market [2] to resupply.",
-                PORTS[self.harbor].name
-            ));
+            self.events.push(Event::Docked {
+                port: self.harbor,
+                first,
+            });
             return Cue::Good;
         }
         cue
@@ -542,10 +643,10 @@ impl Game {
     /// Advance one fixed tick, accepting only available trades and legal commands.
     /// Terminal states are immutable. Input fields are consumed only by the caller's tick.
     pub fn tick(&mut self, input: &Input) -> Cue {
+        self.events.clear();
         if self.result != Outcome::Playing {
             return Cue::None;
         }
-        self.notice_ticks = self.notice_ticks.saturating_sub(1);
         if self.passage.is_some() {
             return self.sail(input);
         }
@@ -570,12 +671,15 @@ impl Game {
                 {
                     self.selected_port = port;
                     self.page = 0;
+                    self.events.push(Event::Chose(port));
                 }
             } else if (658.0..926.0).contains(&p.x) {
                 if (478.0..509.0).contains(&p.y) {
                     primary = true;
                 } else if (514.0..545.0).contains(&p.y) {
-                    secondary = true;
+                    // On the chart the X button is a two-sided route switch:
+                    // clicking the side already chosen changes nothing.
+                    secondary = self.page != 0 || (p.x < ROUTE_SPLIT) != self.sheltered;
                 } else {
                     let (top, height, count) = match self.page {
                         0 => (194., 30., 6),
@@ -587,6 +691,7 @@ impl Game {
                         self.row = ((p.y - top) / height) as usize;
                         if self.page == 0 {
                             self.selected_port = self.row;
+                            self.events.push(Event::Chose(self.row));
                         }
                     }
                 }
@@ -603,6 +708,7 @@ impl Game {
         if direction != 0 {
             if self.page == 0 {
                 self.selected_port = (self.selected_port as i32 + direction).rem_euclid(6) as usize;
+                self.events.push(Event::Chose(self.selected_port));
             } else {
                 self.row = (self.row as i32 + direction).rem_euclid(count) as usize;
             }
@@ -611,10 +717,8 @@ impl Game {
             0 if primary => self.depart(),
             0 if secondary => {
                 self.sheltered = !self.sheltered;
-                self.tell(if self.sheltered {
-                    "Sheltered route: one extra day, protected from squalls."
-                } else {
-                    "Open sea: quicker, but steer clear of storm rings. Space reefs sails."
+                self.events.push(Event::Route {
+                    sheltered: self.sheltered,
                 });
                 Cue::Action
             }
@@ -638,7 +742,7 @@ impl Game {
             }
             3 if primary => self.shipyard(),
             4 if primary => {
-                self.tell("A day passes in harbor. The debt deadline does not wait.");
+                self.events.push(Event::Waited);
                 self.advance_day(false)
             }
             _ => Cue::None,
@@ -649,7 +753,7 @@ impl Game {
             && self.cargo_total() == 0
             && self.result == Outcome::Playing
         {
-            return self.lose("With no food, cargo or coin, the crew disbanded. Restart to plan a solvent voyage.");
+            return self.lose(Loss::Broke);
         }
         cue
     }
@@ -853,13 +957,8 @@ mod tests {
             press(&mut game);
         }
         assert_eq!(game.result(), Outcome::Lost);
-        let before = (
-            game.day,
-            game.coins,
-            game.hull,
-            game.score,
-            game.notice.clone(),
-        );
+        assert_eq!(game.loss, Some(Loss::Season));
+        let before = (game.day, game.coins, game.hull, game.score, game.loss);
         for _ in 0..200 {
             game.tick(&Input {
                 primary: true,
@@ -868,13 +967,7 @@ mod tests {
             });
         }
         assert_eq!(
-            (
-                game.day,
-                game.coins,
-                game.hull,
-                game.score,
-                game.notice.clone()
-            ),
+            (game.day, game.coins, game.hull, game.score, game.loss),
             before
         );
         let reset = Game::new();
@@ -904,12 +997,12 @@ mod tests {
         assert_eq!(
             game.result(),
             Outcome::Won,
-            "day={} crowns={} charter={} food={} notice={}",
+            "day={} crowns={} charter={} food={} loss={:?}",
             game.day,
             game.coins,
             game.charter,
             game.provisions,
-            game.notice
+            game.loss
         );
         assert_eq!(game.charter, CHARTERS.len());
         assert!(game.visited.iter().all(|&value| value));
@@ -971,7 +1064,7 @@ mod tests {
         assert_eq!(game.result(), Outcome::Lost);
         assert_eq!(game.hull, 0);
         assert_eq!(game.provisions, 0);
-        assert!(game.loss.contains("hungry"));
+        assert_eq!(game.loss, Some(Loss::Starved));
     }
 
     #[test]
@@ -1046,6 +1139,56 @@ mod tests {
         });
         assert!(game.passage.unwrap().reefed);
         assert_eq!(game.passage.unwrap().traveled, 70);
+    }
+
+    #[test]
+    fn route_switch_clicks_pick_a_side_through_the_x_key_path() {
+        let mut game = Game::new();
+        key(&mut game, 1);
+        let click = |game: &mut Game, x: f32| {
+            game.tick(&Input {
+                click: true,
+                pointer: Vec2::new(x, 529.),
+                ..Input::default()
+            })
+        };
+        assert!(game.sheltered);
+        assert_eq!(click(&mut game, 720.), Cue::None, "already sheltered");
+        assert!(game.sheltered);
+        assert_eq!(click(&mut game, 860.), Cue::Action);
+        assert!(!game.sheltered);
+        assert_eq!(
+            game.events.iter().next(),
+            Some(Event::Route { sheltered: false })
+        );
+        assert_eq!(click(&mut game, 860.), Cue::None, "already open sea");
+        assert!(!game.sheltered);
+        assert_eq!(click(&mut game, 700.), Cue::Action);
+        assert!(game.sheltered);
+        // Other pages keep the plain secondary action.
+        key(&mut game, 3);
+        click(&mut game, 860.);
+        assert_eq!(game.page, 1);
+    }
+
+    #[test]
+    fn sail_plan_tiles_reef_and_unfurl_through_the_space_key_path() {
+        let mut game = Game::new();
+        key(&mut game, 1);
+        press(&mut game);
+        let click = |game: &mut Game, x: f32| {
+            game.tick(&Input {
+                click: true,
+                pointer: Vec2::new(x, 286.),
+                ..Input::default()
+            });
+            game.passage.unwrap().reefed
+        };
+        assert!(!click(&mut game, 720.), "full sail is already set");
+        assert!(click(&mut game, 860.));
+        assert_eq!(game.events.iter().next(), Some(Event::Reefed(true)));
+        assert!(click(&mut game, 860.), "already reefed");
+        assert!(!click(&mut game, 720.));
     }
 
     #[test]

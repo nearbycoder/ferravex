@@ -6,16 +6,6 @@ pub(crate) enum Role {
     Delivery,
     Outpost,
 }
-impl Role {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Depot => "Depot",
-            Self::Pickup => "Pickup",
-            Self::Delivery => "Deliver",
-            Self::Outpost => "Fuel",
-        }
-    }
-}
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Planet {
     pub name: &'static str,

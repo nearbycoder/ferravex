@@ -72,7 +72,7 @@ impl Layout {
         let top = if self.compact { 10. } else { 62. };
         UiRect {
             min: [left, top],
-            size: [if self.compact { 132. } else { 150. }, 44.],
+            size: [if self.compact { 160. } else { 168. }, 44.],
         }
     }
 

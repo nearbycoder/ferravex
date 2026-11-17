@@ -8,81 +8,84 @@ use ferravex_play::gameplay::trial::Medal;
 /// Medal targets in race seconds (penalties included): gold, silver, bronze.
 /// Gold sits just under Dusty, the demo bot's autoplay time (29.92s).
 pub(super) const MEDALS: [f32; 3] = [29.5, 32.5, 37.0];
+#[cfg(test)]
 pub(super) const DUSTY: f32 = 29.92;
 
+// Radio lines play during the race, so each is a callout of at most three
+// words; the longer jokes live on the pause and results cards.
 const START: [&str; 6] = [
-    "GOOD MORNING, SAND FANS. CONDITIONS: DRY.",
-    "THE CAMELS HAVE PLACED THEIR BETS",
-    "FORECAST: 100% CHANCE OF SAND",
-    "REMEMBER: THE GATES DO NOT MOVE. YOU DO.",
-    "DUSTY THE DEMO BOT SAYS HI. AND GOOD LUCK.",
-    "TODAY'S SPONSOR: SUNSCREEN",
+    "CONDITIONS: DRY.",
+    "CAMELS PLACED BETS",
+    "FORECAST: SAND.",
+    "GATES DON'T MOVE",
+    "DUSTY SAYS HI",
+    "SPONSOR: SUNSCREEN",
 ];
 
 const ROCKET: [&str; 4] = [
-    "ROCKET START! THE SAND DIDN'T SEE THAT COMING",
-    "WHAT A LAUNCH. SOMEBODY CHECK THE PAINT.",
-    "PERFECT JUMP. DUSTY IS TAKING NOTES.",
-    "AND THEY'RE OFF. LIKE, REALLY OFF.",
+    "SAND DIDN'T SEE",
+    "CHECK THE PAINT",
+    "DUSTY TAKES NOTES",
+    "REALLY OFF!",
 ];
 
 const EAGER: [&str; 4] = [
-    "EAGER! TAP THE GAS ON '1' FOR A ROCKET START",
-    "TOO SOON. THE ENGINE WAS STILL YAWNING.",
-    "PATIENCE, PILOT. PRESS ON THE '1'.",
-    "THE THROTTLE APPRECIATES THE ENTHUSIASM",
+    "GAS ON '1'!",
+    "ENGINE WAS YAWNING",
+    "PATIENCE, PILOT",
+    "SUCH ENTHUSIASM",
 ];
 
 const STREAK: [&str; 6] = [
-    "THREADING LIKE A TAILOR WITH A DEADLINE",
-    "THE GATES ARE BLUSHING",
-    "ONE MORE AND WE NAME A DUNE AFTER YOU",
-    "SURGICAL. THE PILLARS FEEL SEEN.",
-    "THAT'S NOT DRIVING, THAT'S EMBROIDERY",
-    "SOMEBODY GET THIS PILOT A NEEDLE",
+    "TAILOR ON DEADLINE",
+    "GATES ARE BLUSHING",
+    "NAME A DUNE!",
+    "SURGICAL.",
+    "PURE EMBROIDERY",
+    "GET A NEEDLE",
 ];
 
 const SCRAPE: [&str; 6] = [
-    "THAT ROCK FELT A BREEZE",
+    "ROCK FELT THAT",
     "PAINT? WHAT PAINT?",
-    "CLOSE ENOUGH TO READ THE ROCK'S DIARY",
-    "THE BOULDER FLINCHED",
+    "READ ITS DIARY",
+    "BOULDER FLINCHED",
     "SPICY LINE!",
-    "SCRAPE BONUS. YOUR MECHANIC IS CRYING.",
+    "MECHANIC IS CRYING",
 ];
 
 const IMPACT: [&str; 8] = [
-    "THE ROCK WAS THERE FIRST",
-    "SANDSTONE: 1, SKIMMER: 0",
-    "THAT'S ONE WAY TO STOP",
-    "THE PILLAR WOULD LIKE A WORD",
+    "ROCK WAS FIRST",
+    "SANDSTONE WINS",
+    "THAT STOPPED YOU",
+    "PILLAR IS UPSET",
     "BONK. RESPECTFULLY.",
-    "DID SOMEONE MOVE THAT? NO. NO THEY DID NOT.",
-    "THE ROCKS ARE UNIONIZED. THEY DON'T MOVE.",
-    "PHYSICS: STILL UNDEFEATED",
+    "IT DIDN'T MOVE",
+    "ROCKS ARE UNIONIZED",
+    "PHYSICS: UNDEFEATED",
 ];
 
 const STREAK_LOST: [&str; 4] = [
-    "STREAK SNAPPED. THE NEEDLE HAS BEEN DROPPED.",
-    "AND THE THREAD... HAS FRAYED",
-    "STREAK OVER. THE GATES EXHALE.",
-    "BACK TO ONE. IT BUILDS CHARACTER.",
+    "NEEDLE DROPPED",
+    "THE THREAD FRAYED",
+    "GATES EXHALE",
+    "BUILDS CHARACTER",
 ];
 
 const RECOVERY: [&str; 6] = [
-    "A PASSING CAMEL TOWED YOU BACK. +3s.",
-    "RECALCULATING ROUTE...",
-    "THE DESERT IS BIG. THE TRACK IS NOT.",
-    "SCENIC DETOUR COMPLETE. +3s.",
-    "WE FOUND YOU. YOU WERE NEAR A ROCK. AGAIN.",
-    "THE SAND RETURNS YOU, SLIGHTLY EMBARRASSED",
+    "CAMEL TOW. +3s",
+    "RECALCULATING...",
+    "TRACK IS SMALLER",
+    "SCENIC DETOUR. +3s",
+    "FOUND YOU. AGAIN.",
+    "SAND RETURNS YOU",
 ];
 
 const SAND: [&str; 4] = [
-    "THAT'S NOT TRACK, THAT'S JUST SAND",
-    "LOOSE SAND! BOOST IS ON A COFFEE BREAK",
-    "OFF-ROADING IS A LIFESTYLE, NOT A STRATEGY",
-    "THE DUNES WANT A HUG. SAY NO.",
+    "THAT'S JUST SAND",
+    "BOOST ON BREAK",
+    "NOT A STRATEGY",
+    "DUNES WANT HUGS",
 ];
 
 const PAUSE: [&str; 5] = [
@@ -163,21 +166,22 @@ pub(super) fn pause(seed: u32) -> &'static str {
 }
 
 /// Commentary for a completed lap. `lap` is 1-based; `delta` compares with the
-/// previous lap (negative is faster).
+/// previous lap (negative is faster). The banner already names the lap, so
+/// the radio only reacts.
 pub(super) fn lap(lap: u32, laps: u32, perfect: bool, delta: Option<f32>) -> &'static str {
     if perfect {
-        "MIRAGE LAP! ALL 14 THREADED. FULL TANK, ON THE HOUSE."
+        "FULL TANK, FREE!"
     } else if lap + 1 == laps {
         match delta {
-            Some(d) if d < 0. => "FINAL LAP! FASTER EVERY TIME. THE CAMELS ARE STANDING.",
-            _ => "FINAL LAP! THE CAMELS ARE ON THEIR FEET.",
+            Some(d) if d < 0. => "CAMELS ARE STANDING",
+            _ => "CAMELS ARE UP",
         }
     } else {
         match delta {
-            Some(d) if d < -0.5 => "THAT LAP WAS SPICY. DO IT AGAIN.",
-            Some(d) if d < 0. => "QUICKER! THE SAND IS LEARNING YOUR NAME.",
-            Some(_) => "A LITTLE SLOWER. THE VIEW WAS NICE, THOUGH.",
-            None => "LAP ONE IN THE BOOKS. THE SUN IS STILL HOT.",
+            Some(d) if d < -0.5 => "SPICY. AGAIN!",
+            Some(d) if d < 0. => "QUICKER!",
+            Some(_) => "NICE VIEW, THOUGH",
+            None => "SUN STILL HOT",
         }
     }
 }
@@ -206,38 +210,24 @@ pub(super) struct RunSummary {
 /// Silly, never mean; rarest feats first, then the general medal tiers.
 pub(super) fn rank(run: RunSummary) -> Rank {
     let (title, quip) = if run.perfect_laps >= 1 && run.threaded == run.gates {
-        (
-            "SAND SURGEON",
-            "FORTY-TWO GATES, FORTY-TWO BULLSEYES. SCALPEL, PLEASE.",
-        )
+        ("SAND SURGEON", "42 GATES. 42 BULLSEYES.")
     } else if run.perfect_laps >= 1 {
-        (
-            "MIRAGE MAKER",
-            "A WHOLE LAP OF PERFECTION. WAS IT EVEN REAL?",
-        )
+        ("MIRAGE MAKER", "A PERFECT LAP. WAS IT REAL?")
     } else if run.recoveries >= 3 {
         ("CAMEL'S FAVOURITE", "THE TOW SERVICE KNOWS YOU BY NAME")
     } else if run.impacts >= 8 {
-        ("ROCK ENTHUSIAST", "YOU VISITED EVERY BOULDER. PERSONALLY.")
+        ("ROCK ENTHUSIAST", "EVERY BOULDER, PERSONALLY")
     } else if run.scrapes >= 4 {
-        (
-            "PAINT SCRAPER",
-            "YOU AND THE ROCKS ARE ON A FIRST-NAME BASIS",
-        )
+        ("PAINT SCRAPER", "ON FIRST NAMES WITH ROCKS")
     } else if run.best_streak >= 14 {
         ("THREAD COUNT: HIGH", "LUXURY-GRADE GATE THREADING")
     } else {
         match run.medal {
-            Medal::Gold if run.impacts == 0 => {
-                ("DUNE DEMON", "CLEAN AND QUICK. DUSTY IS IN SHAMBLES.")
-            }
-            Medal::Gold => ("SANDSTORM", "FASTER THAN THE DEMO BOT. TELL EVERYONE."),
+            Medal::Gold if run.impacts == 0 => ("DUNE DEMON", "DUSTY IS IN SHAMBLES"),
+            Medal::Gold => ("SANDSTORM", "FASTER THAN DUSTY. TELL EVERYONE."),
             Medal::Silver => ("HOT WIND", "QUICK, DRY AND MOSTLY ON THE TRACK"),
             Medal::Bronze => ("TUMBLEWEED", "ROLLING ALONG AT A RESPECTABLE CLIP"),
-            Medal::Unranked if run.rocket => (
-                "ALL LAUNCH, NO LUNCH",
-                "WHAT A START. THE REST WAS A JOURNEY.",
-            ),
+            Medal::Unranked if run.rocket => ("ALL LAUNCH, NO LUNCH", "WHAT A START, THOUGH"),
             Medal::Unranked => ("SUNDAY DRIVER", "THE SCENIC ROUTE. THE CACTI WAVED."),
         }
     };
@@ -256,22 +246,13 @@ pub(super) fn medal_for(time: f32) -> Medal {
     }
 }
 
-pub(super) fn medal_name(medal: Medal) -> &'static str {
-    match medal {
-        Medal::Gold => "GOLD",
-        Medal::Silver => "SILVER",
-        Medal::Bronze => "BRONZE",
-        Medal::Unranked => "NO MEDAL",
-    }
-}
-
-/// The authored target above `medal`, as (name, seconds), if one exists.
-pub(super) fn next_medal(medal: Medal) -> Option<(&'static str, f32)> {
+/// The authored target above `medal`, as (medal, seconds), if one exists.
+pub(super) fn next_medal(medal: Medal) -> Option<(Medal, f32)> {
     match medal {
         Medal::Gold => None,
-        Medal::Silver => Some(("GOLD", MEDALS[0])),
-        Medal::Bronze => Some(("SILVER", MEDALS[1])),
-        Medal::Unranked => Some(("BRONZE", MEDALS[2])),
+        Medal::Silver => Some((Medal::Gold, MEDALS[0])),
+        Medal::Bronze => Some((Medal::Silver, MEDALS[1])),
+        Medal::Unranked => Some((Medal::Bronze, MEDALS[2])),
     }
 }
 
@@ -302,6 +283,28 @@ mod tests {
             for line in table {
                 // Toasts are single-line; keep them short enough to fit.
                 assert!(line.len() <= 56, "{line}");
+            }
+        }
+        // Radio lines play mid-race: callouts of at most three words.
+        for table in [
+            &START[..],
+            &ROCKET[..],
+            &EAGER[..],
+            &STREAK[..],
+            &SCRAPE[..],
+            &IMPACT[..],
+            &STREAK_LOST[..],
+            &RECOVERY[..],
+            &SAND[..],
+        ] {
+            for line in table {
+                assert!(line.split_whitespace().count() <= 3, "{line}");
+            }
+        }
+        for delta in [None, Some(-1.), Some(-0.1), Some(0.3)] {
+            for (lap_number, perfect) in [(1, false), (2, false), (2, true)] {
+                let line = lap(lap_number, 3, perfect, delta);
+                assert!(line.split_whitespace().count() <= 3, "{line}");
             }
         }
         assert!(!streak_milestone(2) && streak_milestone(3) && !streak_milestone(4));
@@ -378,7 +381,7 @@ mod tests {
         assert_eq!(medal_for(MEDALS[0]), Medal::Gold);
         assert_eq!(medal_for(DUSTY), Medal::Silver);
         assert_eq!(medal_for(MEDALS[2] + 0.01), Medal::Unranked);
-        assert_eq!(next_medal(Medal::Silver), Some(("GOLD", MEDALS[0])));
+        assert_eq!(next_medal(Medal::Silver), Some((Medal::Gold, MEDALS[0])));
         assert_eq!(next_medal(Medal::Gold), None);
         const { assert!(MEDALS[0] < DUSTY) };
     }

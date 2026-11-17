@@ -7,8 +7,10 @@ matching dock to restore a workbench; finish all twelve to revive the factory.
 
 The campaign contains twelve distinct authored 9-by-7 workbenches, seventeen
 parcels, seven instructions, two switch circuits, and thirty-six available stars.
-Its mint, copper and cream workshop art is drawn procedurally. Parcel numbers,
-gate letters, the robot's facing arrow, tape cursor and execution highlight make
+Its mint, copper and cream workshop art is drawn procedurally. The screen
+explains itself with pictures rather than sentences: instructions are icon
+tiles, the program is a strip of icon cells, and parcel numbers, gate letters,
+the robot's facing arrow, the tape cursor and the glowing execution head make
 the rules visible without relying only on color.
 
 ## Start playing
@@ -21,9 +23,10 @@ cargo run -p tin-automata --offline --locked
 
 Read the title screen's field guide with **H**, then start. In the first room,
 write **Forward, Grab, Forward, Forward, Forward, Forward, Drop**. Choose each
-instruction with Left/Right, press Space to write it, and press **1** to run.
-The robot starts facing east. A room ends immediately after its last delivery;
-Space then opens the next workbench with an empty tape.
+instruction with Left/Right and press Space to write it, or click its tile, then
+press **1** (or the play button) to run. The robot starts facing east. A room
+ends immediately after its last delivery; Space or the Next button then opens
+the next workbench with an empty tape.
 
 ## Controls
 
@@ -40,8 +43,9 @@ Space then opens the next workbench with an empty tape.
 | 4 | Clear the tape while editing; undo can recover it |
 | 5 | Open/close the current room's hint; opening it pauses execution |
 | Click a tape cell | Select that cell while editing |
-| Click the instruction bar | Cycle through available instructions |
-| Click a bottom button | Run, step, undo, clear or hint |
+| Click an instruction tile | Choose it and write it at the cursor, exactly like choosing it and pressing Space |
+| Click a button under the tape | Run/pause (1), step (2), stop (C), undo (3), clear (4) or hint (5) |
+| Click Next on a solved card | Open the next workbench, like Space |
 | H | Shared field guide |
 | P or Escape | Shared campaign pause |
 | R | Restart the entire campaign, including earned stars and current tape |
@@ -51,6 +55,36 @@ Closing a hint does not resume execution automatically; press **1** to resume.
 Editing commands are ignored while the robot runs or is paused. Use **C** to
 restore the board before editing. Holding a direction does not repeatedly change
 the tape: the editor consumes key presses.
+
+## Reading the screen
+
+- **Header:** twelve progress pips and the workbench's name; below them, one
+  chip per parcel showing the numbered parcel, an arrow and its matching dock
+  (ticked when delivered, the parcel lifted while carried), then a short goal.
+- **Instruction tiles:** the unlocked instructions as icon tiles with a
+  one-word caption; repeats stay locked (dim, with a padlock) until rooms 5
+  and 6. The chosen tile lifts and glows; hovering one previews it on the tape.
+- **Tape:** the room's budget as open cells (unavailable capacity shows as
+  faint rivets). A gold rule ending in a star marks the three-star par length.
+  While editing, the cursor cell breathes; an empty cursor cell shows a ghost of
+  what Space would write, and a small badge previews a replacement. While
+  running, executed cells dim and the current cell glows; repeat cells count
+  their played copies with pips.
+- **Readouts:** three stars forecast the medal the current program would earn
+  if it solved now (a bulb appears once a hint was used), then executed steps
+  (clock) and faults this room (warning sign).
+- **Buttons:** play/pause, step, stop, undo, clear and hint, each with its key
+  cap. The next useful button pulses: play once there is a program, stop (red)
+  after a fault. Hovering the hint blinks the star it would cost.
+- **Board feedback:** the robot glides and turns, leaves a dotted trail for the
+  current attempt, bursts dust as it moves and lunges at whatever blocked it.
+  Grabs, drops, deliveries and switches flash where they happen; a delivery
+  pops a tick, a switch sparkles its gate open. A fault marks the blocked tile
+  with a red cross (or a "!" over the robot), turns the failing tape cell red
+  and floats a one- or two-word reason such as "Wall" or "Wrong dock".
+- **Solved card:** one word for the medal, the stars landing, three checks
+  explaining them (length against par, faults, hint), steps run, the points
+  banked and the Next button.
 
 ## Instructions and factory rules
 
@@ -82,6 +116,11 @@ the robot, parcels, deliveries and both switches together while preserving the
 edited tape. A fault freezes execution and records one failed attempt; press
 **C** or **Space** to edit and try again. There is no campaign game-over limit.
 
+**5** opens the hint: the room's reference route appears on the board as gold
+chevrons marching from the start to the final dock, and the room is capped at
+two stars. The written route advice is published to status readers while the
+hint is open.
+
 Each room restricts the number of occupied tape cells. The editor cannot exceed
 that budget, and no tape can exceed 32 instructions. An attempt also stops at
 160 execution steps, so an invalid program cannot run indefinitely. Undo affects
@@ -111,7 +150,8 @@ undoing or clearing the tape. Stopping an experiment before it faults is free.
 
 Each completed room banks `500 + 500 * stars + max(100 - executed_steps, 0)`
 points once. Editing, failed actions and replaying a solved screen cannot farm
-score. The final screen reports restored workbenches, stars and total points.
+score. The final card shows restored workbenches (gear), stars, perfect rooms (crown),
+each room's medal and the total points.
 The shared host can retain completed-run records locally when available; an
 unfinished campaign, tape, and individual level selections are not saved.
 
@@ -131,7 +171,11 @@ can improve stars and the execution-step bonus.
 ## Implementation and validation
 
 `model.rs` contains the pure fixed-tick rules and bounded state, `content.rs`
-contains the authored rooms, and `view.rs` contains read-only rendering. Position
+contains the authored rooms, `layout.rs` holds the geometry shared by drawing
+and pointer hit-testing, and `view.rs` contains read-only rendering and effects.
+The model also keeps presentation-only memory that its rules never read: the
+events accepted by the latest update, the robot's previous pose for gliding,
+the attempt's trail and its fault. Position
 cells reuse `ferravex_play::navigation::Cell`. No external dependencies or assets
 are added. The shared arcade host owns timing, input edge retention, menus,
 letterboxing, audio cues and completed-run records.
@@ -145,13 +189,14 @@ headless callers. The model module includes an executable rustdoc example.
 cargo test -p tin-automata --offline --locked -j 2
 cargo clippy -p tin-automata --all-targets --offline --locked -j 2 -- -D warnings
 cargo run -p tin-automata --offline --locked -- --headless
-rustfmt --edition 2024 --check examples/tin-automata/src/lib.rs examples/tin-automata/src/model.rs examples/tin-automata/src/content.rs examples/tin-automata/src/view.rs examples/tin-automata/src/main.rs
+rustfmt --edition 2024 --check examples/tin-automata/src/*.rs
 ```
 
-Sixteen behavioral tests cover editing and undo, hard budgets, repeat expansion,
-turning, execution cadence, pause/step/stop, fault atomicity, parcel handling,
-switch reset, hazards, hints and medals, pointer controls, full campaign wins,
-and exact replay. The complete-campaign tests begin with `Game::new()` and enter
+Twenty-six behavioral tests cover editing and undo, hard budgets, repeat
+expansion, turning, execution cadence, pause/step/stop, fault atomicity, parcel
+handling, switch reset, hazards, hints and medals, pointer controls that mirror
+keys, the shared drawing/hit-test geometry, presentation events and effects,
+header progress and copy, the short guide, full campaign wins, and exact replay. The complete-campaign tests begin with `Game::new()` and enter
 every solution through ordinary editor inputs; they never inject tapes, room
 progress or victory state. Focused rule tests set up individual edge cases.
 The headless pilot likewise enters its reference programs through the same

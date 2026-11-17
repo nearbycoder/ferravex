@@ -824,6 +824,168 @@ pub fn fill_capsule(a: Vec2, b: Vec2, radius: f32, fill: impl Into<Fill>) {
     })
 }
 
+/// Most corners [`fill_polygon`] accepts; longer input draws nothing.
+pub const MAX_POLYGON_POINTS: usize = 64;
+
+/// Filled, anti-aliased convex polygon through `points` in either winding.
+///
+/// Every edge gets the same half-pixel fringe as the rounded shapes, so icons,
+/// arrows, stars (as triangles) and badges built from polygons sit smoothly
+/// beside circles and rounded rectangles. Very sharp corners are mitred to at
+/// most four times the fringe width. Concave or self-intersecting input is not
+/// rejected but fills as the fan from its centroid; split such outlines into
+/// convex pieces. Fewer than three distinct corners, more than
+/// [`MAX_POLYGON_POINTS`], zero area or non-finite input draw nothing.
+/// Emits at most 576 vertices.
+///
+/// ```
+/// use ferravex_render::{Color, vec2, shapes};
+/// // A play triangle and a hexagon badge.
+/// shapes::fill_polygon(&[vec2(20., 10.), vec2(44., 24.), vec2(20., 38.)],
+///     Color::from_hex(0xf7b553));
+/// let hex: Vec<_> = (0..6).map(|i| {
+///     let a = i as f32 * std::f32::consts::TAU / 6.;
+///     vec2(100. + 20. * a.cos(), 24. + 20. * a.sin())
+/// }).collect();
+/// shapes::fill_polygon(&hex, Color::from_hex(0x5bd5d8));
+/// ```
+pub fn fill_polygon(points: &[Vec2], fill: impl Into<Fill>) {
+    let fill = fill.into();
+    let n = points.len();
+    if !(3..=MAX_POLYGON_POINTS).contains(&n)
+        || !fill.is_finite()
+        || !points.iter().all(|p| p.is_finite())
+    {
+        return;
+    }
+    // Shoelace area decides the winding; outward normals follow from it.
+    let mut twice_area = 0.;
+    let mut centroid = Vec2::ZERO;
+    for i in 0..n {
+        let (a, b) = (points[i], points[(i + 1) % n]);
+        twice_area += a.x * b.y - b.x * a.y;
+        centroid += a;
+    }
+    centroid /= n as f32;
+    if !twice_area.is_finite() || twice_area.abs() < 1e-6 {
+        return;
+    }
+    let outward = if twice_area > 0. { -1. } else { 1. };
+    with_sink(|sink, px| {
+        let f = px * 0.5;
+        let mut inner = [Vec2::ZERO; MAX_POLYGON_POINTS];
+        let mut outer = [Vec2::ZERO; MAX_POLYGON_POINTS];
+        let mut colors = [Color::new(0., 0., 0., 0.); MAX_POLYGON_POINTS];
+        let mut clear = [Color::new(0., 0., 0., 0.); MAX_POLYGON_POINTS];
+        for i in 0..n {
+            let p = points[i];
+            let prev = points[(i + n - 1) % n];
+            let next = points[(i + 1) % n];
+            let edge_in = (p - prev).normalize_or_zero();
+            let edge_out = (next - p).normalize_or_zero();
+            // Perpendiculars pointing away from the interior.
+            let n_in = edge_in.perp() * outward;
+            let n_out = edge_out.perp() * outward;
+            let miter = (n_in + n_out).normalize_or(n_out);
+            let cos = miter.dot(n_out).abs().max(0.25);
+            let reach = f / cos;
+            inner[i] = p - miter * reach;
+            outer[i] = p + miter * reach;
+            let c = fill.at(p);
+            colors[i] = c;
+            clear[i] = fade(c, 0.);
+        }
+        let hub = fill.at(centroid);
+        sink.reserve(n * 9);
+        let mut prev = n - 1;
+        for i in 0..n {
+            sink.tri(
+                centroid,
+                hub,
+                inner[prev],
+                colors[prev],
+                inner[i],
+                colors[i],
+            );
+            sink.quad(
+                [inner[prev], inner[i], outer[i], outer[prev]],
+                [colors[prev], colors[i], clear[i], clear[prev]],
+            );
+            prev = i;
+        }
+    })
+}
+
+/// Filled, anti-aliased triangle; a convenience for [`fill_polygon`].
+///
+/// ```
+/// use ferravex_render::{Color, vec2, shapes};
+/// shapes::fill_triangle(vec2(10., 40.), vec2(30., 6.), vec2(50., 40.), Color::from_hex(0xe5484d));
+/// ```
+pub fn fill_triangle(a: Vec2, b: Vec2, c: Vec2, fill: impl Into<Fill>) {
+    fill_polygon(&[a, b, c], fill)
+}
+
+/// Filled, anti-aliased pie slice of `radius` from `start` sweeping `sweep`
+/// radians (positive is clockwise on screen with Y down), for cooldown dials,
+/// timers and progress pies. A full turn or more fills the circle; a zero or
+/// non-finite sweep draws nothing. Emits at most 588 vertices.
+///
+/// ```
+/// use std::f32::consts::{FRAC_PI_2, TAU};
+/// use ferravex_render::{Color, vec2, shapes};
+/// // Two thirds of a timer, starting at 12 o'clock.
+/// shapes::fill_sector(vec2(40., 40.), 16., -FRAC_PI_2, TAU * 2. / 3., Color::from_hex(0xf7b553));
+/// ```
+pub fn fill_sector(center: Vec2, radius: f32, start: f32, sweep: f32, fill: impl Into<Fill>) {
+    let fill = fill.into();
+    if !(center.is_finite()
+        && radius.is_finite()
+        && radius > 0.
+        && start.is_finite()
+        && sweep.is_finite()
+        && fill.is_finite())
+        || sweep == 0.
+    {
+        return;
+    }
+    if sweep.abs() >= TAU {
+        return fill_circle(center, radius, fill);
+    }
+    with_sink(|sink, px| {
+        let f = px * 0.5;
+        let steps = ((quarter_segments(radius / px) * 4) as f32 * sweep.abs() / TAU)
+            .ceil()
+            .clamp(1., 64.) as usize;
+        let hub = fill.at(center);
+        let point = |i: usize, r: f32| {
+            let a = start + sweep * i as f32 / steps as f32;
+            center + vec2(a.cos(), a.sin()) * r
+        };
+        sink.reserve(steps * 9 + 12);
+        let inner_r = (radius - f).max(0.);
+        for i in 0..steps {
+            let (a0, a1) = (point(i, inner_r), point(i + 1, inner_r));
+            let (b0, b1) = (point(i, radius + f), point(i + 1, radius + f));
+            let (c0, c1) = (fill.at(a0), fill.at(a1));
+            sink.tri(center, hub, a0, c0, a1, c1);
+            sink.quad([a0, a1, b1, b0], [c0, c1, fade(c1, 0.), fade(c0, 0.)]);
+        }
+        // Soften both straight edges with a fringe on their outer side.
+        let sign = sweep.signum();
+        for (i, side) in [(0usize, -1.), (steps, 1.)] {
+            let tip = point(i, inner_r);
+            let dir = (tip - center).normalize_or_zero();
+            let out = dir.perp() * side * sign * f;
+            let (ch, ct) = (hub, fill.at(tip));
+            sink.quad(
+                [center, tip, tip + out, center + out],
+                [ch, ct, fade(ct, 0.), fade(ch, 0.)],
+            );
+        }
+    })
+}
+
 /// Soft shadow under a rounded rectangle. The falloff follows a smoothstep
 /// across `blur`, approximating a Gaussian with four feathered rings.
 /// Emits at most 1,836 vertices.
@@ -924,6 +1086,28 @@ impl Strokes<'_, '_> {
             self.section(p, n, 1.);
         });
     }
+    /// A round cap: like [`Self::sweep`], but each section keeps only its
+    /// `-normal` half, which faces away from the stroke body. The cap is then
+    /// exactly a half disc beyond the end point, so translucent strokes do not
+    /// double-cover the body under the cap. Degenerate halves keep the vertex
+    /// count of a full sweep.
+    fn sweep_cap(&mut self, p: Vec2, from: Vec2, angle: f32, steps: usize) {
+        turn(0., angle, steps, |_, u| {
+            let n = vec2(from.x * u.x - from.y * u.y, from.x * u.y + from.y * u.x);
+            let outer = n * (self.core + self.fringe);
+            let inner = n * (self.core - self.fringe).max(0.);
+            let next = Section(p, [p, p, p - inner, p - outer]);
+            if let Some(Section(_, prev)) = self.prev {
+                let clear = fade(self.color, 0.);
+                let solid = fade(self.color, self.alpha);
+                let q = next.1;
+                self.sink
+                    .quad([prev[2], q[2], q[3], prev[3]], [solid, solid, clear, clear]);
+                self.sink.tri(p, solid, q[2], solid, prev[2], solid);
+            }
+            self.prev = Some(next);
+        });
+    }
     fn cap(&mut self, p: Vec2, dir: Vec2, cap: Cap, start: bool, steps: usize) {
         let n = dir.perp();
         match cap {
@@ -938,13 +1122,13 @@ impl Strokes<'_, '_> {
             }
             Cap::Round => {
                 if start {
-                    self.sweep(p, -n, PI, steps * 2);
+                    self.sweep_cap(p, -n, PI, steps * 2);
                     self.break_strip();
                     self.section(p, n, 1.);
                 } else {
                     self.section(p, n, 1.);
                     self.break_strip();
-                    self.sweep(p, n, PI, steps * 2);
+                    self.sweep_cap(p, n, PI, steps * 2);
                 }
             }
         }
@@ -1321,6 +1505,116 @@ pub(crate) mod tests {
         }
         // Fringe vertices are transparent; core vertices are opaque.
         assert!(v.iter().all(|v| v[7] == 0. || v[7] == 1.));
+    }
+
+    #[test]
+    fn round_caps_cover_only_the_half_disc_beyond_each_end() {
+        // A 100-unit line of width 20 with round caps: its opaque core is a
+        // rectangle plus exactly one disc (two half discs), never two discs.
+        let area = |v: &[[f32; 8]]| -> f32 {
+            v.chunks(3)
+                .filter(|t| t.iter().all(|v| v[7] > 0.999))
+                .map(|t| {
+                    let [a, b, c] = [t[0], t[1], t[2]].map(|v| screen(&v, 400., 300.));
+                    ((b - a).perp_dot(c - a) * 0.5).abs()
+                })
+                .sum()
+        };
+        for draw in [
+            Box::new(|| {
+                polyline(
+                    &[vec2(100., 150.), vec2(200., 150.)],
+                    Stroke::new(20., Color::new(1., 1., 1., 1.)).cap(Cap::Round),
+                )
+            }) as Box<dyn Fn()>,
+            Box::new(|| {
+                stroke_arc(
+                    vec2(200., 150.),
+                    80.,
+                    0.,
+                    100. / 80.,
+                    Stroke::new(20., Color::new(1., 1., 1., 1.)).cap(Cap::Round),
+                )
+            }),
+        ] {
+            let v = capture(400, 300, draw);
+            let core = 9.5_f32; // half width minus the half-pixel fringe
+            let expected = 100. * 2. * core + PI * core * core;
+            let actual = area(&v);
+            assert!(
+                (actual - expected).abs() < expected * 0.04,
+                "core area {actual} vs {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn polygons_and_sectors_are_smooth_bounded_and_reject_bad_input() {
+        let white = Color::new(1., 1., 1., 1.);
+        // A square polygon matches the rounded-rect edge convention exactly.
+        for winding in [
+            [
+                vec2(10., 20.),
+                vec2(110., 20.),
+                vec2(110., 70.),
+                vec2(10., 70.),
+            ],
+            [
+                vec2(10., 70.),
+                vec2(110., 70.),
+                vec2(110., 20.),
+                vec2(10., 20.),
+            ],
+        ] {
+            let v = capture(400, 300, || fill_polygon(&winding, white));
+            assert!(v.len() <= 9 * 4 && v.len() % 3 == 0, "{}", v.len());
+            let outer = bounds(&v, 400., 300., false);
+            let core = bounds(&v, 400., 300., true);
+            for (o, e) in outer.iter().zip([9.5, 19.5, 110.5, 70.5]) {
+                assert!((o - e).abs() < 1e-3, "{outer:?}");
+            }
+            for (c, e) in core.iter().zip([10.5, 20.5, 109.5, 69.5]) {
+                assert!((c - e).abs() < 1e-3, "{core:?}");
+            }
+        }
+        let many: Vec<_> = (0..MAX_POLYGON_POINTS)
+            .map(|i| {
+                let a = i as f32 * TAU / MAX_POLYGON_POINTS as f32;
+                vec2(300. + 200. * a.cos(), 300. + 200. * a.sin())
+            })
+            .collect();
+        let v = capture(1280, 800, || fill_polygon(&many, white));
+        assert_eq!(v.len(), 576);
+        assert!(v.iter().flatten().all(|x| x.is_finite()));
+        let sector = capture(1280, 800, || {
+            fill_sector(vec2(400., 400.), 390., -FRAC_PI_2, 6.2, white)
+        });
+        assert!(
+            !sector.is_empty() && sector.len() <= 588,
+            "{}",
+            sector.len()
+        );
+        assert!(sector.iter().flatten().all(|x| x.is_finite()));
+        // A quarter sector stays inside its quadrant (plus the fringe).
+        let quarter = capture(400, 300, || {
+            fill_sector(vec2(100., 100.), 40., 0., FRAC_PI_2, white)
+        });
+        let b = bounds(&quarter, 400., 300., false);
+        assert!(
+            b[0] >= 99. && b[1] >= 99. && b[2] <= 141. && b[3] <= 141.,
+            "{b:?}"
+        );
+        let rejected = capture(400, 300, || {
+            fill_polygon(&[vec2(0., 0.), vec2(10., 0.)], white);
+            fill_polygon(&[vec2(0., 0.), vec2(10., 0.), vec2(20., 0.)], white);
+            fill_polygon(&[vec2(0., 0.), vec2(f32::NAN, 0.), vec2(0., 9.)], white);
+            fill_polygon(&many.repeat(2), white);
+            fill_triangle(vec2(0., 0.), vec2(5., 5.), vec2(10., 10.), white);
+            fill_sector(vec2(0., 0.), 10., 0., 0., white);
+            fill_sector(vec2(0., 0.), -1., 0., 1., white);
+            fill_sector(vec2(0., 0.), 10., 0., f32::NAN, white);
+        });
+        assert!(rejected.is_empty(), "{}", rejected.len());
     }
 
     #[test]

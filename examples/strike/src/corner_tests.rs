@@ -242,7 +242,10 @@ fn menus_cards_and_results_keep_the_fullscreen_menu_corner_clear() {
     let results = cards::Results::new(&board, Some(40), true);
     let mut rows: [String; 3] = Default::default();
     for (w, h) in SIZES {
-        let bad = offenders(w, h, |ui| cards::results(ui, &results));
+        let bad = offenders(w, h, |ui| {
+            cards::results(ui, &results);
+            cards::results_glyphs(&results);
+        });
         assert!(bad.is_empty(), "{w}x{h} results: {bad:#?}");
         for (mode, played) in [
             (Mode::Practice, false),
@@ -259,7 +262,8 @@ fn menus_cards_and_results_keep_the_fullscreen_menu_corner_clear() {
                     } else {
                         cards::briefing_rows(Some((40, 12)), &input, &mut rows);
                     }
-                    cards::info(ui, left, bottom, &rows, cards::PAUSE_COLORS);
+                    cards::info(ui, left, bottom, &rows, cards::PAUSE_STYLE);
+                    cards::info_glyphs(left, bottom, &rows, cards::PAUSE_STYLE);
                 });
                 assert!(bad.is_empty(), "{w}x{h} {mode:?} menu: {bad:#?}");
             }

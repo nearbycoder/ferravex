@@ -19,13 +19,19 @@ change power, Space to putt, P/Escape to pause, C for the scorecard, and R to re
 to the previous safe lie for one penalty stroke. Game menu → Controls (or F2) shows saved bindings and supports keyboard/controller
 remapping. In fullscreen, Shift+Tab reaches the game menu.
 
-The score chip shows the hole, par, strokes and a colored round-to-par badge;
-tap it for the full card. Each hole opens with a short title card (name, par,
-the hole's read and your best score there) that fades as soon as you putt. The
-aim line grows and warms from mint to copper with power and ends in a target
-ring; the putter pulls back further for harder shots. A labelled power meter
-and five shot controls sit below the course, with a control hint that fades
-after your first three putts. Fullscreen fills the viewport with the app,
+The HUD speaks in marks rather than words: a flag is par, the ball is strokes,
+pips are holes, a trophy is a personal best. The score chip shows the hole name
+over twelve hole pips (played holes in their result color, the current hole
+glowing), a flag with par, a ball with your strokes (copper once over par) and
+a tinted round-to-par badge that bumps when it changes; tap it for the full
+card. Each hole opens with a title card (its number on a copper tee sign, its
+name, and chips for par, water with its +1, sand, the raised green, moving
+copper and your best there) that fades as soon as you putt. The aim line grows
+and warms from mint to copper with power and ends in a target ring; the putter
+pulls back further for harder shots. A bolt-marked power meter, ticked at this
+hole's previous putt, and five shot controls sit below the course. Until your
+third putt, wide screens show the keys as caps beside their marks and narrow
+screens show a hand dragging from the ball to the target. Fullscreen fills the viewport with the app,
 without the website toolbar or a navigation rail. The course projection and
 pointer mapping use the same reserved scene region.
 
@@ -34,12 +40,14 @@ pointer mapping use the same reserved scene region.
 Every celebration comes from an accepted rules event:
 
 - **Every hole gets a name and a quip**: hole in one, eagle, birdie, par,
-  bogey, double, triple, then a cheeky "+4 AND COUNTING". Quips rotate and
-  never repeat back to back.
+  bogey, double, triple, then a cheeky "+4 AND COUNTING". The name flies alone
+  as the headline; the one-line quip waits on the between-hole sheet. Quips
+  rotate and never repeat back to back, and every callout during play is three
+  words at most.
 - **Hole in one**: confetti fountains from the cup, a ring shockwave, a short
   screen kick, a soft gold flash and a big headline.
 - **The cup drop**: the ball sinks into the cup and the flag waves; birdies
-  and better throw confetti, pars a polite puff.
+  and better throw four-color confetti and rings, pars a polite puff.
 - **So close**: a putt that rattles over the cup too fast gets a lip-out
   callout; a ball that stops within a putter's length hears about it too.
 - **Bank and trick shots**: a holed putt that kissed one or two walls is a bank
@@ -48,14 +56,18 @@ Every celebration comes from an accepted rules event:
 - **Secret**: let a moving copper barrier help a putt drop. The first time per
   round it is announced; the results card counts how many you found.
 - Splashes, sand, hard rail hits ("CLANG!" on copper), streaks of par or
-  better ("ON A ROLL ×2") and returning the ball each have their own callout.
+  better ("ON A ROLL ×2") and returning the ball each have their own callout;
+  a penalty also rises as a copper "+1".
 
 Between holes, a sheet slides up while the course re-fits above it, so the cup
-drop stays visible. It shows the score name and quip, trick/assist/streak tags,
-whether you set a new hole best, a twelve-cell scorecard strip colored by result
-and NEXT HOLE. The round ends on a results card with a rank title (from
-"Duck Pond Patron" to "Copper Deity"), your total and to-par, a personal-best
-comparison, the strokes to the next title and round stats.
+drop stays visible. It shows the score name and quip, strokes and par, tag
+pills (bank or trick shot, the copper assist, a flame streak, a trophy for a
+hole best), a twelve-cell strip in scorecard notation (circles under par,
+squares over, a gold medal for an ace) and NEXT HOLE. The scorecard uses the
+same notation. The round ends on a results card with a rank title (from
+"Duck Pond Patron" to "Copper Deity"), your total beside its to-par badge, a
+personal-best comparison, the next title and the strokes it needs, and round
+stats as mark-and-number tiles.
 
 Reduced motion (shared player preference) removes particles, rings, the
 rolling trail, shake, squash/stretch, the flag wave and every bounce or slide;
@@ -129,7 +141,7 @@ There are no exported game-state mutation or test-win functions.
 
 Native debug builds read optional screenshot hooks (`GOLF_WINDOW=390x700`,
 `GOLF_HOLE=9`, `GOLF_SHOT=DEG,POWER`, `GOLF_SKIP_WELCOME`, `GOLF_PAUSE_AT`,
-`GOLF_CARD_AT`, `GOLF_TURBO`, `GOLF_FOCUS`, `GOLF_FAKE_BEST`,
+`GOLF_CARD_AT`, `GOLF_PRACTICE_AT`, `GOLF_TURBO`, `GOLF_FOCUS`, `GOLF_FAKE_BEST`,
 `GOLF_PLAYER_CARD`); see `src/capture.rs`. Release and Wasm builds ignore them.
 
 ## Verify

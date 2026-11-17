@@ -67,11 +67,11 @@ pub struct Ring {
     pub color: Color,
 }
 
-/// A full-width headline for rare moments: aces, splashes, the hidden trick.
+/// A full-width headline for a finished hole: the score name alone, no
+/// subtitle (the between-hole sheet carries the one-line quip).
 #[derive(Clone, Debug)]
 pub struct Banner {
     pub head: String,
-    pub sub: String,
     pub color: Color,
     pub age: f32,
     pub life: f32,
@@ -358,23 +358,16 @@ impl Juice {
     }
 
     /// A callout stacked `row` text lines above an anchor shared with others.
-    fn pop_row(&mut self, at: Vec3, text: String, color: Color, size: f32, row: u8) {
-        let slot = self.pop_slot(at, text, color, size, 1.8);
+    fn pop_row(&mut self, at: Vec3, text: String, color: Color, size: f32, row: u8, life: f32) {
+        let slot = self.pop_slot(at, text, color, size, life);
         if let Some(pop) = &mut self.pops[slot] {
             pop.row = row;
         }
     }
 
-    pub fn banner(
-        &mut self,
-        head: impl Into<String>,
-        sub: impl Into<String>,
-        color: Color,
-        life: f32,
-    ) {
+    pub fn banner(&mut self, head: impl Into<String>, color: Color, life: f32) {
         self.banner = Some(Banner {
             head: head.into(),
-            sub: sub.into(),
             color,
             age: 0.,
             life,
@@ -490,14 +483,10 @@ impl Juice {
         self.ring(ball, 0.9, 0.6, WATER);
         self.ring(ball, 0.5, 0.45, PAPER);
         self.kick(0.32);
-        self.pop(vec3(ball.x, 0.5, ball.y), "SPLASH! +1", WATER, 22., 1.6);
-        self.pop(
-            vec3(ball.x, 1.05, ball.y),
-            quips::water(count),
-            PAPER,
-            14.,
-            1.6,
-        );
+        // The penalty as a number, the joke as one short word or two.
+        let at = vec3(ball.x, 0.5, ball.y);
+        self.pop_row(at, quips::water(count).into(), WATER, 22., 1, 1.6);
+        self.pop_row(at, "+1".into(), CLAY, 22., 0, 1.6);
     }
 
     pub fn lip_out(&mut self, cup: Vec2, count: u32) {
@@ -524,13 +513,10 @@ impl Juice {
 
     pub fn returned(&mut self, ball: Vec2, count: u32) {
         self.ring(ball, 0.5, 0.35, PAPER);
-        self.pop(
-            vec3(ball.x, 0.5, ball.y),
-            quips::returned(count),
-            PAPER,
-            14.,
-            1.1,
-        );
+        self.ring(ball, 0.9, 0.5, CLAY);
+        let at = vec3(ball.x, 0.5, ball.y);
+        self.pop_row(at, quips::returned(count).into(), PAPER, 15., 1, 1.1);
+        self.pop_row(at, "+1".into(), CLAY, 18., 0, 1.1);
     }
 
     /// Sample the rolling ball every other accepted tick for the trail.
@@ -558,7 +544,6 @@ impl Juice {
         // Every score name gets the headline first; the sheet takes it after.
         self.banner(
             outcome.name.headline(),
-            quips::hole(outcome),
             tone_color(tone),
             HANDOFF + HANDOFF_FADE + 0.3,
         );
@@ -599,22 +584,24 @@ impl Juice {
                 }
             }
             Tone::Under => {
-                for color in [MINT, GOLD] {
+                // Confetti: four colors fanning out of the cup.
+                for (color, dx) in [(MINT, -0.25), (GOLD, 0.25), (PAPER, 0.), (CLAY, 0.)] {
                     self.emit(
                         burst(
                             color,
                             color,
-                            vec3(0., 5., 0.),
-                            vec3(2.2, 1.3, 2.2),
+                            vec3(dx * 3., 5.4, 0.),
+                            vec3(2.4, 1.4, 2.4),
                             GRAVITY,
-                            1.2,
+                            1.3,
                             0.13,
                         ),
                         base,
-                        20,
+                        12,
                     );
                 }
                 self.ring(cup, 1.3, 0.6, MINT);
+                self.ring(cup, 2., 0.85, GOLD);
                 self.kick(0.35);
             }
             Tone::Even => {
@@ -661,15 +648,15 @@ impl Juice {
             } else {
                 line.to_owned()
             };
-            self.pop_row(above, text, GOLD, 16., row);
+            self.pop_row(above, text, GOLD, 16., row, 1.8);
             row += 1;
         }
         if outcome.streak >= 2 {
-            self.pop_row(above, quips::streak(outcome.streak), MINT, 15., row);
+            self.pop_row(above, quips::streak(outcome.streak), MINT, 15., row, 1.8);
             row += 1;
         }
         if outcome.assist_found {
-            self.pop_row(above, "SECRET: COPPER ASSIST!".into(), GOLD, 18., row);
+            self.pop_row(above, "SECRET ASSIST!".into(), GOLD, 18., row, 1.8);
         }
     }
 
@@ -844,7 +831,7 @@ mod tests {
         let frozen = (juice.time, juice.particles.len());
         juice.advance(0.);
         assert_eq!((juice.time, juice.particles.len()), frozen);
-        juice.banner("A", "B", PAPER, 1.);
+        juice.banner("A", PAPER, 1.);
         juice.reset();
         assert!(juice.banner.is_none() && juice.particles.is_empty());
     }
@@ -859,7 +846,6 @@ mod tests {
             let banner = juice.banner.as_ref().expect("score headline");
             assert!(banner.score);
             assert_eq!(banner.head, outcome.name.headline());
-            assert_eq!(banner.sub, quips::hole(&outcome));
             assert_eq!(juice.handoff(), 0., "the headline owns the moment");
             assert!(
                 juice.pops.iter().flatten().all(|p| p.text != banner.head),
@@ -880,8 +866,29 @@ mod tests {
             assert_eq!(juice.handoff(), 1.);
         }
         let mut juice = Juice::new();
-        juice.banner("A", "B", PAPER, 2.);
+        juice.banner("A", PAPER, 2.);
         assert_eq!(juice.handoff(), 1., "other banners never hide the sheet");
+    }
+
+    #[test]
+    fn penalties_rise_as_plus_one_beside_a_short_callout() {
+        for penalty in [Juice::water as fn(&mut Juice, Vec2, u32), Juice::returned] {
+            for count in 0..8 {
+                let mut juice = Juice::new();
+                penalty(&mut juice, vec2(9., 2.), count);
+                let texts: Vec<&str> = juice
+                    .pops
+                    .iter()
+                    .flatten()
+                    .map(|p| p.text.as_str())
+                    .collect();
+                assert_eq!(texts.len(), 2, "{texts:?}");
+                assert!(texts.contains(&"+1"), "the stroke penalty is a number");
+                assert!(texts.iter().all(|t| t.split(' ').count() <= 3), "{texts:?}");
+                let rows: Vec<u8> = juice.pops.iter().flatten().map(|p| p.row).collect();
+                assert_ne!(rows[0], rows[1], "stacked, never overlapping");
+            }
+        }
     }
 
     #[test]

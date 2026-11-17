@@ -40,81 +40,41 @@ impl std::fmt::Display for Who {
     }
 }
 
-/// Lines a bot says after fragging you.
+/// Lines a bot says after fragging you (in play: three words at most).
 const GLOAT: [[&str; 3]; 5] = [
-    [
-        "NOTHING PERSONAL. JUST FREIGHT.",
-        "SIGNED, SEALED, DELIVERED.",
-        "THAT'S A BOB-SHOT.",
-    ],
-    [
-        "BEEP BEEP. BACKING OVER YOU.",
-        "LIFTED AND SHIFTED.",
-        "FORKS UP, YOU DOWN.",
-    ],
-    [
-        "SKRAAA! (THAT MEANS GG)",
-        "MINE. MINE. MINE.",
-        "I'LL BE TAKING THOSE CHIPS.",
-    ],
-    [
-        "SMALL BOAT. BIG AIM.",
-        "TOWED YOU RIGHT BACK TO SPAWN.",
-        "TOOT TOOT, FRIEND.",
-    ],
-    [
-        "I'M HELD TOGETHER BY PAINT AND SPITE.",
-        "CORRODED BUT NOT DEFEATED.",
-        "OXIDIZE THIS.",
-    ],
+    ["JUST FREIGHT.", "SIGNED. SEALED.", "A BOB-SHOT!"],
+    ["BEEP BEEP.", "LIFTED. SHIFTED.", "FORKS UP!"],
+    ["SKRAAA! GG!", "MINE. MINE.", "CHIPS ARE MINE."],
+    ["BIG AIM.", "TOWED HOME.", "TOOT TOOT!"],
+    ["PAINT AND SPITE.", "OXIDIZE THIS.", "STILL RUSTY."],
 ];
 
 /// Lines a bot says as you frag it.
 const LAST_WORDS: [[&str; 3]; 5] = [
-    [
-        "I WAS ON MY BREAK!",
-        "TELL THE BARNACLES I LOVED THEM",
-        "UNION'S HEARING ABOUT THIS",
-    ],
-    [
-        "MY FORKS! MY BEAUTIFUL FORKS!",
-        "I DIDN'T EVEN LIFT ANYTHING",
-        "PARKING BRAKE... WAS... ON",
-    ],
-    [
-        "SKRAW?!",
-        "THE SEA... TAKES ME... BACK",
-        "NOT THE FEATHERS!",
-    ],
-    [
-        "I'VE BEEN SCUTTLED!",
-        "ABANDON SHIP! ABANDON ME!",
-        "TOOT... TOOT... TOO...",
-    ],
-    [
-        "FINALLY, SOME REST",
-        "I'LL BE BACK. SLIGHTLY RUSTIER.",
-        "THAT'S GONNA FLAKE",
-    ],
+    ["MY BREAK!", "TELL THE BARNACLES", "UNION!"],
+    ["MY FORKS!", "PARKING BRAKE...", "LIFT... THIS..."],
+    ["SKRAW?!", "THE SEA... CALLS", "NOT THE FEATHERS!"],
+    ["SCUTTLED!", "ABANDON ME!", "TOOT... TOO..."],
+    ["FINALLY, REST", "RUSTIER SOON.", "GONNA FLAKE"],
 ];
 
 /// Lines for when the crew frags itself.
 const OOPS: [&str; 5] = [
-    "SORRY! SORRY! WRONG HARD HAT!",
-    "THAT WAS... A TRAINING EXERCISE",
-    "HR WILL HEAR ABOUT THIS",
-    "FRIENDLY FIRE IS STILL FIRE",
-    "IN MY DEFENCE, YOU LOOK LIKE HIM",
+    "WRONG HARD HAT!",
+    "TRAINING EXERCISE!",
+    "HR INCOMING",
+    "FRIENDLY FIRE!",
+    "LOOKED LIKE HIM",
 ];
 
 /// Encouragement on the elimination panel.
 const RETRY: [&str; 6] = [
-    "SHAKE IT OFF. RESPAWN IS FREE.",
-    "THE CONTAINERS BELIEVE IN YOU",
-    "PRO TIP: AIM AT THE HEADS",
-    "THEY GOT LUCKY. PROBABLY.",
-    "NEW LIFE, SAME RIFLE",
-    "COVER EXISTS. JUST SAYING.",
+    "SHAKE IT OFF.",
+    "CONTAINERS BELIEVE.",
+    "AIM HIGHER.",
+    "LUCKY SHOT.",
+    "SAME RIFLE. AGAIN.",
+    "COVER EXISTS.",
 ];
 
 const PAUSE: [&str; 5] = [
@@ -169,14 +129,15 @@ pub(super) fn multi_kill(count: u8) -> Option<&'static str> {
     }
 }
 
-/// Kills without dying. Only milestones get a banner.
-pub(super) fn streak(count: u16) -> Option<(&'static str, &'static str)> {
+/// Kills without dying. Only milestones get a banner (the banner shows the
+/// count as a flame and a number, so no subtitle is needed).
+pub(super) fn streak(count: u16) -> Option<&'static str> {
     match count {
-        3 => Some(("HEATING UP", "3 IN A ROW")),
-        5 => Some(("FREIGHT TRAIN", "5 IN A ROW. CHOO CHOO.")),
-        7 => Some(("UNSTOPPABLE CARGO", "7 IN A ROW")),
-        10 => Some(("KRAKEN MODE", "10 IN A ROW. THE SEA FEARS YOU.")),
-        15 => Some(("LEGEND OF THE DOCKS", "15 IN A ROW. GO OUTSIDE.")),
+        3 => Some("HEATING UP"),
+        5 => Some("FREIGHT TRAIN"),
+        7 => Some("UNSTOPPABLE CARGO"),
+        10 => Some("KRAKEN MODE"),
+        15 => Some("DOCK LEGEND"),
         _ => None,
     }
 }
@@ -274,27 +235,40 @@ impl Award {
             Self::Pacifist => "PACIFIST",
         }
     }
-    /// Write the award's one-line detail.
-    pub fn detail(self, f: &mut impl std::fmt::Write) -> std::fmt::Result {
+    /// The pictogram shown beside the award's title.
+    pub fn icon(self) -> ferravex_render::icons::Icon {
+        use ferravex_render::icons::Icon;
         match self {
-            Self::Duck => f.write_str("YOU FOUND THE DOCK DUCK. QUACK."),
-            Self::Untouchable => f.write_str("ZERO DEATHS. SUSPICIOUSLY CLEAN."),
-            Self::Headhunter(n) => write!(f, "{n} HEADSHOTS. HATS OFF. LITERALLY."),
-            Self::Sharpshooter(n) => write!(f, "{n}% ACCURACY. THE WALLS FEEL IGNORED."),
-            Self::Combo(n) => write!(
-                f,
-                "BEST COMBO: {}",
-                multi_kill(n.min(5)).unwrap_or("DOUBLE TAP")
-            ),
-            Self::Revenge(n) => write!(f, "{n} REVENGE FRAGS. PETTY. EFFECTIVE."),
-            Self::Wall(n) => write!(f, "{n} SHOTS INTO A WALL. THE WALL IS FINE."),
-            Self::Gulls(n) => write!(f, "{n} SHOTS AT THE SKY. NO GULLS WERE HURT."),
-            Self::Oops(n) => write!(f, "THE CREW FRAGGED ITSELF {n}X. YOU'RE WELCOME?"),
+            Self::Duck => Icon::Star,
+            Self::Untouchable => Icon::Shield,
+            Self::Headhunter(_) => Icon::Target,
+            Self::Sharpshooter(_) => Icon::Eye,
+            Self::Combo(_) => Icon::Bolt,
+            Self::Revenge(_) => Icon::Flame,
+            Self::Wall(_) => Icon::Crate,
+            Self::Gulls(_) => Icon::Cloud,
+            Self::Oops(_) => Icon::Alert,
+            Self::Nemesis(..) => Icon::Skull,
+            Self::Respawn(_) => Icon::Restart,
+            Self::Pacifist => Icon::Heart,
+        }
+    }
+    /// Write the award's compact stat: a number, a percentage or a name
+    /// (empty when the title says it all).
+    pub fn stat(self, f: &mut impl std::fmt::Write) -> std::fmt::Result {
+        match self {
+            Self::Duck | Self::Untouchable | Self::Pacifist => Ok(()),
+            Self::Headhunter(n)
+            | Self::Revenge(n)
+            | Self::Wall(n)
+            | Self::Gulls(n)
+            | Self::Respawn(n) => write!(f, "{n}"),
+            Self::Sharpshooter(n) => write!(f, "{n}%"),
+            Self::Combo(n) => write!(f, "×{n}"),
+            Self::Oops(n) => write!(f, "×{n}"),
             Self::Nemesis(id, n) => {
-                write!(f, "{} GOT YOU {n} TIMES", bot_name(id).unwrap_or("SOMEONE"))
+                write!(f, "{} ×{n}", bot_name(id).unwrap_or("SOMEONE"))
             }
-            Self::Respawn(n) => write!(f, "{n} RESPAWNS. THE SPAWN PAD KNOWS YOU."),
-            Self::Pacifist => f.write_str("YOU DIDN'T FIRE ONCE. VERY ZEN."),
         }
     }
 }
@@ -349,6 +323,22 @@ mod tests {
         assert_eq!(gloat(0, 1), None, "you never gloat at yourself");
         assert_eq!(last_words(6, 1), None);
         assert!(gloat(5, 1).is_some() && last_words(1, 0).is_some());
+    }
+
+    #[test]
+    fn in_play_lines_stay_punchy() {
+        for line in GLOAT
+            .iter()
+            .chain(LAST_WORDS.iter())
+            .flat_map(|t| t.iter())
+            .chain(OOPS.iter())
+            .chain(RETRY.iter())
+        {
+            assert!(line.split(' ').count() <= 3, "{line}");
+        }
+        for n in 0..20 {
+            assert!(streak(n).is_none_or(|head| head.split(' ').count() <= 3));
+        }
     }
 
     #[test]
@@ -453,8 +443,14 @@ mod tests {
             [Some(Award::Duck), Some(Award::Untouchable)]
         );
         let mut text = String::new();
-        Award::Nemesis(2, 4).detail(&mut text).unwrap();
-        assert_eq!(text, "FORKLIFT FRAN GOT YOU 4 TIMES");
+        Award::Nemesis(2, 4).stat(&mut text).unwrap();
+        assert_eq!(text, "FORKLIFT FRAN ×4");
+        text.clear();
+        Award::Sharpshooter(62).stat(&mut text).unwrap();
+        assert_eq!(text, "62%");
+        text.clear();
+        Award::Untouchable.stat(&mut text).unwrap();
+        assert!(text.is_empty(), "the title says it all");
         assert_eq!(multi_kill(2), Some("DOUBLE TAP"));
         assert_eq!(multi_kill(9), Some("DOCKYARD SWEEP"));
         assert_eq!(streak(4), None);

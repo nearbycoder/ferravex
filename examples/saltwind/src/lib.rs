@@ -13,17 +13,13 @@ pub use model::Game;
 pub const META: Meta = Meta {
     id: "saltwind",
     title: "Saltwind",
-    subtitle: "Sailing and trading",
+    subtitle: "Merchant sailing",
     controls: "1-5 Panels | Arrows Select/Steer | Act Buy/Sail | X Sell/Route",
     help: &[
-        "Complete six deliveries and repay 900 crowns before day 42.",
-        "Begin at Market [2]. Buy 3 grain with Space, open Chart [1], select Brinewatch and press Space to sail.",
-        "At the destination, open Charters [3] and press Space to deliver. Each sealed charter pays you and reveals the next.",
-        "Market: arrows choose goods, food or repairs. Space buys one crate or services; X sells one crate. Cargo space and stock are limited.",
-        "Chart: arrows or an island click choose a port. X toggles sheltered/open sea. Sheltered takes one extra day and avoids storm damage.",
-        "One sea day uses one food. Watch the forecast! At sea, Up/Down steer around storm rings; Space reefs sails, reducing storm damage but slowing you.",
-        "Shipyard [4] sells faster sails, more hold space and armor. Save enough crowns for cargo, food and the final debt.",
-        "Planning in port costs no days. Log [5] can wait one day. R restarts the whole voyage; H opens this guide, P/Esc pauses.",
+        "Seal six charters, then pay 900 crowns by day 42.",
+        "Buy cargo at Market, pick an island, then set sail.",
+        "Open sea is quick; dodge squalls or reef your sails.",
+        "Each day at sea eats one food. Port planning is free.",
     ],
     accent: Color::new(0.83, 0.66, 0.35, 1.),
 };

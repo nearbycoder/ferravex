@@ -7,31 +7,59 @@ A 3D rolling-ball campaign with four hand-authored courses. Choose any course
 immediately, collect all its crystals and reach the finish arch, which turns gold
 once it will accept you. Falling restores the latest checkpoint and preserves
 crystals; the timer keeps running. Each fresh trial begins with **3, 2, 1, GO**
-over a one-more-try line (attempt number, gold target and your best). The marble
-and sweepers wait for GO, and only time after GO counts toward medals and records.
+over a one-more-try icon row (attempt, the gold trophy's time with no falls, and
+the crown of your best). The marble and sweepers wait for GO, and only time
+after GO counts toward medals and records.
+
+## Show, don't tell
+
+The screen explains itself with pictograms (`ferravex_render::icons`, one icon
+per idea), numbers, pips and rings; words are limited to course names, rank
+titles, three-word callouts and key caps.
+
+- **HUD.** A gem and one diamond pip per crystal, and a clock with the run time;
+  a trophy in the medal still on, ringed by the share of its time left, with the
+  seconds beside it (a finish flag once only bronze remains); a flag with
+  checkpoint pips and a skull with the falls. Counters bounce when an accepted
+  event changes them.
+- **Callouts.** One centred pill at a time: an icon badge and a punchy headline
+  (`CHECKPOINT!`, `MARBLE OVERBOARD!`, `ARCH OPEN!`, `GOLD LOST`), with an icon
+  row instead of a subtitle: back-to-flag and crystals-kept marks after a fall,
+  checkpoint pips and the split with a green/coral delta, or the silver trophy's
+  deadline after gold slips away.
+- **Prompts.** Key caps beside pictograms (the marble to roll, a hand to brake,
+  an eye for the overview). The first clean checkpoint shows the recover key
+  beside the back-to-flag mark. The overview pins the next target in the world
+  with its distance.
+- **Menus.** Course cards show difficulty bolts, a hazard pictogram, the gold
+  target or the earned medal and best time; the title shows a trophy shelf of
+  medals earned. The pause card pairs each key cap with its pictogram.
 
 ## Feel and personality
 
 - **Juice from accepted events only.** Crystal pickups burst into gold sparkles
-  with a rising `3/6` callout; checkpoints ping outward rings; landings after
+  with a rising gem + `3/6` callout; the last one also lights the arch with
+  sparks and a ring; checkpoints ping outward rings; landings after
   real airtime squash the marble and puff dust; respawns pop the marble back in.
   Above cruising speed the marble leaves a cream-to-gold comet trail and sheds
   sparkles. Clockwork's sweepers answer contact with a **BONK!**, sparks and a
   small camera kick.
 - **Style callouts.** Teetering past an edge and rolling back to safety is a
   **CLUTCH!** save; a jump of at least 0.45 s announces its airtime.
-- **Quips that never repeat back-to-back.** Falls get a line that depends on why
-  you fell (the void, the ice, a sweeper or a manual recover) and switch to
-  encouragement when one section keeps winning. Checkpoints, pause and the
-  results card have their own lines.
-- **Medal pace.** A chip under the clock shows the best medal still on and how
-  long it stays on; it pulses in the last five seconds, and a banner announces
-  when gold (or silver) slips away.
-- **Results card.** After a short confetti celebration: medal and time, the
-  comparison with your prior best (NEW PERSONAL BEST in green), crystals, falls
-  and bonks, a silly rank title (from SUNDAY ROLLER to MOONSTONE MONARCH) and a
-  next-goal hook: the next medal's exact requirement, then the moonstone rumour,
-  then your best time to beat.
+- **Quips that never repeat back-to-back.** Falls get a three-word callout that
+  depends on why you fell (the void, the ice, a sweeper or a manual recover) and
+  switch to encouragement when one section keeps winning. Checkpoints have their
+  own callouts; the pause card and the results card keep one longer line each.
+- **Medal pace.** A trophy ring under the clock shows the best medal still on and
+  how long it stays on; it pulses coral in the last five seconds, and a banner
+  announces when gold (or silver) slips away.
+- **Results card.** After a short confetti celebration: the medal chip and time,
+  the comparison with your prior best as a crown chip (`NEW BEST` and the delta
+  in green, the gap in coral, `FIRST CLEAR`, `TIED`), crystals, falls and bonks
+  as icon stats, a silly rank title (from SUNDAY ROLLER to MOONSTONE MONARCH)
+  with its one-line quip, and a next-goal icon row: the next medal's trophy,
+  time and falls allowed, then the moonstone rumour (a violet gem and a question
+  mark), then your best time to beat.
 - **Secret.** Every course hides one optional violet **moonstone** on the flat
   platform corner farthest from the racing line, clear of hazards. It is never
   required, does not change medals or saved records, and appears on the results
@@ -51,8 +79,8 @@ reads the same way. None of it is saved beyond the existing record schema.
 Gold requires the target time with no falls or recoveries. Silver allows 1.5×
 the target time and up to two falls; every other successful finish earns Bronze.
 Best times save independently per course and content version. The results card
-offers Next (named course) and Retry for Gold (One More Try after a gold);
-completing Frostline returns to the picker.
+offers Next (the named course and an arrow) and Retry with a gold trophy (One
+More Try after a gold); completing Frostline returns to the picker.
 Targets are initial tuning values, not measured human playtest results.
 
 ```sh
@@ -88,35 +116,34 @@ new trial. The picker pauses the countdown, timer and moving obstacles. Closing
 it preserves a separate manual pause. Its four-card layout also fits a 320 × 152
 logical-pixel play area, with course labels sized to their cards.
 
-The HUD keeps to what matters now: crystals and the clock top right with the
-medal-pace chip beneath, checkpoint pips (next one ringed in gold), falls and a
+The HUD keeps to what matters now: crystal pips and the clock top right with the
+medal-pace ring beneath, checkpoint pips (next one ringed in gold), falls and a
 found moonstone under the course button. One centred message appears at a time:
-countdown, then checkpoint/fall notices, then banners. Bottom-of-screen tips
+countdown, then checkpoint/fall notices, then banners. Bottom-of-screen key caps
 show the current roll/brake/overview bindings until you have rolled for a few
-seconds, and a brake/recover tip returns if one section claims two falls.
-Holding the overview names the next target (checkpoint, missing crystal or
+seconds, and a brake/recover pair returns if one section claims two falls.
+Holding the overview pins the next target (checkpoint, missing crystal or
 finish arch) with its straight-line distance, not route completion. Narrow
 viewports stack the clock, pace and pips under the course button. The top-right
 72 × 60 corner stays clear for the browser's fullscreen menu button (the touch
-Recover button sits below it); a layout test checks five viewport sizes. Finished
-times use `M:SS.cc` and targets spell out `SEC`, because the bitmap font draws a
-lowercase `s` after digits like a `5`.
+Recover button, a back-to-flag icon, sits below it); a layout test checks five
+viewport sizes. Finished times use `M:SS.cc` and medal targets `M:SS`.
 Checkpoint splits are cumulative time since GO, captured on the first accepted
 visit, and shown in the checkpoint notice. Skipped checkpoints have no invented
 split. After completing a course, retries compare splits against that
-course/content's fastest completed run in this session; the label explicitly
-says **SESSION**. These references are bounded
+course/content's fastest completed run in this session, shown as a green
+(faster) or coral (slower) delta beside the split. These references are bounded
 to one per course and are not persisted. A different content version cannot use
 the previous version's splits.
 
 The results card compares the result with the **prior** saved/session best:
 first time, tie, new best or signed time delta (negative is faster). Medal score
 and fastest time stay independent. Saving failures retain the session record and
-show Save Unavailable on the card. Its rows are fitted by priority (medal and
+show a warning mark with NOT SAVED on the card. Its rows are fitted by priority (medal and
 time, comparison, rank, next goal, stats, quip, header), so short phones keep
 the essentials. Record schema, owner/slot and content fingerprints are
 unchanged. The picker shows each course's earned medal and best time, or its
-difficulty and gold target.
+difficulty bolts and gold target.
 
 Recovery counts as a fall and is available after GO while playing. Keyboard/pad
 edges and the touch Recover button wait for an actual 120 Hz tick; a quick tap
@@ -180,7 +207,7 @@ switching to another course loads its embedded scene. Native `--content` watches
 the supplied file until switching courses. Accepted reloads begin a fresh
 countdown and reset camera/audio/input state; invalid edits keep the last valid
 course; a persistent HUD message identifies a rejected edit while the last-good
-course continues. Record keys and authored course formats are unchanged.
+course continues (EDIT REJECTED). Record keys and authored course formats are unchanged.
 
 The overhead camera preserves its follow distance beside every pole instead of
 treating the open course's poles as walls that should shorten its boom. Narrow

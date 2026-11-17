@@ -16,6 +16,7 @@ use ferravex_play::tween::{
     Ease, Entrance, Motion, RollCounter, ScreenTransition, TransitionEvent, TransitionKind,
     TransitionPhase,
 };
+use ferravex_render::icons::{self, Icon, IconStyle};
 use ferravex_render::input::PlayerInput;
 use ferravex_render::post;
 use ferravex_render::prelude::{Color, Rect, Vec2, vec2};
@@ -247,6 +248,93 @@ impl Painter {
         );
         kit::button(r, label, ButtonKind::Primary, motion, theme);
     }
+
+    /// The primary action as `[key] icon Label`: a key cap, a pictogram and
+    /// one word, centered on the authored button.
+    pub fn key_button(
+        &self,
+        rect: UiRect,
+        key: &str,
+        icon: Icon,
+        label: &str,
+        motion: &ButtonMotion,
+        theme: &KitTheme,
+    ) {
+        self.button(rect, "", motion, theme);
+        let text = modern(16., fade(INK, theme.alpha));
+        let key_w = self.keycap_width(key) + 8.;
+        let w = key_w + 22. + 8. + self.width(label, text);
+        let cy = rect.min[1] + rect.size[1] * 0.5 + 2. * motion.press();
+        let x = rect.min[0] + rect.size[0] * 0.5 - w * 0.5;
+        self.keycap(x, cy - 12., key, theme);
+        self.icon(icon, x + key_w + 10., cy, 20., fade(INK, theme.alpha));
+        self.text(label, x + key_w + 30., text.centered_baseline(cy), text);
+    }
+
+    /// A pictogram centered on a layout point.
+    pub fn icon(&self, icon: Icon, x: f32, y: f32, size: f32, color: Color) {
+        icons::draw_styled(
+            icon,
+            self.point(x, y),
+            size * self.scale,
+            IconStyle::new(color).shadow(fade(SHADOW, color.a * 0.8)),
+        );
+    }
+
+    /// A kit key cap at a layout point; returns its width in layout units.
+    pub fn keycap(&self, x: f32, y: f32, label: &str, theme: &KitTheme) -> f32 {
+        let at = self.point(x, y);
+        kit::keycap(at.x, at.y, label, theme).w / self.scale
+    }
+
+    /// Width of [`Painter::keycap`] without drawing.
+    pub fn keycap_width(&self, label: &str) -> f32 {
+        (self.width(label, modern(16., PAPER)) + 24.).max(23.)
+    }
+
+    /// A ring meter: a faint track and an arc filled clockwise from the top.
+    pub fn ring(&self, x: f32, y: f32, radius: f32, fraction: f32, width: f32, color: Color) {
+        let c = self.point(x, y);
+        shapes::stroke_circle(
+            c,
+            radius * self.scale,
+            width * self.scale,
+            Color::new(1., 1., 1., 0.08 * color.a),
+        );
+        if fraction > 0. {
+            shapes::stroke_arc(
+                c,
+                radius * self.scale,
+                -std::f32::consts::FRAC_PI_2,
+                std::f32::consts::TAU * fraction.clamp(0., 1.),
+                Stroke::new(width * self.scale, color).cap(Cap::Round),
+            );
+        }
+    }
+
+    /// The game's drone silhouette: a neon diamond with one eye.
+    pub fn drone(&self, x: f32, y: f32, size: f32, color: Color) {
+        let c = self.point(x, y);
+        let r = size * 0.5 * self.scale;
+        let points = [
+            c + vec2(0., -r),
+            c + vec2(r, 0.),
+            c + vec2(0., r),
+            c + vec2(-r, 0.),
+        ];
+        shapes::fill_polygon(&points, fade(INK, color.a));
+        shapes::polyline(
+            &points,
+            Stroke::new(2. * self.scale, color)
+                .closed(true)
+                .join(ferravex_render::shapes::Join::Round),
+        );
+        shapes::fill_circle(
+            c + vec2(r * 0.18, -r * 0.05),
+            r * 0.22,
+            fade(PAPER, color.a),
+        );
+    }
 }
 
 pub(crate) fn modern(size: f32, color: Color) -> TextStyle {
@@ -340,15 +428,18 @@ impl Results {
                 .is_none_or(|best| self.summary.score > best)
     }
 
-    /// The record line: celebrate a best, otherwise show the gap to beat.
-    pub fn record_line(&self) -> (Line, Color) {
+    /// The record as a trophy chip: celebrate a best, otherwise show the
+    /// stored best and the gap to beat it.
+    pub fn record_chip(&self) -> Chip {
         let score = self.summary.score;
         match self.previous_best {
-            _ if score == 0 => (Line::from("Score a kill to set a record"), SOFT),
-            None => (Line::from("First record set! Now beat it."), GOLD),
-            Some(best) if score > best => (line!("New personal best! +{}", score - best), GOLD),
-            Some(best) if score == best => (Line::from("Tied your best. So close."), AMBER),
-            Some(best) => (line!("Best {best} · {} to beat it", best - score), PAPER),
+            _ if score == 0 => Chip::new(Icon::Trophy, Line::from("—"), SOFT),
+            None => Chip::new(Icon::Trophy, Line::from("FIRST RECORD"), GOLD),
+            Some(best) if score > best => Chip::new(Icon::Trophy, Line::from("NEW BEST"), GOLD)
+                .with_value(line!("+{}", score - best), CYAN),
+            Some(best) if score == best => Chip::new(Icon::Trophy, Line::from("TIED"), AMBER),
+            Some(best) => Chip::new(Icon::Trophy, line!("{best}"), PAPER)
+                .with_value(line!("−{}", best - score), CORAL),
         }
     }
 
@@ -386,28 +477,83 @@ pub(crate) fn key<'a>(input: &PlayerInput, action: &str, buffer: &'a mut [u8]) -
     full.split(" / ").next().unwrap_or(full)
 }
 
-/// Nonzero style feats as one short line, for results and pause.
-pub(crate) fn style_line(style: &Style) -> Line {
-    let mut out = Line::new();
-    let mut part = |n: u32, one: &str, many: &str| {
-        if n > 0 {
-            let sep = if out.len > 0 { " · " } else { "" };
-            let _ = write!(out, "{sep}{n} {}", if n == 1 { one } else { many });
+/// A pill with a pictogram, short text and an optional trailing number.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Chip {
+    pub icon: Icon,
+    pub text: Line,
+    pub color: Color,
+    pub value: Line,
+    pub value_color: Color,
+}
+
+impl Chip {
+    pub fn new(icon: Icon, text: Line, color: Color) -> Self {
+        Self {
+            icon,
+            text,
+            color,
+            value: Line::new(),
+            value_color: color,
         }
-    };
-    part(style.drive_bys, "drive-by", "drive-bys");
-    part(style.close_shaves, "close shave", "close shaves");
-    part(style.multi_kills, "multi-kill", "multi-kills");
-    part(style.untouched_waves, "clean wave", "clean waves");
-    if style.beacons_lit() > 0 {
-        let sep = if out.len > 0 { " · " } else { "" };
-        let _ = write!(out, "{sep}lamps {}/4", style.beacons_lit());
     }
-    if out.len == 0 {
-        Line::from("No style yet: dash through attacks, chain kills")
-    } else {
-        out
+
+    pub fn with_value(mut self, value: Line, color: Color) -> Self {
+        self.value = value;
+        self.value_color = color;
+        self
     }
+
+    fn width(&self, p: &Painter, lead: bool) -> f32 {
+        let text = modern(16., PAPER);
+        let value = if self.value.as_str().is_empty() {
+            0.
+        } else {
+            10. + p.width(self.value.as_str(), text)
+        };
+        (if lead { 24. } else { 0. }) + 28. + p.width(self.text.as_str(), text) + value + 24.
+    }
+
+    /// Draws the pill centered on (`x`, `y`), optionally led by `lead`.
+    fn draw(&self, p: &Painter, x: f32, y: f32, lead: Option<Icon>, alpha: f32) {
+        let w = self.width(p, lead.is_some());
+        let r = p.rect(x - w * 0.5, y - 15., w, 30.);
+        shapes::fill_rounded_rect(r, 15. * p.scale, fade(self.color, 0.1 * alpha));
+        shapes::stroke_rounded_rect(r, 15. * p.scale, 1., fade(self.color, 0.4 * alpha));
+        let mut cursor = x - w * 0.5 + 12.;
+        if let Some(icon) = lead {
+            p.icon(icon, cursor + 8., y, 16., fade(SOFT, alpha));
+            cursor += 24.;
+        }
+        p.icon(self.icon, cursor + 10., y, 18., fade(self.color, alpha));
+        cursor += 28.;
+        let text = modern(16., fade(self.color, alpha));
+        cursor += p.text(self.text.as_str(), cursor, text.centered_baseline(y), text);
+        if !self.value.as_str().is_empty() {
+            let value = text.with_color(fade(self.value_color, alpha));
+            p.text(
+                self.value.as_str(),
+                cursor + 10.,
+                value.centered_baseline(y),
+                value,
+            );
+        }
+    }
+}
+
+/// Earned style feats as pictogram and count pairs: drive-bys (bolt), close
+/// shaves (wind), multi-kills (target), clean waves (shield) and lamps (bulb).
+pub(crate) fn style_feats(style: &Style) -> impl Iterator<Item = (Icon, Line)> {
+    [
+        (Icon::Bolt, style.drive_bys, false),
+        (Icon::Wind, style.close_shaves, false),
+        (Icon::Target, style.multi_kills, false),
+        (Icon::Shield, style.untouched_waves, false),
+        (Icon::Bulb, style.beacons_lit(), true),
+    ]
+    .into_iter()
+    .filter(|(_, n, _)| *n > 0)
+    .map(|(icon, n, lamps)| (icon, if lamps { line!("{n}/4") } else { line!("{n}") }))
 }
 
 /// "WASD" when every movement binding is a single key.
@@ -600,7 +746,10 @@ pub(crate) fn bands(p: &Painter, screen: [f32; 2]) {
     band(bottom, screen[1], bottom);
 }
 
-/// The in-play HUD for the wide layout.
+/// Dash recharge in seconds, for the ring meter (the ability bank owns it).
+const DASH_RECHARGE: f32 = 1.7;
+
+/// The in-play HUD for the wide layout: pictograms, numbers and meters only.
 pub(crate) fn play(
     p: &Painter,
     game: &Game,
@@ -618,14 +767,14 @@ pub(crate) fn play(
         0
     });
 
-    // Left: score and the live chain.
+    // Left: a star and the score; the live multiplier, its chain and timer.
     p.glass(64., 14., 300., 78., 1.);
-    p.text("Score", 80., 36., modern(16., SOFT));
+    p.icon(Icon::Star, 92., 53., 26., GOLD);
     let score = line!("{}", hud.score.shown().max(0));
     p.text(
         score.as_str(),
-        80.,
-        74.,
+        112.,
+        68.,
         classic(32., PAPER).with_shadow(SHADOW),
     );
     if chain > 0 {
@@ -633,35 +782,53 @@ pub(crate) fn play(
         p.text(
             label.as_str(),
             348.,
-            66.,
+            60.,
             right(classic(32., tier).with_shadow(SHADOW)),
         );
-        let count = line!("chain {chain}");
-        p.text(count.as_str(), 348., 36., right(modern(16., tier)));
+        let count = line!("{chain}");
+        p.icon(Icon::Flame, 254., 43., 14., tier);
+        p.text(count.as_str(), 264., 49., modern(16., tier));
         let life = game.score.remaining_life().unwrap_or(0.) as f32 / 3.5;
-        p.meter(Rect::new(244., 76., 104., 6.), life, None, tier, &theme);
+        p.meter(Rect::new(244., 72., 104., 6.), life, None, tier, &theme);
     } else {
-        p.text("Kill to chain", 348., 36., right(modern(16., SOFT)));
+        p.text(
+            "×1",
+            348.,
+            60.,
+            right(classic(32., fade(SOFT, 0.35)).with_shadow(SHADOW)),
+        );
     }
 
-    // Center: the wave, its name and what is left of it.
-    let name = quips::wave_name(game.wave);
-    let wave = line!("Wave {}/3 · {name}", game.wave);
-    p.text(wave.as_str(), 640., 34., centered(modern(16., CYAN)));
-    let left = game.remaining_enemies();
-    let headline = if game.final_drone() {
-        Line::from("Last drone standing")
-    } else if left == 0 {
-        Line::from("Wave clear")
-    } else {
-        line!("{left} drone{} left", if left == 1 { "" } else { "s" })
-    };
+    // Center: the wave's name, a drone and the count left, and wave pips.
     p.text(
-        headline.as_str(),
+        quips::wave_name(game.wave),
         640.,
-        66.,
-        centered(modern(24., PAPER).with_shadow(SHADOW)),
+        34.,
+        centered(modern(16., CYAN)),
     );
+    let left = game.remaining_enemies();
+    if left == 0 {
+        p.icon(Icon::Check, 640., 58., 26., CYAN);
+    } else {
+        let last = game.final_drone();
+        let count = line!("{left}");
+        let style = classic(24., if last { CORAL } else { PAPER }).with_shadow(SHADOW);
+        let w = p.width(count.as_str(), style) + 30.;
+        let x = 640. - w * 0.5;
+        if last && juice.motion() > 0. {
+            let pulse = 0.5 + 0.5 * (juice.time * 6.).sin();
+            p.ring(
+                x + 11.,
+                58.,
+                15. + 3. * pulse,
+                1.,
+                1.5,
+                fade(CORAL, 0.5 * pulse),
+            );
+        }
+        p.drone(x + 11., 58., 20., CORAL);
+        p.text(count.as_str(), x + 30., 70., style);
+    }
     for w in 1..=3_u32 {
         let color = if w < game.wave {
             CYAN
@@ -670,89 +837,102 @@ pub(crate) fn play(
         } else {
             Color::new(1., 1., 1., 0.12)
         };
-        let a = p.point(604. + (w - 1) as f32 * 30., 80.);
+        let a = p.point(604. + (w - 1) as f32 * 30., 82.);
         let b = a + vec2(20. * p.scale, 0.);
         shapes::fill_capsule(a, b, 2.5 * p.scale, color);
     }
     if game.wave_clear_remaining().is_none() {
         let (admission, position) = game.spawn_preview();
         let held = match admission {
-            AdmissionPreview::AliveLimit { .. } => Some("Entry held · arena full"),
-            _ if position.is_none() && admission.next_available_in().is_some() => {
-                Some("Entry held · no safe spot")
-            }
+            AdmissionPreview::AliveLimit { .. } => Some("FULL"),
+            _ if position.is_none() && admission.next_available_in().is_some() => Some("BLOCKED"),
             _ => None,
         };
         if let Some(held) = held {
-            p.text(held, 640., 94., centered(modern(8., AMBER)));
+            // Entries are held: a lock beside the wave pips says so.
+            p.icon(Icon::Lock, 716., 82., 13., AMBER);
+            p.text(held, 727., 87., modern(16., AMBER));
         }
     }
 
-    // Right: health and shield. Copy ends at x 1192, clear of the corner.
+    // Right: heart and shield meters with their numbers. Ends at x 1192.
     p.glass(912., 14., 296., 78., 1.);
     let low = game.health <= 30;
-    p.text("Health", 928., 36., modern(16., SOFT));
-    let shield_value = game.shield.value();
-    let shield = line!("Shield {}", shield_value.ceil() as u32);
-    p.text(
-        shield.as_str(),
-        1096.,
-        36.,
-        right(modern(16., if shield_value > 0. { SHIELD } else { SOFT })),
-    );
     let pulse = if low && juice.motion() > 0. {
         0.75 + 0.25 * (juice.time * 6.).sin()
     } else {
         1.
     };
+    let heart = if low { fade(CORAL, pulse) } else { CYAN };
+    p.icon(Icon::Heart, 936., 37., 20., heart);
     p.meter(
-        Rect::new(928., 46., 168., 12.),
+        Rect::new(954., 31., 170., 12.),
         game.health as f32 / 100.,
         Some(hud.ghost()),
-        if low { fade(CORAL, pulse) } else { CYAN },
-        &theme,
-    );
-    p.meter(
-        Rect::new(928., 64., 168., 7.),
-        shield_value / game.shield.maximum(),
-        None,
-        SHIELD,
+        heart,
         &theme,
     );
     let health = line!("{}", game.health);
     p.text(
         health.as_str(),
         1192.,
-        74.,
-        right(classic(32., if low { CORAL } else { PAPER }).with_shadow(SHADOW)),
+        47.,
+        right(classic(24., if low { CORAL } else { PAPER }).with_shadow(SHADOW)),
     );
-
-    // Bottom: dash on the left, weapon in the middle, cells on the right.
-    let dash = game.dash_availability();
-    let ready = dash.check().is_ok();
-    p.glass(64., 740., 240., 50., 1.);
-    let mut buffer = [0; 64];
-    let dash_key = key(input, "boost", &mut buffer);
-    let cap = kit::keycap(p.point(76., 750.).x, p.point(76., 750.).y, dash_key, &theme);
-    let after = 76. + cap.w / p.scale + 8.;
-    p.text(
-        if ready { "Dash ready" } else { "Dash" },
-        after,
-        764.,
-        modern(16., if ready { CYAN } else { SOFT }),
+    let shield_value = game.shield.value();
+    let shielded = shield_value > 0.;
+    p.icon(
+        Icon::Shield,
+        936.,
+        67.,
+        18.,
+        if shielded { SHIELD } else { fade(SOFT, 0.5) },
     );
     p.meter(
-        Rect::new(after, 772., 288. - after, 6.),
-        1. - game.dash_cooldown / 1.7,
+        Rect::new(954., 63., 170., 8.),
+        shield_value / game.shield.maximum(),
         None,
-        if ready { CYAN } else { SOFT },
+        SHIELD,
         &theme,
     );
-    if ready && juice.motion() > 0. {
-        let glow = p.point(after + (288. - after) * 0.5, 775.);
-        post::glow_circle(glow.x, glow.y, 30. * p.scale, fade(CYAN, 0.25), 0.7);
-    }
+    let shield = line!("{}", shield_value.ceil() as u32);
+    p.text(
+        shield.as_str(),
+        1192.,
+        74.,
+        right(classic(16., if shielded { SHIELD } else { SOFT }).with_shadow(SHADOW)),
+    );
 
+    // Bottom left: the dash key and a bolt inside its recharge ring.
+    let ready = game.dash_availability().check().is_ok();
+    p.glass(64., 740., 132., 50., 1.);
+    let mut buffer = [0; 64];
+    let dash_key = key(input, "boost", &mut buffer);
+    let cap = p.keycap(76., 752., dash_key, &theme).min(64.);
+    let ring_x = 76. + cap + 26.;
+    let charge = 1. - game.dash_cooldown / DASH_RECHARGE;
+    if ready && juice.motion() > 0. {
+        let glow = p.point(ring_x, 765.);
+        post::glow_circle(glow.x, glow.y, 26. * p.scale, fade(CYAN, 0.25), 0.7);
+    }
+    p.ring(
+        ring_x,
+        765.,
+        15.,
+        charge,
+        3.,
+        if ready { CYAN } else { fade(SOFT, 0.8) },
+    );
+    p.icon(
+        Icon::Bolt,
+        ring_x,
+        765.,
+        16.,
+        if ready { CYAN } else { fade(SOFT, 0.7) },
+    );
+
+    // Bottom center: a key-cap prompt until fire and dash are learned, then
+    // the weapon: a sword with its damage, level pips and the XP meter.
     if !learned.complete() || onboarding > 0. {
         let alpha = if learned.complete() {
             onboarding.min(1.)
@@ -760,64 +940,89 @@ pub(crate) fn play(
             1.
         };
         let theme = crate::hud::theme(p.scale, alpha);
-        let (keys, action) = if !learned.fired {
-            (
-                key(input, "fire", &mut [0; 64]).to_owned_line(),
-                "Hold to aim and fire",
-            )
+        let breathe = if juice.motion() > 0. {
+            0.75 + 0.25 * (juice.time * 4.).sin()
+        } else {
+            1.
+        };
+        let mut fire = [0; 64];
+        let (keys, icon) = if !learned.fired {
+            (key(input, "fire", &mut fire), Icon::Target)
         } else if !learned.dashed {
-            (Line::from(dash_key), "Dash: untouchable mid-dash")
+            (dash_key, Icon::Bolt)
         } else {
-            (Line::new(), "Nice. Now chain those kills.")
+            ("", Icon::Check)
         };
-        let width = if keys.as_str().is_empty() {
-            p.width(action, modern(16., PAPER))
+        let key_w = if keys.is_empty() {
+            0.
         } else {
-            p.width(keys.as_str(), modern(16., PAPER)) + 34. + p.width(action, modern(16., PAPER))
+            p.keycap_width(keys) + 10.
         };
-        let x = 640. - width * 0.5;
-        if keys.as_str().is_empty() {
-            p.text(action, x, 766., modern(16., fade(AMBER, alpha)));
-        } else {
-            let at = p.point(x, 748.);
-            kit::key_prompt(at.x, at.y, &[keys.as_str()], action, &theme);
+        let x = 640. - (key_w + 24.) * 0.5;
+        if !keys.is_empty() {
+            p.keycap(x, 752., keys, &theme);
         }
+        p.icon(
+            icon,
+            x + key_w + 12.,
+            765.,
+            22.,
+            fade(if keys.is_empty() { CYAN } else { AMBER }, alpha * breathe),
+        );
     } else {
         let level = game.progression.level();
-        let (fraction, label) = match game.progression.next_cost() {
-            Some(cost) => (
-                game.progression.xp() as f32 / cost as f32,
-                line!("Weapon Lv {level} · {} dmg", game.shot_damage()),
-            ),
-            None => (
-                1.,
-                line!("Weapon Lv {level} max · {} dmg", game.shot_damage()),
-            ),
+        let damage = line!("{:.0}", game.shot_damage());
+        p.icon(Icon::Sword, 556., 765., 18., SOFT);
+        p.text(
+            damage.as_str(),
+            570.,
+            773.,
+            classic(16., PAPER).with_shadow(SHADOW),
+        );
+        let maxed = game.progression.next_cost().is_none();
+        for pip in 1..=4_u16 {
+            let c = p.point(616. + f32::from(pip - 1) * 14., 765.);
+            let lit = pip <= level;
+            let color = if !lit {
+                Color::new(1., 1., 1., 0.12)
+            } else if maxed {
+                GOLD
+            } else {
+                CYAN
+            };
+            shapes::fill_circle(c, 4.5 * p.scale, color);
+        }
+        let fraction = match game.progression.next_cost() {
+            Some(cost) => game.progression.xp() as f32 / cost as f32,
+            None => 1.,
         };
-        p.text(label.as_str(), 640., 760., centered(modern(16., SOFT)));
         p.meter(
-            Rect::new(540., 770., 200., 6.),
+            Rect::new(674., 762., 70., 6.),
             fraction,
             None,
-            CYAN,
+            if maxed { GOLD } else { CYAN },
             &theme,
         );
     }
 
-    p.glass(944., 740., 264., 50., 1.);
+    // Bottom right: a battery and twelve energy-cell pips that refill amber
+    // while recharging.
+    p.glass(1040., 740., 168., 50., 1.);
     let cells = game.magazine.loaded();
     let reloading = game.magazine.reloading();
-    let status = if reloading {
-        line!("Recharging {:.1}s", game.magazine.remaining())
+    let battery = if reloading {
+        let blink = if juice.motion() > 0. {
+            0.6 + 0.4 * (juice.time * 10.).sin().abs()
+        } else {
+            1.
+        };
+        fade(AMBER, blink)
+    } else if cells <= 3 {
+        CORAL
     } else {
-        line!("{cells}/12 cells")
+        CYAN
     };
-    p.text(
-        status.as_str(),
-        960.,
-        770.,
-        modern(16., if reloading { AMBER } else { SOFT }),
-    );
+    p.icon(Icon::Battery, 1066., 765., 22., battery);
     for cell in 0..12_u16 {
         let x = 1192. - (12 - cell) as f32 * 9. + 3.;
         let lit = !reloading && cell < cells;
@@ -839,49 +1044,57 @@ pub(crate) fn play(
     }
 }
 
+/// What a wave banner's short second line shows.
+enum Subline {
+    /// Drones inbound, with a crown when the Overseer is among them.
+    Inbound { drones: u32, overseer: bool },
+    /// The next wave's name (or the final securing step) and a countdown ring.
+    Next { name: &'static str, remaining: f32 },
+}
+
 /// Wave intro/clear banners in the arena's middle band, and the announcer
 /// slot near the top. Drawn in the world layer before the HUD boundary, in
-/// unshaken design space, so the glow blooms.
+/// unshaken design space, so the glow blooms. A banner is one headline and
+/// one short line; the announcer is one line with an optional badge.
 pub(crate) fn announcements(p: &Painter, game: &Game, juice: &Juice, hud: &Hud, motion: Motion) {
     let banner = if let Some(remaining) = game.wave_clear_remaining() {
-        let title = line!("Wave {:02} clear", game.wave);
-        let sub = if game.wave == 3 {
-            line!("Securing Sector 07 · {remaining:.1}s")
+        let next = if game.wave == 3 {
+            "SECURING SECTOR 07"
         } else {
-            line!(
-                "Next up: {} · {remaining:.1}s",
-                quips::wave_name(game.wave + 1)
-            )
+            quips::wave_name(game.wave + 1)
         };
         let extra = juice
             .callout
             .as_ref()
             .filter(|c| c.priority >= Priority::Epic)
-            .map(|c| (c.head, c.color, c.alpha()));
+            .map(|c| (c.head, c.badge, c.color, c.alpha()));
         Some((
-            Line::from("All clear"),
-            title,
-            sub,
+            Line::from("WAVE CLEAR"),
+            Some(Icon::Check),
+            Subline::Next {
+                name: next,
+                remaining,
+            },
             CYAN,
             1.6 - remaining,
             1.,
             extra,
         ))
     } else if game.wave_banner > 0. {
-        let top = line!("Wave {:02} / 03", game.wave);
-        let sub = if game.wave == 3 {
-            line!(
-                "{} drones + one very large problem",
-                game.remaining_enemies().saturating_sub(1)
-            )
-        } else {
-            line!("{} drones inbound", game.remaining_enemies())
-        };
+        let drones = game.remaining_enemies();
+        let overseer = game.wave == 3;
         let total = if game.wave == 1 { 2.7 } else { 2.4 };
         Some((
-            top,
             Line::from(quips::wave_name(game.wave)),
-            sub,
+            None,
+            Subline::Inbound {
+                drones: if overseer {
+                    drones.saturating_sub(1)
+                } else {
+                    drones
+                },
+                overseer,
+            },
             AMBER,
             total - game.wave_banner,
             (game.wave_banner / 0.4).min(1.),
@@ -890,7 +1103,7 @@ pub(crate) fn announcements(p: &Painter, game: &Game, juice: &Juice, hud: &Hud, 
     } else {
         None
     };
-    if let Some((top, title, sub, accent, elapsed, exit, extra)) = banner {
+    if let Some((title, icon, sub, accent, elapsed, exit, extra)) = banner {
         let look = Entrance::pop(0.86)
             .with_duration(0.36)
             .with_ease(Ease::BackOut)
@@ -906,31 +1119,82 @@ pub(crate) fn announcements(p: &Painter, game: &Game, juice: &Juice, hud: &Hud, 
         shapes::stroke_rounded_rect(r, 16. * p.scale, 1.5, fade(accent, 0.55 * alpha));
         let c = rect.center();
         let s = look.scale;
-        p.text(
-            top.as_str(),
-            c.x,
-            c.y - 26. * s,
-            centered(modern(16. * s, fade(accent, alpha))),
-        );
+        // Wave pips along the top edge replace "Wave 02 / 03".
+        for w in 1..=3_u32 {
+            let color = if w < game.wave || (w == game.wave && icon.is_some()) {
+                CYAN
+            } else if w == game.wave {
+                AMBER
+            } else {
+                Color::new(1., 1., 1., 0.14)
+            };
+            let a = p.point(c.x - 44. + (w - 1) as f32 * 30., c.y - 34. * s);
+            let b = a + vec2(20. * p.scale, 0.);
+            shapes::fill_capsule(a, b, 2.5 * p.scale, fade(color, alpha));
+        }
+        let head = classic(40. * s, fade(PAPER, alpha)).with_outline(fade(INK, alpha));
+        let head_w = p.width(title.as_str(), head) + if icon.is_some() { 44. } else { 0. };
+        let x = c.x - head_w * 0.5;
+        if let Some(icon) = icon {
+            p.icon(icon, x + 16., c.y - 2. * s, 32. * s, fade(accent, alpha));
+        }
         p.text(
             title.as_str(),
-            c.x,
+            x + if icon.is_some() { 44. } else { 0. },
             c.y + 12. * s,
-            centered(classic(40. * s, fade(PAPER, alpha)).with_outline(fade(INK, alpha))),
+            head,
         );
-        p.text(
-            sub.as_str(),
-            c.x,
-            c.y + 38. * s,
-            centered(modern(16. * s, fade(CYAN, alpha))),
-        );
-        if let Some((head, color, a)) = extra {
-            p.text(
-                head.as_str(),
-                c.x,
-                c.y + 72.,
-                centered(classic(16., fade(color, a * alpha)).with_outline(fade(INK, a * alpha))),
-            );
+        let line = modern(16. * s, fade(CYAN, alpha));
+        let y = c.y + 34. * s;
+        match sub {
+            Subline::Inbound { drones, overseer } => {
+                let count = line!("{drones}");
+                let w = 26. + p.width(count.as_str(), line) + if overseer { 52. } else { 0. };
+                let x = c.x - w * 0.5;
+                p.drone(x + 8., y, 16., fade(CORAL, alpha));
+                p.text(count.as_str(), x + 22., line.centered_baseline(y), line);
+                if overseer {
+                    let plus = x + 26. + p.width(count.as_str(), line);
+                    p.text("+", plus + 4., line.centered_baseline(y), line);
+                    p.icon(Icon::Crown, plus + 30., y - 1., 20., fade(GOLD, alpha));
+                }
+            }
+            Subline::Next { name, remaining } => {
+                let w = 22. + p.width(name, line) + 30.;
+                let x = c.x - w * 0.5;
+                p.icon(Icon::ArrowRight, x + 8., y, 14., fade(CYAN, alpha));
+                let tw = p.text(name, x + 22., line.centered_baseline(y), line);
+                // The ring drains over the recovery interval.
+                p.ring(
+                    x + 22. + tw + 18.,
+                    y,
+                    7.,
+                    remaining / 1.6,
+                    2.,
+                    fade(CYAN, alpha),
+                );
+            }
+        }
+        if let Some((head, badge, color, a)) = extra {
+            // An earned epic callout rides the banner as a stamp.
+            let a = a * alpha;
+            let style = classic(16., fade(color, a)).with_outline(fade(INK, a));
+            let badge_w = badge.map_or(0., |b| 30. + p.width(b.text.as_str(), style));
+            let w = p.width(head.as_str(), style) + badge_w + 32.;
+            let stamp = p.rect(c.x - w * 0.5, rect.y - 16., w, 28.);
+            shapes::fill_rounded_rect(stamp, 14. * p.scale, fade(INK, 0.92 * a));
+            shapes::stroke_rounded_rect(stamp, 14. * p.scale, 1.5, fade(color, 0.8 * a));
+            let x = c.x - w * 0.5 + 16.;
+            let tw = p.text(head.as_str(), x, rect.y + 4., style);
+            if let Some(b) = badge {
+                p.icon(b.icon, x + tw + 16., rect.y - 2., 14., fade(b.color, a));
+                p.text(
+                    b.text.as_str(),
+                    x + tw + 26.,
+                    rect.y + 4.,
+                    style.with_color(fade(b.color, a)),
+                );
+            }
         }
         let _ = hud;
         return;
@@ -941,8 +1205,14 @@ pub(crate) fn announcements(p: &Painter, game: &Game, juice: &Juice, hud: &Hud, 
         let head = classic(size, fade(c.color, alpha))
             .with_outline(fade(INK, alpha))
             .with_shadow(fade(Color::new(0., 0., 0., 0.6), alpha));
+        let badge_style = classic(16., fade(PAPER, alpha)).with_outline(fade(INK, alpha));
+        let head_w = p.width(c.head.as_str(), head);
+        let badge_w = c
+            .badge
+            .map_or(0., |b| 32. + p.width(b.text.as_str(), badge_style));
+        let x = 640. - (head_w + badge_w) * 0.5;
         let center = p.point(640., 180.);
-        let width = p.width(c.head.as_str(), head) * p.scale;
+        let width = (head_w + badge_w) * p.scale;
         post::with_glow(|| {
             shapes::fill_capsule(
                 center - vec2(width * 0.42, 0.),
@@ -951,13 +1221,16 @@ pub(crate) fn announcements(p: &Painter, game: &Game, juice: &Juice, hud: &Hud, 
                 fade(c.color, 0.07 * alpha),
             );
         });
-        p.text(c.head.as_str(), 640., 192., centered(head));
-        if !c.sub.as_str().is_empty() {
+        p.text(c.head.as_str(), x, 192., head);
+        if let Some(b) = c.badge {
+            // A pictogram and a number beside the callout, never a sentence.
+            let bx = x + head_w + 12.;
+            p.icon(b.icon, bx + 9., 180., 18., fade(b.color, alpha));
             p.text(
-                c.sub.as_str(),
-                640.,
-                218.,
-                centered(modern(16., fade(PAPER, alpha * 0.92)).with_shadow(fade(SHADOW, alpha))),
+                b.text.as_str(),
+                bx + 20.,
+                186.,
+                badge_style.with_color(fade(b.color, alpha)),
             );
         }
     }
@@ -1049,6 +1322,61 @@ fn logo(p: &Painter, x: f32, y: f32, size: f32, time: f32, motion: Motion) {
     }
 }
 
+/// A key cap followed by a pictogram (`None` draws the four-way move
+/// arrows), at a layout point; returns the width.
+fn key_icon(p: &Painter, x: f32, y: f32, keys: &str, icon: Option<Icon>, theme: &KitTheme) -> f32 {
+    let w = p.keycap(x, y, keys, theme);
+    let color = fade(SOFT, theme.alpha);
+    match icon {
+        Some(icon) => p.icon(icon, x + w + 16., y + 12., 20., color),
+        None => move_glyph(p, x + w + 16., y + 12., 20., color),
+    }
+    w + 30.
+}
+
+/// Four outward arrowheads: move in any direction.
+pub(crate) fn move_glyph(p: &Painter, x: f32, y: f32, size: f32, color: Color) {
+    let c = p.point(x, y);
+    let u = size * 0.5 * p.scale;
+    for d in [vec2(0., -1.), vec2(1., 0.), vec2(0., 1.), vec2(-1., 0.)] {
+        let side = vec2(-d.y, d.x);
+        let tip = c + d * u;
+        let base = c + d * (u * 0.45);
+        shapes::fill_triangle(
+            tip,
+            base + side * (u * 0.42),
+            base - side * (u * 0.42),
+            color,
+        );
+    }
+    shapes::fill_circle(c, u * 0.16, color);
+}
+
+/// Width of [`key_icon`] without drawing.
+fn key_icon_width(p: &Painter, keys: &str) -> f32 {
+    p.keycap_width(keys) + 30.
+}
+
+/// A centered row of pictogram + number pairs.
+fn icon_stats(p: &Painter, items: &[(Icon, Line, Color)], y: f32, alpha: f32) {
+    let style = |c: Color| modern(16., fade(c, alpha));
+    let item = |text: &Line| 24. + p.width(text.as_str(), style(PAPER));
+    let gap = 22.;
+    let total: f32 =
+        items.iter().map(|(_, t, _)| item(t)).sum::<f32>() + gap * (items.len().max(1) - 1) as f32;
+    let mut x = 640. - total * 0.5;
+    for (icon, text, color) in items {
+        p.icon(*icon, x + 8., y, 17., fade(*color, alpha));
+        p.text(
+            text.as_str(),
+            x + 22.,
+            style(PAPER).centered_baseline(y),
+            style(PAPER),
+        );
+        x += item(text) + gap;
+    }
+}
+
 pub(crate) fn ready(
     p: &Painter,
     input: &PlayerInput,
@@ -1066,86 +1394,67 @@ pub(crate) fn ready(
         centered(modern(16., fade(PAPER, tag.alpha)).with_shadow(fade(SHADOW, tag.alpha))),
     );
     let look = hud.look(2, motion);
-    let card = card_panel(p, READY_CARD, CYAN, look);
-    let theme = theme(p.scale, look.alpha);
+    card_panel(p, READY_CARD, CYAN, look);
     let dy = look.offset[1];
-    // Controls as key caps, three columns.
+    // Controls as key caps beside pictograms: move, aim + fire, dash.
     let mut buffer = [0; 64];
     let moves = movement_hint(input);
     let fire = Line::from(key(input, "fire", &mut buffer));
     let dash = Line::from(key(input, "boost", &mut [0; 64]));
-    for (i, (keys, label)) in [
-        (moves.as_str(), "Move"),
-        (fire.as_str(), "Aim + fire"),
-        (dash.as_str(), "Dash"),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let column = 408. + i as f32 * 158.;
-        let row = hud.look(3 + i, motion);
-        let theme = crate::hud::theme(p.scale, row.alpha);
-        let at = p.point(column + 8., 302. + dy + row.offset[1]);
-        kit::key_prompt(at.x, at.y, &[keys], label, &theme);
+    let row = [
+        (moves.as_str(), None),
+        (fire.as_str(), Some(Icon::Target)),
+        (dash.as_str(), Some(Icon::Bolt)),
+    ];
+    let gap = 26.;
+    let total: f32 = row
+        .iter()
+        .map(|(keys, _)| key_icon_width(p, keys))
+        .sum::<f32>()
+        + gap * 2.;
+    let mut x = 640. - total * 0.5;
+    for (i, (keys, icon)) in row.into_iter().enumerate() {
+        let look = hud.look(3 + i, motion);
+        let theme = crate::hud::theme(p.scale, look.alpha);
+        x += key_icon(p, x, 304. + dy + look.offset[1], keys, icon, &theme) + gap;
     }
+
+    // Two pictogram lessons: dash through an amber bite; chain kills to ×5.
     let tips = hud.look(6, motion);
+    let (ta, ty) = (tips.alpha, 372. + dy + tips.offset[1]);
+    let bite = p.point(520., ty);
+    shapes::fill_circle(bite, 18. * p.scale, fade(AMBER, 0.12 * ta));
+    p.ring(520., ty, 18., 0.7, 3., fade(AMBER, ta));
+    let badge = p.point(520., ty - 26.);
+    shapes::fill_circle(badge, 8. * p.scale, fade(AMBER, ta));
+    p.text("!", 520., ty - 21., centered(classic(16., fade(INK, ta))));
+    p.icon(Icon::ArrowRight, 556., ty, 16., fade(SOFT, ta));
+    p.icon(Icon::Bolt, 590., ty, 24., fade(CYAN, ta));
+    for i in 0..3 {
+        p.drone(688. + i as f32 * 22., ty, 16., fade(CORAL, ta));
+    }
+    p.icon(Icon::ArrowRight, 762., ty, 16., fade(SOFT, ta));
     p.text(
-        "Amber ring = incoming bite. Dash through it for style.",
-        640.,
-        368. + dy + tips.offset[1],
-        centered(modern(16., fade(SOFT, tips.alpha))),
+        "×5",
+        782.,
+        ty + 8.,
+        classic(24., fade(MAGENTA, ta)).with_shadow(fade(SHADOW, ta)),
     );
-    p.text(
-        "Chain kills for up to ×5 points. A hit breaks the chain.",
-        640.,
-        392. + dy + tips.offset[1],
-        centered(modern(16., fade(SOFT, tips.alpha))),
-    );
+
     let record = hud.look(7, motion);
+    let ry = 430. + dy + record.offset[1];
     match best {
-        Some((score, runs)) => {
-            let text = line!("Personal best {score} · {runs} runs");
-            p.text(
-                text.as_str(),
-                640.,
-                436. + dy + record.offset[1],
-                centered(
-                    modern(16., fade(GOLD, record.alpha)).with_shadow(fade(SHADOW, record.alpha)),
-                ),
-            );
-        }
+        Some((score, runs)) => Chip::new(Icon::Trophy, line!("{score}"), GOLD)
+            .with_value(line!("· {runs}"), SOFT)
+            .draw(p, 640., ry, None, record.alpha),
         None => {
-            p.text(
-                "No record yet. Go make one.",
-                640.,
-                436. + dy + record.offset[1],
-                centered(modern(16., fade(SOFT, record.alpha))),
-            );
+            Chip::new(Icon::Trophy, Line::from("—"), SOFT).draw(p, 640., ry, None, record.alpha)
         }
     }
-    let _ = card;
     let button = hud.look(8, motion);
     let theme_b = crate::hud::theme(p.scale, button.alpha);
-    let mut label = Line::from("Start");
-    if !motion.is_reduced() {
-        // Attract-mode pulse on the call to action.
-        let _ = &mut label;
-    }
-    p.button(ACTION, label.as_str(), &hud.button, &theme_b);
     let confirm = key(input, "confirm", &mut buffer);
-    let prompt = line!("Press {confirm} to start");
-    let blink = if motion.is_reduced() {
-        1.
-    } else {
-        0.55 + 0.45 * (t * 3.).sin().abs()
-    };
-    p.text(
-        prompt.as_str(),
-        640.,
-        556.,
-        centered(modern(16., fade(SOFT, blink * button.alpha))),
-    );
-    let _ = theme;
+    p.key_button(ACTION, confirm, Icon::Play, "Start", &hud.button, &theme_b);
 }
 
 pub(crate) fn paused(
@@ -1157,10 +1466,9 @@ pub(crate) fn paused(
     motion: Motion,
 ) {
     let look = hud.look(0, motion);
-    let card = card_panel(p, PAUSE_CARD, AMBER, look);
+    card_panel(p, PAUSE_CARD, AMBER, look);
     let a = look.alpha;
     let dy = look.offset[1];
-    let _ = card;
     p.text(
         "PAUSED",
         640.,
@@ -1174,36 +1482,48 @@ pub(crate) fn paused(
         330. + dy + q.offset[1],
         centered(modern(16., fade(CYAN, q.alpha))),
     );
+    // The run so far as pictograms: wave, score, chain, kills and style.
     let s = hud.look(2, motion);
-    let run = line!(
-        "Wave {}/3 · {} pts · ×{} chain",
-        game.wave,
-        game.score.total(),
-        game.score.multiplier()
-    );
-    p.text(
-        run.as_str(),
-        640.,
-        372. + dy + s.offset[1],
-        centered(modern(16., fade(PAPER, s.alpha))),
-    );
-    let kills = line!("{} kills · style {}", game.kills, game.style.points);
-    p.text(
-        kills.as_str(),
-        640.,
-        396. + dy + s.offset[1],
-        centered(modern(16., fade(SOFT, s.alpha))),
+    icon_stats(
+        p,
+        &[
+            (Icon::Flag, line!("{}/3", game.wave), CYAN),
+            (Icon::Star, line!("{}", game.score.total()), GOLD),
+            (
+                Icon::Flame,
+                line!("×{}", game.score.multiplier()),
+                tier_color(game.score.multiplier()),
+            ),
+            (Icon::Skull, line!("{}", game.kills), CORAL),
+            (
+                Icon::Gem,
+                line!("{}", game.style.points),
+                crate::juice::VIOLET,
+            ),
+        ],
+        380. + dy + s.offset[1],
+        s.alpha,
     );
     let k = hud.look(3, motion);
     let mut buffer = [0; 64];
     let restart = key(input, "restart", &mut buffer);
     let theme = theme(p.scale, k.alpha);
-    let w = p.width(restart, modern(16., PAPER)) + 30. + p.width("Restart", modern(16., PAPER));
-    let at = p.point(640. - w * 0.5, 418. + dy + k.offset[1]);
-    kit::key_prompt(at.x, at.y, &[restart], "Restart", &theme);
+    let w = key_icon_width(p, restart);
+    key_icon(
+        p,
+        640. - w * 0.5,
+        418. + dy + k.offset[1],
+        restart,
+        Some(Icon::Restart),
+        &theme,
+    );
     let b = hud.look(4, motion);
-    p.button(
+    let mut resume = [0; 64];
+    let pause_key = key(input, "pause", &mut resume);
+    p.key_button(
         ACTION,
+        pause_key,
+        Icon::Play,
         "Resume",
         &hud.button,
         &crate::hud::theme(p.scale, b.alpha),
@@ -1233,38 +1553,34 @@ pub(crate) fn results(
                 .with_shadow(fade(SHADOW, a)),
         ),
     );
+    // The rank and its one-line joke.
     let r = hud.look(1, motion);
     let ra = r.alpha;
     let ry = dy + r.offset[1];
     p.text(
-        "Your rank",
-        640.,
-        200. + ry,
-        centered(modern(16., fade(SOFT, ra))),
-    );
-    p.text(
         results.rank.title,
         640.,
-        230. + ry,
+        212. + ry,
         centered(modern(24., fade(GOLD, ra)).with_shadow(fade(SHADOW, ra))),
     );
     p.text(
         results.rank.quip,
         640.,
-        254. + ry,
+        238. + ry,
         centered(modern(16., fade(PAPER, ra))),
     );
+    // Four pictogram tiles: score, time or wave reached, best chain or kills, style.
     let s = results.summary;
-    let names: [&str; 4] = if won {
-        ["Score", "Time", "Best chain", "Style"]
+    let icons: [Icon; 4] = if won {
+        [Icon::Star, Icon::Clock, Icon::Flame, Icon::Gem]
     } else {
-        ["Score", "Reached", "Kills", "Style"]
+        [Icon::Star, Icon::Flag, Icon::Skull, Icon::Gem]
     };
-    for (i, name) in names.iter().enumerate() {
+    for (i, icon) in icons.into_iter().enumerate() {
         let tile = hud.look(2 + i, motion);
         let x = 324. + i as f32 * 160.;
-        let y = 270. + dy + tile.offset[1];
-        let r = p.rect(x, y, 152., 66.);
+        let y = 264. + dy + tile.offset[1];
+        let r = p.rect(x, y, 152., 70.);
         shapes::fill_rounded_rect(
             r,
             10. * p.scale,
@@ -1275,38 +1591,37 @@ pub(crate) fn results(
             ),
         );
         shapes::stroke_rounded_rect(r, 10. * p.scale, 1., fade(EDGE, tile.alpha));
+        let color = [GOLD, CYAN, AMBER, crate::juice::VIOLET][i];
+        p.icon(icon, x + 76., y + 20., 20., fade(color, tile.alpha));
         let shown = hud.stats[i].shown();
         let value = match (i, won) {
             (1, true) => line!("{shown}s"),
-            (1, false) => line!("Wave {shown}"),
+            (1, false) => line!("{shown}/3"),
             _ => line!("{shown}"),
         };
         p.text(
             value.as_str(),
             x + 76.,
-            y + 36.,
+            y + 56.,
             centered(classic(24., fade(PAPER, tile.alpha)).with_shadow(fade(SHADOW, tile.alpha))),
         );
-        p.text(
-            name,
-            x + 76.,
-            y + 56.,
-            centered(modern(16., fade(SOFT, tile.alpha))),
-        );
     }
+    // Earned style feats as pictograms, then the record and the next goal.
     let l = hud.look(6, motion);
     let ly = dy + l.offset[1];
-    let style = style_line(&s.style);
-    p.text(
-        style.as_str(),
-        640.,
-        364. + ly,
-        centered(modern(16., fade(SOFT, l.alpha))),
-    );
-    let (record, color) = results.record_line();
+    let mut feats = [(Icon::Star, Line::new(), PAPER); 5];
+    let mut count = 0;
+    for (icon, text) in style_feats(&s.style) {
+        feats[count] = (icon, text, crate::juice::VIOLET);
+        count += 1;
+    }
+    if count > 0 {
+        icon_stats(p, &feats[..count], 366. + ly, l.alpha);
+    }
+    let record = results.record_chip();
     let best = results.new_best();
     if best && l.alpha > 0. {
-        let c = p.point(640., 388. + ly);
+        let c = p.point(640., 414. + ly);
         let pulse = if motion.is_reduced() {
             1.
         } else {
@@ -1314,43 +1629,30 @@ pub(crate) fn results(
         };
         post::glow_circle(c.x, c.y, 150. * p.scale, fade(GOLD, 0.22 * l.alpha), pulse);
     }
-    p.text(
-        record.as_str(),
-        640.,
-        394. + ly,
-        centered(modern(24., fade(color, l.alpha)).with_shadow(fade(SHADOW, l.alpha))),
-    );
-    p.text(
-        quips::next_goal(s),
-        640.,
-        422. + ly,
-        centered(modern(16., fade(CYAN, l.alpha))),
-    );
-    let quip = results.quip();
-    p.text(
-        quip.as_str(),
-        640.,
-        446. + ly,
-        centered(modern(16., fade(SOFT, l.alpha))),
+    let (icon, goal) = quips::next_goal(s);
+    let next = Chip::new(icon, Line::from(goal), CYAN);
+    let (record_w, next_w) = (record.width(p, false), next.width(p, true));
+    let gap = 16.;
+    let start = 640. - (record_w + gap + next_w) * 0.5;
+    record.draw(p, start + record_w * 0.5, 414. + ly, None, l.alpha);
+    next.draw(
+        p,
+        start + record_w + gap + next_w * 0.5,
+        414. + ly,
+        Some(Icon::Target),
+        l.alpha,
     );
     let b = hud.look(7, motion);
-    p.button(ACTION, "Play again", &hud.button, &theme(p.scale, b.alpha));
     let mut buffer = [0; 64];
     let confirm = key(input, "confirm", &mut buffer);
-    let theme = theme(p.scale, b.alpha);
-    let w = p.width(confirm, modern(16., PAPER)) + 30. + p.width("Play again", modern(16., PAPER));
-    let at = p.point(640. - w * 0.5, 530.);
-    kit::key_prompt(at.x, at.y, &[confirm], "Play again", &theme);
-}
-
-trait ToLine {
-    fn to_owned_line(&self) -> Line;
-}
-
-impl ToLine for &str {
-    fn to_owned_line(&self) -> Line {
-        Line::from(self)
-    }
+    p.key_button(
+        ACTION,
+        confirm,
+        Icon::Restart,
+        "Play again",
+        &hud.button,
+        &theme(p.scale, b.alpha),
+    );
 }
 
 /// Stroke helper kept for the dash ring and similar arcs.
@@ -1378,36 +1680,50 @@ mod tests {
         game.phase = Phase::Lost;
         let none = Results::new(&game, None, 0);
         assert!(!none.new_best(), "a zero score is never a best");
-        assert_eq!(none.record_line().1, SOFT);
+        assert_eq!(none.record_chip().color, SOFT);
         game.score.award(100);
         let first = Results::new(&game, None, 0);
         assert!(first.new_best());
-        assert!(first.record_line().0.as_str().starts_with("First record"));
+        assert_eq!(first.record_chip().text, "FIRST RECORD");
         let chase = Results::new(&game, Some(400), 1);
         assert!(!chase.new_best());
-        assert_eq!(chase.record_line().0, "Best 400 · 300 to beat it");
+        let gap = chase.record_chip();
+        assert_eq!((gap.text.as_str(), gap.value.as_str()), ("400", "−300"));
+        assert_eq!(gap.value_color, CORAL);
         let beat = Results::new(&game, Some(40), 2);
         assert!(beat.new_best());
-        assert_eq!(beat.record_line().0, "New personal best! +60");
+        let best = beat.record_chip();
+        assert_eq!(
+            (best.text.as_str(), best.value.as_str()),
+            ("NEW BEST", "+60")
+        );
+        assert_eq!(Results::new(&game, Some(100), 3).record_chip().text, "TIED");
+        for chip in [none, first, chase, beat].map(|r| r.record_chip()) {
+            assert_eq!(chip.icon, Icon::Trophy);
+            assert!(chip.text.as_str().split_whitespace().count() <= 3);
+        }
         assert_eq!(beat.rank.title, "Welcome Mat");
     }
 
     #[test]
-    fn style_line_lists_only_earned_feats_and_lines_truncate_safely() {
-        assert!(
-            style_line(&Style::default())
-                .as_str()
-                .starts_with("No style")
-        );
+    fn style_feats_list_only_earned_feats_and_lines_truncate_safely() {
+        assert_eq!(style_feats(&Style::default()).count(), 0);
         let style = Style {
             drive_bys: 1,
             close_shaves: 3,
             beacons: 0b0101,
             ..Style::default()
         };
+        let feats: Vec<_> = style_feats(&style)
+            .map(|(icon, text)| (icon, text.as_str().to_owned()))
+            .collect();
         assert_eq!(
-            style_line(&style),
-            "1 drive-by · 3 close shaves · lamps 2/4"
+            feats,
+            [
+                (Icon::Bolt, "1".to_owned()),
+                (Icon::Wind, "3".to_owned()),
+                (Icon::Bulb, "2/4".to_owned()),
+            ]
         );
         let learned = Learned {
             fired: true,

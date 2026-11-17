@@ -68,15 +68,6 @@ impl Goal {
             Self::CleanSweep => "Clean sweep",
         }
     }
-
-    pub fn brief(self) -> &'static str {
-        match self {
-            Self::Strike => "Bowl into the big stack: topple 10 crates.",
-            Self::Airtime => "Pulse something 7 m into the air.",
-            Self::Avalanche => "50 bonks in one second. Try Chaos.",
-            Self::CleanSweep => "Topple all 30 stack crates. Orbit, bowl, repeat.",
-        }
-    }
 }
 
 /// One accepted impact worth a spark, in world meters.
@@ -645,7 +636,11 @@ mod tests {
             },
         );
         assert_eq!(paused.sandbox.bodies.len(), MAX_BODIES);
-        assert!(paused.feedback.starts_with("Body limit reached"));
+        assert_eq!(
+            paused.notice,
+            crate::Notice::ChaosFull,
+            "the last refusal wins"
+        );
     }
 
     #[test]

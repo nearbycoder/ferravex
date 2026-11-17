@@ -3,21 +3,28 @@
 //! accepted simulation event or contact serial and aged on presentation time,
 //! so nothing here can change collision, timing, scoring or input.
 //!
-//! Reduced motion clears and blocks rings, trails, sparks, bumper punch,
-//! shake, the crane's travel animation and the score roll (it snaps). Reduced
-//! flashes clears and blocks bumper illumination, table flashes and lamp
-//! blinking (lamps stay steadily lit). Text pops and callouts are
+//! Reduced motion clears and blocks rings, glints, trails, sparks, bumper
+//! punch, shake, the crane's travel animation and the score roll (it snaps).
+//! Reduced flashes clears and blocks bumper illumination, table flashes and
+//! lamp blinking (lamps stay steadily lit). Text pops and callouts are
 //! informational, so they remain, but pops no longer rise under reduced motion.
+//!
+//! Dot-matrix callouts are a headline of at most three words plus a [`Sub`]
+//! row of points, lamps or a meter: never an explanatory sentence.
 use super::quips;
 use crate::{BUMPERS, CRANE, PinballFeedback, Table};
 use ferravex_core::session::SessionState;
-use ferravex_render::{input::PlayerInput, preferences, prelude::Color};
+use ferravex_render::{icons::Icon, input::PlayerInput, preferences, prelude::Color};
 
 const BUMPER_SECONDS: f32 = 0.18;
 const PUNCH_SECONDS: f32 = 0.16;
 const POP_SECONDS: f32 = 0.85;
+const GLINT_SECONDS: f32 = 0.5;
 const POPS: usize = 6;
+const GLINTS: usize = 6;
 const SPARKS: usize = 72;
+/// The opening ball save's length in seconds, for the save meters.
+pub(super) const SAVE_SECONDS: f32 = 5.;
 /// Flipper presses needed before the flipper hint retires.
 pub(super) const FLIPS_TO_LEARN: u32 = 6;
 const SEED: u32 = 0x5a1f_a6e5;
@@ -28,7 +35,10 @@ pub(super) const AMBER: Color = Color::new(1.0, 0.62, 0.22, 1.0);
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Pop {
     pub at: [f32; 2],
+    /// Points shown as `+N`; zero shows only the icon.
     pub points: u32,
+    /// Optional pictogram before the number (or alone).
+    pub icon: Option<Icon>,
     pub age: f32,
     pub big: bool,
 }
@@ -42,6 +52,52 @@ impl Pop {
         let t = (self.age / POP_SECONDS).min(1.);
         (1. - (1. - t) * (1. - t)) * if self.big { 0.4 } else { 0.7 } * motion.min(1.)
     }
+}
+
+/// An expanding ring where a lamp just lit (bumper lamps, multiplier inserts,
+/// the crane target): "this changed, look here".
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Glint {
+    pub at: [f32; 2],
+    pub age: f32,
+    pub color: Color,
+    /// Final radius in table units.
+    pub radius: f32,
+}
+
+impl Glint {
+    /// 0 when spawned, 1 when finished.
+    pub fn progress(&self) -> f32 {
+        (self.age / GLINT_SECONDS).min(1.)
+    }
+}
+
+/// Where the lamp under bumper `index` sits, in table units.
+pub(super) fn lamp_insert(index: usize) -> [f32; 2] {
+    let [x, y] = BUMPERS[index];
+    [x, y + 0.98]
+}
+
+/// Where the multiplier insert for `level` (2..=5) sits, in table units.
+pub(super) fn multiplier_insert(level: u32) -> [f32; 2] {
+    [3.6 + level.saturating_sub(2) as f32 * 0.72, 11.8]
+}
+
+/// The dot-matrix display's second row: a number or lamps, never a sentence.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Sub {
+    None,
+    /// An award, shown as `+1,000`.
+    Points(u32),
+    /// A value at stake, shown as `5,000`.
+    Value(u32),
+    /// `lit` of `total` round lamps.
+    Pips {
+        lit: u8,
+        total: u8,
+    },
+    /// A draining bar, 0..=1.
+    Meter(f32),
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -86,8 +142,9 @@ pub(super) enum Priority {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Callout {
+    /// At most three words (a chain past nine adds its count).
     pub head: String,
-    pub sub: &'static str,
+    pub sub: Sub,
     pub color: Color,
     pub age: f32,
     pub life: f32,
@@ -113,6 +170,9 @@ pub(super) struct Presentation {
     flash_scale: f32,
     pub launch_seconds: f32,
     pub pops: [Option<Pop>; POPS],
+    pub glints: [Option<Glint>; GLINTS],
+    seen_lamps: [bool; 3],
+    seen_multiplier: u32,
     pub sparks: Sparks,
     next_spark: usize,
     rng: u32,
@@ -163,6 +223,7 @@ impl Presentation {
         self.flash_scale = if reduced_flash { 0. } else { intensity };
         if self.motion_scale == 0. {
             self.rings.fill(0.);
+            self.glints = [None; GLINTS];
             self.punch.fill(0.);
             self.trail_len = 0;
             self.trauma = 0.;
@@ -254,6 +315,10 @@ impl Presentation {
     }
 
     fn pop(&mut self, at: [f32; 2], points: u32, big: bool) {
+        self.pop_icon(at, None, points, big);
+    }
+
+    fn pop_icon(&mut self, at: [f32; 2], icon: Option<Icon>, points: u32, big: bool) {
         let slot = self
             .pops
             .iter()
@@ -270,8 +335,34 @@ impl Presentation {
         self.pops[slot] = Some(Pop {
             at,
             points,
+            icon,
             age: 0.,
             big,
+        });
+    }
+
+    /// A ring expanding from a lamp that just lit; motion only.
+    fn glint(&mut self, at: [f32; 2], color: Color, radius: f32) {
+        if self.motion_scale == 0. {
+            return;
+        }
+        let slot = self
+            .glints
+            .iter()
+            .position(Option::is_none)
+            .unwrap_or_else(|| {
+                (0..GLINTS)
+                    .max_by(|&a, &b| {
+                        let age = |i: usize| self.glints[i].map_or(0., |g| g.age);
+                        age(a).total_cmp(&age(b))
+                    })
+                    .unwrap_or(0)
+            });
+        self.glints[slot] = Some(Glint {
+            at,
+            age: 0.,
+            color,
+            radius,
         });
     }
 
@@ -293,7 +384,7 @@ impl Presentation {
     pub(super) fn say(
         &mut self,
         head: String,
-        sub: &'static str,
+        sub: Sub,
         color: Color,
         life: f32,
         priority: Priority,
@@ -332,6 +423,14 @@ impl Presentation {
                 p.age += dt;
                 if p.age >= POP_SECONDS {
                     *pop = None;
+                }
+            }
+        }
+        for glint in &mut self.glints {
+            if let Some(g) = glint {
+                g.age += dt;
+                if g.age >= GLINT_SECONDS {
+                    *glint = None;
                 }
             }
         }
@@ -391,13 +490,24 @@ impl Presentation {
                     self.punch[i] = PUNCH_SECONDS;
                 }
                 self.pop([bumper[0], bumper[1] - 0.75], table.bumper_points[i], false);
-                self.burst(bumper, 7, 5., &[GOLD, AMBER, super::CREAM]);
+                self.burst(bumper, 10, 5.5, &[GOLD, AMBER, super::CREAM]);
                 self.shake(0.07);
             }
         }
         // Consume serials even while effects are suppressed. Enabling a channel
         // cannot replay contacts accepted under the previous preference.
         self.seen_hits = table.bumper_hits;
+        // A lamp that just lit rings outward so progress is seen where it happens.
+        for (i, lit) in table.lamps.into_iter().enumerate() {
+            if lit && !self.seen_lamps[i] {
+                self.glint(lamp_insert(i), GOLD, 0.75);
+            }
+        }
+        self.seen_lamps = table.lamps;
+        if self.seen_multiplier != 0 && table.multiplier > self.seen_multiplier {
+            self.glint(multiplier_insert(table.multiplier), GOLD, 1.1);
+        }
+        self.seen_multiplier = table.multiplier;
         self.accept_rules(table, events);
 
         // Reuse the fixed simulation trail, exposing only samples produced after
@@ -425,40 +535,46 @@ impl Presentation {
         if self.mash > 9. && self.mash_cooldown == 0. && !table.waiting {
             self.mash_cooldown = 15.;
             self.mashes += 1;
-            let line = quips::mash(self.mashes);
             self.say(
-                "EASY THERE!".into(),
-                line,
+                quips::mash(self.mashes).into(),
+                Sub::None,
                 super::MINT,
                 2.2,
                 Priority::Banter,
             );
         }
         if let Some(line) = quips::chain(events.chain) {
-            self.say(
-                format!("{line}  x{}", events.chain),
-                "CHAIN BONUS ON EVERY HIT",
-                AMBER,
-                1.4,
-                Priority::Event,
-            );
+            // One lamp per chained hit; past nine the headline adds the count.
+            let head = if events.chain > 9 {
+                format!("{line} x{}", events.chain)
+            } else {
+                line.into()
+            };
+            let lamps = events.chain.min(9) as u8;
+            let sub = Sub::Pips {
+                lit: lamps,
+                total: lamps,
+            };
+            self.say(head, sub, AMBER, 1.4, Priority::Event);
         }
         if events.crane_arms > 0 {
             self.show = self.show.max(1.2);
+            let jackpot = crate::JACKPOT_POINTS * table.multiplier;
             self.say(
                 "CRANE ARMED!".into(),
-                "SHOOT UNDER THE MAGNET",
+                Sub::Value(jackpot),
                 GOLD,
                 2.4,
                 Priority::Award,
             );
             self.flash_board(0.25, GOLD, CRANE);
+            self.glint(CRANE, GOLD, 1.5);
         }
         if events.skill_shots > 0 {
             self.show = self.show.max(1.);
             self.say(
-                format!("SKILL SHOT  +{}", quips::grouped(crate::SKILL_SHOT_POINTS)),
-                "THE FOREMAN NODS. SLOWLY.",
+                "SKILL SHOT!".into(),
+                Sub::Points(crate::SKILL_SHOT_POINTS),
                 GOLD,
                 2.2,
                 Priority::Award,
@@ -468,8 +584,8 @@ impl Presentation {
         }
         if events.secrets > 0 {
             self.say(
-                format!("OVERTIME PAY  +{}", quips::grouped(crate::OVERTIME_POINTS)),
-                "SECRET: 45S ON ONE BALL",
+                "OVERTIME PAY!".into(),
+                Sub::Points(crate::OVERTIME_POINTS),
                 GOLD,
                 3.,
                 Priority::Jackpot,
@@ -478,18 +594,23 @@ impl Presentation {
         }
         if events.jackpots > 0 {
             self.show = self.show.max(2.4);
-
             self.say(
-                format!("JACKPOT  +{}", quips::grouped(table.last_jackpot)),
-                quips::jackpot(table.jackpots),
+                quips::jackpot(table.jackpots).into(),
+                Sub::Points(table.last_jackpot),
                 GOLD,
                 2.6,
                 Priority::Jackpot,
             );
-            self.pop([CRANE[0], CRANE[1] + 1.75], table.last_jackpot, true);
+            self.pop_icon(
+                [CRANE[0], CRANE[1] + 1.75],
+                Some(Icon::Star),
+                table.last_jackpot,
+                true,
+            );
             self.shake(0.55);
             self.flash_board(0.45, super::CREAM, CRANE);
             self.burst(CRANE, 30, 9., &[GOLD, AMBER, super::CREAM, super::RUST]);
+            self.glint(CRANE, super::CREAM, 2.2);
         }
         if events.crane_drops > 0 {
             self.shake(0.2);
@@ -497,13 +618,16 @@ impl Presentation {
         }
         if events.saves > 0 {
             self.say(
-                "BALL SAVED".into(),
-                quips::save(table.saves),
+                quips::save(table.saves).into(),
+                Sub::None,
                 super::MINT,
                 2.,
                 Priority::Award,
             );
             self.flash_board(0.2, super::MINT, [4.9, 15.]);
+            // The save insert answers with its shield rising from the drain.
+            self.pop_icon([4.95, 14.45], Some(Icon::Shield), 0, false);
+            self.burst([4.95, 14.9], 10, 5., &[super::MINT, super::CREAM]);
         }
         if events.drains > events.saves {
             self.unsaved_drains += 1;
@@ -511,13 +635,13 @@ impl Presentation {
             self.flash_board(0.35, super::RUST, [4.9, 15.]);
             self.burst([4.9, 14.9], 14, 6., &[super::RUST, AMBER]);
             if !table.over() {
-                let head = match table.lives {
-                    1 => "LAST BALL!".to_owned(),
-                    n => format!("DRAINED  /  {n} LEFT"),
-                };
+                // The headline jokes; the lamps underneath count balls left.
                 self.say(
-                    head,
-                    quips::drain(self.unsaved_drains, table.lives),
+                    quips::drain(self.unsaved_drains, table.lives).into(),
+                    Sub::Pips {
+                        lit: table.lives,
+                        total: 3,
+                    },
                     super::CREAM,
                     2.6,
                     Priority::Award,
@@ -786,7 +910,7 @@ mod tests {
         assert!(chain.head.starts_with("CLANK"));
         assert_eq!(chain.priority, Priority::Event);
         // Banter cannot interrupt a fresh event, but a jackpot always can.
-        view.say("NOISE".into(), "", GOLD, 1., Priority::Banter);
+        view.say("NOISE".into(), Sub::None, GOLD, 1., Priority::Banter);
         assert_eq!(view.callout.as_ref().unwrap().head, chain.head);
         view.finish_frame(
             DT,
@@ -803,6 +927,73 @@ mod tests {
             view.finish_frame(0.25, &table, PinballFeedback::default());
         }
         assert_eq!(view.callout, None, "callouts expire on presentation time");
+    }
+
+    #[test]
+    fn lit_lamps_glint_and_dot_matrix_rows_carry_counts_not_sentences() {
+        let mut table = Table::new();
+        let mut view = Presentation::default();
+        view.apply_preferences(false, false, 1.);
+        view.finish_frame(DT, &table, PinballFeedback::default());
+        assert!(view.glints.iter().all(Option::is_none), "no glint at rest");
+        table.lamps = [false, true, false];
+        table.multiplier = 2;
+        view.finish_frame(DT, &table, PinballFeedback::default());
+        let at: Vec<_> = view.glints.iter().flatten().map(|g| g.at).collect();
+        assert_eq!(at, [lamp_insert(1), multiplier_insert(2)]);
+        // A chain lights one dot-matrix lamp per hit.
+        let chain = PinballFeedback {
+            chain: 4,
+            ..Default::default()
+        };
+        view.finish_frame(DT, &table, chain);
+        let callout = view.callout.clone().unwrap();
+        assert_eq!(callout.sub, Sub::Pips { lit: 4, total: 4 });
+        // A drain jokes in three words and counts the balls left in lamps.
+        table.lives = 2;
+        let drain = PinballFeedback {
+            drains: 1,
+            ..Default::default()
+        };
+        view.finish_frame(DT, &table, drain);
+        let callout = view.callout.clone().unwrap();
+        assert_eq!(callout.sub, Sub::Pips { lit: 2, total: 3 });
+        assert!(callout.head.split_whitespace().count() <= 3);
+        // A save raises the shield from the drain.
+        let save = PinballFeedback {
+            drains: 1,
+            saves: 1,
+            ..Default::default()
+        };
+        view.finish_frame(DT, &table, save);
+        assert!(
+            view.pops
+                .iter()
+                .flatten()
+                .any(|p| p.icon == Some(Icon::Shield) && p.points == 0)
+        );
+        // Jackpots pop with a star and show the award on the second row.
+        table.last_jackpot = 5_000;
+        let jackpot = PinballFeedback {
+            jackpots: 1,
+            ..Default::default()
+        };
+        view.finish_frame(DT, &table, jackpot);
+        assert_eq!(view.callout.clone().unwrap().sub, Sub::Points(5_000));
+        assert!(
+            view.pops
+                .iter()
+                .flatten()
+                .any(|p| p.big && p.icon == Some(Icon::Star))
+        );
+        // Reduced motion clears glints and blocks new ones.
+        assert!(view.glints.iter().any(Option::is_some));
+        view.apply_preferences(true, false, 1.);
+        assert!(view.glints.iter().all(Option::is_none));
+        table.lamps = [true; 3];
+        table.multiplier = 3;
+        view.finish_frame(DT, &table, PinballFeedback::default());
+        assert!(view.glints.iter().all(Option::is_none));
     }
 
     #[test]

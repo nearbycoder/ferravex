@@ -18,6 +18,7 @@
 mod atmosphere;
 #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
 mod capture;
+mod glyph;
 mod hud;
 mod juice;
 mod quips;
@@ -1198,7 +1199,12 @@ async fn game() {
         let restarted = rebuild
             || matches!(state, SessionState::Won | SessionState::Lost)
                 && (confirm || menu_fire || pointer_fire);
-        let started = state == SessionState::Ready && (confirm || menu_fire || pointer_fire);
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        let scripted_start = capture.start();
+        #[cfg(not(all(debug_assertions, not(target_arch = "wasm32"))))]
+        let scripted_start = false;
+        let started = state == SessionState::Ready
+            && (confirm || menu_fire || pointer_fire || scripted_start);
         if restarted {
             foundry.rebuild();
             hud_anim.open_doors();
@@ -1330,6 +1336,7 @@ async fn game() {
             state,
             &layout,
             hud::enabled_buttons(&foundry, state, controls_open),
+            &coach,
         );
         hud::draw(&hud::View {
             foundry: &foundry,

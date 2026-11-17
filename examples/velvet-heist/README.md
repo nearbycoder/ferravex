@@ -39,27 +39,71 @@ is recoverable only while one of the three career-wide favors remains.
 - **Left click on the map:** mark a coin target. Moving clears the mark and uses
   your facing again. Clicking the briefing, debrief or capture screen confirms
   its displayed action.
-- **Esc/P:** pause. **H:** open the paginated field guide. **F2:** remap controls.
+- **Sidebar buttons:** the X (posture), C (coins) and Space (action) buttons are
+  clickable twins of those keys and use exactly the same rules.
+- **Esc/P:** pause. **H:** open the field guide. **F2:** remap controls.
   **M:** toggle sound. **R:** restart the entire career.
 
 The shared host fits the logical canvas to the window and maps pointer input
 back into its coordinates. Keyboard and pointer are the intended controls;
 mobile and physical gamepad play have not been verified.
 
+## Read the screen
+
+The play screen uses sprites, icons, meters and numbers instead of sentences.
+
+- **Header:** six progress pips and the heist's name. The objective row shows
+  each required record as a ghost that fills in with a tick when packed, an
+  arrow to the extraction door (it lights and runs once every record is
+  packed), then a plus and the two optional artworks.
+- **Strip above the map:** a clock ring and the time left (red and pulsing in
+  the last 20 seconds); a bell and the alarm meter, whose faint segment keeps
+  the heist's peak alarm, with quarter marks toward lockdown; and the medal
+  forecast. The first medal is always lit, any alarm breaks the other two, and
+  the third shows a small painting until both artworks are packed.
+- **Sidebar:** a large eye shows **HIDDEN** (eye with a slash, violet),
+  **EXPOSED** (amber) or **SEEN** (red, pulsing). One head per guard follows,
+  marked `!` while that guard watches you and `?` while it searches. Below are
+  three buttons: X shows the standing and crouching thief with a switch (sound
+  arcs mark the loud posture); C shows the coins left and a reticle that lights
+  when a target is marked; Space shows what it would act on now and its reward
+  (`+250` record, `+175` artwork, the extraction total, an unlocked door or
+  crossed-out beams), with a progress ring while working. The kit tiles show
+  the brass pass (padlock until found) and the beam grid (red until rewired),
+  and the hearts are the career's three recovery favors.
+- **Cards:** the briefing card names the heist and its target, counts the
+  floor's time, records, guards, artworks, doors and beams, and draws the
+  floor's lesson as a picture equation (for example console, arrow, crossed-out
+  beam). The debrief card shows the medals (a missed medal shows a slash for
+  the alarm or a painting for the artworks) and the haul; the capture card
+  shows the cause (guard, bell or hourglass) and which heart a retry spends.
+- **Results:** records saved, medals of 18 and favors kept, then each heist's
+  medals. A loss shows heists cleared instead.
+
 ## Read the floor plan
 
-**E** is extraction, **K** is the brass pass, **L** is a required record, **$** is
-optional artwork, **T** is the security console, and **H** is a hiding cabinet.
-Locked doors have gold bars; live security beams are red. Violet floor tiles and
-edge corridors are shadows. Gold-tinted floor tiles show each guard's normal
-standing vision, clipped by solid walls and closed doors. The thief wears violet;
-guards wear dark coats and carry a facing marker.
+The extraction stair is a mint door with chevrons; the brass pass is a gold
+key; required records are white ledger pages with a red seal; optional
+artworks are gilt paintings; the beam console is a teal screen; cabinets are
+violet wardrobes. Locked doors carry a padlock until the pass is found and
+glint afterward. Live security beams are red and flicker. Violet floor tiles
+and edge corridors are shadows. The thief wears violet; guards wear dark coats
+and carry a facing marker.
 
+Guard sight is tinted on the floor. Faint tiles are each guard's normal
+standing vision, clipped by solid walls and closed doors; bright tiles are where
+that guard would see you in your current posture, so crouching visibly shrinks
+the danger and clears the shadows. Searching guards tint their sight red.
 Standing guards see up to six Manhattan tiles in a forward 90-degree cone.
 Crouching reduces that range to four. A crouching thief in shadow or a cabinet
-is concealed unless immediately adjacent and in the guard's cone. Sharing a
-guard's tile is always capture. The sidebar states whether you are hidden,
-exposed, standing or seen; a ring appears around the thief when seen.
+is concealed unless immediately adjacent and in the guard's cone; inside a
+cabinet only the thief's eyes show. Sharing a guard's tile is always capture.
+
+The object Space would act on glows under a floating Space key cap. Each
+standing footstep draws an amber diamond of its two-tile hearing reach, and a
+landing coin draws its six-tile reach. Hovering a tile previews a throw: a
+dotted arc and reticle with a faint `?` over every guard it would lure, or a
+red cross when the tile is out of reach or out of sight.
 
 Standing movement takes nine ticks per tile; crouching takes eighteen, at 60
 ticks per second. Nearby guards hear a standing footstep within two tiles and
@@ -72,6 +116,21 @@ guards within six tiles to its landing position, including through nearby walls.
 They search for three seconds without a fresh clue, turning at the target before
 resuming their patrol. Each heist begins with three coins; invalid or blocked
 throws spend none.
+
+## Feedback
+
+Every accepted event is felt where it happens: rings where work starts; a
+sparkle, burst and `+250`/`+175` where loot is packed; a key or open-padlock
+popup at the pass and doors; mint bursts along every beam when a console is
+rewired; a gold ring and coin where a coin lands; `?` over each guard that
+heard it; `!` and a short shake when a guard spots you; a bell `+45%` and shake
+on a live beam; and broken-medal sparks in the strip at the first alarm. While
+a guard watches, the screen edges glow red with the alarm level. The clock
+rings each of the last ten seconds. Extraction pops the heist's points and
+sparkles each earned medal on the debrief card, with confetti scaled by the
+medals. Refused commands give a small red ring and at most an icon: a crossed
+coin target, an empty coin, a padlock at a door without the pass, or the
+records still missing at the exit.
 
 ## Take the records and get out
 
@@ -97,13 +156,13 @@ Reaching 100 percent, sharing a tile with a guard, or running out of time fails
 the heist. The highest alarm reached remains part of the medal calculation even
 if the current alarm later falls to zero.
 
-Extraction works from the E tile or beside it, only after every L record is
-packed. Optional artwork is not required. A clean extraction with both artworks
-earns three medals; a clean extraction without both earns two; any alarmed
-extraction earns one. A record is worth 250 points and artwork 175. Extraction
-adds 1,000 points, 200 per medal and three per full second remaining. No reward
-comes from repeated invalid interaction, waiting or repeatedly visiting a
-collected display.
+Extraction works from the exit tile or beside it, only after every required
+record is packed. Optional artwork is not required. A clean extraction with
+both artworks earns three medals; a clean extraction without both earns two;
+any alarmed extraction earns one. A record is worth 250 points and artwork
+175. Extraction adds 1,000 points, 200 per medal and three per full second
+remaining. No reward comes from repeated invalid interaction, waiting or
+repeatedly visiting a collected display.
 
 After failure, Space spends a recovery favor and restores the same heist's
 opening score, floor plan, guards, items, coins and time. Previously extracted
@@ -143,14 +202,18 @@ patrols. It does not take every optional artwork or achieve a perfect stealth
 rank. There is no bot-specific invulnerability, state injection or modified
 rules.
 
-Sixteen behavioral tests cover the complete legal career and same-host replay,
-authored geometry, inert briefings, movement speed/collision, cones and wall
-occlusion, shadow cover, interaction duration and cancellation, pass/door rules,
-beam disabling and alarm, footsteps, finite coins and investigation, suspicion
-cooling, guard pathing/capture, retry rollback, extraction medals, pointer bounds
-and terminal invariance. The public model doctest executes without a renderer.
-Strict all-target Clippy and scoped formatting pass. The parent inspected an
-actual native frame-500 capture and reported readable art, objects and sidebar.
+Twenty-three behavioral tests cover the complete legal career and same-host
+replay, authored geometry, inert briefings, movement speed/collision, cones and
+wall occlusion, shadow cover, interaction duration and cancellation, pass/door
+rules, beam disabling and alarm, footsteps, finite coins and investigation,
+suspicion cooling, guard pathing/capture, retry rollback, extraction medals,
+pointer bounds and terminal invariance. Presentation tests check that the
+sidebar buttons mirror X, C and Space exactly, that the Space preview matches
+every accepted press over a full career, that each tick records only its own
+events, header progress from heist 1 to 6, short HUD goals, and the effects
+requested for packing a record, throwing a coin, a refusal and a sighting. The
+public model doctest executes without a renderer. Strict all-target Clippy and
+scoped formatting pass.
 
 Suggested native captures are frame 500 (foyer), 3000 (opera), 5200 (train),
 9000 (final museum), and 10700 (ending):

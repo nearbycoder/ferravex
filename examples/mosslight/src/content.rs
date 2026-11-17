@@ -6,14 +6,12 @@ pub(crate) const CELLS: usize = COLS * ROWS;
 
 pub(crate) struct Floor {
     pub name: &'static str,
-    pub hint: &'static str,
     pub map: [&'static str; ROWS],
 }
 
 pub(crate) const FLOORS: [Floor; 6] = [
     Floor {
         name: "The Lantern Stair",
-        hint: "Red tiles attack after your next action.",
         map: [
             "###############",
             "#@...#....$...#",
@@ -30,7 +28,6 @@ pub(crate) const FLOORS: [Floor; 6] = [
     },
     Floor {
         name: "The Glasshouse",
-        hint: "Walls block spore beams.",
         map: [
             "###############",
             "#@..s...#....$#",
@@ -47,7 +44,6 @@ pub(crate) const FLOORS: [Floor; 6] = [
     },
     Floor {
         name: "The Thorn Library",
-        hint: "Knights rest after attacking. Guard blocks 3 damage.",
         map: [
             "###############",
             "#@....#...$...#",
@@ -64,7 +60,6 @@ pub(crate) const FLOORS: [Floor; 6] = [
     },
     Floor {
         name: "The Flooded Choir",
-        hint: "Flasks heal 12 HP and use one turn.",
         map: [
             "###############",
             "#@..#...$...f.#",
@@ -81,7 +76,6 @@ pub(crate) const FLOORS: [Floor; 6] = [
     },
     Floor {
         name: "The Amber Vault",
-        hint: "The key opens gold seals and stairs.",
         map: [
             "###############",
             "#@....#.$....$#",
@@ -98,7 +92,6 @@ pub(crate) const FLOORS: [Floor; 6] = [
     },
     Floor {
         name: "The Root King's Hall",
-        hint: "Dodge the boss's cross and ring attacks.",
         map: [
             "###############",
             "#@...#...#...$#",

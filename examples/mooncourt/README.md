@@ -3,9 +3,10 @@
 Win the Earthrise Cup across six lunar courts. Mooncourt is a finite singles
 racket tournament: place shots into open space, move to meet the incoming ball,
 and decide when to spend stamina on an attacking smash. An airborne ball, its
-ground shadow and its landing marker are separate cues. Returns depend on
+ground shadow and its landing ring are separate cues. Returns depend on
 position, height and timing; the rivals move and strike under the same physical
-court and ball rules.
+court and ball rules. The screen explains itself with icons, meters and
+motion rather than sentences.
 
 ## Play
 
@@ -21,21 +22,48 @@ court after its opponent briefing. The model does not save unfinished matches.
 | --- | --- |
 | Arrows / WASD | Move across your half of the court |
 | 1 / 2 / 3 | Aim left / center / right on the rival's half |
-| Click the three target buttons | Choose the same aim lanes |
+| Click a third of the rival's court, or the aim strip | Choose the same aim lanes |
 | Space / Enter | Drive, serve, enter court or confirm retry |
 | X / E | High recovery lob |
 | C / Q | Fast stamina-consuming smash |
 | 1 / 2 / 3 between matches | Train footwork / endurance / racket reach |
 | Click a training card | Purchase the corresponding free training level |
-| Space between matches | Skip training and proceed |
+| Space, or click Skip, between matches | Skip training and proceed |
+| Click Play / Retry on a court card | Same as Space: enter the court or spend a wildcard |
 | H | Field guide; arrows turn pages |
 | Esc / P | Pause |
 | R | Restart the entire tournament |
 | M / F2 | Sound / control bindings |
 
 Movement uses held keys. Shots use fresh press edges; holding a shot button does
-not repeatedly swing. Mouse input selects targets and menu cards; movement and
-swings use the keyboard by default.
+not repeatedly swing. Mouse input selects targets and card buttons (they lift
+under the pointer); movement and swings use the keyboard by default. The guide
+(H) holds four short reminders after the key-cap page.
+
+## Reading the screen
+
+- **Header:** six pips for the tournament, the court's name, then a score bug:
+  your blue helmet and the rival's, games won as balls (first to two), the
+  current points, a gold ball beside the server, a DEUCE tag, and your
+  remaining wildcards as hearts.
+- **Court:** the three aim targets glow on the rival's half (the chosen one
+  breathes; each shows its number key). A flight's landing ring has a second
+  ring that closes as the ball arrives; after the bounce a red mark shows where
+  an unreturned ball would bounce again. Your reach ring turns gold when a
+  swing would connect, and a dotted arc previews the drive to your target. The
+  ball's trail is tinted by shot (mint drive, violet lob, orange smash).
+- **Panel:** a bolt stamina meter notched at the smash threshold (it flashes
+  below 26 and turns red below 12), the rival's stamina, the three shot keys
+  with their flight and stamina cost (lit when a swing would connect, red when
+  a smash is unavailable), the rally count beside the best rally, and training
+  levels.
+- **Feedback:** bursts at the racket, dust where the ball bounces, OUT and NET
+  marks where a rally dies, the new score in a pill during the pause, ACE,
+  DEUCE and MATCH callouts, and a shake for smashes and net faults.
+- **Cards:** the briefing shows the six-rival ladder with medals, the rival's
+  speed and reflexes, and the shots they favor. Training cards preview each
+  stat before and after the level. A lost match shows the hearts a retry spends
+  and the score it rolls back.
 
 ## Tournament and rivals
 
@@ -79,10 +107,11 @@ net fault or out ball awards the point. A ball that passes beyond the receiving
 area after its legal bounce also awards the point to its last hitter.
 
 The colored landing ring shows where the flight will first touch the ground.
-The small pale shadow shows the current ground position. Move to the landing
-region, then step toward the net to intercept the ball earlier and higher. A
-gold ring around your athlete and **SWING NOW!** in the sidebar mean the ball is
-within racket reach. The swing window lasts ten ticks; its cooldown lasts twenty.
+The small pale shadow shows the current ground position, and the line above it
+turns gold while an incoming ball is low enough to hit. Move to the landing
+region, then step toward the net to intercept the ball earlier and higher. Your
+reach ring turning gold and the shot keys lighting up mean the ball is within
+racket reach. The swing window lasts ten ticks; its cooldown lasts twenty.
 The racket cannot strike a high ball, a distant ball or your own outgoing shot.
 
 | Shot | Stamina cost after contact | Flight time | Use |
@@ -98,8 +127,9 @@ A low attacking shot near the net can catch its tape. Serves use a safe
 between points; movement slows to 80% below 12 stamina.
 
 Each point won earns 50 plus twice the rally length, capped at 20 strokes for
-that bonus. A game earns 200. A match earns 800 plus 100 per medal. Scores,
-medals, return count and longest rally appear in the ending.
+that bonus. A game earns 200. A match earns 800 plus 100 per medal. The ending
+shows matches won, medals, aces and the longest rally as icons; an ace is a
+point your serve wins untouched.
 
 ## Strategy
 
@@ -114,10 +144,13 @@ placement and stamina choices used against earlier rivals.
 ## Validation and implementation
 
 `model.rs` owns fixed 60 Hz rules, `content.rs` owns the six opponents, and
-`view.rs` draws the court and interface without changing the game. The rules
-reuse Ferravex math and `ferravex_play::motion::approach_vec2`. The shared Arcade
-host owns platform input, lifecycle, sound, records and window fitting. There
-are no external libraries, assets or services.
+`view.rs` draws the court and interface without changing the game. Each step
+records a short presentation feed (hits, bounces, how a rally died, points,
+games, refusals) that the rules never read; `view.rs` turns it into effects at
+the place each event happened. The rules reuse Ferravex math and
+`ferravex_play::motion::approach_vec2`. The shared Arcade host owns platform
+input, lifecycle, sound, records and window fitting. There are no external
+libraries, assets or services.
 
 ```sh
 cargo test -p mooncourt --offline --locked -j 2
@@ -125,19 +158,21 @@ cargo clippy -p mooncourt --all-targets --offline --locked -j 2 -- -D warnings
 cargo run -p mooncourt --offline --locked -j 2 -- --headless
 ```
 
-The suite executes 13 behavioral tests and one public API doctest. It covers
+The suite executes 21 behavioral tests and one public API doctest. It covers
 movement and serving boundaries, real racket reach and height, press-only swings,
 shot trajectories and costs, fallback shots, net/out/bounce decisions, deuce and
-service changes, training, wildcard rollback and whole-run loss. A separate
-complete tournament test starts at `Game::new`, consumes only ordinary pilot
-inputs, visits all six matches and verifies terminal invariance and an identical
-same-host replay.
+service changes, training, wildcard rollback and whole-run loss. Presentation
+tests cover header progress at the first and final match, effects for returns,
+smashes, smash fallbacks and refused training, aces, the court-click aim path
+(identical to the number keys) and the Retry/Skip buttons (identical to Space).
+A separate complete tournament test starts at `Game::new`, consumes only
+ordinary pilot inputs, visits all six matches and verifies terminal invariance
+and an identical same-host replay.
 
 The final legal pilot wins at tick 19,689 (about 5 minutes 28 seconds of
-simulation), with all 18 medals, all three wildcards, 11,712 points, 66 returns
-and a longest rally of 13. This is automated completion evidence, not a human
-skill estimate or balance study. The parent inspected native frame 600 and
-reported readable court, silhouettes, scoreboard and point feedback. Browser,
-combined build and further visual checks belong to the parent. Device audio,
+simulation), with all 18 medals, all three wildcards, 11,712 points, 66 returns,
+4 aces and a longest rally of 13. This is automated completion evidence, not a
+human skill estimate or balance study. Native screenshots of the title, play,
+cards, help and ending were reviewed; browser, combined build, device audio,
 physical mobile/controller play and cross-platform bitwise determinism have not
-been verified by this implementation task.
+been verified by this task.

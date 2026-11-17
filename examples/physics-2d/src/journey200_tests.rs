@@ -165,7 +165,9 @@ fn workshop(rate: u32) -> Vec<LabState> {
     let query = lab.sandbox.inspect(rigid.translation()).unwrap();
     assert_eq!(query.body(&lab.sandbox), Some(handle));
     lab.select_body(Some(&query));
-    assert!(lab.selected_label().contains("BOX ASLEEP"));
+    let selection = lab.selection().unwrap();
+    assert!(matches!(selection.shape, Shape::Box(_)));
+    assert_eq!(selection.rest, Rest::Asleep);
     assert_eq!(
         state(&lab),
         at_rest,
@@ -199,7 +201,7 @@ fn workshop(rate: u32) -> Vec<LabState> {
     );
     lab.update(1. / TICK_HZ, LabInput::default());
     assert!(!lab.pulsed);
-    assert_eq!(lab.feedback, "Pulse recharging.");
+    assert_eq!(lab.notice, Notice::PulseRecharging);
     toggle_pause(&mut lab);
     for _ in 0..24 {
         lab.update(

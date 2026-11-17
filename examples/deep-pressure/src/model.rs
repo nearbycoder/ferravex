@@ -19,9 +19,106 @@ pub(crate) const WORLD_W: f32 = 640.;
 pub(crate) const WORLD_H: f32 = 400.;
 pub(crate) const RADIUS: f32 = 11.;
 pub(crate) const BASE: Vec2 = vec2(50., 50.);
+/// Winch reach around an air bell and the slowest refused approach speed.
+pub(crate) const WINCH_RANGE: f32 = 25.;
+pub(crate) const DOCK_RANGE: f32 = 31.;
+pub(crate) const WINCH_SPEED: f32 = 35.;
+/// Seconds of air below which the boat raises its low-air alarm.
+pub(crate) const LOW_AIR: f32 = 12.;
+/// Ticks inside which a clean sortie still earns gold.
+pub(crate) const GOLD_TICKS: u32 = 9_000;
+/// Instrument-panel buttons that mirror X (ballast) and C (sonar).
+pub(crate) const BALLAST_BUTTON: (f32, f32, f32, f32) = (716., 384., 102., 58.);
+pub(crate) const SONAR_BUTTON: (f32, f32, f32, f32) = (826., 384., 102., 58.);
 const NAV_W: usize = 32;
 const NAV_H: usize = 20;
 const NAV_CELLS: usize = NAV_W * NAV_H;
+/// Longest guidance trail, in 20-unit chart cells.
+pub(crate) const TRAIL: usize = 48;
+/// Most presentation events one tick can record.
+const EVENT_CAP: usize = 8;
+/// What damaged the hull.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Cause {
+    Reef,
+    Hazard(HazardKind),
+}
+/// One thing the latest tick accepted or refused, recorded only so the view
+/// can make it felt where it happened. Rules never read these.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Event {
+    Launch,
+    Fitted {
+        index: usize,
+        price: u32,
+    },
+    RefitRefused {
+        index: usize,
+        maxed: bool,
+    },
+    Winched {
+        index: usize,
+    },
+    /// Winch or dock refused for speed beside the target at `at`.
+    TooFast {
+        at: Vec2,
+    },
+    /// Winch refused beside the air bell at `at` because every berth is taken.
+    CabinFull {
+        at: Vec2,
+    },
+    /// The dock landed `landed` people; `cleared` finished the sortie.
+    Docked {
+        landed: u32,
+        cleared: bool,
+    },
+    Ballast {
+        neutral: bool,
+    },
+    Sonar,
+    /// The hull lost `loss` at chart point `at`.
+    Impact {
+        at: Vec2,
+        loss: f32,
+        cause: Cause,
+    },
+    LowAir,
+    Wreck {
+        hull: bool,
+    },
+    Recovered,
+    NextSortie,
+}
+/// Bounded per-tick event list, cleared at the start of every tick.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Events {
+    list: [Event; EVENT_CAP],
+    len: usize,
+}
+impl Events {
+    const fn new() -> Self {
+        Self {
+            list: [Event::NextSortie; EVENT_CAP],
+            len: 0,
+        }
+    }
+    fn push(&mut self, event: Event) {
+        if self.len < EVENT_CAP {
+            self.list[self.len] = event;
+            self.len += 1;
+        }
+    }
+    pub(crate) fn as_slice(&self) -> &[Event] {
+        &self.list[..self.len]
+    }
+}
+/// A guidance path along the pilot's navigation grid, in chart units.
+pub(crate) struct Trail {
+    pub points: [Vec2; TRAIL],
+    pub len: usize,
+    /// The same route length the pilot uses to budget air.
+    pub distance: f32,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Phase {
     Briefing,
@@ -66,6 +163,8 @@ pub struct Game {
     pub(crate) medals: [u8; 6],
     pub(crate) notice: String,
     pub(crate) failure: &'static str,
+    /// Presentation-only record of the latest tick; see [`Event`].
+    pub(crate) events: Events,
 }
 impl Default for Game {
     fn default() -> Self {
@@ -103,6 +202,7 @@ impl Game {
             medals: [0; 6],
             notice: "Read the chart. Space launches; 1 / 2 / 3 buys refits.".into(),
             failure: "",
+            events: Events::new(),
         }
     }
     /// Current sortie number, one-based and always in 1..=6.
@@ -165,6 +265,25 @@ impl Game {
     pub(crate) fn upgrade_cost(&self, index: usize) -> u32 {
         UPGRADE_COSTS[index] + u32::from(self.upgrades[index]) * 20
     }
+    /// True while any diver of this sortie still waits in an air bell.
+    pub(crate) fn waiting(&self) -> bool {
+        self.divers[..self.chart().divers.len()].contains(&RescueState::Waiting)
+    }
+    /// The medal this sortie earns if its last survivor lands now.
+    pub(crate) fn medal_pace(&self) -> u8 {
+        if self.stage_impacts == 0 && self.elapsed < GOLD_TICKS {
+            3
+        } else if self.stage_impacts <= 4 {
+            2
+        } else {
+            1
+        }
+    }
+    /// Seconds of air the pilot keeps for a trip of `home_distance` chart
+    /// units back to the dock: cruise time, passenger drain and a margin.
+    pub(crate) fn air_reserve(&self, home_distance: f32) -> f32 {
+        home_distance / 55. * (1.5 + self.onboard() as f32 * 0.18) + 8.
+    }
     fn reset_dive(&mut self) {
         self.position = BASE;
         self.velocity = Vec2::ZERO;
@@ -186,6 +305,7 @@ impl Game {
         self.stage_score = self.score;
         self.phase = Phase::Diving;
         self.notice = "Arrows thrust. X sets ballast. Slow + Space winches or docks.".into();
+        self.events.push(Event::Launch);
         Cue::Action
     }
     fn buy(&mut self, index: usize) -> Cue {
@@ -195,6 +315,7 @@ impl Game {
         let price = self.upgrade_cost(index);
         if self.upgrades[index] >= 2 {
             self.notice = "That refit is already at its maximum level.".into();
+            self.events.push(Event::RefitRefused { index, maxed: true });
             return Cue::None;
         }
         if self.credits < price {
@@ -202,6 +323,10 @@ impl Game {
                 "{} costs {} credits. Rescue people to earn pay.",
                 UPGRADE_NAMES[index], price
             );
+            self.events.push(Event::RefitRefused {
+                index,
+                maxed: false,
+            });
             return Cue::None;
         }
         self.credits -= price;
@@ -212,6 +337,7 @@ impl Game {
             "{} fitted. Launch when you are ready.",
             UPGRADE_NAMES[index]
         );
+        self.events.push(Event::Fitted { index, price });
         Cue::Good
     }
     fn recover(&mut self) -> Cue {
@@ -227,6 +353,7 @@ impl Game {
             "Sortie reset; {} tugs left. Earlier rescues and refits are safe.",
             self.recovery
         );
+        self.events.push(Event::Recovered);
         Cue::Action
     }
     fn damage(&mut self, amount: f32, reason: &'static str) -> Cue {
@@ -240,12 +367,55 @@ impl Game {
         self.notice = reason.into();
         Cue::Bad
     }
+    /// [`Self::damage`] that also records where an accepted hit landed.
+    fn hit(&mut self, amount: f32, reason: &'static str, cause: Cause, at: Vec2) -> Cue {
+        let before = self.hull;
+        let cue = self.damage(amount, reason);
+        if cue == Cue::Bad {
+            self.events.push(Event::Impact {
+                at,
+                loss: before - self.hull,
+                cause,
+            });
+        }
+        cue
+    }
+    /// Air bell within winch reach of the boat, if a diver still waits there.
+    fn bell_in_reach(&self) -> Option<Vec2> {
+        self.chart()
+            .divers
+            .iter()
+            .enumerate()
+            .find(|(index, (point, _))| {
+                self.divers[*index] == RescueState::Waiting
+                    && self.position.distance(*point) < WINCH_RANGE
+            })
+            .map(|(_, (point, _))| *point)
+    }
+    /// True when docking now would land someone or restore air or hull.
+    fn dock_has_work(&self) -> bool {
+        self.onboard() > 0
+            || self.oxygen <= self.max_air() - 0.1
+            || self.hull <= self.max_hull() - 0.1
+    }
     fn try_winch(&mut self) -> Cue {
-        if self.velocity.length() > 35. {
+        if self.velocity.length() > WINCH_SPEED {
             self.notice = "Too fast for the winch. Hold Space to brake, then tap it again.".into();
+            // Feedback only beside something the tap could have served.
+            if self.position.distance(BASE) < DOCK_RANGE {
+                if self.dock_has_work() {
+                    self.events.push(Event::TooFast { at: BASE });
+                }
+            } else if let Some(at) = self.bell_in_reach() {
+                self.events.push(if self.onboard() >= self.capacity() {
+                    Event::CabinFull { at }
+                } else {
+                    Event::TooFast { at }
+                });
+            }
             return Cue::None;
         }
-        if self.position.distance(BASE) < 31. {
+        if self.position.distance(BASE) < DOCK_RANGE {
             let aboard = self.onboard();
             if aboard == 0
                 && self.oxygen > self.max_air() - 0.1
@@ -269,17 +439,16 @@ impl Game {
             } else {
                 "Dock serviced: air and hull restored. No rescue reward claimed.".into()
             };
-            if self.delivered() == self.chart().divers.len() {
-                let medal = if self.stage_impacts == 0 && self.elapsed < 9_000 {
-                    3
-                } else if self.stage_impacts <= 4 {
-                    2
-                } else {
-                    1
-                };
+            let cleared = self.delivered() == self.chart().divers.len();
+            self.events.push(Event::Docked {
+                landed: aboard as u32,
+                cleared,
+            });
+            if cleared {
+                let medal = self.medal_pace();
                 self.medals[self.mission] = medal;
                 self.score +=
-                    400 + u32::from(medal) * 100 + 9_000u32.saturating_sub(self.elapsed) / 30;
+                    400 + u32::from(medal) * 100 + GOLD_TICKS.saturating_sub(self.elapsed) / 30;
                 self.phase = if self.mission == 5 {
                     Phase::Complete
                 } else {
@@ -291,10 +460,15 @@ impl Game {
         }
         if self.onboard() >= self.capacity() {
             self.notice = "Cabin full. Bring these survivors back to the yellow dock.".into();
+            if let Some(at) = self.bell_in_reach() {
+                self.events.push(Event::CabinFull { at });
+            }
             return Cue::None;
         }
         for (index, (point, name)) in self.chart().divers.iter().enumerate() {
-            if self.divers[index] == RescueState::Waiting && self.position.distance(*point) < 25. {
+            if self.divers[index] == RescueState::Waiting
+                && self.position.distance(*point) < WINCH_RANGE
+            {
                 self.divers[index] = RescueState::Onboard;
                 self.notice = format!(
                     "{} aboard: {} / {} berths. Return to the dock to land survivors.",
@@ -302,6 +476,7 @@ impl Game {
                     self.onboard(),
                     self.capacity()
                 );
+                self.events.push(Event::Winched { index });
                 return Cue::Good;
             }
         }
@@ -343,11 +518,14 @@ impl Game {
         let mut cue = Cue::None;
         if self.solid(vec2(target.x, old.y), RADIUS) {
             let impact = self.velocity.x.abs();
+            let at = vec2(old.x + self.velocity.x.signum() * RADIUS, old.y);
             self.velocity.x *= -0.28;
             if impact > 22. {
-                cue = self.damage(
+                cue = self.hit(
                     8. + impact * 0.12,
                     "Reef strike! Hold Space to brake near stone.",
+                    Cause::Reef,
+                    at,
                 );
             }
         } else {
@@ -355,11 +533,14 @@ impl Game {
         }
         if self.solid(vec2(self.position.x, target.y), RADIUS) {
             let impact = self.velocity.y.abs();
+            let at = vec2(self.position.x, old.y + self.velocity.y.signum() * RADIUS);
             self.velocity.y *= -0.28;
             if impact > 22. {
-                cue = self.damage(
+                cue = self.hit(
                     8. + impact * 0.12,
                     "Reef strike! Hold Space to brake before tight turns.",
+                    Cause::Reef,
+                    at,
                 );
             }
         } else {
@@ -369,6 +550,7 @@ impl Game {
     }
     /// Execute one fixed 60 Hz tick. Menus never sample real time or input devices.
     pub fn tick(&mut self, input: &Input) -> Cue {
+        self.events = Events::new();
         if self.outcome() != Outcome::Playing {
             return Cue::None;
         }
@@ -410,6 +592,7 @@ impl Game {
                     self.phase = Phase::Briefing;
                     self.reset_dive();
                     self.notice = "1 / 2 / 3 buys a refit. Space launches the next sortie.".into();
+                    self.events.push(Event::NextSortie);
                     return Cue::Action;
                 }
                 return Cue::None;
@@ -429,8 +612,11 @@ impl Game {
         self.impact_cooldown = self.impact_cooldown.saturating_sub(1);
         self.sonar = self.sonar.saturating_sub(1);
         self.sonar_cooldown = self.sonar_cooldown.saturating_sub(1);
+        let air_before = self.oxygen;
         let mut cue = Cue::None;
-        if input.secondary {
+        // The instrument buttons are the same commands as X and C.
+        let clicked = |button| input.click && button_hit(input.pointer, button);
+        if input.secondary || clicked(BALLAST_BUTTON) {
             self.balanced = !self.balanced;
             self.notice = if self.balanced {
                 "Neutral ballast: no passive rise."
@@ -438,13 +624,18 @@ impl Game {
                 "Light ballast: the submarine rises when you release the controls."
             }
             .into();
+            self.events.push(Event::Ballast {
+                neutral: self.balanced,
+            });
             cue = Cue::Action;
         }
-        if input.tertiary && self.sonar_cooldown == 0 && self.oxygen > 3. {
+        if (input.tertiary || clicked(SONAR_BUTTON)) && self.sonar_cooldown == 0 && self.oxygen > 3.
+        {
             self.sonar = 180;
             self.sonar_cooldown = 240;
             self.oxygen -= 2.;
             self.notice = "Sonar shows danger circles for 3 seconds. Air cost: 2 seconds.".into();
+            self.events.push(Event::Sonar);
             cue = Cue::Action;
         }
         let movement = self.move_ship(input);
@@ -456,12 +647,16 @@ impl Game {
             + self.onboard() as f32 * 0.18
             + if self.position.y > 280. { 0.3 } else { 0. };
         self.oxygen = (self.oxygen - TICK_DT * rate).max(0.);
+        if air_before >= LOW_AIR && self.oxygen < LOW_AIR && self.oxygen > 0. {
+            self.events.push(Event::LowAir);
+        }
         if self.mission >= 4 && self.position.y > 315. && self.upgrades[1] == 0 {
             self.hull = (self.hull - TICK_DT * 0.6).max(0.);
         }
         for hazard in self.chart().hazards {
+            let center = hazard.position(self.elapsed);
             if hazard.active(self.elapsed)
-                && self.position.distance(hazard.position(self.elapsed)) < RADIUS + hazard.radius()
+                && self.position.distance(center) < RADIUS + hazard.radius()
             {
                 let reason = match hazard.kind {
                     HazardKind::Vent => {
@@ -470,13 +665,16 @@ impl Game {
                     HazardKind::Jelly => "Jellyfish discharge! Give the moving bell a wide berth.",
                     HazardKind::Mine => "Old mine struck the hull. Sonar shows its danger radius.",
                 };
-                let hit = self.damage(
+                let at = self.position + (center - self.position).normalize_or_zero() * RADIUS;
+                let hit = self.hit(
                     if hazard.kind == HazardKind::Mine {
                         27.
                     } else {
                         16.
                     },
                     reason,
+                    Cause::Hazard(hazard.kind),
+                    at,
                 );
                 if hit != Cue::None {
                     cue = hit;
@@ -489,6 +687,9 @@ impl Game {
             } else {
                 "The breathing mixture ran out."
             };
+            self.events.push(Event::Wreck {
+                hull: self.hull <= 0.,
+            });
             self.phase = Phase::Wreck;
             self.velocity = Vec2::ZERO;
             return Cue::Bad;
@@ -546,7 +747,7 @@ impl Game {
             };
         }
         let (home_distance, _) = self.route(BASE);
-        let return_air = home_distance / 55. * (1.5 + self.onboard() as f32 * 0.18) + 8.;
+        let return_air = self.air_reserve(home_distance);
         let returning = self.onboard() >= self.capacity()
             || self.oxygen < return_air
             || self.divers[..self.chart().divers.len()]
@@ -596,20 +797,9 @@ impl Game {
                 p.distance(hazard.point) < hazard.radius() + RADIUS + 7. + extra
             })
     }
-    fn route(&self, destination: Vec2) -> (f32, Vec2) {
-        let cell = |p: Vec2| -> usize {
-            let x = (p.x / 20.).clamp(0., 31.) as usize;
-            let y = (p.y / 20.).clamp(0., 19.) as usize;
-            y * NAV_W + x
-        };
-        let point = |index: usize| {
-            vec2(
-                (index % NAV_W) as f32 * 20. + 10.,
-                (index / NAV_W) as f32 * 20. + 10.,
-            )
-        };
-        let start = cell(self.position);
-        let goal = cell(destination);
+    /// Breadth-first step counts from `goal` over clear navigation cells;
+    /// the boat's own cell `start` is always admitted.
+    fn field(&self, start: usize, goal: usize) -> [u16; NAV_CELLS] {
         let mut distances = [u16::MAX; NAV_CELLS];
         let mut queue = [0usize; NAV_CELLS];
         distances[goal] = 0;
@@ -620,13 +810,20 @@ impl Game {
             let current = queue[head];
             head += 1;
             for next in neighbors(current).into_iter().flatten() {
-                if distances[next] == u16::MAX && (next == start || self.nav_clear(point(next))) {
+                if distances[next] == u16::MAX && (next == start || self.nav_clear(nav_point(next)))
+                {
                     distances[next] = distances[current] + 1;
                     queue[tail] = next;
                     tail += 1;
                 }
             }
         }
+        distances
+    }
+    fn route(&self, destination: Vec2) -> (f32, Vec2) {
+        let start = nav_cell(self.position);
+        let goal = nav_cell(destination);
+        let distances = self.field(start, goal);
         if start == goal {
             return (self.position.distance(destination), destination);
         }
@@ -635,23 +832,18 @@ impl Game {
         }
         let mut cursor = start;
         let mut direction = None;
-        let mut waypoint = point(start);
+        let mut waypoint = nav_point(start);
         for _ in 0..4 {
-            let Some(next) = neighbors(cursor)
-                .into_iter()
-                .flatten()
-                .filter(|&n| distances[n] < distances[cursor])
-                .min_by_key(|&n| distances[n])
-            else {
+            let Some(next) = downhill(&distances, cursor) else {
                 break;
             };
-            let step = point(next) - point(cursor);
+            let step = nav_point(next) - nav_point(cursor);
             if direction.is_some_and(|d: Vec2| d != step) {
                 break;
             }
             direction = Some(step);
             cursor = next;
-            waypoint = point(next);
+            waypoint = nav_point(next);
             if cursor == goal {
                 waypoint = destination;
                 break;
@@ -659,6 +851,60 @@ impl Game {
         }
         (f32::from(distances[start]) * 20., waypoint)
     }
+    /// The whole grid route the pilot would follow toward `destination`
+    /// (at most [`TRAIL`] cells), for drawing a guidance path. Read-only.
+    pub(crate) fn trail(&self, destination: Vec2) -> Trail {
+        let start = nav_cell(self.position);
+        let goal = nav_cell(destination);
+        let distances = self.field(start, goal);
+        let mut trail = Trail {
+            points: [destination; TRAIL],
+            len: 0,
+            distance: if start == goal {
+                self.position.distance(destination)
+            } else if distances[start] == u16::MAX {
+                10_000.
+            } else {
+                f32::from(distances[start]) * 20.
+            },
+        };
+        if distances[start] == u16::MAX {
+            return trail;
+        }
+        let mut cursor = start;
+        while cursor != goal && trail.len < TRAIL {
+            let Some(next) = downhill(&distances, cursor) else {
+                break;
+            };
+            cursor = next;
+            trail.points[trail.len] = if cursor == goal {
+                destination
+            } else {
+                nav_point(cursor)
+            };
+            trail.len += 1;
+        }
+        trail
+    }
+}
+fn nav_cell(p: Vec2) -> usize {
+    let x = (p.x / 20.).clamp(0., 31.) as usize;
+    let y = (p.y / 20.).clamp(0., 19.) as usize;
+    y * NAV_W + x
+}
+fn nav_point(index: usize) -> Vec2 {
+    vec2(
+        (index % NAV_W) as f32 * 20. + 10.,
+        (index / NAV_W) as f32 * 20. + 10.,
+    )
+}
+/// The neighbor of `cursor` closest to the goal (first minimum, as the pilot).
+fn downhill(distances: &[u16; NAV_CELLS], cursor: usize) -> Option<usize> {
+    neighbors(cursor)
+        .into_iter()
+        .flatten()
+        .filter(|&n| distances[n] < distances[cursor])
+        .min_by_key(|&n| distances[n])
 }
 fn neighbors(index: usize) -> [Option<usize>; 4] {
     let x = index % NAV_W;
@@ -682,6 +928,10 @@ pub(crate) fn card_hit(p: Vec2, index: usize) -> bool {
 }
 pub(crate) fn launch_hit(p: Vec2) -> bool {
     p.x >= 64. && p.x <= 652. && p.y >= 479. && p.y <= 519.
+}
+/// Whether canvas point `p` is inside an instrument button `(x, y, w, h)`.
+pub(crate) fn button_hit(p: Vec2, (x, y, w, h): (f32, f32, f32, f32)) -> bool {
+    p.x >= x && p.x <= x + w && p.y >= y && p.y <= y + h
 }
 
 #[cfg(test)]
@@ -1001,5 +1251,164 @@ mod tests {
             ..Input::default()
         });
         assert_eq!(g.phase, Phase::Diving);
+    }
+    fn click(at: (f32, f32, f32, f32)) -> Input {
+        Input {
+            click: true,
+            pointer: vec2(at.0 + at.2 * 0.5, at.1 + at.3 * 0.5),
+            ..Input::default()
+        }
+    }
+    #[test]
+    fn instrument_buttons_mirror_ballast_and_sonar_keys() {
+        let mut keyed = launched();
+        let mut clicked = keyed.clone();
+        keyed.tick(&Input {
+            secondary: true,
+            ..Input::default()
+        });
+        assert_eq!(clicked.tick(&click(BALLAST_BUTTON)), Cue::Action);
+        assert!(keyed.balanced && clicked.balanced);
+        assert_eq!(keyed.position, clicked.position);
+        keyed.tick(&Input {
+            tertiary: true,
+            ..Input::default()
+        });
+        assert_eq!(clicked.tick(&click(SONAR_BUTTON)), Cue::Action);
+        assert_eq!((keyed.sonar, clicked.sonar), (180, 180));
+        assert_eq!(keyed.oxygen, clicked.oxygen);
+        // Cooldown refuses the button exactly as it refuses C.
+        let before = clicked.oxygen;
+        assert_eq!(clicked.tick(&click(SONAR_BUTTON)), Cue::None);
+        assert!((before - clicked.oxygen - TICK_DT).abs() < 0.001);
+        // Clicks elsewhere (the chart, the briefing cards) change nothing.
+        let mut idle = launched();
+        let mut reference = idle.clone();
+        idle.tick(&Input {
+            click: true,
+            pointer: vec2(300., 370.),
+            ..Input::default()
+        });
+        reference.tick(&Input::default());
+        assert_eq!(
+            (idle.balanced, idle.sonar, idle.oxygen),
+            (reference.balanced, reference.sonar, reference.oxygen)
+        );
+        // Only while diving: the briefing ignores the instrument buttons.
+        let mut briefing = Game::new();
+        briefing.tick(&click(BALLAST_BUTTON));
+        assert!(!briefing.balanced && briefing.phase == Phase::Briefing);
+    }
+    #[test]
+    fn events_record_accepted_actions_and_clear_every_tick() {
+        let mut g = launched();
+        assert_eq!(g.events.as_slice(), &[Event::Launch]);
+        g.balanced = true;
+        g.position = g.chart().divers[0].0;
+        let winch = Input {
+            primary: true,
+            ..Input::default()
+        };
+        assert_eq!(g.tick(&winch), Cue::Good);
+        assert_eq!(g.events.as_slice(), &[Event::Winched { index: 0 }]);
+        g.tick(&Input::default());
+        assert!(g.events.as_slice().is_empty());
+        // A fast pass beside a bell is refused with feedback at that bell.
+        g.position = g.chart().divers[1].0;
+        g.velocity = vec2(60., 0.);
+        g.tick(&winch);
+        assert!(matches!(g.events.as_slice(), [Event::TooFast { .. }]));
+        // The same tap far from anything stays silent (it is just braking).
+        g.position = vec2(330., 60.);
+        g.velocity = vec2(60., 0.);
+        g.tick(&winch);
+        assert!(g.events.as_slice().is_empty());
+        // Landing at the dock reports the people delivered.
+        g.position = BASE;
+        g.velocity = Vec2::ZERO;
+        g.tick(&winch);
+        assert_eq!(
+            g.events.as_slice(),
+            &[Event::Docked {
+                landed: 1,
+                cleared: false
+            }]
+        );
+    }
+    #[test]
+    fn full_cabin_low_air_impacts_and_wrecks_are_reported() {
+        let mut g = launched();
+        g.balanced = true;
+        for index in 0..2 {
+            g.position = g.chart().divers[index].0;
+            g.velocity = Vec2::ZERO;
+            g.try_winch();
+        }
+        g.position = g.chart().divers[2].0;
+        g.events = Events::new();
+        assert_eq!(g.try_winch(), Cue::None);
+        assert_eq!(
+            g.events.as_slice(),
+            &[Event::CabinFull {
+                at: g.chart().divers[2].0
+            }]
+        );
+        // Crossing the low-air line raises one alarm, not one per tick.
+        g.oxygen = LOW_AIR + 0.01;
+        g.tick(&Input::default());
+        assert_eq!(g.events.as_slice(), &[Event::LowAir]);
+        g.tick(&Input::default());
+        assert!(g.events.as_slice().is_empty());
+        // A reef strike records its cause, place and the hull it cost.
+        let mut hit = launched();
+        hit.position = vec2(208., 170.);
+        hit.velocity = vec2(90., 0.);
+        hit.balanced = true;
+        hit.tick(&Input {
+            right: true,
+            ..Input::default()
+        });
+        let [Event::Impact { at, loss, cause }] = hit.events.as_slice() else {
+            panic!("{:?}", hit.events);
+        };
+        assert_eq!(*cause, Cause::Reef);
+        assert!((loss - (100. - hit.hull)).abs() < 0.001);
+        assert!(at.x > hit.position.x);
+        let mut sunk = launched();
+        sunk.oxygen = 0.001;
+        sunk.tick(&Input::default());
+        assert_eq!(sunk.events.as_slice(), &[Event::Wreck { hull: false }]);
+    }
+    #[test]
+    fn guidance_trail_follows_the_pilot_route_without_mutation() {
+        let mut g = launched();
+        g.position = g.chart().divers[2].0;
+        let before = (g.position, g.velocity, g.oxygen, g.elapsed);
+        let trail = g.trail(BASE);
+        assert!(trail.len > 10 && trail.len <= TRAIL);
+        assert_eq!(trail.points[trail.len - 1], BASE);
+        assert_eq!(trail.distance, g.route(BASE).0);
+        assert!(
+            trail.points[..trail.len]
+                .iter()
+                .all(|p| !g.solid(*p, RADIUS))
+        );
+        assert_eq!(before, (g.position, g.velocity, g.oxygen, g.elapsed));
+        // The reserve mark is the same rule of thumb the pilot turns on.
+        assert_eq!(
+            g.air_reserve(trail.distance),
+            trail.distance / 55. * 1.5 + 8.
+        );
+        g.position = BASE;
+        assert_eq!(g.trail(BASE).len, 0);
+    }
+    #[test]
+    fn medal_pace_matches_the_awarded_medal() {
+        let mut g = launched();
+        assert_eq!(g.medal_pace(), 3);
+        g.elapsed = GOLD_TICKS;
+        assert_eq!(g.medal_pace(), 2);
+        g.stage_impacts = 5;
+        assert_eq!(g.medal_pace(), 1);
     }
 }

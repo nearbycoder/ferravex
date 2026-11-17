@@ -2,6 +2,7 @@
 //! gamepad, mouse and touch focus/activation) through invisible buttons; the
 //! visuals use the UI kit (`kit::button` with eased `ButtonMotion`, AA shapes),
 //! `Entrance` staggers and `RollCounter` roll-ups, all honoring reduced motion.
+use crate::chips;
 use crate::gfx::{Painter, color, ease, mix3, rgba, scale3, with_alpha};
 use crate::hud::{self, CYAN, GOLD, MUTED, PAPER, RED, VIOLET, panel, r, theme};
 use crate::icons;
@@ -10,7 +11,9 @@ use crate::meta::Meta;
 use crate::sim::content::*;
 use crate::sim::{Card, ChestItem, Game, Phase};
 use crate::text::{Align, BODY, HUGE, LARGE, SMALL, Text};
+use crate::text::{Face, width_in};
 use ferravex_play::tween::{Appearance, Entrance, Motion, RollCounter};
+use ferravex_render::icons::{self as glyph, Icon, IconStyle};
 use ferravex_render::prelude::{Color, Vec2, vec2};
 use ferravex_render::shapes::{self, Fill, Shadow};
 use ferravex_render::ui::kit::{self, ButtonKind, ButtonMotion};
@@ -345,14 +348,6 @@ pub fn title(m: &mut Menu, l: &Layout, meta: &Meta, best: Option<(u64, u64)>, ag
     );
     crate::text::logo(m.p, vec2(w * 0.5, logo_y), cell, m.t, m.sway, &palette);
     let sub_y = logo_y + cell * 5.5;
-    m.tx.label(
-        vec2(0., sub_y),
-        w,
-        "A tiny lantern spirit vs. the entire ocean",
-        if l.compact { BODY } else { LARGE },
-        with_alpha(PAPER, a),
-        Align::Center,
-    );
     let bw = if l.compact { 240. } else { 300. };
     let bh = if l.short { 44. } else { 52. };
     let by = if l.short { sub_y + 30. } else { h * 0.56 };
@@ -377,40 +372,55 @@ pub fn title(m: &mut Menu, l: &Layout, meta: &Meta, best: Option<(u64, u64)>, ag
         true,
         ButtonKind::Secondary,
     );
+    // Footer: Glimmer as a gem and a number, then best time and kills.
     let foot = h - if l.short { 46. } else { 84. };
-    hud::gem(m.p, vec2(w * 0.5 - 100., foot + 8.), 6., GOLD);
-    m.tx.label_fmt(
-        vec2(w * 0.5 - 88., foot),
-        220.,
+    let mut buf = [0u8; 24];
+    let glimmer = fmt_into(&mut buf, format_args!("{}", meta.glimmer));
+    let gw = width_in(Face::Classic, glimmer, BODY);
+    hud::gem(m.p, vec2(w * 0.5 - gw * 0.5 - 10., foot + 8.), 6., GOLD);
+    m.tx.big(
+        vec2(w * 0.5 - gw * 0.5 + 4., foot),
+        gw + 8.,
+        glimmer,
         BODY,
         rgba(GOLD, 1.),
         Align::Left,
-        format_args!("{} Glimmer", meta.glimmer),
     );
-    let size = if l.compact { SMALL } else { BODY };
     if let Some((deciseconds, kills)) = best {
         let s = deciseconds / 10;
-        m.tx.label_fmt(
-            vec2(0., foot + 26.),
-            w,
-            size,
-            MUTED,
-            Align::Center,
-            format_args!(
-                "Best survival {:02}:{:02} · Most kills {}",
-                s / 60,
-                s % 60,
-                kills
-            ),
+        let size = if l.compact { SMALL } else { BODY };
+        let mut tb = [0u8; 16];
+        let time = fmt_into(&mut tb, format_args!("{:02}:{:02}", s / 60, s % 60));
+        let mut kb = [0u8; 16];
+        let kills = fmt_into(&mut kb, format_args!("{kills}"));
+        let icon = size + 4.;
+        let (tw, kw) = (
+            width_in(Face::Modern, time, size),
+            width_in(Face::Modern, kills, size),
         );
-    } else {
+        let total = icon + 5. + tw + 26. + icon + 5. + kw;
+        let mut x = w * 0.5 - total * 0.5;
+        let cy = foot + 26. + size * 0.5;
+        glyph::draw(Icon::Clock, vec2(x + icon * 0.5, cy), icon, color(MUTED));
+        x += icon + 5.;
         m.tx.label(
-            vec2(0., foot + 26.),
-            w,
-            "Survive the tide. Defeat what waits at its bottom.",
+            vec2(x, cy - size * 0.5),
+            tw + 4.,
+            time,
             size,
             MUTED,
-            Align::Center,
+            Align::Left,
+        );
+        x += tw + 26.;
+        hud::skull(m.p, vec2(x + icon * 0.5, cy), icon * 0.42);
+        x += icon + 5.;
+        m.tx.label(
+            vec2(x, cy - size * 0.5),
+            kw + 4.,
+            kills,
+            size,
+            MUTED,
+            Align::Left,
         );
     }
 }
@@ -471,7 +481,7 @@ pub fn select(
     meta: &Meta,
     selected: usize,
     age: f32,
-    notice: Option<(&str, f32)>,
+    notice: Option<(u64, f32)>,
 ) {
     let w = l.screen.x;
     dim(l, 0.8);
@@ -577,53 +587,53 @@ pub fn select(
             Align::Left,
         );
         if !dense {
-            let used = m.tx.wrapped(
-                vec2(min.x + 14., wy + 28.),
-                cw - 28.,
-                2,
-                c.quirk,
-                BODY,
-                with_alpha(PAPER, a),
-                Align::Left,
+            // Strengths and costs as chips: heart HP, sword, target, wind.
+            let size = if cw < 220. { SMALL } else { BODY };
+            chips::rows(
+                m.tx,
+                &chips::character(i),
+                min.x + 12.,
+                cw - 24.,
+                wy + 28.,
+                size,
+                true,
+                c.color,
+                if unlocked { a } else { 0.6 * a },
             );
-            let flavor_y = wy + 34. + used;
-            let flavor_lines = ((min.y + ch - 44. - flavor_y) / 14.).floor().clamp(0., 2.) as usize;
-            if flavor_lines > 0 {
-                m.tx.wrapped(
-                    vec2(min.x + 14., flavor_y),
-                    cw - 28.,
-                    flavor_lines,
-                    c.flavor,
-                    SMALL,
-                    with_alpha(MUTED, a),
-                    Align::Left,
-                );
-            }
         }
         if !unlocked {
+            // Locked: a padlock and the price in Glimmer.
             let lock = min + vec2(cw * 0.5, ch - if dense { 13. } else { 26. });
+            let size = if dense { SMALL } else { BODY };
+            let mut buf = [0u8; 16];
+            let cost = fmt_into(&mut buf, format_args!("{}", c.cost));
+            let cw_text = width_in(Face::Classic, cost, size);
+            let pill = 16. + 14. + 16. + cw_text + 18.;
             shapes::fill_rounded_rect(
-                r(lock - vec2(72., 14.), vec2(144., 28.)),
+                r(lock - vec2(pill * 0.5, 14.), vec2(pill, 28.)),
                 14.,
                 Color::new(0.02, 0.03, 0.06, 0.9 * a),
             );
-            hud::gem(m.p, lock - vec2(48., 0.), 5., GOLD);
-            m.tx.label_fmt(
-                lock - vec2(36., 8.),
-                120.,
-                if dense { SMALL } else { BODY },
+            let x = lock.x - pill * 0.5 + 10.;
+            glyph::draw(Icon::Lock, vec2(x + 7., lock.y), 14., color(rgba(GOLD, a)));
+            hud::gem(m.p, vec2(x + 14. + 12., lock.y), 5., GOLD);
+            m.tx.big(
+                vec2(x + 14. + 22., lock.y - size * 0.44),
+                cw_text + 8.,
+                cost,
+                size,
                 rgba(GOLD, a),
                 Align::Left,
-                format_args!("Unlock {}", c.cost),
             );
         } else if chosen {
-            m.tx.label(
-                vec2(min.x, min.y + ch - if dense { 18. } else { 26. }),
-                cw,
-                "✓ Selected",
-                if dense { SMALL } else { BODY },
-                rgba(c.color, a),
-                Align::Center,
+            let at = vec2(min.x + cw * 0.5, min.y + ch - if dense { 13. } else { 22. });
+            let d = if dense { 18. } else { 26. };
+            glyph::badge(
+                Icon::Check,
+                at,
+                d,
+                color(rgba(c.color, a)),
+                Color::new(0.04, 0.06, 0.12, a),
             );
         }
     }
@@ -672,14 +682,24 @@ pub fn select(
         meta.is_unlocked(selected),
         ButtonKind::Primary,
     );
-    if let Some((msg, a)) = notice {
-        m.tx.label(
-            vec2(0., lower + bh + 4.),
-            w,
-            msg,
+    if let Some((missing, a)) = notice {
+        // Not enough Glimmer: a padlock, a gem and how many are missing.
+        let a = a.min(1.);
+        let mut buf = [0u8; 16];
+        let need = fmt_into(&mut buf, format_args!("{missing}"));
+        let nw = width_in(Face::Classic, need, BODY);
+        let total = 18. + 8. + 12. + 8. + nw;
+        let x = w * 0.5 - total * 0.5;
+        let cy = lower + bh + 16.;
+        glyph::draw(Icon::Lock, vec2(x + 9., cy), 18., color(rgba(RED, a)));
+        hud::gem(m.p, vec2(x + 18. + 8. + 6., cy), 6., RED);
+        m.tx.big(
+            vec2(x + 18. + 8. + 12. + 8., cy - 7.),
+            nw + 8.,
+            need,
             BODY,
-            rgba(RED, a.min(1.)),
-            Align::Center,
+            rgba(RED, a),
+            Align::Left,
         );
     }
 }
@@ -746,7 +766,11 @@ pub fn shrine(m: &mut Menu, l: &Layout, meta: &Meta, age: f32, flash: Option<(us
             glow,
         );
         let big = rh >= 54.;
-        let text_w = if dense { rw - 16. } else { rw - 160. };
+        let effect = chips::shrine(i);
+        let chip_size = if big && !dense { BODY } else { SMALL };
+        // Dense rows put the effect beside the name; others stack it below.
+        let inline = effect[0].map_or(0., |c| chips::width(&c, SMALL) + 8.);
+        let text_w = if dense { rw - 16. - inline } else { rw - 160. };
         m.tx.label(
             min + vec2(
                 if dense { 8. } else { 14. },
@@ -764,23 +788,25 @@ pub fn shrine(m: &mut Menu, l: &Layout, meta: &Meta, age: f32, flash: Option<(us
             with_alpha(PAPER, look.alpha),
             Align::Left,
         );
-        m.tx.label(
-            min + vec2(
-                if dense { 8. } else { 14. },
-                if dense {
-                    21.
-                } else if big {
-                    28.
-                } else {
-                    23.
-                },
-            ),
-            text_w,
-            item.summary,
-            if big && !dense { BODY } else { SMALL },
-            with_alpha(MUTED, look.alpha),
-            Align::Left,
-        );
+        if dense {
+            if let Some(chip) = &effect[0] {
+                let x = min.x + rw - inline - 2.;
+                chips::draw(m.tx, chip, x, min.y + 12., SMALL, GOLD, look.alpha);
+            }
+        } else {
+            let top = min.y + if big { 30. } else { 23. };
+            chips::rows(
+                m.tx,
+                &effect,
+                min.x + 12.,
+                text_w,
+                top,
+                chip_size,
+                false,
+                GOLD,
+                look.alpha,
+            );
+        }
         for k in 0..if dense { 0 } else { item.max } {
             let lit = k < rank;
             shapes::fill_rounded_rect(
@@ -810,7 +836,7 @@ pub fn shrine(m: &mut Menu, l: &Layout, meta: &Meta, age: f32, flash: Option<(us
         match cost {
             Some(c) => {
                 let mut buf = [0u8; 24];
-                let label = fmt_into(&mut buf, format_args!("Buy ♦ {c}"));
+                let label = fmt_into(&mut buf, format_args!("♦ {c}"));
                 m.button(
                     id::BUY + i as u64,
                     bmin,
@@ -828,7 +854,7 @@ pub fn shrine(m: &mut Menu, l: &Layout, meta: &Meta, age: f32, flash: Option<(us
             None => m.tx.label(
                 bmin + vec2(0., 9.),
                 bw,
-                "★ Maxed",
+                "★ MAX",
                 BODY,
                 rgba(GOLD, 1.),
                 Align::Center,
@@ -891,14 +917,16 @@ pub fn paused(m: &mut Menu, l: &Layout, game: &Game, quip: &str, age: f32) {
     let rows = game.weapon_count().max(1);
     let row_h = if l.short { 24. } else { 34. };
     let look = Entrance::fade_up(14.).sample(age, 0, m.motion);
+    // The build: each weapon's icon, name, level pips and share of damage.
     let card = kit::card(
-        kit::appear(r(vec2(px, py), vec2(pw, rows as f32 * row_h + 64.)), look),
-        Some("Your build"),
+        kit::appear(r(vec2(px, py), vec2(pw, rows as f32 * row_h + 32.)), look),
+        None,
         &theme().faded(look.alpha),
     );
     let total = game.total_damage().max(1.);
     for (k, ws) in game.weapons.iter().flatten().enumerate() {
         let y = card.y + k as f32 * row_h;
+        let c = if ws.evolved { GOLD } else { ws.id.info().color };
         icons::weapon(
             m.p,
             ws.id,
@@ -912,22 +940,42 @@ pub fn paused(m: &mut Menu, l: &Layout, game: &Game, quip: &str, age: f32) {
         } else {
             ws.id.info().name
         };
-        m.tx.label_fmt(
+        let name_w = card.w * 0.4;
+        m.tx.label(
             vec2(card.x + 30., y + (row_h - 16.) * 0.5),
-            card.w * 0.55,
+            name_w,
+            name,
             BODY,
             PAPER,
             Align::Left,
-            format_args!("{name}  Lv {}", ws.level),
+        );
+        let pips_w = (card.w * 0.24).min(84.);
+        level_pips(
+            vec2(card.x + 36. + name_w, y + row_h * 0.5 - 2.),
+            pips_w,
+            ws.level,
+            WEAPON_MAX,
+            c,
+            None,
+            1.,
         );
         let d = game.stats.damage[ws.id as usize];
-        m.tx.label_fmt(
+        let mut buf = [0u8; 24];
+        let share = fmt_into(&mut buf, format_args!("{:.0}%", d / total * 100.));
+        let sw = width_in(Face::Modern, share, BODY);
+        glyph::draw(
+            Icon::Sword,
+            vec2(card.x + card.w - sw - 14., y + row_h * 0.5),
+            14.,
+            color(rgba(c, 1.)),
+        );
+        m.tx.label(
             vec2(card.x + card.w * 0.5, y + (row_h - 16.) * 0.5),
             card.w * 0.5,
+            share,
             BODY,
-            rgba(ws.id.info().color, 1.),
+            rgba(c, 1.),
             Align::Right,
-            format_args!("{:.0} · {:.0}%", d, d / total * 100.),
         );
     }
     let cols = if w < 560. { 2 } else { 4 };
@@ -1017,10 +1065,11 @@ impl UpgradeLayout {
             } else {
                 250.
             });
+            // Effects are chips now, so wide cards no longer need room for prose.
             let ch = if l.short {
                 (h - top - 140.).clamp(150., 230.)
             } else {
-                330_f32.min(h * 0.5)
+                270_f32.min(h * 0.5)
             };
             (
                 cw,
@@ -1049,21 +1098,65 @@ impl UpgradeLayout {
     }
 }
 
-/// Preserve complete effect copy; captions are used only when body text would
-/// exceed the card's reserved content area.
-fn card_copy_fit(copy: &str, width: f32, height: f32, preferred: f32) -> (f32, usize) {
-    let mut size = preferred;
-    loop {
-        let style = ferravex_render::text::TextStyle::modern(size, Color::new(1., 1., 1., 1.));
-        let lines = ferravex_render::text::wrap_text(copy, width, style).count();
-        if size <= SMALL || lines as f32 * style.line_height() <= height {
-            return (size, lines.max(1));
-        }
-        size -= 8.;
+/// A row of `max` level pips lit up to `level`; with `next`, the pip a pick
+/// would light glows at that strength.
+fn level_pips(at: Vec2, w: f32, level: u8, max: u8, c: [f32; 3], next: Option<f32>, a: f32) {
+    let step = w / f32::from(max.max(1));
+    for k in 0..max {
+        let rect = r(
+            at + vec2(k as f32 * step, 0.),
+            vec2((step - 2.).max(2.), 5.),
+        );
+        let fill = if k < level {
+            color(rgba(c, a))
+        } else if let Some(glow) = next.filter(|_| k == level) {
+            color(rgba(mix3(c, [1.; 3], 0.55), (0.45 + 0.55 * glow) * a))
+        } else {
+            Color::new(0.2, 0.25, 0.35, 0.8 * a)
+        };
+        shapes::fill_rounded_rect(rect, 2., fill);
     }
 }
 
-pub fn level_up(m: &mut Menu, l: &Layout, game: &Game, v: &CardView, keyboard_hint: &str) {
+/// The level a card would reach as pips (weapons and passives only).
+fn card_pips(card: Card, at: Vec2, w: f32, next: u8, c: [f32; 3], t: f32, a: f32) {
+    let max = match card {
+        Card::Weapon(_) => WEAPON_MAX,
+        Card::Passive(_) => PASSIVE_MAX,
+        _ => return,
+    };
+    let glow = 0.5 + 0.5 * (t * 5.).sin();
+    level_pips(at, w, next.saturating_sub(1), max, c, Some(glow), a);
+}
+
+/// Where a level-up card's effect chips go: (offset of the row block inside
+/// the card, its width, the text size, centered?).
+fn chip_slot(l: &Layout, g: &UpgradeLayout) -> (Vec2, f32, f32, bool) {
+    if g.dense {
+        return (vec2(50., 32.), g.cw - 62., SMALL, false);
+    }
+    let compact = l.portrait || l.short;
+    let size = if compact && g.ch < 120. { SMALL } else { BODY };
+    if l.short && !l.portrait {
+        (vec2(14., 104.), g.cw - 28., size, true)
+    } else if compact {
+        (vec2(76., 54. + 28.), g.cw - 88., size, false)
+    } else {
+        (vec2(14., 146. + 28.), g.cw - 28., size, true)
+    }
+}
+
+/// Width `kit::keycap` will use for `label`.
+fn keycap_width(label: &str, theme: &kit::KitTheme) -> f32 {
+    let style = ferravex_render::text::TextStyle::modern(theme.body, theme.ink);
+    let h = theme.body * 1.5 + 2.;
+    (ferravex_render::text::text_width(label, style) + kit::SPACE[2] * 2.).max(h - 3.)
+}
+
+/// Key caps (keyboard or controller) shown on the reroll and banish buttons.
+pub type ActionKeys = Option<[&'static str; 2]>;
+
+pub fn level_up(m: &mut Menu, l: &Layout, game: &Game, v: &CardView, keys: ActionKeys) {
     let w = l.screen.x;
     let h = l.screen.y;
     let a = ease::out_cubic(v.age / 0.25);
@@ -1094,13 +1187,19 @@ pub fn level_up(m: &mut Menu, l: &Layout, game: &Game, v: &CardView, keyboard_hi
         rgba(if v.banish_mode { RED } else { CYAN }, a),
         Align::Center,
     );
-    m.tx.label_fmt(
-        vec2(0., top + 30. + size * 0.6),
-        w,
+    // The new level as a badge instead of a sentence.
+    let mut lv = [0u8; 12];
+    let lv = fmt_into(&mut lv, format_args!("LV{}", game.level()));
+    let lw = width_in(Face::Classic, lv, BODY) + 24.;
+    let badge = vec2(w * 0.5 - lw * 0.5, top + 26. + size * 0.6);
+    panel(m.p, badge, vec2(lw, 24.), 12., CYAN, 0.6 * a);
+    m.tx.big(
+        badge + vec2(0., 5.),
+        lw,
+        lv,
         BODY,
-        with_alpha(MUTED, a),
+        rgba(CYAN, a),
         Align::Center,
-        format_args!("Level {} · choose a blessing", game.level()),
     );
     let cards = game.offer.cards();
     let vertical = l.portrait;
@@ -1179,37 +1278,26 @@ pub fn level_up(m: &mut Menu, l: &Layout, game: &Game, v: &CardView, keyboard_hi
                     rgba(GOLD, ca),
                     Align::Right,
                 );
-            } else if matches!(card, Card::Weapon(_) | Card::Passive(_)) {
-                m.tx.label_fmt(
-                    min + vec2(cw - 76., 12.),
-                    66.,
-                    SMALL,
-                    rgba(accent, ca),
-                    Align::Right,
-                    format_args!("Lv {} → {}", level - 1, level),
-                );
+            } else {
+                card_pips(card, min + vec2(cw - 76., 14.), 66., level, accent, m.t, ca);
             }
             icons::card(m.p, card, min + vec2(26., ch * 0.67), 13., m.t, false);
-            let copy = hud::card_line(game, card);
-            let (copy_size, copy_lines) = card_copy_fit(copy, cw - 62., ch - 34., SMALL);
-            m.tx.wrapped(
-                min + vec2(50., 30.),
-                cw - 62.,
-                copy_lines,
-                copy,
-                copy_size,
-                with_alpha(PAPER, ca),
-                Align::Left,
+            let (at, chip_w, size, centered) = chip_slot(l, &geometry);
+            let effect = chips::card(card, level);
+            let room = ch - at.y - if evolve_hint { 24. } else { 4. };
+            chips::rows(
+                m.tx,
+                &effect,
+                min.x + at.x,
+                chip_w,
+                min.y + at.y,
+                chips::fit(&effect, chip_w, room, size),
+                centered,
+                accent,
+                ca,
             );
             if evolve_hint && ch >= 82. {
-                m.tx.label(
-                    min + vec2(50., ch - 16.),
-                    cw - 62.,
-                    "★ Find a chest to evolve",
-                    SMALL,
-                    rgba(GOLD, ca),
-                    Align::Left,
-                );
+                chips::evolve_tag(m.p, min.x + 50. + 37., min.y + ch - 14., m.t, ca);
             }
             continue;
         }
@@ -1268,15 +1356,10 @@ pub fn level_up(m: &mut Menu, l: &Layout, game: &Game, v: &CardView, keyboard_hi
             min.x + 14.
         };
         let tw = if compact_card { cw - 88. } else { cw - 28. };
-        let mut ty = if compact_card {
+        let ty = if compact_card {
             min.y + 54.
         } else {
             min.y + 146.
-        };
-        let align = if compact_card {
-            Align::Left
-        } else {
-            Align::Center
         };
         if is_new {
             let bx = if compact_card {
@@ -1297,107 +1380,100 @@ pub fn level_up(m: &mut Menu, l: &Layout, game: &Game, v: &CardView, keyboard_hi
                 [0.12, 0.08, 0.02, ca],
                 Align::Center,
             );
-        } else if matches!(card, Card::Weapon(_) | Card::Passive(_)) {
-            m.tx.label_fmt(
-                vec2(tx, ty + 2.),
-                tw,
-                BODY,
-                rgba(accent, ca),
-                align,
-                format_args!("Lv {} → {}", level - 1, level),
-            );
-        }
-        ty += 28.;
-        let (copy_x, copy_w, copy_align) = if l.short && !vertical {
-            ty = min.y + 104.;
-            (min.x + 14., cw - 28., Align::Center)
         } else {
-            (tx, tw, align)
-        };
-        let copy = hud::card_line(game, card);
-        let reserve = if evolve_hint { 30. } else { 8. };
-        let (copy_size, copy_lines) = card_copy_fit(copy, copy_w, min.y + ch - ty - reserve, BODY);
-        let used = m.tx.wrapped(
-            vec2(copy_x, ty),
-            copy_w,
-            copy_lines,
-            copy,
-            copy_size,
-            with_alpha(PAPER, ca),
-            copy_align,
+            // The level this pick reaches, as pips; the next one glows.
+            let pw = tw.min(150.);
+            let px = if compact_card {
+                tx
+            } else {
+                tx + (tw - pw) * 0.5
+            };
+            card_pips(card, vec2(px, ty + 7.), pw, level, accent, m.t, ca);
+        }
+        let (at, chip_w, size, centered) = chip_slot(l, &geometry);
+        let effect = chips::card(card, level);
+        let room = ch - at.y - if evolve_hint { 30. } else { 8. };
+        chips::rows(
+            m.tx,
+            &effect,
+            min.x + at.x,
+            chip_w,
+            min.y + at.y,
+            chips::fit(&effect, chip_w, room, size),
+            centered,
+            accent,
+            ca,
         );
-        ty += used + 10.;
-        let flavor_limit = if evolve_hint {
-            min.y + ch - 30.
-        } else {
-            min.y + ch - 6.
-        };
-        let flavor_lines = ((flavor_limit - ty) / 14.).floor().clamp(0., 2.) as usize;
-        if flavor_lines > 0 {
-            m.tx.wrapped(
-                vec2(tx, ty),
-                tw,
-                flavor_lines,
-                card.flavor(),
-                SMALL,
-                with_alpha(MUTED, ca),
-                align,
-            );
-        }
         if evolve_hint {
-            let y = min.y + ch - 24.;
-            m.tx.label(
-                vec2(min.x, y),
-                cw,
-                "★ Evolution ready: find a chest!",
-                SMALL,
-                rgba(GOLD, (0.6 + 0.4 * (m.t * 5.).sin().abs()) * ca),
-                Align::Center,
-            );
+            chips::evolve_tag(m.p, min.x + cw * 0.5, min.y + ch - 18., m.t, ca);
         }
     }
+    // Reroll and banish: icon, word, a count bubble and the key cap.
     let by = geometry.footer_y;
     let bw = if l.compact { 150. } else { 200. };
     let bh = if l.short { 38. } else { 44. };
-    let mut b1 = [0u8; 24];
-    let mut b2 = [0u8; 24];
-    let reroll = fmt_into(&mut b1, format_args!("Reroll ({})", game.rerolls));
-    let banish = if v.banish_mode {
-        "Cancel"
-    } else {
-        fmt_into(&mut b2, format_args!("× Banish ({})", game.banishes))
-    };
+    let reroll_ok = game.rerolls > 0 && !v.banish_mode;
+    let banish_ok = game.banishes > 0 || v.banish_mode;
+    let reroll_at = vec2(w * 0.5 - bw - 6., by);
+    let banish_at = vec2(w * 0.5 + 6., by);
     m.button(
         id::REROLL,
-        vec2(w * 0.5 - bw - 6., by),
+        reroll_at,
         vec2(bw, bh),
-        reroll,
+        "Reroll",
         VIOLET,
-        game.rerolls > 0 && !v.banish_mode,
+        reroll_ok,
         ButtonKind::Secondary,
     );
     m.button(
         id::BANISH,
-        vec2(w * 0.5 + 6., by),
+        banish_at,
         vec2(bw, bh),
-        banish,
+        if v.banish_mode { "Cancel" } else { "Banish" },
         RED,
-        game.banishes > 0 || v.banish_mode,
+        banish_ok,
         if v.banish_mode {
             ButtonKind::Danger
         } else {
             ButtonKind::Secondary
         },
     );
-    if !l.short {
+    let marks = [
+        (reroll_at, Icon::Restart, VIOLET, game.rerolls, reroll_ok, 0),
+        (banish_at, Icon::Cross, RED, game.banishes, banish_ok, 1),
+    ];
+    for (at, icon, c, count, live, k) in marks {
+        let fade = if live { 1. } else { 0.45 };
+        if v.banish_mode && k == 1 {
+            continue;
+        }
+        glyph::draw_styled(
+            icon,
+            at + vec2(20., bh * 0.5),
+            18.,
+            IconStyle::new(color(rgba(c, fade))),
+        );
+        let bubble = at + vec2(bw - 6., 6.);
+        let mut buf = [0u8; 8];
+        let n = fmt_into(&mut buf, format_args!("{count}"));
+        shapes::fill_circle(bubble, 10., color(rgba(c, 0.95 * fade)));
+        shapes::stroke_circle(bubble, 10., 1.5, Color::new(0.02, 0.03, 0.08, 0.9 * fade));
         m.tx.label(
-            vec2(0., by + bh + 12.),
-            w,
-            keyboard_hint,
-            BODY,
-            with_alpha(MUTED, 0.8),
+            bubble - vec2(10., 4.),
+            20.,
+            n,
+            SMALL,
+            [0.04, 0.05, 0.1, fade],
             Align::Center,
         );
+        if let Some(keys) = keys
+            && !l.short
+        {
+            let th = theme().faded(0.85 * fade);
+            let cap = keys[k];
+            let cw = keycap_width(cap, &th);
+            kit::keycap(at.x + bw * 0.5 - cw * 0.5, by + bh + 8., cap, &th);
+        }
     }
 }
 
@@ -1484,25 +1560,33 @@ pub fn chest(m: &mut Menu, l: &Layout, game: &Game, age: f32) {
                 icons::card(m.p, Card::Snack, min + vec2(26., rh * 0.5), 14., m.t, false);
                 m.tx.label(
                     min + vec2(48., 16.),
-                    rw - 56.,
-                    "A seaweed snack. Delicious.",
+                    rw * 0.45,
+                    Card::Snack.name(),
                     BODY,
                     with_alpha(PAPER, a),
                     Align::Left,
                 );
+                if let Some(chip) = &chips::card(Card::Snack, 1)[0] {
+                    let x = min.x + rect.w - chips::width(chip, BODY) - 12.;
+                    chips::draw(m.tx, chip, x, min.y + rect.h * 0.5, BODY, accent, a);
+                }
             }
         }
         y += rh + if l.short && !l.portrait { 8. } else { 10. };
     }
     let done = 0.7 + reveal.total_duration(items.len());
     if age > done {
-        m.tx.label_fmt(
-            vec2(0., y + 6.),
-            w,
+        let mut buf = [0u8; 16];
+        let gain = fmt_into(&mut buf, format_args!("+{}", game.chest.glimmer));
+        let gw = width_in(Face::Classic, gain, BODY);
+        hud::gem(m.p, vec2(w * 0.5 - gw * 0.5 - 10., y + 14.), 6., GOLD);
+        m.tx.big(
+            vec2(w * 0.5 - gw * 0.5 + 4., y + 6.),
+            gw + 8.,
+            gain,
             BODY,
             rgba(GOLD, 1.),
-            Align::Center,
-            format_args!("+{} Glimmer ♦", game.chest.glimmer),
+            Align::Left,
         );
         let bw = 220.;
         m.button(
@@ -1586,7 +1670,6 @@ pub fn results(m: &mut Menu, l: &Layout, game: &Game, s: &Summary, age: f32) {
         with_alpha(MUTED, head.alpha),
         Align::Center,
     );
-    let names = ["Survived", "Level", "Kills", "Glimmer"];
     let colors = [CYAN, VIOLET, RED, GOLD];
     let bests = [s.best_time, s.best_level, s.best_kills, false];
     let cols = if w < 560. { 2 } else { 4 };
@@ -1619,14 +1702,15 @@ pub fn results(m: &mut Menu, l: &Layout, game: &Game, s: &Summary, age: f32) {
             c,
             if bests[k] { 0.8 } else { 0. },
         );
-        m.tx.label(
-            min + vec2(0., 7.),
-            rect.w,
-            names[k],
-            SMALL,
-            rgba(c, look.alpha),
-            Align::Center,
-        );
+        // Each tile's meaning is its icon: clock, level, skull, gem.
+        let icon_at = min + vec2(rect.w * 0.5, if l.short { 11. } else { 14. });
+        let icon = if l.short { 12. } else { 16. };
+        match k {
+            0 => glyph::draw(Icon::Clock, icon_at, icon, color(rgba(c, look.alpha))),
+            1 => glyph::draw(Icon::ArrowUp, icon_at, icon, color(rgba(c, look.alpha))),
+            2 => hud::skull(m.p, icon_at, icon * 0.42),
+            _ => hud::gem(m.p, icon_at, icon * 0.36, GOLD),
+        }
         let vy = min.y + if l.short { 20. } else { 28. };
         let vs = if l.short { BODY } else { LARGE };
         let v = s.rolls[k].shown();
@@ -1647,6 +1731,14 @@ pub fn results(m: &mut Menu, l: &Layout, game: &Game, s: &Summary, age: f32) {
                 Align::Center,
                 format_args!("+{v}"),
             ),
+            1 => m.tx.big_fmt(
+                vec2(min.x, vy),
+                rect.w,
+                vs,
+                with_alpha(PAPER, look.alpha),
+                Align::Center,
+                format_args!("LV{v}"),
+            ),
             _ => m.tx.big_fmt(
                 vec2(min.x, vy),
                 rect.w,
@@ -1657,19 +1749,16 @@ pub fn results(m: &mut Menu, l: &Layout, game: &Game, s: &Summary, age: f32) {
             ),
         }
         if bests[k] && !s.rolls[k].is_rolling() && age > 1. {
+            // A new personal best wears a crown.
             let pulse = 0.75 + 0.25 * (m.t * 5.).sin() * m.sway;
-            shapes::fill_rounded_rect(
-                r(min + vec2(rect.w - 62., -9.), vec2(66., 18.)),
-                9.,
+            let at = min + vec2(rect.w - 6., 2.);
+            m.p.glow(at, 22., rgba(GOLD, 0.35 * pulse));
+            glyph::badge(
+                Icon::Crown,
+                at,
+                24.,
                 color(rgba(GOLD, pulse)),
-            );
-            m.tx.label(
-                min + vec2(rect.w - 62., -4.),
-                66.,
-                "New best!",
-                SMALL,
-                [0.12, 0.08, 0.02, 1.],
-                Align::Center,
+                Color::new(0.12, 0.08, 0.02, 1.),
             );
         }
     }
@@ -1692,13 +1781,28 @@ pub fn results(m: &mut Menu, l: &Layout, game: &Game, s: &Summary, age: f32) {
     if shown > 0 {
         let look = Entrance::fade_up(16.).sample(age - 0.45, 0, m.motion);
         let card = kit::card(
-            kit::appear(r(vec2(bx, by), vec2(bw, shown as f32 * row_h + 64.)), look),
-            Some("Damage by weapon"),
+            kit::appear(r(vec2(bx, by), vec2(bw, shown as f32 * row_h + 32.)), look),
+            None,
             &theme().faded(look.alpha),
         );
         let total = game.total_damage().max(1.);
         let top_d = game.stats.damage[order[0]].max(1.);
         let grow_in = Entrance::fade().with_duration(0.6).with_stagger(0.06);
+        // One name size for every row: the largest that fits them all.
+        let name_of = |wi: usize| {
+            let wid = WeaponId::ALL[wi];
+            if game.weapon(wid).is_some_and(|s| s.evolved) {
+                wid.info().evolved
+            } else {
+                wid.info().name
+            }
+        };
+        let fits = |size: f32| {
+            order[..shown]
+                .iter()
+                .all(|&wi| width_in(Face::Modern, name_of(wi), size) <= card.w * 0.3)
+        };
+        let ts = if !l.short && fits(BODY) { BODY } else { SMALL };
         for (k, &wi) in order[..shown].iter().enumerate() {
             let wid = WeaponId::ALL[wi];
             let y = card.y + k as f32 * row_h;
@@ -1713,12 +1817,7 @@ pub fn results(m: &mut Menu, l: &Layout, game: &Game, s: &Summary, age: f32) {
                 m.t,
                 evolved,
             );
-            let name = if evolved {
-                wid.info().evolved
-            } else {
-                wid.info().name
-            };
-            let ts = if l.short { SMALL } else { BODY };
+            let name = name_of(wi);
             m.tx.label(
                 vec2(card.x + 30., y + (row_h - ts) * 0.5),
                 card.w * 0.3,
@@ -1927,7 +2026,7 @@ mod responsive_tests {
                                 banish_mode: false,
                                 age: 3.,
                             },
-                            "Choose a card",
+                            Some(["E", "Q"]),
                         ),
                         5 => chest(&mut m, &l, &game, 5.),
                         _ => results(&mut m, &l, &game, &summary, 3.),
@@ -1969,37 +2068,51 @@ mod responsive_tests {
     }
 
     #[test]
-    fn every_upgrade_effect_fits_in_full_in_four_card_phone_and_landscape_layouts() {
-        let mut copies: Vec<&str> = WeaponId::ALL
-            .iter()
-            .flat_map(|id| id.info().levels)
-            .collect();
-        copies.extend(PassiveId::ALL.iter().map(|id| id.info().summary));
-        copies.extend(["Restore 30% of your HP.", "+25 Glimmer for the Shrine."]);
-        for size in [[320., 480.], [390., 844.], [844., 390.]] {
+    fn every_upgrade_effect_fits_as_chips_in_four_card_phone_and_landscape_layouts() {
+        let mut cards: Vec<(Card, u8)> = Vec::new();
+        for id in WeaponId::ALL {
+            cards.extend((1..=WEAPON_MAX).map(|l| (Card::Weapon(id), l)));
+        }
+        for id in PassiveId::ALL {
+            cards.extend((1..=PASSIVE_MAX).map(|l| (Card::Passive(id), l)));
+        }
+        cards.extend([(Card::Snack, 1), (Card::Pebble, 1)]);
+        for size in [
+            [320., 480.],
+            [390., 844.],
+            [844., 390.],
+            [1280., 800.],
+            [1600., 1000.],
+        ] {
             let l = Layout::new(size);
-            let g = UpgradeLayout::new(&l, 4);
-            let width = if g.dense { g.cw - 62. } else { g.cw - 28. };
-            let height = if g.dense {
-                g.ch - 34.
-            } else {
-                g.ch - 104. - 30.
-            };
-            for copy in &copies {
-                let (font, lines) =
-                    card_copy_fit(copy, width, height, if g.dense { SMALL } else { BODY });
-                let style =
-                    ferravex_render::text::TextStyle::modern(font, Color::new(1., 1., 1., 1.));
-                assert_eq!(
-                    lines,
-                    ferravex_render::text::wrap_text(copy, width, style)
-                        .count()
-                        .max(1)
-                );
-                assert!(
-                    lines as f32 * style.line_height() <= height,
-                    "complete effect fits {size:?}: {copy}"
-                );
+            for n in 1..=4 {
+                let g = UpgradeLayout::new(&l, n);
+                let (at, width, preferred, _) = chip_slot(&l, &g);
+                // Room above the evolve tag, which sits at the card's foot
+                // (dense cards under 82 px show no tag).
+                let tag = match (g.dense, g.ch >= 82.) {
+                    (true, true) => 24.,
+                    (true, false) => 4.,
+                    _ => 30.,
+                };
+                let room = g.ch - at.y - tag;
+                for &(card, level) in &cards {
+                    let effect = chips::card(card, level);
+                    let font = chips::fit(&effect, width, room, preferred);
+                    assert!(effect[0].is_some(), "{card:?} says what it does");
+                    for chip in effect.iter().flatten() {
+                        assert!(
+                            chips::width(chip, font) <= width,
+                            "{size:?}: {card:?} {:?} fits its card",
+                            chip.label
+                        );
+                    }
+                    let used = chips::measure(&effect, width, font);
+                    assert!(
+                        used <= room,
+                        "{size:?} x{n}: {card:?} chips {used} fit in {room}"
+                    );
+                }
             }
         }
     }

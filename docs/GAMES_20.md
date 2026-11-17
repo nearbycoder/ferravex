@@ -48,7 +48,7 @@ Open the local catalog and select a game. Existing games retain their routes.
 
 ## Shared controls and lifecycle
 
-Enter begins a campaign. The in-game footer and H field guide explain each game’s controls; arrow keys turn guide pages. Esc/P pauses, R begins a fresh campaign, M toggles sound, and F2 opens control remapping. The shared host uses Ferravex GameSession at 60 Hz and consumes input edges only in executed ticks. A completed campaign freezes further simulation until retry. Browser keyboard/pointer and native keyboard/pointer use the same model.
+Enter begins a campaign over a live demonstration of the game. The footer's icon buttons (or Esc/P, H, F2 and M) pause, open the guide, remap controls and toggle sound; the guide's first page shows the controls as key caps and arrow keys turn its pages. R begins a fresh campaign. Every game follows the [visual language](VISUAL_LANGUAGE.md): icons, pips and meters instead of labels, and effects at the place where an accepted action happened. The shared host uses Ferravex GameSession at 60 Hz and consumes input edges only in executed ticks. A completed campaign freezes further simulation until retry. Browser keyboard/pointer and native keyboard/pointer use the same model.
 
 Scores and completed-run records use the existing versioned local storage. Unfinished campaigns are not saved. Autoplay generates legal commands through each game’s ordinary rules and uses transient storage; it does not alter personal records. No external assets, libraries or network services are required.
 
@@ -111,6 +111,51 @@ input bridge and expanded player. This Linux environment has no iOS simulator;
 those checks do not substitute for a physical iPhone Chrome playtest.
 
 Workspace Rustdoc completed with one existing `owned-lab` warning about a public documentation link to the private `GRADE_THRESHOLDS` item. That unrelated implementation was preserved.
+
+## Visual language pass
+
+Every game in the catalog now follows the [visual language](VISUAL_LANGUAGE.md):
+icons, pips, meters and motion replace labels, logs and instructions, and every
+accepted action is felt where it happens. Across the collection, help guides
+shrank from 160–390 words to four short bullets, and status logs became effects
+at the event. Previews show the result of an action before it is committed, and
+clickable controls now take the same rule paths as their keys.
+
+The engine gained the shared pieces this needed: 92 two-tone vector pictograms
+(`ferravex_render::icons`), a bounded presentation-effects pool
+(`ferravex_render::juice`: bursts, puffs, sparkles, confetti, rings, popups,
+callouts, toasts, shake, flashes and vignettes), anti-aliased polygon and
+pie-sector fills, round line caps that no longer double-cover translucent
+strokes, and icon-first UI-kit pieces (`icon_value`, `pips`, `ring_meter`,
+`row`, `button_icon`, `toast_icon`). The arcade host plays a live bot
+demonstration behind the title. Its footer is a set of icon buttons, the
+header shows progress pips and a star score with rising gains, and results
+count up beside a trophy. Optional `ArcadeGame` hooks (`progress`, `effects`,
+`draw_objective`, `draw_result`, `shake_on_bad`) let each game add its own
+visual layer.
+
+Rules, content, balance, scoring and autoplay are unchanged. Each game's
+headless bot reproduces its previous ending tick and score. New pointer paths
+reuse the existing key rules and have tests. Two bugs were fixed along the way:
+Crown & Council no longer panics when Enter follows a closed works page, and
+Gravity Post's route dashes can no longer stall on float rounding (the touch
+test caught a hang there).
+
+Validation for this pass:
+
+- Workspace Rust tests: 5,196 passed, 0 failed, with all features.
+- Strict clippy: `--workspace --all-targets --all-features -D warnings` is clean.
+- rustfmt: the 231 changed Rust files pass the check.
+- Release Wasm: all 39 games rebuilt and staged.
+- Browser suite: 595 passed, 0 failed, and the one optional native-status
+  fixture was skipped as before. Arcade start, help, pause, controls and
+  restart pass at three sizes, every campaign wins, and touch-only flows pass
+  at phone sizes.
+- Python tools: the dependency and catalog audits, the docs checks and every
+  tool suite pass.
+
+Native screenshots were reviewed for every game. Hover states were checked by
+pinning the pointer. They are presentation checks, not human playtests.
 
 ## Gameplay text cleanup
 

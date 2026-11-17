@@ -1,6 +1,9 @@
 //! Table-driven courier personality. Selectors are pure functions of accepted
 //! counters, so a replayed flight reads the same and nothing depends on a clock
 //! or RNG. Consecutive counters never select the same line twice in a row.
+//!
+//! In-flight callouts are punchy headlines of at most three words; the longer
+//! jokes live on the pause card and the shift card, one line each.
 use super::courier::{DropGrade, Impact, Ledger, Line};
 
 /// Advance by a stride coprime with the table length: consecutive counters
@@ -16,24 +19,24 @@ pub(super) fn rotate<'a>(table: &[&'a str], counter: u32) -> &'a str {
 
 const WATER: [&str; 6] = [
     "Splashdown!",
-    "The fish signed for it",
-    "You're a boat now",
-    "Wet mail is still mail",
-    "The sea says hello",
-    "Seagulls 1, pilot 0",
+    "Fish signed it",
+    "Boat mode!",
+    "Wet mail!",
+    "Sea says hi",
+    "Gulls 1, you 0",
 ];
 const ISLAND: [&str; 5] = [
-    "The island didn't move",
+    "Island: unmoved",
     "Tree: unimpressed",
     "Rock: still there",
-    "Landscaping is extra",
-    "Locals report a thud",
+    "Landscaping: extra",
+    "Locals heard that",
 ];
 const BOUNDARY: [&str; 4] = [
-    "Off the map, off course",
-    "Air traffic is cross",
-    "The sky has a limit",
-    "That's not the route",
+    "Off the map!",
+    "ATC is cross",
+    "Sky has limits",
+    "Wrong way!",
 ];
 
 /// `impacts` counts this run's impacts, including this one.
@@ -74,18 +77,16 @@ pub(super) fn gate(line: Line, gate: usize) -> &'static str {
 /// A streak milestone, shown once when the multiplier reaches it.
 pub(super) fn streak(multiplier: u32) -> Option<&'static str> {
     match multiplier {
-        3 => Some("On a roll"),
-        4 => Some("The sky is your office"),
-        5 => Some("Max tips! Unstoppable"),
+        3 => Some("On a roll!"),
+        4 => Some("Corner office!"),
+        5 => Some("Unstoppable!"),
         _ => None,
     }
 }
 
-const BONUS: [&str; 3] = [
-    "Secret ring!",
-    "Off-route and on-trend",
-    "Scenic detour pays",
-];
+const BONUS: [&str; 3] = ["Secret ring!", "Off-route, on-trend", "Scenic detour!"];
+/// Headline when the third hidden ring completes the scenic route.
+pub(super) const SCENIC: &str = "Scenic route!";
 
 pub(super) fn bonus(found: u32) -> &'static str {
     rotate(&BONUS, found.saturating_sub(1))
@@ -110,7 +111,7 @@ const BULLSEYE_DROP: [&str; 4] = [
     "Was that a helicopter?",
 ];
 const SMOOTH_DROP: [&str; 4] = [
-    "Package arrived. Slightly airborne.",
+    "Arrived slightly airborne.",
     "Only bounced once. Nice.",
     "Gentle-ish. I'll allow it.",
     "My hat flew off. Worth it.",
@@ -124,7 +125,7 @@ const BUMPY_DROP: [&str; 4] = [
 const SUNK: [&str; 3] = [
     "The fish enjoyed their mail.",
     "The parcel joined the reef.",
-    "Insurance is on its way. Slowly.",
+    "Insurance? Eventually.",
 ];
 const LATE: [&str; 3] = [
     "The customer went to bed.",
@@ -153,7 +154,8 @@ pub(super) const RANKS: [(u32, &str); 5] = [
     (900, "Legend of the Letterbox"),
 ];
 
-/// Title for a finished shift, plus the next tip goal on the ladder.
+/// Title for a finished shift, plus the next rank and its tip goal. An
+/// undelivered shift aims at the first real rank.
 pub(super) fn rank(
     ledger: &Ledger,
     delivered: bool,
@@ -168,7 +170,7 @@ pub(super) fn rank(
         } else {
             "Fashionably Late"
         };
-        return (title, Some((RANKS[1].0, "Deliver for a real rank")));
+        return (title, Some(RANKS[1]));
     }
     let tier = RANKS
         .iter()
@@ -213,14 +215,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn callouts_fit_a_narrow_toast_and_card_without_wrapping() {
-        use ferravex_render::text::{TextStyle, text_width, wrap_text};
-        // The narrowest toast and card rows are 280 logical pixels of 16px
-        // modern copy; measure with the face that actually draws them.
-        let body = TextStyle::modern(16., ferravex_render::WHITE);
-        let width = |line: &str| text_width(line, body);
-        for line in WATER
+    /// Every in-flight headline: impacts, gate lines, streaks and secrets.
+    fn callouts() -> impl Iterator<Item = &'static str> {
+        WATER
             .iter()
             .chain(&ISLAND)
             .chain(&BOUNDARY)
@@ -228,18 +225,48 @@ mod tests {
             .chain(&CLEAN)
             .chain(&SCRAPE)
             .chain(&BONUS)
-            .chain(&PAUSE)
+            .copied()
+            .chain([SCENIC])
+            .chain((3..=5).filter_map(streak))
+    }
+
+    #[test]
+    fn flight_callouts_are_punchy_headlines() {
+        for line in callouts() {
+            let words = line
+                .split_whitespace()
+                .filter(|word| word.chars().any(char::is_alphabetic))
+                .count();
+            assert!(words <= 3, "{line}: {words} words");
+        }
+    }
+
+    #[test]
+    fn callouts_and_card_lines_fit_the_narrowest_card_on_one_line() {
+        use ferravex_render::text::{TextStyle, text_width};
+        // In flight, headlines are 24px modern copy in a card no wider than
+        // the 304px HUD at 320px, with 20px padding each side.
+        let title = TextStyle::modern(24., ferravex_render::WHITE);
+        for line in callouts() {
+            let width = text_width(line, title);
+            assert!(width <= 264., "{line}: {width}");
+        }
+        // Card rows are 280 logical pixels of 16px modern copy; measure with
+        // the face that actually draws them. Jokes get exactly one line.
+        let body = TextStyle::modern(16., ferravex_render::WHITE);
+        let width = |line: &str| text_width(line, body);
+        for line in PAUSE
+            .iter()
             .chain(RANKS.iter().map(|(_, title)| title))
             .chain(&[
                 "Scenic Route Specialist",
                 "Splashdown Specialist",
-                "The sky is your office",
-                "Max tips! Unstoppable",
+                "Takeoff Enthusiast",
+                "Fashionably Late",
             ])
         {
             assert!(width(line) <= 280., "{line}: {}", width(line));
         }
-        // Customer reactions may use two card lines (quoted).
         for line in BULLSEYE_DROP
             .iter()
             .chain(&SMOOTH_DROP)
@@ -248,7 +275,7 @@ mod tests {
             .chain(&LATE)
         {
             let quoted = format!("“{line}”");
-            assert!(wrap_text(&quoted, 280., body).count() <= 2, "{line}");
+            assert!(width(&quoted) <= 280., "{line}: {}", width(&quoted));
         }
     }
 
@@ -264,6 +291,7 @@ mod tests {
         ledger.tips = 950;
         assert_eq!(rank(&ledger, true, 3, 5), ("Legend of the Letterbox", None));
         assert_eq!(rank(&ledger, false, 0, 0).0, "Takeoff Enthusiast");
+        assert_eq!(rank(&ledger, false, 0, 0).1, Some(RANKS[1]));
         assert_eq!(rank(&ledger, false, 0, 3).0, "Splashdown Specialist");
         assert_eq!(rank(&ledger, false, 2, 3).0, "Fashionably Late");
         ledger.drop = Some(Drop {

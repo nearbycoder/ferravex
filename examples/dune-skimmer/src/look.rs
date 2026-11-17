@@ -5,7 +5,7 @@
 //! world pass (before the explicit HUD boundary), so only they and the sun cross
 //! the bloom threshold; sand, stone and pale curbs never haze.
 use super::juice::Juice;
-use super::race::{GATES, HALF_WIDTH, HOVER_HEIGHT, Race, right, world};
+use super::race::{GATES, HALF_WIDTH, HOVER_HEIGHT, Race, THREAD_RADIUS, right, world};
 use ferravex_play::particles::{RibbonFacing, Trail, TrailConfig, TrailSample};
 use ferravex_render::effects::{EffectBlend, EffectStyle, draw_ribbon};
 use ferravex_render::post::{self, PostFx, Tonemap};
@@ -174,6 +174,21 @@ pub(super) fn glows(
                 let r = (projector.scale(depth) * 1.6).clamp(6., 90.);
                 post::glow_circle(p.x, p.y, r, GATE_GLOW, 0.9 * pulse);
             }
+        }
+        // The threading zone: a breathing ring in the gate's opening, as wide
+        // as a threaded pass, so the centre is shown rather than explained.
+        // It is brighter until the pilot has threaded a gate.
+        if let Some((p, depth)) = projector.project(world(gate.position, HOVER_HEIGHT + 1.1)) {
+            let r = (projector.scale(depth) * THREAD_RADIUS).clamp(5., 180.);
+            let strength = if juice.learned.thread || juice.veteran {
+                0.32
+            } else {
+                0.7
+            };
+            let breathe = 1. + 0.06 * (juice.time * 3.).sin() * juice.motion().min(1.);
+            let ring = Color::new(GATE_GLOW.r, GATE_GLOW.g, GATE_GLOW.b, strength * pulse);
+            shapes::stroke_circle(p, r * breathe, (r * 0.07).clamp(1.5, 5.), ring);
+            shapes::fill_circle(p, (r * 0.1).clamp(2., 8.), ring);
         }
     }
     let forward = vec2(yaw.sin(), yaw.cos());

@@ -109,13 +109,6 @@ fn dmd_rect(w: f32, scale: f32, origin: Vec2) -> Rect {
     )
 }
 
-fn readable_label<'a>(text: &'a str, fallback: &'a str, size: f32, width: f32) -> &'a str {
-    match fitted_text(text, size, width) {
-        Some((fitted, _)) if fitted >= size - 0.01 => text,
-        _ => fallback,
-    }
-}
-
 fn table_render(
     game: &PinballGame,
     view: &Presentation,
@@ -152,9 +145,9 @@ fn table_render(
         hud::side_panels(&layout, table, view, frame.best, &hints);
     } else {
         hud::header(table, view, frame.best, layout.header);
-        if state == SessionState::Playing {
-            hud::footer_hint(layout.hint_y, table, view, &hints);
-        }
+    }
+    if state == SessionState::Playing {
+        hud::table_prompts(&layout, table, view, &hints);
     }
     let center = vec2(screen_width() * 0.5, layout.origin.y + 7.4 * layout.scale);
     match state {
@@ -179,32 +172,51 @@ fn dmd_lines<'a>(
     view: &Presentation,
     state: SessionState,
     buffers: &'a mut hud::Buffers,
-) -> (dmd::Line<'a>, dmd::Line<'a>, f32) {
+) -> (dmd::Line<'a>, dmd::Row<'a>, f32) {
     buffers.head.clear();
     buffers.sub.clear();
-    let (color, alpha, time) = if let Some(callout) = &view.callout {
+    let (color, alpha, time, sub) = if let Some(callout) = &view.callout {
         buffers.head.push_str(&callout.head);
-        buffers.sub.push_str(callout.sub);
         (
             callout.color,
             ((callout.life - callout.age) / 0.2).clamp(0., 1.),
             callout.age,
+            callout.sub,
         )
     } else {
         let (head, sub) = hud::objective(table, state);
-        buffers.head.push_str(&head);
-        buffers.sub.push_str(sub);
-        (presentation::AMBER, 1., view.menu_time)
+        buffers.head.push_str(head);
+        (presentation::AMBER, 1., view.menu_time, sub)
+    };
+    let row_color = with_alpha(presentation::AMBER, alpha);
+    let row = match sub {
+        presentation::Sub::None => dmd::Row::Empty,
+        presentation::Sub::Points(points) | presentation::Sub::Value(points) => {
+            if matches!(sub, presentation::Sub::Points(_)) {
+                buffers.sub.push('+');
+            }
+            quips::grouped_into(&mut buffers.sub, points);
+            dmd::Row::Text(dmd::Line {
+                text: &buffers.sub,
+                color: row_color,
+            })
+        }
+        presentation::Sub::Pips { lit, total } => dmd::Row::Pips {
+            lit,
+            total,
+            color: row_color,
+        },
+        presentation::Sub::Meter(fill) => dmd::Row::Meter {
+            fill,
+            color: row_color,
+        },
     };
     (
         dmd::Line {
             text: &buffers.head,
             color: with_alpha(color, alpha),
         },
-        dmd::Line {
-            text: &buffers.sub,
-            color: with_alpha(presentation::AMBER, alpha * 0.72),
-        },
+        row,
         time,
     )
 }
@@ -335,9 +347,15 @@ async fn game() {
             sound.pause();
         }
         let confirm = player_input.pressed("confirm");
+        #[allow(unused_mut)]
+        let mut retry_demo = demo.autoplay && game_over_time > 2.5;
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        {
+            retry_demo &= !capture.hold_results();
+        }
         let restart = player_input.pressed("restart")
             || active && (reset_tapped || pinball.table().over() && (confirm || tapped))
-            || demo.autoplay && game_over_time > 2.5;
+            || retry_demo;
         let dt = demo.dt();
         if restart {
             pinball.restart();
@@ -461,7 +479,8 @@ mod tests {
             assert_eq!(reset, hud.reset);
             let text = |t: &str, size: f32| fitted_text(t, size, f32::MAX).unwrap().1;
             // Every header element's rectangle: (left, top, right, bottom).
-            let mult = text("MULT 5X", 13.);
+            // The multiplier is a chip around "5X"; the best line has a trophy.
+            let mult = text("5X", 13.) + 16.;
             let elements = [
                 ("score", hud.left, 0., hud.left + hud.score_room, 58.),
                 (
@@ -499,8 +518,10 @@ mod tests {
             assert!(hud.mult_right <= reset.x || hud.mult_y < reset.y);
             let (size, _) = fitted_text("1,234,567", 32., hud.score_room).unwrap();
             assert!(size >= 18., "score shrinks to {size} at {w}x{h}");
-            let (size, _) = fitted_text("BEST 1,234,567", 13., hud.best_room).unwrap();
+            let (size, _) = fitted_text("1,234,567", 13., hud.best_room - 20.).unwrap();
             assert!(size >= 12., "best shrinks to {size} at {w}x{h}");
+            let (size, _) = fitted_text("NEW BEST!", 13., hud.best_room - 20.).unwrap();
+            assert!(size >= 12., "new best shrinks to {size} at {w}x{h}");
             assert!(reset.w >= 44. && reset.h >= 44.);
             assert!(origin.y >= hud.header, "table clears the header");
             assert!(origin.x >= 4. && origin.x + 10.3 * scale <= w - 4.);
@@ -510,34 +531,13 @@ mod tests {
             assert!(dmd.y >= origin.y + 16. * scale + 8.);
             assert!(dmd.y + dmd.h + 22. <= h - 6., "hint fits at {w}x{h}");
             let panel_width = (w - 24.).clamp(1., 460.) - 28.;
-            let (title_size, _) = fitted_text("READY FOR YOUR SHIFT?", 21., panel_width).unwrap();
+            let (title_size, _) = fitted_text("CLOCK IN!", 21., panel_width).unwrap();
             assert!(title_size >= 17.);
             // The tallest card (results) fits between the header and canvas end.
             let center = origin.y + 7.4 * scale;
             let tall = hud::RESULTS_HEIGHT;
             assert!((center - tall * 0.5).max(hud.header + 4.) + tall <= h);
         }
-    }
-
-    #[test]
-    fn oversized_hud_bindings_use_readable_controls_guidance() {
-        let long = "LEFT SHIFT / SPACE / J / SOUTH BUTTON TO START AND LAUNCH";
-        for width in [272., 296., 366., 516.] {
-            let label = readable_label(long, "BINDINGS: SEE CONTROLS", 13., width);
-            assert_eq!(label, "BINDINGS: SEE CONTROLS");
-            assert_eq!(fitted_text(label, 13., width).unwrap().0, 13.);
-            for fallback in [
-                "FLIPPERS: SEE CONTROLS",
-                "RELEASE / LAUNCH: SEE CONTROLS",
-                "SCORE SHOWN ABOVE",
-            ] {
-                assert_eq!(fitted_text(fallback, 13., width.max(296.)).unwrap().0, 13.);
-            }
-        }
-        assert_eq!(
-            readable_label("SPACE TO LAUNCH", "BINDINGS: SEE CONTROLS", 13., 296.),
-            "SPACE TO LAUNCH"
-        );
     }
 
     #[test]

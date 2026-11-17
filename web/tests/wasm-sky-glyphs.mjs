@@ -3,9 +3,11 @@
 // Usage: node web/tests/wasm-sky-glyphs.mjs [exact.wasm immutable-source-root]
 //
 // The HUD is painted with the modern UI kit: mixed-case modern-face copy on
-// rounded translucent surfaces. Text is located by its exact ink colour and
-// the row it is centred in; each glyph run is one axis-aligned quad, so the
-// summed quad area of a complete string equals its lit font pixels × pixel².
+// rounded translucent surfaces, with icons, gauges and pips instead of labels.
+// Text is located by its exact ink colour and the row it is centred in; each
+// glyph run is one axis-aligned quad, so the summed quad area of a complete
+// string equals its lit font pixels × pixel². Icons are anti-aliased shapes and
+// never match a glyph ink exactly.
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
@@ -21,7 +23,7 @@ console.log('Wasm SHA256', createHash('sha256').update(bytes).digest('hex'));
 const art = readFileSync(join(source,'crates/ferravex-render/src/font_modern.rs'),'utf8').split('const ART: &str = r#"')[1].split('\n"#;')[0];
 const lit = new Map();{let current=null;for(const line of art.split('\n')){const head=line.match(/^(\S) \d+$/u);if(head){current=head[1];lit.set(current,0);}else if(current&&/^[#.]+$/.test(line))lit.set(current,lit.get(current)+[...line].filter(c=>c==='#').length);}}
 assert.ok(lit.get('A')>10&&lit.get('·')>0&&lit.get('$')>0,'modern face art parsed');
-const cream=[.95,.91,.78,1], amber=[.93,.70,.34,1], mist=[.72,.84,.84,1], ink=[.10,.20,.22,1], line=[.62,.86,.84,.22], postBlue=[.33,.58,.78,1];
+const cream=[.95,.91,.78,1], amber=[.93,.70,.34,1], mist=[.72,.84,.84,1], ink=[.10,.20,.22,1], line=[.62,.86,.84,.22], postBlue=[.33,.58,.78,1], coral=[.82,.36,.23,1], mint=[.56,.92,.74,1];
 const same=(a,b)=>a.every((n,i)=>Math.abs(n-b[i])<1e-5);
 const sameRgb=(a,b)=>[0,1,2].every(i=>Math.abs(a[i]-b[i])<1e-5);
 function expectedArea(text,size) {
@@ -119,7 +121,11 @@ function runtime(w,h,autoplay=false,config=configurations[0]) {
     const box=extent(c=>sameRgb(c,line));
     return box&&box.h>220?{x:box.x+1,y:box.y+1,w:box.w-2,h:box.h-2}:null;
   }
-  function menu(expectedTitle,expectedDetail,summary=null) {
+  // A card: the title, a two-row detail block (icon stats or a rank), a
+  // two-row summary block of icon stats around amber numbers, then the button.
+  // `detail` and `summary` are [ink, exact text] pairs; a null summary only
+  // requires some amber copy, and `expired` is the coral 0:00 of a timeout.
+  function menu(expectedTitle,detail=null,summary=null,expired=false) {
     const p=card();
     assert.ok(p,'actual inactive menu is painted');
     assert.ok(p.y>=7.99&&p.x>=7.99&&p.x+p.w<=w-7.99&&p.y+p.h<=h-7.99,'compact menu is contained in the actual viewport');
@@ -127,9 +133,11 @@ function runtime(w,h,autoplay=false,config=configurations[0]) {
     const result={};
     // 24px descenders start below the 30px title row, above the detail capitals.
     result.title=glyphs(cream,rect(y,34),expectedTitle,24,'title',p,[24,16]);y+=30+4;
-    result.detail=expectedDetail?glyphs(cream,rect(y,ROW),expectedDetail,16,'detail',p):0;y+=2*ROW+8;
-    if(summary)result.summary=glyphs(amber,rect(y,2*ROW),summary,16,'summary',p);
-    else {const area=inkArea(amber,rect(y,2*ROW));assert.ok(area>100,'summary copy painted');result.summary=Math.round(area*100)/100;}
+    result.detail=detail?glyphs(detail[0],rect(y,2*ROW),detail[1],16,'detail',p):0;
+    if(expired)glyphs(coral,rect(y,2*ROW),'0:00',16,'expired window',p);
+    y+=2*ROW+8;
+    if(summary)result.summary=glyphs(summary[0],rect(y,2*ROW),summary[1],16,'summary',p);
+    else {const area=inkArea(amber,rect(y,2*ROW))+inkArea(mist,rect(y,2*ROW));assert.ok(area>50,'summary stats painted');result.summary=Math.round(area*100)/100;}
     y+=2*ROW+12;
     const width=Math.min(p.w-24,240),button={x:p.x+(p.w-width)/2,y,w:width,h:48};
     // The anti-aliased fill fades across one device pixel centred on each
@@ -140,46 +148,57 @@ function runtime(w,h,autoplay=false,config=configurations[0]) {
     assert.ok(inkArea(ink,button)>100,'button label painted on the target');
     return result;
   }
-  const guideRows=()=>{const width=Math.min(w-16,960),x=8+(w-16-width)/2;return {x:x+12,y:8+52+36,w:width-24,h:22*3};};
-  function guidance(head,detail) {
+  // The approach prompt sits under the 36px heading widget (top 52, gap 6):
+  // one 30px row of key caps, or two when a long remap must flow.
+  const guideRows=()=>{const width=Math.min(w-16,960),x=8+(w-16-width)/2;return {x:x+12,y:8+52+36+6,w:width-24,h:2*30+4};};
+  // Too fast: every bound slow key is a complete cap label (cream) and the
+  // action is the coral "Slow"; "Open Controls" is spelled out instead.
+  function slowPrompt(keys) {
     const rows=guideRows();
-    glyphs(cream,rows,head,16,'delivery guidance');
-    return glyphs(mist,rows,detail,16,'delivery guidance detail');
+    glyphs(coral,rows,'Slow',16,'slow-flight action');
+    return glyphs(cream,rows,keys.split(' / ').join(' '),16,'complete slow bindings');
   }
-  function matchesGuidance(head) {
-    return Math.abs(inkArea(cream,guideRows())-expectedArea(head,16))<.2;
+  function matchesSlow() {
+    return Math.abs(inkArea(coral,guideRows())-expectedArea('Slow',16))<.2;
+  }
+  // Slow enough: a mint check replaces the prompt, with no key copy at all.
+  function matchesReady() {
+    const rows=guideRows(),inside=q=>q[0]>=rows.x&&q[0]<=rows.x+rows.w&&q[1]>=rows.y&&q[1]<=rows.y+rows.h;
+    return Boolean(extent(c=>same(c,mint),inside))&&inkArea(coral,rows)===0&&inkArea(cream,rows)===0;
   }
   function footer() {
     const p=extent(c=>sameRgb(c,line),q=>q[1]>=h-8-58-2);
     assert.ok(p&&Math.abs(p.h-2-58)<.1,'compact playing footer painted');
     assert.ok(p.h<h*.2,'telemetry does not consume the playfield');
-    glyphs(amber,p,'Cruise',16,'current flight mode');
+    // Gauges carry speed, altitude and climb; only their units are words.
+    glyphs(mist,p,'kt m m/s',16,'telemetry units');
+    assert.ok(inkArea(cream,p)>100,'telemetry numbers painted');
   }
-  frame();return {e,frame,key,raw,quads,menu,guidance,matchesGuidance,footer,card};
+  frame();return {e,frame,key,raw,quads,menu,slowPrompt,matchesSlow,matchesReady,footer,card};
 }
-const ready=['Sky Courier','5 gates · 1 delivery'];
-const paused=['Flight paused',''];
-const won=['Mail delivered!',''];
-const lost=['Aircraft grounded','3 impacts'];
-const timeout=["Time's up",''];
-const summary='90 seconds · 3 hull';
+// Ready: five rings then one parcel (cream counts beside icons) and the full
+// 1:30 window; pause shows the same live clock. Results lead with a rank.
+const ready=['Sky Courier',[cream,'×5 ×1'],[amber,'1:30']];
+const paused=['Paused',null,[amber,'1:30']];
+const won=['Delivered!'];
+const lost=['Grounded!'];
+const timeout=["Time's up!",null,null,true];
 const sizes=[[1280,560],[390,600],[320,600],[320,480],[844,390]];
 for(const config of configurations) {
   let reference;
   for(const [w,h] of sizes) {
-    const r=runtime(w,h,false,config);const a=r.menu(...ready,summary);
-    r.key(config.confirmCode);r.footer();r.key(0xff1b);const b=r.menu(...paused,summary);
+    const r=runtime(w,h,false,config);const a=r.menu(...ready);
+    r.key(config.confirmCode);r.footer();r.key(0xff1b);const b=r.menu(...paused);
     // Menu pause cannot consume countdown time. Let the button's eased
     // hover/focus springs settle, then compare every render vertex.
     for(let i=0;i<300;i++)r.frame();
     const before=Array.from(r.raw());for(let i=0;i<30;i++)r.frame();
     assert.deepEqual(Array.from(r.raw()),before,'paused render and UI remain frozen');
     const pilot=runtime(w,h,true,config);let slow=false,speed=false,done=false;
-    const slowText=`Slow down: ${config.slow}`,speedText='Speed ready';
     for(let i=0;i<2800;i++) {
       pilot.frame();
-      if(i%10===0&&!slow&&pilot.matchesGuidance(slowText)){pilot.guidance(slowText,'At most 18 m/s (35 kt)');slow=true;}
-      if(i%10===0&&!speed&&pilot.matchesGuidance(speedText)){pilot.guidance(speedText,'Drop at the post · 16 m up');speed=true;}
+      if(i%10===0&&!slow&&pilot.matchesSlow()){pilot.slowPrompt(config.slow);slow=true;}
+      if(i%10===0&&slow&&!speed&&pilot.matchesReady())speed=true;
       if(i%20===0&&pilot.card()){done=true;break;}
     }
     check(slow&&speed&&done,'actual autopilot slow approach and accepted delivery were observed');

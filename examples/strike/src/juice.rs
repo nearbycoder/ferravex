@@ -17,6 +17,7 @@ use ferravex_play::feedback::FeedbackPolicy;
 use ferravex_play::rounds::{Phase, Team};
 use ferravex_play::tween::Ease;
 use ferravex_render::audio::{Cue, GameAudio, Surface};
+use ferravex_render::icons::Icon;
 use ferravex_render::post;
 use ferravex_render::prelude::*;
 use ferravex_render::shapes::{self, Fill};
@@ -31,6 +32,8 @@ pub(super) const TEAL: Color = style::TEAL;
 const FEED: usize = 4;
 const POPS: usize = 2;
 const FEED_LIFE: f32 = 5.;
+/// Most frag skulls a multi-kill banner draws before switching to a count.
+const MAX_PIPS: u8 = 6;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Marker {
@@ -42,7 +45,12 @@ pub(super) enum Marker {
 #[derive(Clone, Debug)]
 struct Callout {
     head: &'static str,
+    /// A short value under the head (a name, "ROUND 2", "1V3"); often empty.
     sub: String,
+    /// The pictogram leading the row under the head, repeated `pips` times
+    /// when it counts something (one skull per frag of a multi-kill).
+    badge: Option<Icon>,
+    pips: u8,
     color: Color,
     age: f32,
     life: f32,
@@ -69,6 +77,8 @@ struct Pop {
     text: &'static str,
     color: Color,
     size: f32,
+    /// Followed by the headshot glyph.
+    headshot: bool,
     age: f32,
 }
 
@@ -219,6 +229,8 @@ impl Juice {
         priority: u8,
         head: &'static str,
         color: Color,
+        badge: Option<Icon>,
+        pips: u8,
         sub: impl FnOnce(&mut String),
     ) {
         if self
@@ -234,6 +246,8 @@ impl Juice {
         self.callout = Some(Callout {
             head,
             sub: text,
+            badge,
+            pips,
             color,
             age: 0.,
             life: 2.2,
@@ -241,7 +255,7 @@ impl Juice {
         });
     }
 
-    fn pop(&mut self, text: &'static str, color: Color, size: f32) {
+    fn pop(&mut self, text: &'static str, color: Color, size: f32, headshot: bool) {
         let slot = self
             .pops
             .iter()
@@ -258,6 +272,7 @@ impl Juice {
             text,
             color,
             size,
+            headshot,
             age: 0.,
         });
     }
@@ -289,9 +304,9 @@ impl Juice {
                 self.marker = Marker::Kill;
                 sound.cue(Cue::Pickup, 0.5);
                 if headshot {
-                    self.pop("+1 HEADSHOT", RED, 18.);
+                    self.pop("+1", RED, 22., true);
                 } else {
-                    self.pop("+1", GOLD, 22.);
+                    self.pop("+1", GOLD, 22., false);
                 }
                 if bots && let Some(line) = crew::last_words(victim, nth + u32::from(victim)) {
                     self.subtitle = Some(Subtitle {
@@ -301,29 +316,33 @@ impl Juice {
                     });
                 }
                 if revenge {
-                    self.callout(2, "REVENGE", RED, |s| {
-                        let _ = write!(s, "PAYBACK DELIVERED TO {}", who(victim));
+                    self.callout(2, "REVENGE", RED, Some(Icon::Target), 0, |s| {
+                        let _ = write!(s, "{}", who(victim));
                     });
                 } else if first_blood {
-                    self.callout(1, "FIRST BLOOD", GOLD, |s| {
-                        s.push_str("THE CREW HAS BEEN NOTIFIED");
-                    });
+                    self.callout(1, "FIRST BLOOD", GOLD, Some(Icon::Drop), 0, |_| {});
                 }
             }
             Moment::Multi(n) => {
                 if let Some(head) = crew::multi_kill(n) {
                     sound.cue(Cue::Success, 0.55);
                     self.glow = self.flash;
-                    self.callout(3, head, GOLD, |s| {
-                        let _ = write!(s, "{n} FRAGS IN QUICK SUCCESSION");
+                    // One skull per frag; long chains show a count instead.
+                    let pips = if n <= MAX_PIPS { n } else { 0 };
+                    self.callout(3, head, GOLD, Some(Icon::Skull), pips, |s| {
+                        if n > MAX_PIPS {
+                            let _ = write!(s, "×{n}");
+                        }
                     });
                 }
             }
             Moment::Streak(n) => {
-                if let Some((head, sub)) = crew::streak(n) {
+                if let Some(head) = crew::streak(n) {
                     sound.cue(Cue::Success, 0.45);
                     self.glow = self.glow.max(self.flash * 0.7);
-                    self.callout(2, head, TEAL, |s| s.push_str(sub));
+                    self.callout(2, head, TEAL, Some(Icon::Flame), 0, |s| {
+                        let _ = write!(s, "{n}");
+                    });
                 }
             }
             Moment::Died {
@@ -357,15 +376,13 @@ impl Juice {
                 sound.cue(Cue::Success, 0.6);
                 self.duck_flight = 0.;
                 self.glow = self.flash;
-                self.callout(4, "QUACK!", GOLD, |s| {
-                    s.push_str("SECRET FOUND: THE DOCK DUCK");
+                self.callout(4, "QUACK!", GOLD, Some(Icon::Star), 0, |s| {
+                    s.push_str("SECRET");
                 });
             }
             Moment::Clock(30) => {
                 sound.cue(Cue::Click, 0.6);
-                self.callout(1, "30 SECONDS LEFT", GOLD, |s| {
-                    s.push_str("MAKE THEM COUNT")
-                });
+                self.callout(1, "30 SECONDS LEFT", GOLD, Some(Icon::Clock), 0, |_| {});
             }
             Moment::Clock(_) => sound.cue(Cue::Click, 0.45),
         }
@@ -390,17 +407,17 @@ impl Juice {
                 Phase::Live => {
                     sound.cue(Cue::Click, 0.6);
                     let round = view.round;
-                    self.callout(1, "LIVE!", GOLD, |s| {
-                        let _ = write!(s, "ROUND {round} · GOOD LUCK OUT THERE");
+                    self.callout(1, "LIVE!", GOLD, Some(Icon::Flag), 0, |s| {
+                        let _ = write!(s, "ROUND {round}");
                     });
                 }
                 Phase::Planted => {
                     let attack = me.is_some_and(|p| p.team == Team::Attack);
-                    self.callout(2, "BOMB PLANTED", RED, |s| {
+                    self.callout(2, "BOMB PLANTED", RED, Some(Icon::Bomb), 0, |s| {
                         s.push_str(if attack {
                             "HOLD THE SITE"
                         } else {
-                            "GO DEFUSE IT. NO PRESSURE."
+                            "DEFUSE IT!"
                         });
                     });
                 }
@@ -430,8 +447,8 @@ impl Juice {
         if friends == 0 && total_friends > 0 && enemies >= 1 {
             self.clutch_round = Some(view.round);
             sound.cue(Cue::Success, 0.4);
-            self.callout(3, "CLUTCH TIME", TEAL, |s| {
-                let _ = write!(s, "1V{enemies} · YOUR TEAM IS WATCHING");
+            self.callout(3, "CLUTCH TIME", TEAL, Some(Icon::Person), 0, |s| {
+                let _ = write!(s, "1V{enemies}");
             });
         }
     }
@@ -496,14 +513,23 @@ impl Juice {
                 1.
             };
             let style = style::classic(p.size * grow, fade(p.color, alpha));
-            let width = style::width(p.text, style);
-            style::line(
+            let glyph = if p.headshot { p.size * 0.42 } else { 0. };
+            let width = style::width(p.text, style) + glyph * 2.6;
+            let y = cy - 12. - rank * 26. - rise.min(18.);
+            let r = style::line(
                 p.text,
                 (cx + 26.).min(screen_width() - 8. - width),
-                cy - 12. - rank * 26. - rise.min(18.),
+                y,
                 style,
                 TextAlign::Left,
             );
+            if p.headshot {
+                style::headshot_icon(
+                    vec2(r.x + r.w + glyph * 1.5, y - p.size * 0.4),
+                    glyph,
+                    fade(p.color, alpha),
+                );
+            }
         }
     }
 
@@ -525,11 +551,30 @@ impl Juice {
             let base = style::fit(c.head, style::classic(DISPLAY, c.color), w - 64., 16.);
             let size = base.size * (0.7 + 0.3 * enter);
             let head = base.with_size(size).with_color(fade(c.color, alpha));
-            let sub = style::fit(&c.sub, style::modern(BODY, INK), w - 48., 12.);
+            let sub = style::fit(&c.sub, style::modern(BODY, INK), w - 96., 12.);
             let y = (h * 0.22).max(top + base.size + 14.);
-            let band =
-                (style::width(c.head, base).max(style::width(&c.sub, sub)) + 56.).min(w - 16.);
-            let rect = Rect::new((w - band) * 0.5, y - base.size - 12., band, base.size + 40.);
+            // The row under the head: a pictogram (or a row of them) and a
+            // short value. No explanatory sentences.
+            let icon = 20.;
+            let pips = usize::from(c.pips);
+            let row = if pips > 0 {
+                pips as f32 * (icon + 4.) - 4.
+            } else {
+                let value = if c.sub.is_empty() {
+                    0.
+                } else {
+                    style::width(&c.sub, sub) + 6.
+                };
+                c.badge.map_or(0., |_| icon) + value
+            };
+            let has_row = row > 0.;
+            let band = (style::width(c.head, base).max(row) + 56.).min(w - 16.);
+            let rect = Rect::new(
+                (w - band) * 0.5,
+                y - base.size - 12.,
+                band,
+                base.size + if has_row { 48. } else { 22. },
+            );
             style::plate(rect, 8., style::PLATE, alpha);
             // Accent rules sweep out from the center.
             let sweep = if self.motion > 0. {
@@ -553,13 +598,49 @@ impl Juice {
                 });
             }
             style::line(c.head, w * 0.5, y, head, TextAlign::Center);
-            style::line(
-                &c.sub,
-                w * 0.5,
-                y + 22.,
-                sub.with_color(fade(INK, alpha)),
-                TextAlign::Center,
-            );
+            if has_row {
+                let row_y = y + 19.;
+                let mut x = w * 0.5 - row * 0.5;
+                if pips > 0 {
+                    // Each frag stamps in a beat after the last.
+                    for k in 0..pips {
+                        let t = ((c.age - 0.12 - k as f32 * 0.07) / 0.2).clamp(0., 1.);
+                        let pop = if self.motion > 0. {
+                            Ease::BackOut.apply(t)
+                        } else {
+                            1.
+                        };
+                        if pop > 0. {
+                            style::icon(
+                                c.badge.unwrap_or(Icon::Skull),
+                                vec2(x + icon * 0.5, row_y),
+                                icon * pop,
+                                fade(c.color, alpha),
+                            );
+                        }
+                        x += icon + 4.;
+                    }
+                } else {
+                    if let Some(badge) = c.badge {
+                        style::icon(
+                            badge,
+                            vec2(x + icon * 0.5, row_y),
+                            icon,
+                            fade(c.color, alpha),
+                        );
+                        x += icon + 6.;
+                    }
+                    if !c.sub.is_empty() {
+                        style::line(
+                            &c.sub,
+                            x,
+                            row_y + sub.size * 0.42,
+                            sub.with_color(fade(INK, alpha)),
+                            TextAlign::Left,
+                        );
+                    }
+                }
+            }
         }
         if let Some(s) = &self.subtitle {
             let alpha = ((2.6 - s.age) / 0.4).clamp(0., 1.);
@@ -787,13 +868,7 @@ impl Juice {
             TextAlign::Left,
             format_args!("{you}"),
         );
-        style::line(
-            "You",
-            n.x + n.w + 6.,
-            top + 33.,
-            style::modern(SMALL, MUTED),
-            TextAlign::Left,
-        );
+        style::icon(Icon::Person, vec2(n.x + n.w + 15., top + 27.), 17., MUTED);
         let c = style::line_fmt(
             left + width - 14.,
             top + 34.,
@@ -801,25 +876,25 @@ impl Juice {
             TextAlign::Right,
             format_args!("{crew}"),
         );
-        style::line(
-            "Crew",
-            c.x - 6.,
-            top + 33.,
-            style::modern(SMALL, MUTED),
-            TextAlign::Right,
-        );
+        style::icon(Icon::People, vec2(c.x - 15., top + 27.), 17., MUTED);
         let mut bottom = top + 48.;
         if tracker.streak >= 2 {
-            let chip = Rect::new(w * 0.5 - 56., bottom + 5., 112., 22.);
-            style::plate(chip, 11., Color::new(0.14, 0.17, 0.05, 0.85), 1.);
-            style::line_fmt(
-                w * 0.5,
-                bottom + 21.,
-                style::modern(SMALL, LIME),
-                TextAlign::Center,
-                format_args!("▲ Streak {}", tracker.streak),
+            // A flickering flame and the streak count.
+            let count = style::Buf::<8>::fmt(format_args!("{}", tracker.streak));
+            let text = style::modern(BODY, LIME);
+            let tw = style::icon_value_width(count.as_str(), text);
+            let chip = Rect::new(w * 0.5 - tw * 0.5 - 12., bottom + 5., tw + 24., 24.);
+            style::plate(chip, 12., Color::new(0.14, 0.17, 0.05, 0.85), 1.);
+            let flicker = 0.85 + 0.15 * (self.time * 9.).sin() * self.motion.min(1.);
+            style::icon_value(
+                Icon::Flame,
+                chip.x + 12.,
+                bottom + 23.,
+                text,
+                fade(LIME, flicker),
+                format_args!("{}", count.as_str()),
             );
-            bottom += 27.;
+            bottom += 29.;
         }
         bottom
     }
@@ -876,7 +951,7 @@ impl Onboarding {
 }
 
 /// A small key cap; returns its width.
-fn keycap(x: f32, y: f32, label: &str, alpha: f32) -> f32 {
+pub(super) fn keycap(x: f32, y: f32, label: &str, alpha: f32) -> f32 {
     let style = style::modern(SMALL, fade(INK, alpha));
     let w = (style::width(label, style) + 14.).max(22.);
     let lip = Rect::new(x, y + 2., w, 20.);
@@ -896,7 +971,7 @@ fn keycap(x: f32, y: f32, label: &str, alpha: f32) -> f32 {
     w
 }
 
-fn keycap_width(label: &str) -> f32 {
+pub(super) fn keycap_width(label: &str) -> f32 {
     (style::width(label, style::modern(SMALL, INK)) + 14.).max(22.)
 }
 
@@ -905,7 +980,7 @@ pub(super) fn draw_hint(hint: Hint<'_>, y: f32, time: f32) {
     let w = screen_width();
     let (parts, n): ([(&str, &str); 2], usize) = match hint.kind {
         HintKind::FireReload => ([(hint.keys[0], "Fire"), (hint.keys[1], "Reload")], 2),
-        HintKind::Scoreboard => ([(hint.keys[0], "Hold for scoreboard"), ("", "")], 1),
+        HintKind::Scoreboard => ([(hint.keys[0], "Scores"), ("", "")], 1),
     };
     let label = style::modern(SMALL, MUTED);
     let gap = 16.;
@@ -1002,6 +1077,51 @@ mod tests {
         assert_eq!(j.kick(), (0., 0.));
         j.apply_policy(FeedbackPolicy::default());
         assert_eq!(j.kick(), (0., 0.), "re-enabling does not revive the kick");
+    }
+
+    #[test]
+    fn callouts_show_pictograms_instead_of_sentences() {
+        let mut sound = GameAudio::new();
+        sound.pause();
+        let mut j = Juice::new();
+        j.moment(Moment::Multi(3), 0, true, &mut sound);
+        let c = j.callout.as_ref().unwrap();
+        assert_eq!(
+            (c.badge, c.pips, c.sub.as_str()),
+            (Some(Icon::Skull), 3, "")
+        );
+        j.update(3.);
+        j.moment(Moment::Multi(9), 0, true, &mut sound);
+        let c = j.callout.as_ref().unwrap();
+        assert_eq!(
+            (c.pips, c.sub.as_str()),
+            (0, "×9"),
+            "long chains count instead"
+        );
+        j.update(3.);
+        j.moment(Moment::Streak(5), 0, true, &mut sound);
+        let c = j.callout.as_ref().unwrap();
+        assert_eq!(
+            (c.head, c.badge, c.sub.as_str()),
+            ("FREIGHT TRAIN", Some(Icon::Flame), "5")
+        );
+        j.update(3.);
+        j.moment(Moment::Clock(30), 0, true, &mut sound);
+        assert!(j.callout.as_ref().unwrap().sub.is_empty());
+        j.moment(
+            Moment::Kill {
+                victim: 2,
+                headshot: true,
+                nth: 1,
+                first_blood: false,
+                revenge: false,
+            },
+            0,
+            true,
+            &mut sound,
+        );
+        let pop = j.pops.iter().flatten().next().unwrap();
+        assert_eq!((pop.text, pop.headshot), ("+1", true));
     }
 
     #[test]
@@ -1108,18 +1228,12 @@ mod tests {
         view.phase = Phase::Live;
         j.tactical(Some(&view), 0, &mut sound);
         assert_eq!(j.callout.as_ref().unwrap().head, "LIVE!");
-        assert_eq!(
-            j.callout.as_ref().unwrap().sub,
-            "ROUND 2 · GOOD LUCK OUT THERE"
-        );
+        assert_eq!(j.callout.as_ref().unwrap().sub, "ROUND 2");
         j.update(3.);
         view.players[1].health = 0;
         j.tactical(Some(&view), 0, &mut sound);
         assert_eq!(j.callout.as_ref().unwrap().head, "CLUTCH TIME");
-        assert_eq!(
-            j.callout.as_ref().unwrap().sub,
-            "1V2 · YOUR TEAM IS WATCHING"
-        );
+        assert_eq!(j.callout.as_ref().unwrap().sub, "1V2");
         j.update(3.);
         j.tactical(Some(&view), 0, &mut sound);
         assert!(j.callout.is_none(), "one clutch callout per round");
