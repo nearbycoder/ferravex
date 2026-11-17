@@ -354,23 +354,60 @@ pub fn next_gate(track: &Track, gate: usize, time: f32, motion: f32) {
     }
 }
 
-/// Amber guidance back to the nearest road point.
-pub fn recovery_arrow(from: Vec2, target: Vec2) {
-    let direction = (target - from).normalize_or_zero();
-    let end = from + direction * from.distance(target).min(85.);
+/// Chevrons from the car toward where it should go, brightening in a wave
+/// that runs toward the goal, so the way reads without words.
+fn way_arrows(from: Vec2, direction: Vec2, reach: f32, color: Color, time: f32, motion: f32) {
+    let direction = direction.normalize_or_zero();
+    if direction == Vec2::ZERO {
+        return;
+    }
     let normal = vec2(-direction.y, direction.x);
-    shapes::polyline(
-        &[from + direction * 18., end - direction * 6.],
-        Stroke::new(3., AMBER).cap(shapes::Cap::Round),
-    );
-    draw_triangle(
-        end,
-        end - direction * 10. + normal * 5.,
-        end - direction * 10. - normal * 5.,
+    let reach = reach.max(40.);
+    let motion = motion.min(1.);
+    for i in 0..3 {
+        let t = (i as f32 + 1.) / 3.5;
+        let at = from + direction * (20. + (reach - 20.) * t);
+        let wave = 0.5 + 0.5 * (time * 6. - i as f32 * 1.1).sin() * motion;
+        let alpha = 0.55 + 0.45 * wave;
+        let size = 8.5 + 2.5 * wave * motion;
+        let tip = at + direction * size * 0.7;
+        let back = at - direction * size * 0.5;
+        shapes::polyline(
+            &[back + normal * size, tip, back - normal * size],
+            Stroke::new(4.5, Color::new(color.r, color.g, color.b, alpha))
+                .cap(shapes::Cap::Round)
+                .join(Join::Round),
+        );
+    }
+}
+
+/// Amber guidance back to the nearest road point: chevrons pulsing toward
+/// it and a breathing ring where the road begins.
+pub fn recovery_arrow(from: Vec2, target: Vec2, time: f32, motion: f32) {
+    way_arrows(
+        from,
+        target - from,
+        from.distance(target).min(85.),
         AMBER,
+        time,
+        motion,
     );
-    shapes::stroke_circle(target, 7., 2.5, AMBER);
-    post::glow_circle(target.x, target.y, 18., AMBER, 1.2);
+    let breathe = 1. + 0.15 * (time * 5.).sin() * motion.min(1.);
+    shapes::stroke_circle(target, 8. * breathe, 2.5, AMBER);
+    post::glow_circle(target.x, target.y, 20. * breathe, AMBER, 1.2);
+}
+
+/// Red chevrons along the circuit's direction while the car faces the wrong
+/// way: the banner says it, these show which way to turn.
+pub fn wrong_way_arrows(from: Vec2, forward: Vec2, time: f32, motion: f32) {
+    way_arrows(
+        from,
+        forward,
+        80.,
+        Color::new(1.0, 0.42, 0.34, 1.),
+        time,
+        motion,
+    );
 }
 
 /// What the car is doing this frame, for its lights.

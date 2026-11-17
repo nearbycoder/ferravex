@@ -19,8 +19,10 @@ Sleep on day fourteen to begin the festival. Each order must be delivered
 | Lantern Feast | Day 10 | Day 14 | 2 turnips, 2 beans, 3 pumpkins | 120 coins |
 
 Missing a table's deadline ends the season. Completing the orders without the
-80-coin oven reserve also loses at the festival. The final screen explains the
-result and offers a new campaign; R also restarts the complete season.
+80-coin oven reserve also loses at the festival. The final screen names the
+rank and shows tables served, crops harvested, coins and tools (or the missed
+deadline or the cold oven) as icon tiles, and offers a new campaign; R also
+restarts the complete season.
 
 ## Controls
 
@@ -28,20 +30,58 @@ result and offers a new campaign; R also restarts the complete season.
 | --- | --- |
 | Arrows / WASD | Select a field plot or menu row; use presses, not holds |
 | Space / Enter | Work the selected plot, buy a seed/tool, or deliver an order |
-| X / E | Cycle selected seed on Field; sell one harvested crop at Stall |
+| X / E | Cycle the seed packet on Field; sell one harvested crop at Stall |
 | X / E on Tools | Compost the selected **empty** field plot |
 | C / Q | Open the sleep confirmation; Space confirms, X/C cancels |
 | 1 / 2 / 3 / 4 / 5 | Field / Seed Stall / Village / Tools / Almanac |
-| Pointer | Select tabs, plots, seed types and menu rows; click the ledger action button |
-| H | Full in-game field guide; Left/Right turn its pages |
+| Pointer | Select tabs, plots, seed packets and rows; click a selected plot again to work it; press any Buy, Sell, Deliver or Compost button; the ledger's Space and moon buttons act and sleep |
+| H | Key caps and a four-line field guide; Left/Right turn its pages |
 | Esc / P | Pause / resume |
 | R | Start a fresh fourteen-day campaign |
 | F2 | Inspect or remap controls |
 | M | Toggle sound |
 
-Clicking a plot selects it; the ledger's action button performs the current
-Space action. The keyboard remains necessary for selling and composting. On a
-sleep card, both confirm and cancel have pointer buttons.
+Clicking a plot selects it and a second click works it, exactly like Space.
+Every row button routes through the same rule as its key: Buy is Space, Sell
+and Compost are X, Deliver is Space on the Village page, and the ledger's moon
+is C. On the sleep card, both confirm and cancel have pointer buttons.
+
+## Reading the screen
+
+The screen explains itself with icons, meters and motion rather than sentences:
+
+- **Header:** fourteen pips count the mornings; the chip names the current
+  village table (or the festival). Below them the order is drawn as crops with
+  one pip per ingredient, filled from your basket, then an hourglass with the
+  days left (a lock and its opening day before the window), the coin reward,
+  and a pulsing `3 Deliver` key cap once it can be served.
+- **Field:** a solid blue drop is watered soil; a pale drop in a breathing ring
+  asks for water, turning red with stress dots after dry nights. Moons count a
+  crop's growing nights (lit ones have passed), a green check marks a ripe,
+  glowing crop and a red cross a wilted one. Two gold dots show soil richness;
+  spent soil is pale and cracked. A pill over the selected (or hovered) plot
+  previews Space: the action and its energy cost, the missing thing in red, or
+  a moon when it only needs a night. With the Brass Can, the neighbors one
+  watering will reach are outlined. Seed packets show nights to grow and seeds
+  in the tin.
+- **Ledger:** coins with a flame ring that fills toward the oven's 80; energy as
+  one segment per point, blinking the cost of the next action; the basket with
+  order pips; today's and tomorrow's weather with their effect (rain waters,
+  heat doubles thirst, frost pauses growth without Cold Frames); and tonight's
+  forecast of crops that will grow, ripen, freeze, stay dry or wilt. The moon
+  button glows once no plot accepts more work.
+- **Pages:** the stall shows nights, today's stock and your seed tin, with a
+  green count of spare harvest on Sell or an amber lock when every crop is
+  promised to an order. Village rows draw each table's window on a fourteen-day
+  strip; hovering a row shows its letter. Tools draw what they do, and the
+  compost card maps the field with the selected plot outlined. The almanac is a
+  fourteen-day forecast colored by order window; hovering today or an earlier
+  day shows that morning's letter.
+- **Feedback:** accepted actions play where they happen (soil bursts, water
+  rings, harvest sparkles, coin popups at the stall, confetti and a callout
+  for a served table). Each morning brings a day callout and a toast with the
+  first line of the new letter. Refused actions shake gently and ring the thing
+  that refused, with its icon and a word ("Tired", "Short", "Sold out").
 
 ## Learn the field
 
@@ -59,9 +99,9 @@ until you can harvest them.
 
 A crop grows only when you confirm sleep after watering it. Merely waiting,
 rendering more frames, holding Space, or opening menus cannot grow or harvest
-anything. Rain waters existing and newly planted crops for free. The blue dot
-marks watered soil; `age / required nights` shows growing progress. READY
-marks a crop you can harvest. A `!1` or `!2` mark warns of dry stress.
+anything. Rain waters existing and newly planted crops for free. A blue drop marks
+watered soil, moons show growing progress, a green check marks a crop you can
+harvest and red stress dots warn of dry nights.
 
 A dry night adds one stress; heat adds two. Three stress wilts a plant, losing
 the seed and crop. Clear it with Space before replanting. On the day-ten frost,
@@ -69,8 +109,8 @@ watered crops remain safe but do not grow without Cold Frames. The Almanac
 shows the complete authored forecast and a new village letter every morning.
 There are no hidden weather rolls.
 
-Each harvest uses one soil level, shown as S2, S1 or S0. Planting on S0 adds one
-growing night. Select an empty field plot, switch to Tools, and press X to
+Each harvest uses one soil level, shown as two, one or no gold dots. Planting on
+spent soil adds one growing night (an extra moon). Select an empty field plot, switch to Tools, and press X to
 restore rich soil for two coins and one energy. Composting already rich or
 occupied soil is rejected without spending resources.
 
@@ -135,18 +175,30 @@ host; unfinished seasons are not saved.
 
 `content.rs` authors the three crops, three orders, three tools and fourteen
 weather/letter entries. `model.rs` owns all rules and bounded storage, reusing
-Ferravex's fixed-capacity `Inventory<3>` for produce. `view.rs` supplies the
-farm art, five management pages and the `ArcadeGame` adapter. The shared host
-owns tick timing, input-edge buffering, audio, menus, records and browser status.
+Ferravex's fixed-capacity `Inventory<3>` for produce. Its read-only checks
+(`field_check`, `seed_check`, `deliver_check`, `tool_check`, `compost_check`
+and the `night` forecast) decide every action and also drive the on-screen
+previews, so a preview can never disagree with the rule. Each playing tick
+clears a bounded list of presentation events (what was accepted or refused,
+and where); the rules never read it. `view.rs` supplies the farm art, five
+management pages, the effects for those events and the `ArcadeGame` adapter
+(`progress`, `effects`, `draw_objective` and `draw_result`). Pointer targets
+are shared geometry in `model.rs`, so drawing and hit-testing cannot drift.
+The shared host owns tick timing, input-edge buffering, audio, menus, records
+and browser status.
 
-Thirteen behavioral tests and one executable rustdoc example pass. They cover
+Twenty-one behavioral tests and one executable rustdoc example pass. They cover
 an entirely legal fourteen-day campaign win, action costs and invalid repeats,
 confirmation/cancel, rain, heat/wilting, frost, soil/harvest accounting,
 transactional orders, finite market stock, one-time upgrades and watering
 geometry, deadlines/oven failure, terminal invariance, clean restart, held
-input and invalid pointers. Strict Clippy and owned-file formatting pass.
-The headless campaign completes all three orders at day fourteen with 218
-coins and score 3597.
+input and invalid pointers; plus the pointer paths (a second click works a
+plot, row buttons buy/sell/compost/deliver, the moon opens sleep), the night
+forecast against the real sleep, bounded per-tick events that never steer the
+rules, header progress from day one to the festival, effects for harvests,
+deliveries, mornings and refusals, and short header and summary copy. Strict
+Clippy and owned-file formatting pass. The headless campaign completes all
+three orders at day fourteen with 218 coins and score 3597.
 
 These are model/build results, not a human playtest or physical-device
 certification. The parent reviewed native autoplay frame 600 and reported readable field,

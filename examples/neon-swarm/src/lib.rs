@@ -342,15 +342,23 @@ async fn game() {
                     _ if game.phase == Phase::Won => "SECTOR SECURED",
                     _ => "SIGNAL LOST",
                 };
+                // One short line per card: the tagline, a pause joke, or the
+                // results one-liner. Controls appear as key caps elsewhere.
+                let quip = results.as_ref().map(hud::Results::quip);
+                let detail = match hud_screen {
+                    hud::Screen::Paused => quips::pause(pauses),
+                    hud::Screen::Results => quip.as_ref().map_or("", |q| q.as_str()),
+                    _ => "Three waves. One hexagon. Zero chill.",
+                };
                 screen.overlay(
                     &mut hud_ui,
                     title,
-                    if paused {
-                        quips::pause(pauses)
-                    } else {
-                        "Clear three waves. Dash through amber rings."
+                    detail,
+                    match hud_screen {
+                        hud::Screen::Paused => "RESUME",
+                        hud::Screen::Results => "PLAY AGAIN",
+                        _ => "START",
                     },
-                    if paused { "RESUME" } else { "START" },
                     &player_input,
                 );
             }
@@ -360,6 +368,9 @@ async fn game() {
             !run.session.is_playing() && !finished && !lifecycle_changed,
         );
         hud_ui.paint();
+        if screen.compact && hud_screen == hud::Screen::Playing {
+            screen.hud_icons(game);
+        }
         if !screen.compact {
             set_default_camera();
             let painter = hud::Painter::new(screen.viewport);
@@ -429,19 +440,6 @@ async fn game() {
         }
         next_frame().await;
     }
-}
-
-fn label(text: &str, x: f32, y: f32, size: u16, color: Color) {
-    draw_text_ex(
-        text,
-        x,
-        y,
-        TextParams {
-            font_size: size,
-            color,
-            ..Default::default()
-        },
-    );
 }
 
 fn hint<'a>(input: &PlayerInput, action: &str, buffer: &'a mut [u8]) -> &'a str {

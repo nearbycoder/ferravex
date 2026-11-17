@@ -16,6 +16,7 @@ use crate::presentation::Presentation;
 use crate::{AMBER, CORAL, CYAN, FLOOR, INK, MUTED, PAPER};
 use ferravex_play::action::ActionPhase;
 use ferravex_render::canvas::Canvas2D;
+use ferravex_render::icons::{self, Icon};
 use ferravex_render::post::{glow_circle, with_glow};
 use ferravex_render::prelude::*;
 use ferravex_render::shapes::{self, Cap, Fill, Join, Stroke};
@@ -362,9 +363,18 @@ pub(crate) fn spawn_preview(game: &Game) {
             draw_line(a.x, a.y, b.x, b.y, 3., color);
         }
         if game.wave == 1 {
-            let x = p.x.clamp(ARENA.x + 30., ARENA.right() - 30.);
-            let y = if p.y < CENTER.y { p.y + 44. } else { p.y - 32. };
-            centered("Entry", x, y, 12., color);
+            // First-wave zones also get an inward chevron instead of a label.
+            let inward = (CENTER - p).normalize_or_zero();
+            let side = vec2(-inward.y, inward.x);
+            let tip = p + inward * 44.;
+            shapes::polyline(
+                &[
+                    tip - inward * 8. + side * 8.,
+                    tip,
+                    tip - inward * 8. - side * 8.,
+                ],
+                Stroke::new(2.5, color).cap(Cap::Round).join(Join::Round),
+            );
         }
     }
 }
@@ -406,25 +416,18 @@ pub(crate) fn entities(game: &Game, p: &Presentation, emphasis: f32) {
         glow_circle(at.x, at.y, 46. * pulse, color, 0.3);
         // A gentle bob sells "floating supply" without moving its hitbox.
         let at = at - vec2(0., (time * 3.).sin() * 2. * motion);
+        // The frame keeps each supply's silhouette; inside sits the same
+        // heart or shield as the HUD meter it refills, so no label is needed.
         match pickup.kind {
             Supply::Repair => {
                 draw_poly(at.x, at.y, 4, 15. * pulse, 45., INK);
                 with_glow(|| neon_poly(at, 4, 15. * pulse, 45., 2., color));
-                draw_rectangle(at.x - 7., at.y - 2.5, 14., 5., color);
-                draw_rectangle(at.x - 2.5, at.y - 7., 5., 14., color);
+                icons::draw(Icon::Heart, at, 15. * pulse, color);
             }
             Supply::Battery => {
                 draw_poly(at.x, at.y, 6, 15. * pulse, 30., INK);
                 with_glow(|| neon_poly(at, 6, 15. * pulse, 30., 2., color));
-                shapes::polyline(
-                    &[
-                        vec2(at.x + 3., at.y - 8.),
-                        vec2(at.x - 3., at.y + 1.),
-                        vec2(at.x + 3., at.y - 1.),
-                        vec2(at.x - 3., at.y + 8.),
-                    ],
-                    Stroke::new(2.5, color).join(Join::Round),
-                );
+                icons::draw(Icon::Shield, at, 15. * pulse, color);
             }
         }
         if pickup.remaining < 3. {
@@ -435,13 +438,6 @@ pub(crate) fn entities(game: &Game, p: &Presentation, emphasis: f32) {
                 std::f32::consts::TAU * (pickup.remaining / 3.),
                 Stroke::new(2., AMBER).cap(Cap::Round),
             );
-        }
-        if at.distance(game.player) > 48. {
-            let name = match pickup.kind {
-                Supply::Repair => "Repair",
-                Supply::Battery => "Shield",
-            };
-            centered(name, at.x, at.y + 36., 12., fade(color, 0.9));
         }
     }
     for (pos, enemy) in &mut game.world.query::<(&Position, &Enemy)>() {
@@ -718,7 +714,29 @@ pub(crate) fn overlays(game: &Game, p: &Presentation, world_hint: bool) {
             .with_outline(fade(INK, alpha))
             .with_align(TextAlign::Center)
             .with_pixel_snap(scale == 1.);
-        draw_text_styled(pop.text.as_str(), pop.at.x, pop.at.y - 18. - rise, style);
+        let y = pop.at.y - 18. - rise;
+        match pop.icon {
+            Some(icon) => {
+                let size = pop.size * scale;
+                let width = ferravex_render::text::text_width(pop.text.as_str(), style);
+                let x = pop.at.x - (width + size * 1.1) * 0.5;
+                icons::draw(
+                    icon,
+                    vec2(x + size * 0.45, y - size * 0.4),
+                    size,
+                    fade(pop.color, alpha),
+                );
+                draw_text_styled(
+                    pop.text.as_str(),
+                    x + size * 1.1,
+                    y,
+                    style.with_align(TextAlign::Left),
+                );
+            }
+            None => {
+                draw_text_styled(pop.text.as_str(), pop.at.x, y, style);
+            }
+        }
     }
     if game.phase == Phase::Playing && game.health > 0 && game.health <= 30 {
         // Edge warning: slow pulse, or a steady tint under reduced flashes.
@@ -747,17 +765,20 @@ pub(crate) fn overlays(game: &Game, p: &Presentation, world_hint: bool) {
             .filter(|enemy| enemy.attack.phase() == ActionPhase::Windup)
             .count();
         if threats > 0 {
+            // An alert and one word; the count appears only when several wind up.
             let text = if threats == 1 {
-                Line::from("Evade! Attack winding up")
+                Line::from("EVADE!")
             } else {
-                crate::hud::line!("Evade! {threats} attacks winding up")
+                crate::hud::line!("EVADE! ×{threats}")
             };
-            let style = TextStyle::modern(16., AMBER).with_align(TextAlign::Center);
-            let width = ferravex_render::text::text_width(text.as_str(), style);
-            let pill = Rect::new(640. - width * 0.5 - 16., 670., width + 32., 30.);
+            let style = TextStyle::classic(16., AMBER).with_align(TextAlign::Left);
+            let width = ferravex_render::text::text_width(text.as_str(), style) + 26.;
+            let pill = Rect::new(640. - width * 0.5 - 14., 670., width + 28., 30.);
             shapes::fill_rounded_rect(pill, 15., fade(INK, 0.9));
             shapes::stroke_rounded_rect(pill, 15., 1.5, fade(AMBER, 0.7));
-            draw_text_styled(text.as_str(), 640., 691., style);
+            let x = 640. - width * 0.5;
+            icons::draw(Icon::Alert, vec2(x + 9., 685.), 18., AMBER);
+            draw_text_styled(text.as_str(), x + 26., 691., style);
         }
     }
 }

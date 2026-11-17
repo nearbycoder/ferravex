@@ -62,7 +62,8 @@ const MOTH_POINTS: u32 = 500;
 /// Feet within this many units above spikes, then a safe landing, is a close call.
 const CLOSE_CALL: f32 = 26.;
 const LIFT_X: f32 = 2590.;
-const ZONES: [&str; 3] = ["01 · THE TREELINE", "02 · THE OLD MILL", "03 · THE FURNACE"];
+/// Section names; the HUD draws the section number beside them.
+const ZONES: [&str; 3] = ["THE TREELINE", "THE OLD MILL", "THE FURNACE"];
 
 /// Where each numbered lantern is drawn, beside (not under) its spring platform.
 fn lantern_position(index: usize) -> Vec2 {
@@ -717,7 +718,19 @@ fn world(
     for index in [4, 6, 7] {
         let p = game.platforms[index];
         draw_rectangle(p.center().x - 25. - camera, p.y - 5., 50., 5., GREEN);
-        label("^", p.center().x - 6. - camera, p.y - 10., 19., GREEN);
+        // A rising chevron says "launch" without a word.
+        let lift = (time * 3. + index as f32).sin().max(0.) * 2. * movement;
+        let x = p.center().x - camera;
+        ferravex_render::shapes::polyline(
+            &[
+                vec2(x - 7., p.y - 9. - lift),
+                vec2(x, p.y - 16. - lift),
+                vec2(x + 7., p.y - 9. - lift),
+            ],
+            ferravex_render::shapes::Stroke::new(3., GREEN)
+                .cap(ferravex_render::shapes::Cap::Round)
+                .join(ferravex_render::shapes::Join::Round),
+        );
     }
     for h in &game.hazards {
         for i in 0..4 {
@@ -788,11 +801,12 @@ fn world(
         draw_rectangle(at.x - 10., at.y + 30., 20., 20., Color::from_hex(0x1a2420));
         centered_label(&index.to_string(), at.x + 1., at.y + 46., 16., frame);
         if !lit && game.checkpoints.index() + 1 == index && (40. ..WIDTH - 40.).contains(&at.x) {
-            let bob = (time * 4.).sin() * 3. * movement;
-            // Keep the whole hint on screen as the lantern scrolls in.
-            let x = at.x.clamp(84., WIDTH - 84.);
-            centered_label("SAVE POINT", x, at.y - 52. + bob, 16., CREAM);
-            centered_label("↓", at.x, at.y - 34. + bob, 16., CREAM);
+            save_marker(
+                at,
+                time,
+                movement,
+                hud::coach(game) == Some(hud::Coach::Lantern),
+            );
         }
     }
     // The exit lift: a car inside a green frame, with a beacon. It rises on a win.
@@ -831,7 +845,19 @@ fn world(
         14.,
         Color::new(GREEN.r, GREEN.g, GREEN.b, 0.15 * blink),
     );
-    centered_label("LIFT", exit + 1., 442., 16., CREAM);
+    // The finish flag matches the one at the end of the HUD course track.
+    ferravex_render::icons::draw_styled(
+        ferravex_render::icons::Icon::Flag,
+        vec2(exit + 2., 386. + (time * 2.).sin() * 2. * movement),
+        24.,
+        ferravex_render::icons::IconStyle::new(Color::new(
+            GREEN.r,
+            GREEN.g,
+            GREEN.b,
+            0.6 + 0.4 * blink,
+        ))
+        .shadow(Color::new(0.02, 0.03, 0.03, 0.6)),
+    );
     draw_rectangle(exit - 27., 456. - rise, 54., 98., Color::from_hex(0x2d3f36));
     draw_rectangle_lines(
         exit - 27.,
@@ -943,6 +969,36 @@ fn world(
         5.0,
         eye,
         Color::from_hex(0x26312b),
+    );
+}
+
+/// The next unlit lantern's save marker: a breathing gold halo and a bobbing
+/// arrow, drawn without words. While a first-time player is learning to save,
+/// the halo is larger and brighter.
+fn save_marker(at: Vec2, time: f32, movement: f32, teaching: bool) {
+    use ferravex_render::shapes;
+    let breathe = 0.5 + 0.5 * (time * 3.).sin() * movement.min(1.);
+    let boost = if teaching { 1.35 } else { 1. };
+    shapes::glow_disc(
+        at,
+        (40. + 8. * breathe) * boost,
+        Color::new(1., 0.8, 0.4, (0.10 + 0.08 * breathe) * boost),
+    );
+    shapes::glow_ring(
+        at,
+        (26. + 6. * breathe) * boost,
+        3.,
+        Color::new(1., 0.8, 0.4, 0.35 + 0.25 * breathe),
+    );
+    let bob = (time * 4.).sin() * 4. * movement;
+    let tip = vec2(at.x, at.y - 34. + bob);
+    shapes::glow_disc(tip - vec2(0., 8.), 16., Color::new(1., 0.75, 0.3, 0.3));
+    ferravex_render::icons::draw_styled(
+        ferravex_render::icons::Icon::ArrowDown,
+        tip - vec2(0., 8.),
+        22.,
+        ferravex_render::icons::IconStyle::new(juice::GOLD)
+            .shadow(Color::new(0.02, 0.03, 0.03, 0.7)),
     );
 }
 
@@ -1215,6 +1271,8 @@ async fn game() {
             game.feedback.respawned,
             player_input.held("confirm"),
         );
+        let veteran = best_clear(records.as_ref()).is_some();
+        overlay.prompt_frame(hud::prompt(&game, &juice, veteran), demo.dt());
         let camera_x = camera
             .update(
                 simulated,
@@ -1266,9 +1324,8 @@ async fn game() {
         }
         ferravex_render::set_world_colors(false);
         let best = best_clear(records.as_ref());
-        let veteran = best.is_some();
         if let Some(hud) = compact {
-            hud.draw(&game, &player_input, &juice, &results, best);
+            hud.draw(&game, &player_input, &juice, &overlay, &results, best);
         } else {
             let hints = hud::Hints::new(&player_input, touch_mode);
             match game.session.state() {
@@ -1286,7 +1343,8 @@ async fn game() {
                 SessionState::Paused => hud::paused(&game, &hints, &overlay),
                 SessionState::Won => hud::won(&game, &hints, &juice, &overlay, &results),
                 _ => {
-                    hud::play(&game, &juice, &overlay, &hints, veteran, corner.right);
+                    hud::play(&game, &juice, &overlay, corner.right);
+                    hud::hero_prompt(&game, &hints, &overlay, camera_x + shake.x);
                     if touch_mode
                         && !player_input.touch_customized()
                         && [
@@ -1300,19 +1358,38 @@ async fn game() {
                             touch_button_matches(&player_input, action, *channel)
                         })
                     {
-                        for (x, text) in [(68.0, "<"), (182.0, ">"), (1184.0, "^")] {
+                        use ferravex_render::icons::{self, Icon};
+                        for (x, icon) in [
+                            (68.0, Icon::ArrowLeft),
+                            (182.0, Icon::ArrowRight),
+                            (1184.0, Icon::ArrowUp),
+                        ] {
                             draw_circle(x, 651.0, 38.0, Color::new(0.09, 0.14, 0.12, 0.65));
-                            label(text, x - 11.0, 663.0, 32.0, CREAM);
+                            icons::draw(icon, vec2(x, 651.), 34., CREAM);
+                        }
+                        // While a jump prompt is live, the jump button breathes.
+                        if let Some((_, alpha)) = overlay.prompt() {
+                            let breathe =
+                                0.5 + 0.5 * (overlay.since * 5.).sin() * juice.motion().min(1.);
+                            ferravex_render::shapes::glow_ring(
+                                vec2(1184., 651.),
+                                42. + 5. * breathe,
+                                4.,
+                                Color::new(
+                                    GREEN.r,
+                                    GREEN.g,
+                                    GREEN.b,
+                                    alpha * (0.5 + 0.4 * breathe),
+                                ),
+                            );
                         }
                         let pause = corner.pause;
-                        draw_rectangle(
-                            pause.x,
-                            pause.y,
-                            pause.w,
-                            pause.h,
+                        ferravex_render::shapes::fill_rounded_rect(
+                            pause,
+                            12.,
                             Color::new(0.09, 0.14, 0.12, 0.85),
                         );
-                        centered_label("PAUSE", pause.center().x, pause.y + 34., 16., CREAM);
+                        icons::draw(Icon::Pause, pause.center(), 28., CREAM);
                     }
                 }
             }

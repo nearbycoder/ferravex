@@ -1,30 +1,35 @@
 //! Race HUD, countdown, title, pause and results screens in logical pixels.
 //!
-//! The play HUD keeps one job per corner on soft rounded glass plates: lap
-//! (top left), clock and pace (top center), the next gate with this lap's
-//! threading pips (top right), a speed gauge (bottom left) and the boost meter
-//! (bottom right). Copy uses the mixed-case Modern face; big numerals and
-//! arcade callouts keep the Classic face for retro punch. One radio toast, one
-//! banner and one alert slot keep messages from stacking.
+//! The play HUD keeps one job per corner on soft rounded glass plates: a flag
+//! and the lap with a star and the best lap (top left), the clock with a clock
+//! icon, the lap time and the medal the pace projects (top center), a gate
+//! arch, the next-gate count and this lap's threading pips (top right), a
+//! speed gauge (bottom left) and the boost meter (bottom right). Words are
+//! reserved for names, numbers and callouts of at most three words: traction,
+//! boost state, alerts and onboarding are icons, colour and key caps. Copy
+//! uses the mixed-case Modern face; big numerals and arcade callouts keep the
+//! Classic face for retro punch. One radio toast, one banner and one alert
+//! slot keep messages from stacking.
 //!
 //! Browser contract (web/tests/wasm-ui.mjs): narrow layouts draw the white
 //! 14px lap and 20px timer in the top 32px, and wide layouts draw a 14px teal
 //! next-gate count above y=52, all through the classic per-pixel glyph path;
 //! every readable element stays out of the host's top-right menu corner.
 use super::fmtbuf::{Buf, buf, clock};
-use super::juice::{GOLD, Juice, MINT, ROSE};
+use super::juice::{Detail, GOLD, Juice, MINT, ROSE, signed};
 use super::presentation::{binding_hint, text_width as classic_width};
 use super::quips::{self, RunSummary};
-use super::race::{BoostStatus, GATES, LAPS, MULTIPLIER_CAP, RECOVERY_PENALTY, Race, Traction};
+use super::race::{BoostStatus, GATES, LAPS, MULTIPLIER_CAP, Race, Traction};
 use super::{ORANGE, SHORT_START_ROW, TEAL, label};
 use ferravex_play::gameplay::trial::Medal;
 use ferravex_play::tween::{Ease, Entrance, Motion, RollCounter, Spring};
+use ferravex_render::icons::{self, Icon, IconStyle};
 use ferravex_render::input::PlayerInput;
 use ferravex_render::prelude::*;
 use ferravex_render::shapes::{self, Cap, Fill, Shadow, Stroke};
 use ferravex_render::text::{TextAlign, TextStyle, draw_text_styled, text_width};
 use ferravex_render::ui::kit::{self, ButtonKind, ButtonMotion, ButtonState, KitTheme};
-use std::f32::consts::{FRAC_PI_4, PI};
+use std::f32::consts::PI;
 
 pub(super) const INK: Color = Color::new(0.98, 0.95, 0.89, 1.0);
 pub(super) const MUTED: Color = Color::new(0.74, 0.71, 0.64, 1.0);
@@ -207,6 +212,260 @@ fn split_lines(text: &str, available: f32, style: TextStyle) -> (&str, Option<&s
     }
 }
 
+// ---------------------------------------------------------------------------
+// Pictograms. Engine icons where the shared set has the idea; the skimmer's
+// own medals, gate arches, threading bullseye and boulders are drawn here.
+
+/// A HUD icon with a soft drop shadow so it reads over sand and sky.
+pub(super) fn icon(kind: Icon, at: Vec2, size: f32, color: Color) {
+    icons::draw_styled(
+        kind,
+        at,
+        size,
+        IconStyle::new(color).shadow(fade(SHADOW, color.a * 0.7)),
+    );
+}
+
+fn lighten(c: Color, t: f32) -> Color {
+    let m = shapes::mix(c, Color::new(1., 1., 1., c.a), t);
+    Color::new(m.r, m.g, m.b, c.a)
+}
+
+fn darken(c: Color, k: f32) -> Color {
+    Color::new(c.r * k, c.g * k, c.b * k, c.a)
+}
+
+/// A five-point star.
+fn star(c: Vec2, r: f32, color: Color) {
+    let points: [Vec2; 10] = std::array::from_fn(|i| {
+        let a = -PI * 0.5 + i as f32 * PI / 5.;
+        c + Vec2::from_angle(a) * if i % 2 == 0 { r } else { r * 0.46 }
+    });
+    shapes::fill_polygon(&points, color);
+}
+
+/// A medal on a two-tone ribbon, starred in its own colour; unranked is a
+/// plain disc.
+pub(super) fn medal_glyph(c: Vec2, size: f32, medal: Medal, alpha: f32) {
+    let color = medal_color(medal);
+    let r = size * 0.34;
+    let disc = c + vec2(0., size * 0.14);
+    let top = c.y - size * 0.5;
+    if medal != Medal::Unranked {
+        let left = fade(Color::new(0.86, 0.33, 0.28, 1.), alpha);
+        let right = fade(Color::new(0.24, 0.62, 0.62, 1.), alpha);
+        shapes::fill_polygon(
+            &[
+                vec2(c.x - size * 0.34, top),
+                vec2(c.x - size * 0.1, top),
+                vec2(c.x + size * 0.08, disc.y - r * 0.5),
+                vec2(c.x - size * 0.14, disc.y - r * 0.3),
+            ],
+            left,
+        );
+        shapes::fill_polygon(
+            &[
+                vec2(c.x + size * 0.1, top),
+                vec2(c.x + size * 0.34, top),
+                vec2(c.x + size * 0.14, disc.y - r * 0.3),
+                vec2(c.x - size * 0.08, disc.y - r * 0.5),
+            ],
+            right,
+        );
+    }
+    shapes::fill_circle(
+        disc,
+        r,
+        Fill::radial(
+            disc - vec2(r * 0.35, r * 0.4),
+            r * 1.5,
+            fade(lighten(color, 0.35), alpha),
+            fade(darken(color, 0.78), alpha),
+        ),
+    );
+    shapes::stroke_circle(
+        disc,
+        r * 0.76,
+        (size * 0.045).max(1.),
+        fade(darken(color, 0.68), alpha),
+    );
+    if medal != Medal::Unranked {
+        star(disc, r * 0.5, fade(darken(color, 0.62), alpha));
+    }
+}
+
+/// A gate arch like the ones on the course: two posts and a lintel. With
+/// `bullseye`, a ring in its opening says "thread the centre".
+pub(super) fn gate_glyph(c: Vec2, size: f32, color: Color, bullseye: bool) {
+    let s = size * 0.5;
+    for x in [-0.66, 0.42] {
+        shapes::fill_rounded_rect(
+            Rect::new(c.x + x * s, c.y - 0.62 * s, 0.24 * s, 1.5 * s),
+            0.08 * s,
+            color,
+        );
+    }
+    shapes::fill_rounded_rect(
+        Rect::new(c.x - 0.86 * s, c.y - 0.86 * s, 1.72 * s, 0.3 * s),
+        0.1 * s,
+        color,
+    );
+    if bullseye {
+        let centre = c + vec2(0., 0.16 * s);
+        shapes::stroke_circle(centre, 0.24 * s, (0.09 * s).max(1.), color);
+        shapes::fill_circle(centre, 0.09 * s, color);
+    }
+}
+
+/// A low-poly boulder, the course's rocks.
+fn rock_glyph(c: Vec2, size: f32, color: Color) {
+    let s = size * 0.5;
+    let p = |x: f32, y: f32| c + vec2(x, y) * s;
+    shapes::fill_polygon(
+        &[
+            p(-0.72, 0.52),
+            p(-0.8, 0.02),
+            p(-0.42, -0.5),
+            p(0.18, -0.62),
+            p(0.7, -0.18),
+            p(0.76, 0.52),
+        ],
+        color,
+    );
+    shapes::fill_polygon(
+        &[p(-0.42, -0.5), p(0.18, -0.62), p(0.02, 0.0), p(-0.5, -0.06)],
+        lighten(color, 0.3),
+    );
+}
+
+/// A rock with whoosh lines: a scrape that missed it.
+fn scrape_glyph(c: Vec2, size: f32, color: Color) {
+    rock_glyph(c + vec2(size * 0.16, 0.), size * 0.72, color);
+    for (dy, len) in [(-0.22, 0.42), (0.08, 0.56), (0.36, 0.38)] {
+        let y = c.y + dy * size * 0.5;
+        let x = c.x - size * 0.5;
+        shapes::fill_capsule(
+            vec2(x, y),
+            vec2(x + len * size * 0.5, y),
+            (size * 0.04).max(0.8),
+            color,
+        );
+    }
+}
+
+/// A rock with a burst: an impact.
+fn impact_glyph(c: Vec2, size: f32, color: Color) {
+    rock_glyph(
+        c + vec2(-size * 0.12, size * 0.06),
+        size * 0.72,
+        darken(color, 0.85),
+    );
+    star(c + vec2(size * 0.26, -size * 0.22), size * 0.22, color);
+}
+
+/// A diagonal slash: blocked.
+fn slash(c: Vec2, size: f32, color: Color) {
+    let s = size * 0.5;
+    shapes::fill_capsule(
+        c + vec2(-0.62, -0.62) * s,
+        c + vec2(0.62, 0.62) * s,
+        (0.1 * s).max(1.),
+        color,
+    );
+}
+
+/// What a key cap or callout means, drawn as a pictogram.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Glyph {
+    Icon(Icon),
+    /// A course gate.
+    Gate,
+    /// Thread the centre of a gate.
+    Thread,
+    /// Boost blocked: a slashed bolt.
+    NoBoost,
+    /// A medal in its own colours (the piece colour is ignored).
+    Medal(Medal),
+}
+
+impl Glyph {
+    fn draw(self, c: Vec2, size: f32, color: Color) {
+        match self {
+            Glyph::Icon(kind) => icon(kind, c, size, color),
+            Glyph::Gate => gate_glyph(c, size, color, false),
+            Glyph::Thread => gate_glyph(c, size, color, true),
+            Glyph::NoBoost => {
+                icon(Icon::Bolt, c, size, color);
+                slash(c, size, fade(ROSE, color.a));
+            }
+            Glyph::Medal(medal) => medal_glyph(c, size * 1.1, medal, color.a),
+        }
+    }
+}
+
+/// One element of an icon prompt row.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Piece<'a> {
+    /// A key cap showing the live binding.
+    Key(&'a str),
+    Glyph(Glyph, Color),
+    /// A small "leads to" arrow between a cause and its reward.
+    Then,
+    /// Plain text: numbers and callouts of at most three words.
+    Text(&'a str, Color),
+}
+
+const PIECE_GAP: f32 = 8.;
+
+fn piece_width(piece: Piece, theme: &KitTheme) -> f32 {
+    let style = TextStyle::modern(theme.body, theme.ink);
+    let h = theme.body * 1.5 + 2.;
+    match piece {
+        Piece::Key(key) => (text_width(key, style) + kit::SPACE[2] * 2.).max(h - 3.),
+        Piece::Glyph(..) => theme.body * 1.4,
+        Piece::Then => theme.body * 0.8,
+        Piece::Text(text, _) => text_width(text, modern(theme.body, INK)),
+    }
+}
+
+fn pieces_width(pieces: &[Piece], theme: &KitTheme) -> f32 {
+    pieces.iter().map(|&p| piece_width(p, theme)).sum::<f32>()
+        + PIECE_GAP * pieces.len().saturating_sub(1) as f32
+}
+
+/// Draws a prompt row with its vertical centre at `cy`, starting at `x`.
+fn draw_pieces(pieces: &[Piece], x: f32, cy: f32, theme: &KitTheme) {
+    let mut x = x;
+    let alpha = theme.alpha;
+    for &piece in pieces {
+        let w = piece_width(piece, theme);
+        match piece {
+            Piece::Key(key) => {
+                let h = theme.body * 1.5 + 2.;
+                kit::keycap(x, cy - (h - 3.) * 0.5, key, theme);
+            }
+            Piece::Glyph(glyph, color) => {
+                glyph.draw(vec2(x + w * 0.5, cy), w, fade(color, alpha));
+            }
+            Piece::Then => {
+                let c = vec2(x + w * 0.5, cy);
+                let s = w * 0.5;
+                shapes::fill_triangle(
+                    c + vec2(-s * 0.5, -s * 0.7),
+                    c + vec2(s * 0.7, 0.),
+                    c + vec2(-s * 0.5, s * 0.7),
+                    fade(MUTED, alpha),
+                );
+            }
+            Piece::Text(text, color) => {
+                let style = modern(theme.body, fade(color, alpha));
+                draw_text_styled(text, x, style.centered_baseline(cy), style);
+            }
+        }
+        x += w + PIECE_GAP;
+    }
+}
+
 /// The medal the running clock would still earn, projected from the last
 /// completed lap over the remaining gates. Lap one has no honest pace yet.
 pub(super) fn pace(race: &Race) -> Option<Medal> {
@@ -234,41 +493,39 @@ pub(super) fn summary(race: &Race) -> RunSummary {
     }
 }
 
+/// The next goal on the results card, drawn as icons and numbers.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Goal {
+    /// Find `cut` seconds for the next `medal`.
+    Medal { medal: Medal, cut: f32 },
+    /// Thread all fourteen gates in one lap.
+    Mirage,
+    /// Thread every gate of the race (the Sand Surgeon).
+    AllGates(u32),
+    /// Beat this race time.
+    Beat(f32),
+}
+
 /// The next-goal hook on the results card.
-pub(super) fn next_goal(race: &Race, results: &Results) -> Buf<96> {
+pub(super) fn next_goal(race: &Race, results: &Results) -> Goal {
     let time = race.elapsed;
     let medal = quips::medal_for(time);
     let best = results
         .previous_best
         .filter(|_| !results.demo)
         .map_or(time, |b| b.min(time));
-    if let Some((name, target)) = quips::next_medal(medal) {
-        buf!(
-            "Next: {} under {} · find {:.2}s",
-            title_case(name),
-            &*clock(target),
-            (time - target).max(0.01)
-        )
+    if let Some((medal, target)) = quips::next_medal(medal) {
+        Goal::Medal {
+            medal,
+            cut: (time - target).max(0.01),
+        }
     } else if race.perfect_laps == 0 {
-        buf!("Next: a mirage lap. Thread all 14 in one lap.")
+        Goal::Mirage
     } else if race.threaded < (GATES * LAPS as usize) as u32 {
-        buf!("Next: thread all 42 gates for Sand Surgeon")
+        Goal::AllGates((GATES * LAPS as usize) as u32)
     } else {
-        buf!("Next: beat {}. The sand believes.", &*clock(best - 0.25))
+        Goal::Beat(best - 0.25)
     }
-}
-
-fn title_case(medal: &str) -> &'static str {
-    match medal {
-        "GOLD" => "Gold",
-        "SILVER" => "Silver",
-        "BRONZE" => "Bronze",
-        _ => "No medal",
-    }
-}
-
-fn medal_word(medal: Medal) -> &'static str {
-    title_case(quips::medal_name(medal))
 }
 
 /// Speed lines and edge flashes, drawn on top of the world under the HUD.
@@ -348,6 +605,8 @@ pub(super) fn effects(race: &Race, juice: &Juice) {
 pub(super) const MENU_CORNER: (f32, f32) = (72., 60.);
 /// Right edge of the wide right-hand cluster, inset past the menu corner.
 const WIDE_RIGHT: f32 = 76.;
+/// Room the compact flag icon takes before the lap count.
+const COMPACT_FLAG: f32 = 20.;
 
 fn gate_count(completed: usize) -> Buf<16> {
     buf_small(format_args!("{:02} / {GATES}", completed % GATES + 1))
@@ -359,14 +618,34 @@ fn buf_small(args: std::fmt::Arguments) -> Buf<16> {
     out
 }
 
-fn streak_chip_text(streak: u32) -> Buf<96> {
-    buf!("★ Streak {streak}  ×{}", streak.min(MULTIPLIER_CAP))
+/// The streak chip: a flame, the streak length and the boost multiplier.
+fn streak_chip_width(streak: u32) -> f32 {
+    let style = modern(16., GOLD);
+    let n = buf_small(format_args!("{streak}"));
+    let m = buf_small(format_args!("×{}", streak.min(MULTIPLIER_CAP)));
+    36. + text_width(&n, style) + 10. + text_width(&m, style) + 12.
+}
+
+fn streak_chip(r: Rect, streak: u32) {
+    let style = modern(16., GOLD);
+    let cy = r.y + r.h * 0.5;
+    icon(Icon::Flame, vec2(r.x + 21., cy), 18., GOLD);
+    let n = buf_small(format_args!("{streak}"));
+    let x = r.x + 36.;
+    draw_text_styled(&n, x, style.centered_baseline(cy), style);
+    let m = buf_small(format_args!("×{}", streak.min(MULTIPLIER_CAP)));
+    draw_text_styled(
+        &m,
+        x + text_width(&n, style) + 10.,
+        style.centered_baseline(cy),
+        modern(16., ORANGE),
+    );
 }
 
 /// Wide next-gate plate, right-aligned inside the inset.
 fn wide_gate_plate(w: f32) -> Rect {
     let pips_w = GATES as f32 * 12. - 3.;
-    let label_w = text_width("Next gate", modern(16., INK)) + 10. + classic_width("14 / 14", 14);
+    let label_w = 22. + 10. + classic_width("14 / 14", 14);
     let gate_w = pips_w.max(label_w) + 28.;
     Rect::new(w - WIDE_RIGHT - gate_w, 12., gate_w, 60.)
 }
@@ -393,20 +672,21 @@ fn wide_plates(w: f32, sub_w: f32) -> [Rect; 3] {
 }
 
 /// Wide streak chip under the gate plate, right-aligned inside the inset.
-fn wide_streak_chip(w: f32, chip: &str) -> Rect {
-    let chip_w = text_width(chip, modern(16., GOLD)) + 24.;
+fn wide_streak_chip(w: f32, streak: u32) -> Rect {
+    let chip_w = streak_chip_width(streak);
     Rect::new(w - WIDE_RIGHT - chip_w, 78., chip_w, 26.)
 }
 
-fn compact_gate_text(completed: usize) -> Buf<96> {
-    buf!("Next gate {}", &*gate_count(completed))
+/// Compact gate row: an arch and the count.
+fn compact_gate_width(completed: usize) -> f32 {
+    22. + text_width(&gate_count(completed), modern(16., INK))
 }
 
-/// Compact next-gate label left x, centered between the margin and the menu corner.
-fn compact_gate_x(w: f32, text: &str) -> f32 {
+/// Compact next-gate row left x, centered between the margin and the menu corner.
+fn compact_gate_x(w: f32, completed: usize) -> f32 {
     let margin = (w * 0.035).clamp(18.0, 44.0);
     let right = w - MENU_CORNER.0;
-    margin + ((right - margin) - text_width(text, modern(16., INK))) * 0.5
+    margin + ((right - margin) - compact_gate_width(completed)) * 0.5
 }
 
 /// Compact timer left x; its right edge stays 8px clear of the menu corner.
@@ -441,6 +721,50 @@ fn speed_kmh(race: &Race) -> Buf<16> {
     buf_small(format_args!("{:03}", (race.speed() * 3.6) as u32))
 }
 
+/// Body-size theme for prompt rows.
+fn prompt_theme(alpha: f32) -> KitTheme {
+    KitTheme {
+        surface: Color::new(0.08, 0.10, 0.12, 0.9),
+        raised: Color::new(0.20, 0.23, 0.25, 1.),
+        header: Color::new(0.30, 0.33, 0.34, 1.),
+        ink: INK,
+        muted: INK,
+        ..KitTheme::default()
+    }
+    .faded(alpha)
+}
+
+/// A glass pill holding one prompt row, centred on `cx` with its middle at `cy`.
+fn prompt_pill(pieces: &[Piece], cx: f32, cy: f32, accent: Option<Color>, theme: &KitTheme) {
+    let w = pieces_width(pieces, theme);
+    let pill = Rect::new(cx - w * 0.5 - 16., cy - 17., w + 32., 34.);
+    glass(pill, 17., accent, theme.alpha);
+    draw_pieces(pieces, pill.x + 16., cy, theme);
+}
+
+/// The three medal targets, or the stored best and the gold target, as
+/// medals and times. Compact screens keep only the first target.
+fn medal_targets(cx: f32, cy: f32, best: Option<f32>, compact: bool, theme: &KitTheme) {
+    let times: [Buf<16>; 3] = std::array::from_fn(|i| clock(quips::MEDALS[i]));
+    let best_time = best.map(clock);
+    let mut pieces: [Piece; 6] = [Piece::Then; 6];
+    let mut n = 0;
+    if let Some(best) = &best_time {
+        pieces[0] = Piece::Glyph(Glyph::Icon(Icon::Crown), GOLD);
+        pieces[1] = Piece::Text(best, GOLD);
+        n = 2;
+    }
+    let medals = [Medal::Gold, Medal::Silver, Medal::Bronze];
+    let count = if compact || best.is_some() { 1 } else { 3 };
+    for (medal, time) in medals.into_iter().zip(&times).take(count) {
+        pieces[n] = Piece::Glyph(Glyph::Medal(medal), WHITE);
+        pieces[n + 1] = Piece::Text(time, medal_color(medal));
+        n += 2;
+    }
+    let pieces = &pieces[..n];
+    draw_pieces(pieces, cx - pieces_width(pieces, theme) * 0.5, cy, theme);
+}
+
 impl Hud<'_> {
     pub fn draw(&self) {
         let race = self.race;
@@ -472,54 +796,70 @@ impl Hud<'_> {
         let sub_style = modern(16., MUTED);
         // Mid-width hosts show pace instead of the lap clock when both exist.
         let show_lap = !(pace_medal.is_some() && mid);
-        let lap_line = buf!("Lap {}", &*lap_clock);
-        let pace_line = pace_medal.map(|m| buf!("● {} pace", medal_word(m)));
-        let gap = if show_lap && pace_line.is_some() {
-            16.
+        let lap_w = 20. + text_width(&lap_clock, sub_style);
+        let gap = if show_lap && pace_medal.is_some() {
+            14.
         } else {
             0.
         };
-        let sub_w = if show_lap {
-            text_width(&lap_line, sub_style)
-        } else {
-            0.
-        } + pace_line
-            .as_ref()
-            .map_or(0., |p| text_width(p, sub_style) + gap);
+        let sub_w = if show_lap { lap_w } else { 0. } + pace_medal.map_or(0., |_| gap + 18.);
         let [lap_plate, clock_plate, gate] = wide_plates(w, sub_w);
-        // Lap plate.
+        let motion = self.juice.motion().min(1.);
+        // Lap plate: a flag and the lap (orange and beating on the final
+        // lap), then a star and the best lap.
         glass(lap_plate, RADIUS, Some(AQUA), 1.);
-        let x = lap_plate.x + 14.;
-        draw_text_styled("Lap", x, 32., modern(16., MUTED));
+        let cy = lap_plate.y + lap_plate.h * 0.5;
+        let final_lap = race.laps + 1 == LAPS;
+        let beat = if final_lap {
+            1. + 0.12 * (self.juice.time * 6.).sin() * motion
+        } else {
+            1.
+        };
+        icon(
+            Icon::Flag,
+            vec2(lap_plate.x + 24., cy),
+            20. * beat,
+            if final_lap { ORANGE } else { INK },
+        );
+        let x = lap_plate.x + 40.;
         let lap = (race.laps + 1).min(LAPS);
         let lap_text = buf_small(format_args!("{lap}"));
-        let lap_style = classic(24., INK);
-        draw_text_styled(&lap_text, x, 62., lap_style);
+        let lap_style = classic(24., if final_lap { ORANGE } else { INK });
+        let base = lap_style.centered_baseline(cy);
+        draw_text_styled(&lap_text, x, base, lap_style);
         draw_text_styled(
             &buf_small(format_args!("/{LAPS}")),
             x + text_width(&lap_text, lap_style) + 4.,
-            62.,
+            base,
             modern(16., MUTED),
         );
         if !mid {
             let column = lap_plate.x + 92.;
-            if race.laps + 1 == LAPS {
-                draw_text_styled("Final lap!", column, 32., modern(16., ORANGE));
-            } else {
-                draw_text_styled("Best lap", column, 32., modern(16., MUTED));
-            }
+            icon(Icon::Star, vec2(column + 9., cy), 18., GOLD);
+            let style = modern(16., INK);
             match race.best_lap() {
-                Some(best) => draw_text_styled(&clock(best), column, 60., modern(16., INK)),
-                None => draw_text_styled("--:--.--", column, 60., modern(16., MUTED)),
+                Some(best) => draw_text_styled(
+                    &clock(best),
+                    column + 24.,
+                    style.centered_baseline(cy),
+                    style,
+                ),
+                None => draw_text_styled(
+                    "--:--.--",
+                    column + 24.,
+                    style.centered_baseline(cy),
+                    modern(16., MUTED),
+                ),
             };
         }
-        // Clock plate.
+        // Clock plate: the race clock; under it a clock icon with the lap
+        // time and the medal this pace projects.
         glass(clock_plate, RADIUS, Some(AQUA), 1.);
         let cx = clock_plate.x + clock_plate.w * 0.5;
         let timer = clock(race.elapsed);
         centered_text(&timer, cx, 44., classic(if mid { 24. } else { 32. }, INK));
         if race.recovery_count > 0 {
-            // The clock already includes recovery penalties; say so.
+            // The clock already includes recovery penalties; show them.
             draw_text_styled(
                 &buf!("+{:.0}s", race.penalty_seconds()),
                 clock_plate.x + clock_plate.w - 10.,
@@ -527,17 +867,24 @@ impl Hud<'_> {
                 modern(16., ORANGE).with_align(TextAlign::Right),
             );
         }
+        let row = 57.;
         let mut left = cx - sub_w * 0.5;
         if show_lap {
-            draw_text_styled(&lap_line, left, 64., sub_style);
-            left += text_width(&lap_line, sub_style) + gap;
+            icon(Icon::Clock, vec2(left + 7., row), 14., MUTED);
+            draw_text_styled(
+                &lap_clock,
+                left + 20.,
+                sub_style.centered_baseline(row),
+                sub_style,
+            );
+            left += lap_w + gap;
         }
-        if let (Some(line), Some(medal)) = (&pace_line, pace_medal) {
-            draw_text_styled(line, left, 64., modern(16., medal_color(medal)));
+        if let Some(medal) = pace_medal {
+            medal_glyph(vec2(left + 9., row - 1.), 18., medal, 1.);
         }
         // Next-gate plate, inset clear of the host's fullscreen menu corner.
         glass(gate, RADIUS, Some(AQUA), 1.);
-        draw_text_styled("Next gate", gate.x + 14., 36., modern(16., MUTED));
+        gate_glyph(vec2(gate.x + 25., 29.), 20., AQUA, false);
         let count = gate_count(race.gates_completed());
         // Classic teal 14px: the browser glyph contract inspects this count.
         label(
@@ -549,15 +896,9 @@ impl Hud<'_> {
         );
         lap_pips(race, gate.x + 14., 52., 9., 3.);
         if race.streak >= 2 {
-            let chip = streak_chip_text(race.streak);
-            let r = wide_streak_chip(w, &chip);
+            let r = wide_streak_chip(w, race.streak);
             glass(r, r.h * 0.5, None, 1.);
-            draw_text_styled(
-                &chip,
-                r.x + 12.,
-                modern(16., GOLD).centered_baseline(r.y + r.h * 0.5),
-                modern(16., GOLD),
-            );
+            streak_chip(r, race.streak);
         }
     }
 
@@ -574,10 +915,17 @@ impl Hud<'_> {
             Fill::vertical(band, fade(GLASS_BOTTOM, 0.95), fade(GLASS_TOP, 0.7)),
         );
         // Classic white 14px lap and 20px timer: the browser glyph contract.
-        let lap_text = buf!("LAP {}/{LAPS}", (race.laps + 1).min(LAPS));
-        label(&lap_text, margin, 28., 14., WHITE);
+        let lap_text = buf!("{}/{LAPS}", (race.laps + 1).min(LAPS));
+        label(&lap_text, margin + COMPACT_FLAG, 28., 14., WHITE);
         let timer = clock(race.elapsed);
         label(&timer, compact_timer_x(w, &timer), 28., 20.0, WHITE);
+        let final_lap = race.laps + 1 == LAPS;
+        icon(
+            Icon::Flag,
+            vec2(margin + 7., 22.),
+            15.,
+            if final_lap { ORANGE } else { INK },
+        );
         if short_start {
             // Reuse the next-gate row before driving starts. A separate center cue
             // would overlap boost telemetry at the 352px minimum in touch mode.
@@ -594,14 +942,16 @@ impl Hud<'_> {
             );
             return;
         }
-        let next = compact_gate_text(race.gates_completed());
-        let style = modern(16., AQUA);
-        draw_text_styled(&next, compact_gate_x(w, &next), 54., style);
+        let completed = race.gates_completed();
+        let gx = compact_gate_x(w, completed);
+        gate_glyph(vec2(gx + 9., 48.), 18., AQUA, false);
+        draw_text_styled(&gate_count(completed), gx + 22., 54., modern(16., AQUA));
         if race.streak >= 2 {
             // The multiplier leads the gate row, away from the menu corner.
+            icon(Icon::Flame, vec2(margin + 7., 48.), 15., GOLD);
             draw_text_styled(
                 &buf!("×{}", race.streak.min(MULTIPLIER_CAP)),
-                margin,
+                margin + 17.,
                 54.,
                 modern(16., GOLD),
             );
@@ -621,7 +971,9 @@ impl Hud<'_> {
         }
     }
 
-    /// Radial speed gauge: a 270° arc that turns ember-orange and glows on boost.
+    /// Radial speed gauge: a 270° arc that turns ember-orange and glows on
+    /// boost. A small pill beside it shows traction as an icon: waves when
+    /// sliding, a down arrow in reverse, a dune on loose sand.
     fn gauge(&self) {
         let race = self.race;
         let w = screen_width();
@@ -683,77 +1035,78 @@ impl Hud<'_> {
             center.y + radius * 0.52,
             modern(16., MUTED),
         );
-        let compact = w < 600.;
-        let traction = match (race.traction(), compact) {
-            (Traction::Track, _) => None,
-            (Traction::Sliding, false) => Some(("Sliding", ORANGE)),
-            (Traction::Sliding, true) => Some(("Slide", ORANGE)),
-            (Traction::Reversing, false) => Some(("Reverse", MUTED)),
-            (Traction::Reversing, true) => Some(("Rev", MUTED)),
-            (Traction::Sand, false) => Some(("Loose sand", ORANGE)),
-            (Traction::Sand, true) => Some(("Sand", ORANGE)),
+        let traction = match race.traction() {
+            Traction::Track => None,
+            Traction::Sliding => Some((Icon::Wave, ORANGE)),
+            Traction::Reversing => Some((Icon::ArrowDown, MUTED)),
+            Traction::Sand => Some((Icon::Mountain, ORANGE)),
         };
-        if let Some((text, color)) = traction {
-            let style = modern(16., color);
-            let pill = Rect::new(
-                disc.x + disc.w + 8.,
-                center.y - 13.,
-                text_width(text, style) + 20.,
-                26.,
-            );
-            glass(pill, 13., None, 1.);
-            draw_text_styled(
-                text,
-                pill.x + 10.,
-                style.centered_baseline(pill.y + 13.),
-                style,
-            );
+        if let Some((kind, color)) = traction {
+            let pill = Rect::new(disc.x + disc.w + 8., center.y - 16., 36., 32.);
+            glass(pill, 16., Some(color), 1.);
+            icon(kind, pill.center(), 20., color);
         }
     }
 
     /// Boost meter with a trailing ghost, the 25% rearm notch and a hot glow.
+    /// A bolt shows the state by colour (aqua ready, orange boosting, slashed
+    /// on sand); a thermometer means overheated. Under the bar: the boost key
+    /// cap until boost is learned, the cooling time, or the dune that blocks it.
     fn boost(&self) {
         let race = self.race;
         let w = screen_width();
         let margin = (w * 0.035).clamp(18.0, 44.0);
         let bottom = self.bottom_y();
-        let compact = w < 600.;
         let bar_w = (w * 0.38).min(220.0);
         let bx = w - margin - bar_w;
-        let cooling = buf!("Cooling {:.1}s", race.cooling_seconds());
         let mut boost_buffer = [0; 256];
         let boost_key = binding_hint(self.input, "boost", &mut boost_buffer);
-        let ready_hint = if compact {
-            buf!("Hold {boost_key}")
-        } else {
-            buf!("Hold {boost_key} to boost")
-        };
         let learned = self.juice.learned.boost || self.juice.veteran;
-        let (status, hint, color) = match race.boost_status() {
-            BoostStatus::Countdown => ("Boost", "", MUTED),
-            BoostStatus::Ready => ("Boost ready", if learned { "" } else { &*ready_hint }, AQUA),
-            BoostStatus::Active => ("Boosting!", "", ORANGE),
-            BoostStatus::Overheated => ("Overheated", &*cooling, ROSE),
-            BoostStatus::Sand => (
-                "Blocked",
-                if compact {
-                    "Off sand!"
-                } else {
-                    "Get off the sand"
-                },
-                MUTED,
-            ),
-            BoostStatus::Finished => ("Complete", "", AQUA),
+        let status = race.boost_status();
+        let (kind, color) = match status {
+            BoostStatus::Countdown => (Icon::Bolt, MUTED),
+            BoostStatus::Ready => (Icon::Bolt, AQUA),
+            BoostStatus::Active => (Icon::Bolt, ORANGE),
+            BoostStatus::Overheated => (Icon::Thermometer, ROSE),
+            BoostStatus::Sand => (Icon::Bolt, MUTED),
+            BoostStatus::Finished => (Icon::Check, AQUA),
+        };
+        let cooling = buf!("{:.1}s", race.cooling_seconds());
+        let hint: Option<[Piece; 2]> = match status {
+            BoostStatus::Ready if !learned => Some([
+                Piece::Key(boost_key),
+                Piece::Glyph(Glyph::Icon(Icon::Bolt), AQUA),
+            ]),
+            BoostStatus::Overheated => Some([
+                Piece::Glyph(Glyph::Icon(Icon::Hourglass), ROSE),
+                Piece::Text(&cooling, ROSE),
+            ]),
+            BoostStatus::Sand => Some([
+                Piece::Glyph(Glyph::Icon(Icon::Mountain), ORANGE),
+                Piece::Text("SAND", ORANGE),
+            ]),
+            _ => None,
         };
         let panel = Rect::new(
             bx - 14.,
             bottom - 50.,
             bar_w + 28.,
-            if hint.is_empty() { 62. } else { 76. },
+            if hint.is_some() { 80. } else { 62. },
         );
         glass(panel, RADIUS, Some(color), 1.);
-        let header = modern(16., color);
-        draw_text_styled(status, bx, bottom - 26., header);
+        let head = vec2(bx + 10., bottom - 32.);
+        if status == BoostStatus::Active {
+            let throb = 0.5 + 0.5 * (self.juice.time * 14.).sin() * self.juice.motion().min(1.);
+            shapes::glow_disc(
+                head,
+                16. + 6. * throb,
+                fade(Color::new(1., 0.6, 0.25, 1.), 0.6),
+            );
+        }
+        icon(kind, head, 20., color);
+        if status == BoostStatus::Sand {
+            slash(head, 22., ROSE);
+        }
         let percent = buf!("{}%", (race.boost * 100.0) as u32);
         draw_text_styled(
             &percent,
@@ -790,12 +1143,12 @@ impl Hud<'_> {
             }
         }
         draw_rectangle(bx + bar_w * 0.25 - 1., bar.y - 3., 2., bar.h + 6., INK);
-        if !hint.is_empty() {
-            draw_text_styled(hint, bx, bottom + 18., modern(16., MUTED));
+        if let Some(hint) = hint {
+            draw_pieces(&hint, bx, bottom + 16., &prompt_theme(1.));
         }
     }
 
-    /// Countdown, alerts and the one onboarding line.
+    /// Countdown, alerts and the one onboarding prompt.
     fn center(&self) {
         let race = self.race;
         let w = screen_width();
@@ -816,22 +1169,24 @@ impl Hud<'_> {
                 let top = if compact { 156. } else { h * 0.24 };
                 let card = Rect::new((w - card_w) * 0.5, top, card_w, 62.);
                 glass(card, RADIUS, Some(GOLD), 1.);
-                centered_text(
-                    "Three laps · fourteen gates",
-                    w * 0.5,
-                    top + 26.,
-                    modern(16., INK),
+                // Three laps of fourteen gates, then the targets to beat.
+                let theme = prompt_theme(1.);
+                let laps = buf_small(format_args!("{LAPS}"));
+                let gates = buf_small(format_args!("{GATES}"));
+                let course = [
+                    Piece::Glyph(Glyph::Icon(Icon::Flag), INK),
+                    Piece::Text(&laps, INK),
+                    Piece::Text("·", MUTED),
+                    Piece::Glyph(Glyph::Gate, AQUA),
+                    Piece::Text(&gates, INK),
+                ];
+                draw_pieces(
+                    &course,
+                    w * 0.5 - pieces_width(&course, &theme) * 0.5,
+                    top + 19.,
+                    &theme,
                 );
-                let sub = match self.best {
-                    Some(best) => buf!("Your best {} · beat it", &*clock(best)),
-                    None if compact => buf!("Gold under {}", &*clock(quips::MEDALS[0])),
-                    None => buf!(
-                        "Gold under {} · Dusty the bot did {}",
-                        &*clock(quips::MEDALS[0]),
-                        &*clock(quips::DUSTY)
-                    ),
-                };
-                centered_text(&sub, w * 0.5, top + 50., modern(16., GOLD));
+                medal_targets(w * 0.5, top + 44., self.best, compact, &theme);
                 let size = (if compact { 48. } else { 80. } * punch).round();
                 let baseline = if compact {
                     (h * 0.5).max(top + 130.)
@@ -849,40 +1204,68 @@ impl Hud<'_> {
         } else {
             h - 30.
         };
-        let alert = if self.waiting_for_controls {
-            Some((buf!("Release drive controls to rearm"), INK))
+        let mut drive = [0; 256];
+        let drive_key = binding_hint(self.input, "move_forward", &mut drive);
+        let penalty = buf!("+{:.2}s", super::race::RECOVERY_PENALTY);
+        let countdown = race.recovery_in().map(|s| buf!("{s:.1}s"));
+        let theme = prompt_theme(1.);
+        let alert: Option<([Piece; 4], usize, Color)> = if self.waiting_for_controls {
+            // Let go of the drive key to rearm it.
+            Some((
+                [
+                    Piece::Glyph(Glyph::Icon(Icon::Hand), INK),
+                    Piece::Key(drive_key),
+                    Piece::Then,
+                    Piece::Then,
+                ],
+                2,
+                INK,
+            ))
         } else if race.recovery_timer > 0.0 {
-            Some((buf!("Safe return · +{RECOVERY_PENALTY:.2}s added"), ORANGE))
-        } else if let Some(seconds) = race.recovery_in() {
-            Some((buf!("Back to the track! Recovery in {seconds:.1}s"), ORANGE))
+            Some((
+                [
+                    Piece::Glyph(Glyph::Icon(Icon::Restart), ORANGE),
+                    Piece::Text(&penalty, ORANGE),
+                    Piece::Then,
+                    Piece::Then,
+                ],
+                2,
+                ORANGE,
+            ))
+        } else if let Some(countdown) = &countdown {
+            Some((
+                [
+                    Piece::Glyph(Glyph::Icon(Icon::Alert), ORANGE),
+                    Piece::Text("OFF TRACK", ORANGE),
+                    Piece::Glyph(Glyph::Icon(Icon::Hourglass), ORANGE),
+                    Piece::Text(countdown, INK),
+                ],
+                4,
+                ORANGE,
+            ))
         } else if race.off_track {
-            Some((buf!("Loose sand · boost disabled"), INK))
+            Some((
+                [
+                    Piece::Glyph(Glyph::Icon(Icon::Mountain), ORANGE),
+                    Piece::Text("SAND", INK),
+                    Piece::Glyph(Glyph::NoBoost, MUTED),
+                    Piece::Then,
+                ],
+                3,
+                ORANGE,
+            ))
         } else {
             None
         };
-        if let Some((text, color)) = alert {
-            let style = modern(16., color);
-            let pill_w = (text_width(&text, style) + 52.).min(w - 24.);
-            let pill = Rect::new((w - pill_w) * 0.5, alert_y - 20., pill_w, 30.);
-            glass(pill, 15., Some(color), 1.);
-            draw_text_styled(
-                "▲",
-                pill.x + 14.,
-                style.centered_baseline(pill.y + 15.),
-                modern(16., ORANGE),
-            );
-            draw_text_styled(
-                &text,
-                pill.x + 34.,
-                style.centered_baseline(pill.y + 15.),
-                style,
-            );
+        if let Some((pieces, n, color)) = alert {
+            prompt_pill(&pieces[..n], w * 0.5, alert_y - 5., Some(color), &theme);
             return;
         }
         self.coach(alert_y);
     }
 
-    /// One key-cap prompt for a first-time pilot, fading once learned.
+    /// One key-cap prompt for a first-time pilot, fading once learned: drive,
+    /// thread the glowing gate's centre for boost, then boost.
     fn coach(&self, y: f32) {
         let juice = self.juice;
         let race = self.race;
@@ -894,56 +1277,36 @@ impl Hud<'_> {
         let mut boost = [0; 256];
         let drive = binding_hint(self.input, "move_forward", &mut drive);
         let boost = binding_hint(self.input, "boost", &mut boost);
-        let prompts: [(&str, &str); 2] = if race.countdown > 0. {
-            [(drive, "Drive"), (boost, "Boost")]
+        let up = Piece::Glyph(Glyph::Icon(Icon::ArrowUp), INK);
+        let bolt = Piece::Glyph(Glyph::Icon(Icon::Bolt), AQUA);
+        let pieces: &[Piece] = if race.countdown > 0. {
+            &[
+                Piece::Key(drive),
+                up,
+                Piece::Text(" ", INK),
+                Piece::Key(boost),
+                bolt,
+            ]
         } else if !juice.learned.drive {
-            [(drive, "Hold to drive"), ("", "")]
+            &[Piece::Key(drive), up]
         } else if !juice.learned.thread {
-            [("", "Fly through the center of the glowing gate"), ("", "")]
+            &[Piece::Glyph(Glyph::Thread, AQUA), Piece::Then, bolt]
         } else if !juice.learned.boost {
-            [(boost, "Hold while driving to boost"), ("", "")]
+            &[Piece::Key(boost), bolt]
         } else {
-            [("", "Nice. Thread gates to refill boost."), ("", "")]
+            &[
+                Piece::Glyph(Glyph::Thread, GOLD),
+                Piece::Then,
+                Piece::Glyph(Glyph::Icon(Icon::Bolt), GOLD),
+            ]
         };
-        let theme = KitTheme {
-            surface: Color::new(0.08, 0.10, 0.12, 0.9),
-            raised: Color::new(0.20, 0.23, 0.25, 1.),
-            header: Color::new(0.30, 0.33, 0.34, 1.),
-            ink: INK,
-            muted: INK,
-            ..KitTheme::default()
-        }
-        .faded(alpha);
-        let style = modern(16., INK);
-        let key_w = |key: &str| (text_width(key, style) + 24.).max(23.);
-        let mut total = 0.;
-        for (key, action) in prompts
-            .iter()
-            .filter(|(k, a)| !k.is_empty() || !a.is_empty())
-        {
-            total +=
-                if key.is_empty() { 0. } else { key_w(key) + 8. } + text_width(action, style) + 24.;
-        }
-        let w = screen_width();
-        let pill = Rect::new((w - total - 8.) * 0.5, y - 22., total + 8., 34.);
-        glass(pill, 17., None, alpha);
-        let mut x = pill.x + 14.;
-        for (key, action) in prompts
-            .iter()
-            .filter(|(k, a)| !k.is_empty() || !a.is_empty())
-        {
-            if !key.is_empty() {
-                let cap = kit::keycap(x, y - 18., key, &theme);
-                x += cap.w + 8.;
-            }
-            draw_text_styled(
-                action,
-                x,
-                style.centered_baseline(y - 5.),
-                modern(16., fade(INK, alpha)),
-            );
-            x += text_width(action, style) + 24.;
-        }
+        prompt_pill(
+            pieces,
+            screen_width() * 0.5,
+            y - 5.,
+            None,
+            &prompt_theme(alpha),
+        );
     }
 
     /// Rising pops, the lap banner and the radio toast.
@@ -968,8 +1331,42 @@ impl Hud<'_> {
             let travel = if short { 24. } else { 46. };
             let y = h * if short { 0.62 } else { 0.44 } - travel * Ease::CubicOut.apply(t) * rise;
             centered_text(&pop.head, w * 0.5, y, callout(size, fade(pop.color, alpha)));
-            if !pop.sub.is_empty() {
-                centered_text(&pop.sub, w * 0.5, y + 24., modern(16., fade(INK, alpha)));
+            let theme = prompt_theme(alpha);
+            let percent;
+            let multiplier;
+            let detail: &[Piece] = match pop.detail {
+                Detail::None => &[],
+                Detail::Boost {
+                    percent: p,
+                    multiplier: m,
+                } => {
+                    percent = buf_small(format_args!("+{p}%"));
+                    multiplier = buf_small(format_args!("×{m}"));
+                    let bolt = Piece::Glyph(Glyph::Icon(Icon::Bolt), pop.color);
+                    if m > 1 {
+                        &[
+                            bolt,
+                            Piece::Text(&percent, INK),
+                            Piece::Text(&multiplier, GOLD),
+                        ]
+                    } else {
+                        &[bolt, Piece::Text(&percent, INK)]
+                    }
+                }
+                Detail::ThreadHint => &[
+                    Piece::Glyph(Glyph::Thread, AQUA),
+                    Piece::Then,
+                    Piece::Glyph(Glyph::Icon(Icon::Bolt), AQUA),
+                ],
+                Detail::Rocket => &[Piece::Glyph(Glyph::Icon(Icon::Rocket), GOLD)],
+            };
+            if !detail.is_empty() {
+                draw_pieces(
+                    detail,
+                    w * 0.5 - pieces_width(detail, &theme) * 0.5,
+                    y + 18.,
+                    &theme,
+                );
             }
         }
         if let Some(banner) = &juice.banner {
@@ -989,11 +1386,27 @@ impl Hud<'_> {
                 y,
                 callout(32., fade(banner.color, alpha)),
             );
-            centered_text(
-                &banner.sub,
-                w * 0.5,
-                y + 24.,
-                modern(16., fade(banner.sub_color, alpha)),
+            // The lap time and its delta against the previous lap.
+            let theme = prompt_theme(alpha);
+            let time = clock(banner.time);
+            let delta = banner.delta.map(signed);
+            let mut row = [
+                Piece::Glyph(Glyph::Icon(Icon::Clock), MUTED),
+                Piece::Text(&time, INK),
+                Piece::Then,
+            ];
+            let n = if let Some(delta) = &delta {
+                row[2] = Piece::Text(delta, banner.sub_color);
+                3
+            } else {
+                2
+            };
+            let row = &row[..n];
+            draw_pieces(
+                row,
+                w * 0.5 - pieces_width(row, &theme) * 0.5,
+                y + 18.,
+                &theme,
             );
         }
         if let Some(toast) = &juice.toast {
@@ -1040,7 +1453,7 @@ impl Hud<'_> {
         let fade_in = (self.ui.pause_age / 0.18).min(1.);
         draw_rectangle(0., 0., w, h, Color::new(0.03, 0.03, 0.04, 0.45 * fade_in));
         let card_w = (w - 32.).min(440.);
-        let card_h = 214.;
+        let card_h = 184.;
         let base = Rect::new(
             (w - card_w) * 0.5,
             ((h - card_h) * 0.5).max(64.),
@@ -1059,26 +1472,32 @@ impl Hud<'_> {
         if let Some(second) = second {
             centered_text(second, cx, inner.y + 38. + quip.offset[1], style);
         }
-        let status = if race.streak >= 2 {
-            buf!(
-                "Lap {}/{LAPS} · {} · streak {}",
-                (race.laps + 1).min(LAPS),
-                &*clock(race.elapsed),
-                race.streak
-            )
-        } else {
-            buf!(
-                "Lap {}/{LAPS} · {}",
-                (race.laps + 1).min(LAPS),
-                &*clock(race.elapsed)
-            )
-        };
+        // The race so far: lap, clock and any running streak, as icons.
         let info = Entrance::fade_up(10.).sample(self.ui.pause_age, 2, motion);
-        centered_text(
-            &status,
-            cx,
-            inner.y + 66. + info.offset[1],
-            modern(16., fade(MUTED, info.alpha)),
+        let lap = buf_small(format_args!("{}/{LAPS}", (race.laps + 1).min(LAPS)));
+        let time = clock(race.elapsed);
+        let streak = buf_small(format_args!("{}", race.streak));
+        let status = [
+            Piece::Glyph(Glyph::Icon(Icon::Flag), INK),
+            Piece::Text(&lap, INK),
+            Piece::Text(" ", INK),
+            Piece::Glyph(Glyph::Icon(Icon::Clock), MUTED),
+            Piece::Text(&time, INK),
+            Piece::Text(" ", INK),
+            Piece::Glyph(Glyph::Icon(Icon::Flame), GOLD),
+            Piece::Text(&streak, GOLD),
+        ];
+        let status = if race.streak >= 2 {
+            &status[..]
+        } else {
+            &status[..5]
+        };
+        let info_theme = prompt_theme(info.alpha);
+        draw_pieces(
+            status,
+            cx - pieces_width(status, &info_theme) * 0.5,
+            inner.y + 62. + info.offset[1],
+            &info_theme,
         );
         let mut pause = [0; 256];
         let mut restart = [0; 256];
@@ -1086,32 +1505,34 @@ impl Hud<'_> {
         let restart = binding_hint(self.input, "restart", &mut restart);
         let keys = Entrance::fade_up(10.).sample(self.ui.pause_age, 3, motion);
         let theme = desert_theme().faded(keys.alpha);
-        let prompts = [(pause, "Resume"), (restart, "Restart"), ("F2", "Controls")];
-        let style = modern(16., INK);
-        let item_w = |(key, action): (&str, &str)| {
-            (text_width(key, style) + 24.).max(23.) + 8. + text_width(action, style)
-        };
-        let total: f32 = prompts.iter().map(|&p| item_w(p)).sum::<f32>() + 20. * 2.;
+        let prompts = [
+            [
+                Piece::Key(pause),
+                Piece::Glyph(Glyph::Icon(Icon::Play), theme.accent),
+            ],
+            [
+                Piece::Key(restart),
+                Piece::Glyph(Glyph::Icon(Icon::Restart), theme.accent),
+            ],
+            [
+                Piece::Key("F2"),
+                Piece::Glyph(Glyph::Icon(Icon::Gamepad), theme.accent),
+            ],
+        ];
+        let gap = 24.;
+        let total: f32 = prompts.iter().map(|p| pieces_width(p, &theme)).sum::<f32>() + gap * 2.;
         if total <= inner.w {
             let mut x = cx - total * 0.5;
-            for prompt in prompts {
-                kit::key_prompt(
-                    x,
-                    inner.y + 96. + keys.offset[1],
-                    &[prompt.0],
-                    prompt.1,
-                    &theme,
-                );
-                x += item_w(prompt) + 20.;
+            for prompt in &prompts {
+                draw_pieces(prompt, x, inner.y + 108. + keys.offset[1], &theme);
+                x += pieces_width(prompt, &theme) + gap;
             }
         } else {
-            for (i, prompt) in prompts.into_iter().enumerate() {
-                let x = cx - item_w(prompt) * 0.5;
-                kit::key_prompt(
-                    x,
-                    inner.y + 84. + i as f32 * 30. + keys.offset[1],
-                    &[prompt.0],
-                    prompt.1,
+            for (i, prompt) in prompts.iter().enumerate() {
+                draw_pieces(
+                    prompt,
+                    cx - pieces_width(prompt, &theme) * 0.5,
+                    inner.y + 96. + i as f32 * 30. + keys.offset[1],
                     &theme,
                 );
             }
@@ -1151,9 +1572,9 @@ impl Hud<'_> {
             Color::new(0.03, 0.02, 0.02, 0.4 * enter.alpha),
         );
         let header = if new_best && results.previous_best.is_some() {
-            "New personal best!"
+            "New best!"
         } else {
-            "Circuit complete"
+            "Finish!"
         };
         let theme = desert_theme().faded(enter.alpha);
         let inner = kit::card(kit::appear(card, enter), Some(header), &theme);
@@ -1168,7 +1589,7 @@ impl Hud<'_> {
         } else {
             medal_color(medal)
         };
-        // Rank title with a medal glow behind it.
+        // Rank title with a medal glow behind it, and one line of radio.
         let a = item(0);
         let mut row = inner.y + 26. + a.offset[1];
         shapes::glow_disc(vec2(cx, row - 10.), 90., fade(title_color, 0.22 * a.alpha));
@@ -1191,66 +1612,70 @@ impl Hud<'_> {
                 centered_text(second, cx, row, style);
             }
         }
-        // Rolling clock.
+        // The medal and the rolling clock.
         let a = item(1);
-        row += if full { 58. } else { 50. };
+        row += if full { 60. } else { 52. };
         let shown = self.ui.roll.shown() as f32 / 100.;
         let size = if inner.w < 300. { 40. } else { 48. };
-        centered_text(
-            &clock(shown),
-            cx,
-            row + a.offset[1],
-            classic(size, fade(INK, a.alpha)),
-        );
-        row += 30.;
-        // Medal badge.
-        let a = item(2);
-        let medal_text = if medal == Medal::Unranked {
-            buf!("No medal yet")
-        } else {
-            buf!("{} medal", medal_word(medal))
-        };
-        let style = modern(16., fade(medal_color(medal), a.alpha));
-        let badge_w = text_width(&medal_text, style) + 44.;
-        let badge = Rect::new(cx - badge_w * 0.5, row - 14. + a.offset[1], badge_w, 28.);
-        shapes::fill_rounded_rect(badge, 14., fade(medal_color(medal), 0.16 * a.alpha));
-        shapes::stroke_rounded_rect(badge, 14., 1., fade(medal_color(medal), 0.5 * a.alpha));
-        shapes::fill_circle(
-            vec2(badge.x + 16., badge.y + 14.),
-            6.,
-            fade(medal_color(medal), a.alpha),
-        );
-        draw_text_styled(
-            &medal_text,
-            badge.x + 30.,
-            style.centered_baseline(badge.y + 14.),
-            style,
-        );
-        if full {
-            row += 30.;
-            centered_text(
-                &buf!(
-                    "Driving {} + {:.2}s recovery · impacts cost speed, not time",
-                    &*clock(race.driving_seconds()),
-                    race.penalty_seconds()
-                ),
-                cx,
-                row,
-                modern(16., fade(MUTED, a.alpha)),
+        let clock_text = clock(shown);
+        let clock_style = classic(size, fade(INK, a.alpha));
+        let group = size + 12. + text_width(&clock_text, clock_style);
+        let gx = cx - group * 0.5;
+        if medal != Medal::Unranked {
+            shapes::glow_disc(
+                vec2(gx + size * 0.5, row - size * 0.4 + a.offset[1]),
+                size * 0.9,
+                fade(medal_color(medal), 0.3 * a.alpha),
             );
         }
-        row += if full { 20. } else { 16. };
-        // Stats grid, staggered.
+        medal_glyph(
+            vec2(gx + size * 0.5, row - size * 0.42 + a.offset[1]),
+            size * 1.1,
+            medal,
+            a.alpha,
+        );
+        draw_text_styled(&clock_text, gx + size + 12., row + a.offset[1], clock_style);
+        row += 24.;
+        // When recoveries added time: the driving time and the penalty that
+        // the clock above already includes. Impacts cost speed, not time.
+        let a = item(2);
+        let driving = clock(race.driving_seconds());
+        let penalty = buf!("+{:.2}s", race.penalty_seconds());
+        if race.recovery_count > 0 {
+            let pieces = [
+                Piece::Glyph(Glyph::Icon(Icon::Clock), MUTED),
+                Piece::Text(&driving, INK),
+                Piece::Glyph(Glyph::Icon(Icon::Restart), ORANGE),
+                Piece::Text(&penalty, ORANGE),
+            ];
+            let t = prompt_theme(a.alpha);
+            draw_pieces(
+                &pieces,
+                cx - pieces_width(&pieces, &t) * 0.5,
+                row + a.offset[1],
+                &t,
+            );
+        }
+        row += if full { 22. } else { 14. };
+        // Stat tiles: a pictogram over each number.
         let best_lap = race.best_lap().unwrap_or(0.);
-        let threaded = buf!("{}/{}", race.threaded, GATES * LAPS as usize);
+        let threaded = buf!("{}", race.threaded);
         let streak = buf!("{}", race.best_streak);
         let scrapes = buf!("{}", race.scrapes);
         let impacts = buf!("{}", race.impacts);
         let recoveries = buf!("{}", race.recovery_count);
         let lap_clock = clock(best_lap);
-        let stats: [(&str, &str, Color); 6] = [
+        #[derive(Clone, Copy)]
+        enum Mark {
+            Icon(Icon, Color),
+            Thread,
+            Scrape,
+            Impact,
+        }
+        let all_gates = (GATES * LAPS as usize) as f32;
+        let stats: [(Mark, &str, Color); 6] = [
             (
-                "Best lap",
+                Mark::Icon(Icon::Star, GOLD),
                 &lap_clock,
                 if results.new_lap(race.best_lap()) {
                     GOLD
@@ -1259,82 +1684,168 @@ impl Hud<'_> {
                 },
             ),
             (
-                "Threaded",
+                Mark::Thread,
                 &threaded,
                 if race.perfect_laps > 0 { GOLD } else { INK },
             ),
-            ("Best streak", &streak, INK),
-            ("Scrapes", &scrapes, INK),
-            ("Impacts", &impacts, INK),
-            ("Recoveries", &recoveries, INK),
+            (Mark::Icon(Icon::Flame, GOLD), &streak, INK),
+            (Mark::Scrape, &scrapes, INK),
+            (Mark::Impact, &impacts, INK),
+            (Mark::Icon(Icon::Restart, ORANGE), &recoveries, INK),
         ];
         let rows = if full { 2 } else { 1 };
         let col_w = inner.w / 3.;
-        for (i, (name, value, color)) in stats.iter().take(rows * 3).enumerate() {
+        for (i, (mark, value, color)) in stats.iter().take(rows * 3).enumerate() {
             let a = item(3 + i);
             let x = inner.x + col_w * ((i % 3) as f32 + 0.5);
-            let y = row + (i / 3) as f32 * 50. + a.offset[1];
-            centered_text(name, x, y + 16., modern(16., fade(MUTED, a.alpha)));
+            let y = row + (i / 3) as f32 * 58. + a.offset[1];
+            let ic = vec2(x, y + 8.);
+            match *mark {
+                Mark::Icon(kind, tint) => icon(kind, ic, 22., fade(tint, a.alpha)),
+                Mark::Thread => {
+                    // The bullseye inside a ring that fills with gates threaded.
+                    shapes::stroke_arc(ic, 14., 0., PI * 2., Stroke::new(3., fade(TRACK, a.alpha)));
+                    shapes::stroke_arc(
+                        ic,
+                        14.,
+                        -PI * 0.5,
+                        PI * 2. * race.threaded as f32 / all_gates,
+                        Stroke::new(3., fade(GOLD, a.alpha)).cap(Cap::Round),
+                    );
+                    gate_glyph(ic, 16., fade(AQUA, a.alpha), true);
+                }
+                Mark::Scrape => scrape_glyph(ic, 28., fade(ORANGE, a.alpha)),
+                Mark::Impact => impact_glyph(ic, 28., fade(ROSE, a.alpha)),
+            }
             let value_size = if col_w < 100. { 16. } else { 24. };
             centered_text(
                 value,
                 x,
-                y + 40.,
+                y + 44.,
                 classic(value_size, fade(*color, a.alpha)),
             );
         }
-        row += rows as f32 * 50. + 14.;
+        row += rows as f32 * 58. + 18.;
         let a = item(9);
+        let t = prompt_theme(a.alpha);
         if full {
-            let laps = buf!(
-                "Laps  {}  ·  {}  ·  {}",
-                &*clock(race.lap_times[0]),
-                &*clock(race.lap_times[1]),
-                &*clock(race.lap_times[2])
+            // Three lap times; the quickest in gold.
+            let laps: [Buf<16>; 3] = std::array::from_fn(|i| clock(race.lap_times[i]));
+            let fastest = (0..3)
+                .min_by(|&i, &j| race.lap_times[i].total_cmp(&race.lap_times[j]))
+                .unwrap_or(0);
+            let lap_color = |i: usize| if i == fastest { GOLD } else { MUTED };
+            let pieces = [
+                Piece::Glyph(Glyph::Icon(Icon::Flag), MUTED),
+                Piece::Text(&laps[0], lap_color(0)),
+                Piece::Text("·", MUTED),
+                Piece::Text(&laps[1], lap_color(1)),
+                Piece::Text("·", MUTED),
+                Piece::Text(&laps[2], lap_color(2)),
+            ];
+            draw_pieces(
+                &pieces,
+                cx - pieces_width(&pieces, &t) * 0.5,
+                row - 5. + a.offset[1],
+                &t,
             );
-            centered_text(
-                &laps,
-                cx,
-                row + a.offset[1],
-                modern(16., fade(MUTED, a.alpha)),
-            );
-            row += 24.;
+            row += 30.;
         }
-        // Personal best and the next-goal hook.
-        let best_line = match (results.demo, results.previous_best) {
-            (true, _) => buf!("Demo run · Dusty's times are not recorded"),
-            (false, None) => buf!("First finish recorded. Now beat it."),
-            (false, Some(best)) if new_best => {
-                buf!("New best by {:.2}s · old {}", best - time, &*clock(best))
-            }
-            (false, Some(best)) => buf!("Personal best {} ({:+.2})", &*clock(best), time - best),
+        // Personal best as a crown chip.
+        let delta = results.previous_best.map(|best| signed(time - best));
+        let old = results.previous_best.map(clock);
+        let best: [Piece; 3] = match (results.demo, &old, &delta) {
+            (true, ..) => [
+                Piece::Glyph(Glyph::Icon(Icon::Gamepad), MUTED),
+                Piece::Text("DEMO", MUTED),
+                Piece::Then,
+            ],
+            (false, Some(old), Some(delta)) if new_best => [
+                Piece::Glyph(Glyph::Icon(Icon::Crown), GOLD),
+                Piece::Text(delta, GOLD),
+                Piece::Text(old, MUTED),
+            ],
+            (false, Some(old), Some(delta)) => [
+                Piece::Glyph(Glyph::Icon(Icon::Crown), MUTED),
+                Piece::Text(old, INK),
+                Piece::Text(delta, ROSE),
+            ],
+            _ => [
+                Piece::Glyph(Glyph::Icon(Icon::Crown), GOLD),
+                Piece::Text("NEW BEST", GOLD),
+                Piece::Then,
+            ],
         };
-        let color = if new_best && !results.demo { GOLD } else { INK };
-        centered_text(
-            &best_line,
-            cx,
-            row + a.offset[1],
-            modern(16., fade(color, a.alpha)),
+        let best = if matches!(best[2], Piece::Then) {
+            &best[..2]
+        } else {
+            &best[..]
+        };
+        draw_pieces(
+            best,
+            cx - pieces_width(best, &t) * 0.5,
+            row - 5. + a.offset[1],
+            &t,
         );
-        row += 22.;
-        let goal = next_goal(race, results);
-        let style = modern(16., fade(MINT, a.alpha));
-        let (first, second) = split_lines(&goal, inner.w, style);
-        centered_text(first, cx, row + a.offset[1], style);
-        if let Some(second) = second {
-            centered_text(second, cx, row + 18. + a.offset[1], style);
-        }
+        row += 32.;
+        // The next goal, as icons.
+        let cut;
+        let target;
+        let all = buf_small(format_args!("{}", GATES * LAPS as usize));
+        let goal: [Piece; 2] = match next_goal(race, results) {
+            Goal::Medal { medal, cut: c } => {
+                cut = buf_small(format_args!("-{c:.2}s"));
+                [
+                    Piece::Glyph(Glyph::Medal(medal), WHITE),
+                    Piece::Text(&cut, MINT),
+                ]
+            }
+            Goal::Mirage => [
+                Piece::Glyph(Glyph::Thread, GOLD),
+                Piece::Text("MIRAGE LAP", GOLD),
+            ],
+            Goal::AllGates(_) => [Piece::Glyph(Glyph::Thread, GOLD), Piece::Text(&all, GOLD)],
+            Goal::Beat(t) => {
+                target = clock(t);
+                [
+                    Piece::Glyph(Glyph::Icon(Icon::Crown), MINT),
+                    Piece::Text(&target, MINT),
+                ]
+            }
+        };
+        let goal_theme = prompt_theme(a.alpha);
+        let gw = pieces_width(&goal, &goal_theme);
+        let pill = Rect::new(cx - gw * 0.5 - 14., row - 18. + a.offset[1], gw + 28., 30.);
+        shapes::fill_rounded_rect(pill, 15., fade(Color::new(1., 1., 1., 0.06), a.alpha));
+        draw_pieces(&goal, pill.x + 14., pill.y + 15., &goal_theme);
+        // One more run: the restart icon and its live key on the button.
         let mut retry = [0; 256];
         let retry = binding_hint(self.input, "restart", &mut retry);
         let a = item(10);
-        let label = buf!("One more run · {retry}");
         let button = kit::appear(Self::retry_rect(), a);
+        let button_theme = desert_theme().faded(a.alpha);
         kit::button(
             button,
-            &label,
+            "",
             ButtonKind::Primary,
             &self.ui.retry,
-            &desert_theme().faded(a.alpha),
+            &button_theme,
+        );
+        let ink = fade(button_theme.accent_ink, a.alpha);
+        let style = TextStyle::modern(16., ink);
+        let label_w = 26. + text_width(retry, style);
+        let c = button.center();
+        icon(
+            Icon::Restart,
+            vec2(c.x - label_w * 0.5 + 10., c.y),
+            20.,
+            ink,
+        );
+        draw_text_styled(
+            retry,
+            c.x - label_w * 0.5 + 26.,
+            style.centered_baseline(c.y),
+            style,
         );
     }
 }
@@ -1368,7 +1879,7 @@ pub(super) fn desert_theme() -> KitTheme {
     }
 }
 
-/// Title-screen layout: logo baseline, subtitle baseline and prompt top.
+/// Title-screen layout: logo baseline, chip top and prompt top.
 pub(super) fn title_layout(w: f32, h: f32) -> (f32, f32, f32) {
     let logo = (h * 0.30).clamp(110., 260.);
     let prompt = if h < 460. { h - 70. } else { h * 0.74 };
@@ -1377,7 +1888,7 @@ pub(super) fn title_layout(w: f32, h: f32) -> (f32, f32, f32) {
 }
 
 /// The front door: an animated wordmark over the orbiting craft, the best
-/// time and a pulsing start prompt.
+/// time (or the gold target) as a chip, and a pulsing start prompt.
 pub(super) fn title_screen(ui: &UiMotion, input: &PlayerInput, best: Option<f32>, alpha: f32) {
     let w = screen_width();
     let h = screen_height();
@@ -1445,42 +1956,40 @@ pub(super) fn title_screen(ui: &UiMotion, input: &PlayerInput, best: Option<f32>
             index += 1;
         }
     }
-    let sub = Entrance::fade_up(12.).sample(t - 0.45, 0, motion);
+    // The record to beat: a crown and the stored best with its medal, or
+    // the gold medal and its target time.
     let sub_y = if stacked { sub_y + size * 0.7 } else { sub_y };
-    centered_text(
-        "A hover time trial through the sandstone ruins",
-        w * 0.5,
-        sub_y + sub.offset[1],
-        modern(16., fade(INK, sub.alpha * alpha * 0.92)),
-    );
-    let chip = match best {
-        Some(best) => buf!(
-            "★ Personal best {} · {}",
-            &*clock(best),
-            medal_word(quips::medal_for(best))
-        ),
-        None => buf!(
-            "★ Gold under {} · beat Dusty the demo bot",
-            &*clock(quips::MEDALS[0])
-        ),
-    };
     let chip_look = Entrance::fade_up(10.).sample(t - 0.6, 0, motion);
-    let chip_style = modern(16., fade(GOLD, chip_look.alpha * alpha));
-    let chip_w = (text_width(&chip, chip_style) + 28.).min(w - 24.);
+    let a = chip_look.alpha * alpha;
+    let theme = prompt_theme(a);
+    let time = clock(best.unwrap_or(quips::MEDALS[0]));
+    let chip: [Piece; 3] = match best {
+        Some(best) => [
+            Piece::Glyph(Glyph::Icon(Icon::Crown), GOLD),
+            Piece::Text(&time, GOLD),
+            Piece::Glyph(Glyph::Medal(quips::medal_for(best)), WHITE),
+        ],
+        None => [
+            Piece::Glyph(Glyph::Medal(Medal::Gold), WHITE),
+            Piece::Text(&time, GOLD),
+            Piece::Then,
+        ],
+    };
+    let chip = if best.is_some() {
+        &chip[..]
+    } else {
+        &chip[..2]
+    };
+    let chip_w = pieces_width(chip, &theme) + 28.;
     let chip_rect = Rect::new(
         (w - chip_w) * 0.5,
-        sub_y + 18. + chip_look.offset[1],
+        sub_y - 4. + chip_look.offset[1],
         chip_w,
-        28.,
+        30.,
     );
-    glass(chip_rect, 14., None, chip_look.alpha * alpha);
-    centered_text(
-        &chip,
-        w * 0.5,
-        chip_style.centered_baseline(chip_rect.y + 14.),
-        chip_style,
-    );
-    // Pulsing start prompt with real bindings.
+    glass(chip_rect, 15., None, a);
+    draw_pieces(chip, chip_rect.x + 14., chip_rect.y + 15., &theme);
+    // Pulsing start prompt with real bindings: key caps and a play arrow.
     let prompt = Entrance::fade_up(12.).sample(t - 0.8, 0, motion);
     let pulse = if motion.is_reduced() {
         1.
@@ -1501,14 +2010,13 @@ pub(super) fn title_screen(ui: &UiMotion, input: &PlayerInput, best: Option<f32>
     let mut drive = [0; 256];
     let confirm = binding_hint(input, "confirm", &mut confirm);
     let drive = binding_hint(input, "move_forward", &mut drive);
-    let action = if input.touch_seen() {
-        "Tap or press to race"
+    let play = Piece::Glyph(Glyph::Icon(Icon::Play), GOLD);
+    let pieces: &[Piece] = if input.touch_seen() {
+        &[Piece::Glyph(Glyph::Icon(Icon::Hand), INK), play]
     } else {
-        "to race"
+        &[Piece::Key(confirm), Piece::Key(drive), play]
     };
-    let style = modern(16., INK);
-    let key_w = |k: &str| (text_width(k, style) + 24.).max(23.) + 4.;
-    let total = key_w(confirm) + key_w(drive) + 8. + text_width(action, style);
+    let total = pieces_width(pieces, &theme);
     let pill = Rect::new(
         (w - total - 40.) * 0.5,
         prompt_y - 6. + prompt.offset[1],
@@ -1516,8 +2024,7 @@ pub(super) fn title_screen(ui: &UiMotion, input: &PlayerInput, best: Option<f32>
         40.,
     );
     glass(pill, 20., Some(GOLD), a);
-    kit::key_prompt(pill.x + 20., pill.y + 7., &[confirm, drive], action, &theme);
-    let _ = FRAC_PI_4;
+    draw_pieces(pieces, pill.x + 20., pill.y + 20., &theme);
 }
 
 #[cfg(test)]
@@ -1531,15 +2038,25 @@ mod tests {
         race.finished = true;
         let results = Results::default();
         race.elapsed = 40.;
-        assert!(next_goal(&race, &results).starts_with("Next: Bronze"));
+        let Goal::Medal { medal, .. } = next_goal(&race, &results) else {
+            panic!("an unranked run chases bronze");
+        };
+        assert_eq!(medal, Medal::Bronze);
         race.elapsed = 30.;
-        assert!(next_goal(&race, &results).contains("find 0.50s"));
+        let Goal::Medal { medal, cut } = next_goal(&race, &results) else {
+            panic!("silver chases gold");
+        };
+        assert_eq!(medal, Medal::Gold);
+        assert!((cut - 0.5).abs() < 1e-4, "{cut}");
         race.elapsed = 29.;
-        assert!(next_goal(&race, &results).contains("mirage"));
+        assert_eq!(next_goal(&race, &results), Goal::Mirage);
         race.perfect_laps = 1;
-        assert!(next_goal(&race, &results).contains("all 42"));
+        assert_eq!(next_goal(&race, &results), Goal::AllGates(42));
         race.threaded = 42;
-        assert!(next_goal(&race, &results).contains("beat 00:28.75"));
+        let Goal::Beat(target) = next_goal(&race, &results) else {
+            panic!("a perfect gold run chases its own time");
+        };
+        assert_eq!(&*clock(target), "00:28.75");
     }
 
     #[test]
@@ -1585,8 +2102,9 @@ mod tests {
         let corner_clear =
             |w: f32, right: f32, top: f32| top >= MENU_CORNER.1 || right <= w - MENU_CORNER.0;
         let timer = time_label(599.99);
-        let lap = text_width("Lap 09:59.99", modern(16., INK));
-        let pace = text_width("● No medal pace", modern(16., INK));
+        // Worst-case sub row: clock icon and lap time, then the pace medal.
+        let lap = 20. + text_width("09:59.99", modern(16., INK));
+        let pace = 18.;
         for w in [1280., 1600., 844., 768., 700., 600.] {
             let gate = wide_gate_plate(w);
             assert!(
@@ -1595,13 +2113,14 @@ mod tests {
             );
             let count_right = gate.x + gate.w - 14. + 1.;
             assert!(count_right <= w - MENU_CORNER.0, "gate count at {w}");
-            let r = wide_streak_chip(w, &streak_chip_text(99));
+            // The arch glyph sits left of the widest count.
+            assert!(
+                gate.x + 25. + 10. + 8. <= gate.x + gate.w - 14. - classic_width("14 / 14", 14),
+                "gate glyph meets the count at {w}"
+            );
+            let r = wide_streak_chip(w, 99);
             assert!(corner_clear(w, r.x + r.w, r.y), "streak chip at {w}");
-            let sub = if mid_width(w) {
-                lap.max(pace)
-            } else {
-                lap + 16. + pace
-            };
+            let sub = if mid_width(w) { pace } else { lap + 14. + pace };
             let [lap_plate, clock_plate, plate] = wide_plates(w, sub);
             assert_eq!(plate, gate);
             assert!(
@@ -1612,10 +2131,14 @@ mod tests {
                 clock_plate.x + clock_plate.w + 8. <= gate.x,
                 "clock/gate touch at {w}"
             );
+            if !mid_width(w) {
+                // Star and the widest best lap fit the lap plate's column.
+                let best = 24. + text_width("09:59.99", modern(16., INK));
+                assert!(92. + best <= lap_plate.w, "best lap column at {w}");
+            }
         }
         for w in [390., 320., 359., 360., 599.] {
-            let next = compact_gate_text(GATES - 1);
-            let gate_right = compact_gate_x(w, &next) + text_width(&next, modern(16., INK)) + 2.;
+            let gate_right = compact_gate_x(w, GATES - 1) + compact_gate_width(GATES - 1) + 2.;
             assert!(
                 corner_clear(w, gate_right, 54. - 16.),
                 "compact gate at {w}"
@@ -1625,10 +2148,17 @@ mod tests {
                 corner_clear(w, timer_right, 28. - 20.),
                 "compact timer at {w}"
             );
-            // The compact multiplier leads the gate row without touching it.
             let margin = (w * 0.035).clamp(18.0, 44.0);
+            // The flag and lap count stay clear of the timer.
+            let lap_right = margin + COMPACT_FLAG + classic_width("3/3", 14);
             assert!(
-                margin + text_width("×5", modern(16., INK)) + 8. <= compact_gate_x(w, &next),
+                lap_right + 8. <= compact_timer_x(w, &timer),
+                "lap meets timer at {w}"
+            );
+            // The compact multiplier leads the gate row without touching it.
+            assert!(
+                margin + 17. + text_width("×5", modern(16., INK)) + 8.
+                    <= compact_gate_x(w, GATES - 1),
                 "{w}"
             );
         }
@@ -1649,5 +2179,29 @@ mod tests {
             // The card never reaches into the menu corner.
             assert!(card.y >= MENU_CORNER.1 || card.x + card.w <= w - MENU_CORNER.0 || h < 400.);
         }
+    }
+
+    #[test]
+    fn prompt_rows_measure_their_key_caps_icons_and_numbers() {
+        let theme = prompt_theme(1.);
+        let key = pieces_width(&[Piece::Key("Space")], &theme);
+        assert!(key > text_width("Space", modern(16., INK)));
+        let row = [
+            Piece::Key("Space"),
+            Piece::Glyph(Glyph::Icon(Icon::Bolt), AQUA),
+        ];
+        assert_eq!(
+            pieces_width(&row, &theme),
+            key + PIECE_GAP + theme.body * 1.4
+        );
+        assert_eq!(pieces_width(&[], &theme), 0.);
+        // The widest alert fits the narrowest supported screen.
+        let alert = [
+            Piece::Glyph(Glyph::Icon(Icon::Alert), ORANGE),
+            Piece::Text("OFF TRACK", ORANGE),
+            Piece::Glyph(Glyph::Icon(Icon::Hourglass), ORANGE),
+            Piece::Text("2.5s", INK),
+        ];
+        assert!(pieces_width(&alert, &theme) + 32. <= 320. - 16.);
     }
 }

@@ -218,10 +218,15 @@ pub(crate) const MISSIONS: [Mission; 6] = [
         ],
     },
 ];
+/// Every survivor across the six charts.
+pub(crate) const TOTAL_DIVERS: usize = {
+    let mut total = 0;
+    let mut i = 0;
+    while i < MISSIONS.len() {
+        total += MISSIONS[i].divers.len();
+        i += 1;
+    }
+    total
+};
 pub(crate) const UPGRADE_NAMES: [&str; 3] = ["Air tank", "Hull armor", "Rescue cabin"];
-pub(crate) const UPGRADE_HELP: [&str; 3] = [
-    "+12 seconds of air",
-    "+20 hull; less damage",
-    "+1 survivor berth",
-];
 pub(crate) const UPGRADE_COSTS: [u32; 3] = [30, 25, 35];

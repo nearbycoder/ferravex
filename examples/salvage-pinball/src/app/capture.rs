@@ -7,6 +7,7 @@
 //!   results card arrives within a few hundred frames.
 //! - `SALVAGE_FAKE_BEST=SCORE` pretends a stored personal best existed.
 //! - `SALVAGE_START=1` leaves Ready on the first frame without launching.
+//! - `SALVAGE_HOLD=1` keeps the results card up instead of the autoplay retry.
 use super::Conf;
 
 fn number<T: std::str::FromStr>(name: &str) -> Option<T> {
@@ -29,6 +30,7 @@ pub(super) struct Capture {
     lazy_bot: bool,
     fake_best: Option<u32>,
     start: bool,
+    hold: bool,
 }
 
 impl Capture {
@@ -39,6 +41,7 @@ impl Capture {
             lazy_bot: number::<u8>("SALVAGE_LAZY_BOT").is_some_and(|v| v > 0),
             fake_best: number("SALVAGE_FAKE_BEST"),
             start: number::<u8>("SALVAGE_START").is_some_and(|v| v > 0),
+            hold: number::<u8>("SALVAGE_HOLD").is_some_and(|v| v > 0),
         }
     }
 
@@ -52,6 +55,10 @@ impl Capture {
 
     pub fn fake_best(&self) -> Option<u32> {
         self.fake_best
+    }
+
+    pub fn hold_results(&self) -> bool {
+        self.hold
     }
 
     pub fn start_now(&self) -> bool {

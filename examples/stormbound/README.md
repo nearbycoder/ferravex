@@ -11,22 +11,51 @@ crossing. The eighth victory ends the campaign with your captain rank.
 cargo run -p stormbound --offline --locked -j 2
 ```
 
-The shared arcade host supplies the title screen, paginated H guide, pause,
+The shared arcade host supplies the title screen, the short H guide, pause,
 restart, controls editor, sound controls and local best-score record. The game
-itself draws a side-on sea chart, ships with visibly broken sections, cannon
-trails, wind, forecast, aiming history, damage feedback and a repair dock.
+explains itself with pictures rather than sentences:
 
-| Situation | Controls |
-| --- | --- |
-| Briefing | Space / Enter raises the flag |
-| Aim | Left / Right changes angle; Up / Down changes powder |
-| Fire | Space / Enter fires one selected round |
-| Ammunition | 1 roundshot, 2 chainshot, 3 explosive shell |
-| Navigator | X / E toggles the firing table; it never changes your settings |
-| Retreat | C / Q during aiming enters a recoverable setback |
-| Setback | C / Q spends a lifeboat to retry this island; Space retires |
-| Dock | 1 repair, 2 guns, 3 plating, 4 magazine; Space sails |
-| Host | H guide, Esc / P pause, R fresh campaign, M sound, F2 controls |
+- **Header:** island pips and name, then a duel of hull meters (your teal flag
+  against the enemy's colors, one segment per hull section, the target icon
+  marking the ship to sink), your lifeboats and your salvage purse.
+- **Chart:** a wind gauge whose chevrons flow downwind (count and number give
+  its strength; a flip badge warns of Powder Rose's reversing gusts), a
+  protractor on your cannon (gold notch: last shot; teal diamond: firing
+  table), marching forecast dots ending in an aim marker, an outline on the
+  part the shot will strike and a floating `-N` chip with the damage it will
+  deal (hover an ammunition rack to preview that ammunition instead). Every
+  hull section and mast has a meter under its ship, wounds grow from cracks to
+  scorch to flames, armor shows as riveted plates, and hovering a part shows
+  its exact integrity and armor. The enemy's fuse timer counts down over its
+  ship, and a `x2` badge warns of the brothers' double broadside.
+- **Gun deck:** angle and powder readouts with arrow steppers, a charge meter
+  (locked red zone when your mast is down), three ammunition racks with key
+  caps, counts and one pip per round, the firing-table bulb and the Fire
+  button.
+- **Cards:** the briefing (island, captain, ship, the captain's one-line
+  tactic, wind, armor and hull chips, Engage), the shipyard (purse, hull and
+  mast meters, four purchase cards with icon, gain, level pips and price,
+  Sail) and setbacks (cause emblem, lifeboats, Retry and Retire).
+- **Feedback:** muzzle bursts, hit explosions with the shot's total damage,
+  splash eruptions on neighbouring sections, "Mast down!" and "Harbor free!"
+  callouts, salvage and purchase popups, a refused-fire shake on an empty
+  rack, and splash rings with "Miss" for shots into the sea.
+
+| Situation | Keys | Pointer |
+| --- | --- | --- |
+| Briefing | Space / Enter engages | Engage button |
+| Aim | Left / Right changes angle; Up / Down changes powder | Arrow steppers |
+| Fire | Space / Enter fires one selected round | Fire button |
+| Ammunition | 1 roundshot, 2 chainshot, 3 explosive shell | Ammunition racks |
+| Navigator | X / E toggles the firing table; it never changes your settings | Bulb button |
+| Retreat | C / Q during aiming enters a recoverable setback | Keys only |
+| Setback | C / Q spends a lifeboat to retry this island; Space retires | Retry / Retire buttons |
+| Dock | 1 repair, 2 guns, 3 plating, 4 magazine; Space sails | Purchase cards / Sail button |
+| Host | H guide, Esc / P pause, R fresh campaign, M sound, F2 controls | Footer buttons |
+
+Clicks are routed to exactly the same rule paths as the keys they mirror; a
+stepper click moves one unit like a key edge. Retreat stays keyboard-only so a
+stray click can never cost a lifeboat.
 
 Held aim keys adjust at 20 units per second; an input edge adjusts one unit.
 Angle is 15–70 degrees and powder is 25–90. The first briefing starts at a tested
@@ -137,6 +166,17 @@ recoverable setbacks and both endings. `ArcadeGame` delegates to these pure
 rules; drawing never advances the simulation. The executable Rust API example
 is in `src/model.rs` and runs as a doctest.
 
+Each executed tick records a small bounded list of presentation events (shots,
+hits with every section's integrity before and after, splashes, ammunition
+changes, refusals, purchases, gusts, sinkings and setbacks). The list is cleared
+when the next tick starts and is never read by the rules; the view turns it
+into effects at the event's position through `ArcadeGame::effects`. The damage
+preview applies the live damage rules to a copy of the forecast target.
+`src/layout.rs` holds the control rectangles shared by drawing and click
+routing. The host header shows `progress()` pips, `draw_objective` draws the
+hull duel, and `draw_result` draws rank, harbors freed, accuracy and
+lifeboats kept.
+
 ```sh
 cargo test -p stormbound --offline --locked -j 2
 cargo clippy -p stormbound --all-targets --offline --locked -j 2 -- -D warnings
@@ -144,14 +184,20 @@ rustfmt --edition 2024 --check examples/stormbound/src/*.rs
 cargo run -p stormbound --offline --locked -j 2 -- --headless
 ```
 
-The implementation's validation passed 12 behavioral tests and one executed
-doctest. Tests cover wind/gravity, swept contact and destroyed-section holes,
-armor and ammunition effects, prediction/live collision agreement, accepted
-fire edges, invalid input, paid/capped upgrades and repairs, bounded retries,
-empty-magazine and sinking setbacks, mast consequences, gust reversals, two
-physical broadside flights, and immutable terminal states. The full-campaign
-test starts at `Game::new`, supplies only ordinary `Input`, takes actual enemy
-damage, uses every ammunition type and wins all eight islands.
+The suite has 21 behavioral tests and one executed doctest. Tests cover
+wind/gravity, swept contact and destroyed-section holes, armor and ammunition
+effects, prediction/live collision agreement, accepted fire edges, invalid
+input, paid/capped upgrades and repairs, bounded retries, empty-magazine and
+sinking setbacks, mast consequences, gust reversals, two physical broadside
+flights and immutable terminal states. Presentation tests check that every
+click reaches the same state as its key (aim, dock and setback), that events
+and the damage preview match the live shot, that refusals are recorded and
+spend nothing, that a landed shot produces effects, that quiet ticks produce
+none, when the double-broadside warning appears, the header's progress pips at
+both ends of the campaign, the control layout and that the help stays four
+short one-line bullets. The full-campaign test starts at `Game::new`, supplies
+only ordinary `Input`, takes actual enemy damage, uses every ammunition type
+and wins all eight islands.
 
 The headless executable completed in **7,096 ticks**, with **9,882 points**,
 **38 hits from 38 shots**, **two lifeboats** and **Storm Admiral** rank. This is

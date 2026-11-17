@@ -1,7 +1,8 @@
 //! Foreman Gus, his opinions, and the silly titles on the results card.
 //!
 //! Selectors are pure functions of counters, so the same run reads the same
-//! way. Each category advances by a stride coprime with its table length, so
+//! way. Lines Gus says during play are punchy callouts of about three words;
+//! the pause card and results ranks may carry one longer joke. Each category advances by a stride coprime with its table length, so
 //! a category never says the same line twice in a row, and [`Banter`] never
 //! lets two consecutive bubbles match even across categories.
 
@@ -22,82 +23,66 @@ pub(super) enum Mood {
 }
 
 const START: [&str; 5] = [
-    "Six targets. No pressure.",
-    "I just stacked those.",
-    "Mind the paintwork, chief.",
-    "Load-bearing towers. Allegedly.",
-    "Safety first. Demolition second.",
+    "No pressure, chief.",
+    "Just stacked those!",
+    "Mind the paint!",
+    "Load-bearing. Allegedly.",
+    "Safety first!",
 ];
 
 const RETRY: [&str; 6] = [
-    "Rebuilt it. With extra glue.",
-    "Back again? Bring it.",
-    "Same towers. Fresh confidence.",
-    "I've put the kettle on.",
-    "Round two. My back hurts.",
-    "Gently this time. Or not.",
+    "Extra glue now.",
+    "Back again?",
+    "Round two!",
+    "Kettle's on.",
+    "Oof. My back.",
+    "Gently this time.",
 ];
 
 const WOBBLE: [&str; 5] = [
     "Wobble... wobble...",
     "Easy... easy...",
-    "It's fine. It's fine.",
-    "Don't you dare fall.",
+    "It's fine. Fine.",
+    "Don't you dare!",
     "Steady, old girl...",
 ];
 
 const KNOCKED: [&str; 7] = [
-    "My beautiful tower!",
+    "My tower!",
     "That was load-bearing!",
-    "I'll get the broom.",
-    "There goes my weekend.",
-    "Who signed off on that?",
-    "Insurance won't cover this.",
-    "I had a name for that one.",
+    "Fetch the broom.",
+    "My weekend!",
+    "Who signed off?!",
+    "Not insured!",
+    "Named that one!",
 ];
 
 const MISS: [&str; 7] = [
-    "The birds thank you.",
+    "Birds say thanks.",
     "Wind, probably.",
-    "Warning shot? Sure.",
-    "The sky is not a target.",
-    "Bold. Wrong, but bold.",
-    "The clouds felt that.",
-    "I'll put it in the report.",
+    "Warning shot?",
+    "Sky's no target.",
+    "Bold. Wrong.",
+    "Clouds felt that.",
+    "Noted. In ink.",
 ];
 
 const MISS_STREAK: [&str; 4] = [
-    "Try the low sandy blocks.",
-    "Follow the dotted line!",
-    "Aim lower. I'm begging.",
-    "Supports, chief. Supports.",
+    "Aim low, chief!",
+    "Follow the dots!",
+    "Lower. Please.",
+    "Supports, chief!",
 ];
 
-const DOMINO: [&str; 3] = [
-    "They're holding hands!",
-    "Domino rules apply!",
-    "One push. Two towers. Rude.",
-];
+const DOMINO: [&str; 3] = ["Holding hands!", "Domino rules!", "Two for one!"];
 
-const WONDER: [&str; 2] = ["One ball?! One?!", "I'm calling my mum."];
+const WONDER: [&str; 2] = ["One ball?! One?!", "Calling my mum."];
 
-const BELL: [&str; 3] = [
-    "Who rang the lunch bell?",
-    "Ding! ...Lunch already?",
-    "Nobody touches the bell!",
-];
+const BELL: [&str; 3] = ["Lunch bell?!", "Ding! Lunch?", "Not the bell!"];
 
-const LAST_SHELL: [&str; 3] = [
-    "Last shell. Make it count.",
-    "One left. No pressure.",
-    "Last one. I believe in you.",
-];
+const LAST_SHELL: [&str; 3] = ["Last shell!", "Make it count.", "One left!"];
 
-const SETTLING: [&str; 3] = [
-    "Come on... come on...",
-    "Any second now...",
-    "Lean, you stubborn thing!",
-];
+const SETTLING: [&str; 3] = ["C'mon... c'mon...", "Any second...", "Lean, you!"];
 
 const PAUSE: [&str; 5] = [
     "Union-mandated tea break.",
@@ -285,6 +270,15 @@ mod tests {
         }
         for _ in 0..3 {
             assert_ne!(banter.say(Mood::Wonder), banter.say(Mood::Wonder));
+        }
+    }
+
+    #[test]
+    fn play_lines_stay_punchy() {
+        for mood in MOODS {
+            for line in table(mood) {
+                assert!(line.split_whitespace().count() <= 3, "{line}");
+            }
         }
     }
 

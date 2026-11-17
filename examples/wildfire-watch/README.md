@@ -18,7 +18,8 @@ choosing where to spend action points, water and air support.
 
 There are **59 residents, 17 villages and 18 starting ignitions** across the six
 11-by-8 maps. Each map has its own terrain, village placement, wind sequence,
-briefing and tactical advice. Finish every evacuation and contain every active
+briefing and tactical advice (the written briefing and tip are published to
+status readers; the screen shows the same incident as icons). Finish every evacuation and contain every active
 fire to reach the dawn ending. A cleared incident unlocks the next one; there is
 no level-select bypass.
 
@@ -33,16 +34,16 @@ no level-select bypass.
 | X / E | Cut an adjacent firebreak |
 | C / Q | End the turn and advance fire and wind |
 | 4 | Buy an air drop centered on the cursor |
-| 5 | Show or hide the next-ignition forecast |
+| 5 / click the eye switch | Show or hide the next-ignition forecast |
 | H | Open the full paginated field guide |
 | Esc / P | Pause or resume |
 | R | Start a fresh six-incident career |
 | M / F2 | Toggle sound / inspect or remap controls |
 
-The crew cards and action labels in the right panel also accept pointer input.
-At a briefing, Space deploys the crews. At a debrief, 1–3 purchase the shown
-upgrades and Space proceeds; the upgrade cards also accept clicks. At a setback,
-Space spends a retry. Planning, cursor movement, help and ordinary idle ticks do
+The crew cards and command buttons in the right panel also accept pointer input.
+At a briefing, Space or the Deploy button under the map deploys the crews. At a
+debrief, 1–3 or a click on an upgrade card purchases it, and Space or the Next
+button proceeds. At a setback, Space or the Retry button spends a retry. Planning, cursor movement, help and ordinary idle ticks do
 not advance the incident.
 
 ## Crews, actions and priorities
@@ -73,11 +74,41 @@ but its already evacuated residents remain safe.
 Context actions take precedence over movement: targeting an adjacent populated
 village attempts loading, and targeting nearby base with passengers attempts
 unloading. If the relevant action is unaffordable, it is rejected rather than
-silently moving the crew. The right panel names the currently valid action.
+silently moving the crew. The Space button shows the currently valid action,
+its action-point cost and its gain.
 
 Cutting an unburned grass, brush or forest tile removes its remaining fuel
 permanently. Cut breaks cannot reignite and cost only one AP for Rangers. Burning
 tiles and villages cannot be cut. A repeated cut does not consume points.
+
+## Reading the screen
+
+The screen speaks in icons, pips and previews rather than sentences:
+
+- **Header:** progress pips for the six incidents and the incident's name. The
+  objective row shows every resident as a figure (blue: home, white: aboard,
+  grey: waiting, red: threatened), the fires still burning (a check once
+  contained), the medal the incident would earn right now and the career's
+  three retry hearts.
+- **Above the map:** the wind as an animated dial with the next shift ghosted
+  beside it, the forecast switch (5) and the deadline: an hourglass, the turns
+  left and one cell per turn, red in the final three.
+- **Map:** the selected crew's movement range is washed and outlined in its
+  color, and everything it can work on pulses. Hovering (or the keyboard cursor)
+  previews the order: a dotted path and ghost token for a move, a water arc and
+  the heat a spray removes, and a chip with the action-point cost and the gain.
+  A crossed-out icon names what a refused order lacks. Threatened villages
+  pulse red.
+- **Crew cards:** key, role badge (engine drop, ranger pickaxe, rescue people),
+  action-point pips, a water cell per tank unit and one seat pip per passenger
+  place. Spent crews dim.
+- **Commands:** Space (context action with cost and gain), X break and 4 drop
+  with their costs, and End turn with the coming spread, which glows once every
+  crew is spent. Credits and air sorties sit above them.
+- **Feedback:** steam bursts where fires are sprayed, a sparkle and figure where
+  residents board or reach base, dirt where breaks are cut, a splash ring for air
+  drops, embers on every new ignition, coin popups at the wallet, and a short red
+  ring with the missing resource when an order is refused.
 
 ## Fire, forecasts and failure
 
@@ -94,10 +125,12 @@ Pressing C performs one simultaneous spread using the currently displayed wind:
    protects exactly three spreads. Roads, water, rock and cut breaks have no fuel.
 4. Crews regain their action points and the forecast advances to the next wind.
 
-Red borders and exclamation marks show the exact next ignitions. Blue outlines
-show wet ground. Existing flames include a heat number. The map uses no smoke
-overlay that hides targets. Cursor inspection reports the target's fuel and heat;
-villages show their remaining population.
+Ghost flames inside red outlines show the exact next ignitions, and the End turn
+button counts them. Wet ground shows one droplet per spread it still blocks.
+Burning tiles carry one heat pip per heat level. The map uses no smoke overlay
+that hides targets. The strip under the map shows the focused tile's fuel, heat
+and wetness as pips (a shield marks ground that cannot burn); villages show
+their remaining population.
 
 An occupied village catching fire fails the incident. A crew caught by new fire
 with passengers also fails it. An empty crew retreats to base with no water;
@@ -173,24 +206,31 @@ target, action and end-turn inputs as a person. It never writes progression,
 cash, fire, passengers or success state. The tests repeat that full command stream
 and compare the resulting state at every tick.
 
-The 17 behavioral tests cover complete victory, authored-map reachability,
+The 27 behavioral tests cover complete victory, authored-map reachability,
 forecast simultaneity, wet lifetime, movement/AP costs, hose roles, refill
 admission, permanent breaks, passenger capacity and delivery, air-drop footprints,
 village/crew hazards, deadlines and real failed attempts, retry rollback, capped
-upgrades, pointer bounds and terminal invariance. The public model's doctest
-executes without a display. Strict Clippy and scoped formatting also pass.
+upgrades, pointer bounds and terminal invariance. They also check that the drawn
+Deploy, Retry, Next and forecast buttons take the same rule path as their keys,
+that the movement-range overlay and refusal reasons agree with the rules across
+a whole career, that the presentation feed is cleared every step and ignored by
+equality, the header's progress pips and short objective, and that sprays,
+refusals, spreads and cleared incidents request effects. The public model's
+doctest executes without a display. Strict Clippy and scoped formatting also
+pass.
 
 The implementation uses the existing `ferravex-play::navigation::Grid` for
 weighted paths and the parent-owned `ferravex-arcade` host for fixed-tick input,
 menus, audio cues, records and rendering. Model storage is an 88-tile array,
 three crews, six medal slots and bounded counters; temporary paths and planning
-candidates are limited by that same board.
+candidates are limited by that same board. Each step records at most twelve
+presentation events (what was accepted or refused, and where) for the host's
+effects; the rules never read them.
 
-Parent native review at frame 350 found the tactical board and resource display
-readable. Its requested sidebar shortening was applied and the rebuilt frame350
-capture passed the parent's follow-up inspection. Useful additional native
-capture windows are 180 or 350 for Pine Creek, 1300 for Ridge Road, 2000 for Ember
-Ferry, 3100 for the finale and 3700 for the ending. Parent owns final browser/Wasm
+Useful native capture windows are 76 (Pine Creek's first spread, with embers),
+186 (an air drop), 350 for Pine Creek play, 535 for the first debrief, 545 for
+the Orchard Wind briefing, 2000 for Ember Ferry, 3100 for the finale and 3700 for
+the ending. Parent owns final browser/Wasm
 integration and visual checks. Automated solutions establish rule completion,
 not human difficulty balance, physical input/audio device behavior, mobile
 support or cross-platform determinism.

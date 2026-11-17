@@ -15,6 +15,7 @@ use ferravex_play::feedback::FeedbackPolicy;
 use ferravex_play::particles::{
     Emitter, EmitterDesc, EmitterTransform, ParticleDesc, ParticleMotion, ParticlePool, SpawnShape,
 };
+use ferravex_render::icons::Icon;
 use ferravex_render::prelude::{Color, Vec2, Vec3, vec3};
 
 const SEED: u64 = 0x4341_5645;
@@ -27,9 +28,29 @@ pub(super) const VIOLET: Color = Color::new(0.78, 0.6, 1.0, 1.0);
 pub(super) const ECHO: Color = Color::new(0.74, 0.78, 1.0, 1.0);
 pub(super) const STONE: Color = Color::new(0.86, 0.84, 0.78, 1.0);
 
+/// A pictogram that leads a pop or callout. Crystals always use the game's
+/// own faceted gem, so the same idea looks the same everywhere.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Mark {
+    Gem(Color),
+    Icon(Icon, Color),
+}
+
+/// A pictogram row under a callout's headline, in place of a sentence.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum Extra {
+    #[default]
+    None,
+    /// The whole expedition at a glance: three crystals, two altars, daylight.
+    Chain,
+    /// Which page of Wendell's note was just read.
+    Page(u32),
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct Pop {
     pub text: String,
+    pub mark: Option<Mark>,
     pub color: Color,
     pub age: f32,
     pub life: f32,
@@ -48,6 +69,8 @@ pub(super) enum Priority {
 pub(super) struct Callout {
     pub head: String,
     pub sub: String,
+    pub mark: Option<Mark>,
+    pub extra: Extra,
     pub color: Color,
     pub age: f32,
     pub life: f32,
@@ -233,6 +256,16 @@ impl Juice {
     }
 
     pub fn pop(&mut self, text: impl Into<String>, color: Color, size: u16) {
+        self.pop_mark(text, None, color, size);
+    }
+
+    pub fn pop_mark(
+        &mut self,
+        text: impl Into<String>,
+        mark: Option<Mark>,
+        color: Color,
+        size: u16,
+    ) {
         let slot = self
             .pops
             .iter()
@@ -249,6 +282,7 @@ impl Juice {
             });
         self.pops[slot] = Some(Pop {
             text: text.into(),
+            mark,
             color,
             age: 0.,
             life: 1.1,
@@ -264,6 +298,21 @@ impl Juice {
         life: f32,
         priority: Priority,
     ) {
+        self.call_marked(head, sub, None, Extra::None, color, life, priority);
+    }
+
+    /// A callout led by a pictogram, optionally with a pictogram row.
+    #[allow(clippy::too_many_arguments)]
+    pub fn call_marked(
+        &mut self,
+        head: impl Into<String>,
+        sub: impl Into<String>,
+        mark: Option<Mark>,
+        extra: Extra,
+        color: Color,
+        life: f32,
+        priority: Priority,
+    ) {
         if self
             .callout
             .as_ref()
@@ -274,11 +323,29 @@ impl Juice {
         self.callout = Some(Callout {
             head: head.into(),
             sub: sub.into(),
+            mark,
+            extra,
             color,
             age: 0.,
             life,
             priority,
         });
+    }
+
+    /// A zone's name, the cave's short answer, and (for Base Camp) the whole
+    /// expedition as pictograms.
+    pub fn zone(&mut self, zone: usize, life: f32) {
+        let (name, echo) = quips::ZONES[zone];
+        let extra = if zone == 0 { Extra::Chain } else { Extra::None };
+        self.call_marked(
+            name,
+            echo,
+            Some(Mark::Icon(Icon::Pin, STONE)),
+            extra,
+            STONE,
+            life,
+            Priority::Zone,
+        );
     }
 
     /// The cave answers: a line plus its own fading echo.
@@ -336,12 +403,13 @@ impl Juice {
             self.kick = 1.;
             self.bounce[i] = 1.;
             self.glow(MINT, 0.5);
-            // One voice each: the pop counts, the echo jokes, the notice directs.
+            // One voice each: the pop counts, the echo jokes, and the HUD's
+            // sockets and next-target pulse show what is left.
             let count = game.count();
             if count >= 3 {
-                self.pop("ALL 3 CRYSTALS!", GOLD, 30);
+                self.pop_mark("ALL 3!", Some(Mark::Gem(GOLD)), GOLD, 30);
             } else {
-                self.pop(format!("+1 CRYSTAL  {count} / 3"), MINT, 26);
+                self.pop_mark("+1", Some(Mark::Gem(MINT)), MINT, 26);
             }
             self.echo(quips::pickup(count, runs), Priority::Echo);
         }
@@ -387,7 +455,7 @@ impl Juice {
                 self.rumble(0.4);
                 self.pop("ALTAR I AWAKE", GOLD, 26);
             }
-            // The pop names the beat; the echo jokes; the notice says what's next.
+            // The pop names the beat; the echo jokes; the HUD pulses what's next.
             self.echo(quip, Priority::Event);
         }
         if progress.won {
@@ -412,22 +480,22 @@ impl Juice {
             self.bounce[5] = 1.;
             self.glow(VIOLET, 0.55);
             self.pop("SECRET!", VIOLET, 30);
-            self.call(
-                "SECRET: STEVE, THE SHY CRYSTAL",
-                "He's never been found before. He's thrilled.",
+            self.call_marked(
+                "STEVE!",
+                "Found. He's blushing.",
+                Some(Mark::Gem(VIOLET)),
+                Extra::None,
                 VIOLET,
                 4.,
                 Priority::Event,
             );
         }
         if let Some(page) = progress.note {
-            self.call(
-                if page == 0 {
-                    "SECRET: WENDELL'S LOST NOTE"
-                } else {
-                    "WENDELL'S NOTE"
-                },
-                format!("Page {} of 4. His hat is right there.", page % 4 + 1),
+            self.call_marked(
+                "WENDELL'S NOTE",
+                "",
+                Some(Mark::Icon(Icon::Scroll, STONE)),
+                Extra::Page(page),
                 STONE,
                 4.,
                 Priority::Event,
@@ -452,13 +520,14 @@ impl Juice {
             }
         }
         if let Some(zone) = progress.zone {
-            let (name, sub) = quips::ZONES[zone];
-            self.call(name, sub, STONE, 2.8, Priority::Zone);
+            self.zone(zone, 2.8);
         }
         if progress.hint {
-            self.call(
-                "THE ECHO WHISPERS",
+            self.call_marked(
+                "PSST...",
                 game.hint_text(),
+                Some(Mark::Icon(Icon::Bulb, ECHO)),
+                Extra::None,
                 ECHO,
                 7.,
                 Priority::Hint,
@@ -596,7 +665,8 @@ mod tests {
         juice.on_progress(&progress, &game, 0);
         assert!(!juice.particles.is_empty());
         assert!(juice.flash > 0. && juice.bounce[0] == 1.);
-        assert!(juice.pops[0].as_ref().unwrap().text.contains("1 / 3"));
+        let pop = juice.pops[0].as_ref().unwrap();
+        assert_eq!((pop.text.as_str(), pop.mark), ("+1", Some(Mark::Gem(MINT))));
         let callout = juice.callout.as_ref().unwrap();
         assert_eq!(callout.priority, Priority::Echo);
         assert!(callout.sub.starts_with("..."));

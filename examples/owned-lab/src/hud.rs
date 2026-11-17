@@ -1,9 +1,27 @@
-//! Immediate overlay reuses the host's existing UI vertex stream.
+//! Canvas overlay for the Courtyard, reusing the host's UI vertex stream.
+//!
+//! Everything reads at a glance: the four drills are icon badges with the one
+//! control you need as key caps, the qualifier is a score, a ring timer and
+//! streak pips, Sgt. Gravel speaks in short radio callouts, score pops are
+//! icons and numbers beside the crosshair, and the results card is a big
+//! letter grade over icon stats. The DOM strip below the canvas keeps the
+//! health, ammo and match-time text for assistive technology.
+//!
+//! Drawing is allocation-free: copy is formatted into a fixed [`Line`].
 use super::*;
 use ferravex_engine::{
     play::objective::ObjectiveProgress,
-    render::{self, input::PlayerInput},
+    render::{
+        self,
+        icons::{self, Icon, IconStyle},
+        input::PlayerInput,
+        prelude::{Rect, Vec2, vec2},
+        shapes::{self, Cap, Stroke},
+        text::{TextStyle, draw_text_styled, text_width},
+        ui::kit::{self, KitTheme},
+    },
 };
+use std::fmt::Write as _;
 
 fn fit(text: &str, width: f32, metrics: render::BitmapFontMetrics) -> &str {
     let mut end = text.len();
@@ -57,6 +75,9 @@ const CORAL: render::Color = render::Color::new(0.94, 0.47, 0.37, 1.);
 const TEAL: render::Color = render::Color::new(0.45, 0.84, 0.77, 1.);
 const PANEL: render::Color = render::Color::new(0.06, 0.10, 0.13, 0.9);
 const SHADOW: render::Color = render::Color::new(0.02, 0.04, 0.05, 0.8);
+/// Unlit track for pips, rings and meters.
+const TRACK: render::Color = render::Color::new(1., 1., 1., 0.16);
+const ICON_SHADOW: render::Color = render::Color::new(0.02, 0.04, 0.05, 0.55);
 
 fn fade(color: render::Color, alpha: f32) -> render::Color {
     render::Color::new(color.r, color.g, color.b, color.a * alpha.clamp(0., 1.))
@@ -66,91 +87,138 @@ fn metrics(size: u16) -> render::BitmapFontMetrics {
     render::get_default_font().try_metrics(size, 1.).unwrap()
 }
 
-/// Rows are `size + 4` logical pixels tall in the 5x7 bitmap font.
-fn row_height(size: u16) -> f32 {
-    metrics(size).line_height() + 4.
+fn style(size: f32, color: render::Color) -> TextStyle {
+    TextStyle::modern(size, color)
 }
 
-/// Whole-word wrapping for authored copy, bounded to `max` lines.
-fn lines(text: &str, width: f32, size: u16, max: usize) -> Vec<&str> {
-    let metrics = metrics(size);
-    let mut out = Vec::with_capacity(max);
-    let mut rest = text.trim();
-    while !rest.is_empty() && out.len() < max {
-        let prefix = fit(rest, width, metrics);
-        let end = if prefix.len() < rest.len() {
-            prefix
-                .rfind(' ')
-                .filter(|&end| end != 0)
-                .unwrap_or(prefix.len())
-        } else {
-            prefix.len()
-        };
-        if end == 0 {
-            break;
-        }
-        out.push(&rest[..end]);
-        rest = rest[end..].trim_start();
-    }
-    out
+fn width_of(copy: &str, size: f32) -> f32 {
+    text_width(copy, style(size, INK))
 }
 
-fn text(copy: &str, x: f32, top: f32, size: u16, color: render::Color) -> f32 {
-    render::text::draw_text_styled(
-        copy,
-        x,
-        top + metrics(size).baseline(),
-        render::text::TextStyle::modern(f32::from(size), color),
-    )
-    .width
+/// Draws `copy` with its left edge at `x`, vertically centred on `cy`;
+/// returns the drawn width.
+fn label(copy: &str, x: f32, cy: f32, size: f32, color: render::Color) -> f32 {
+    let style = style(size, color);
+    draw_text_styled(copy, x, style.centered_baseline(cy), style).width
 }
 
-/// Floating text over the 3D scene gets a hard drop shadow for contrast.
-fn shadowed(copy: &str, x: f32, top: f32, size: u16, color: render::Color) {
-    let offset = (f32::from(size) / 16.).max(2.);
-    text(copy, x + offset, top + offset, size, fade(SHADOW, color.a));
-    text(copy, x, top, size, color);
+/// Floating copy over the 3D scene gets a hard drop shadow for contrast.
+fn shadowed(copy: &str, x: f32, cy: f32, size: f32, color: render::Color) -> f32 {
+    let offset = (size / 16.).max(2.);
+    label(copy, x + offset, cy + offset, size, fade(SHADOW, color.a));
+    label(copy, x, cy, size, color)
 }
 
-fn centered(copy: &str, center: f32, top: f32, size: u16, color: render::Color, shadow: bool) {
-    let width = render::text::text_width(
-        copy,
-        render::text::TextStyle::modern(f32::from(size), color),
+fn icon(kind: Icon, center: Vec2, size: f32, color: render::Color) {
+    icons::draw_styled(
+        kind,
+        center,
+        size,
+        IconStyle::new(color).shadow(fade(ICON_SHADOW, color.a)),
     );
-    if shadow {
-        shadowed(copy, center - width * 0.5, top, size, color);
-    } else {
-        text(copy, center - width * 0.5, top, size, color);
+}
+
+/// Fixed-capacity formatted copy, so per-frame HUD text never allocates.
+struct Line {
+    bytes: [u8; 96],
+    len: usize,
+}
+
+impl Line {
+    fn format(args: std::fmt::Arguments) -> Self {
+        let mut line = Self {
+            bytes: [0; 96],
+            len: 0,
+        };
+        let _ = line.write_fmt(args);
+        line
+    }
+    fn as_str(&self) -> &str {
+        std::str::from_utf8(&self.bytes[..self.len]).unwrap_or("")
+    }
+}
+
+impl std::fmt::Write for Line {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        let room = self.bytes.len() - self.len;
+        let mut take = s.len().min(room);
+        while !s.is_char_boundary(take) {
+            take -= 1;
+        }
+        self.bytes[self.len..self.len + take].copy_from_slice(&s.as_bytes()[..take]);
+        self.len += take;
+        if take < s.len() {
+            Err(std::fmt::Error)
+        } else {
+            Ok(())
+        }
     }
 }
 
 /// `1234567` as `1,234,567`.
+#[cfg(test)]
 pub(super) fn thousands(value: u32) -> String {
-    let digits = value.to_string();
-    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
-    for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            out.push(',');
+    Grouped(value).to_string()
+}
+
+/// Display adapter for digit grouping without allocating.
+struct Grouped(u32);
+
+impl std::fmt::Display for Grouped {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut groups = [0_u32; 4];
+        let mut count = 0;
+        let mut value = self.0;
+        loop {
+            groups[count] = value % 1000;
+            count += 1;
+            value /= 1000;
+            if value == 0 {
+                break;
+            }
         }
-        out.push(c);
+        write!(f, "{}", groups[count - 1])?;
+        for group in groups[..count - 1].iter().rev() {
+            write!(f, ",{group:03}")?;
+        }
+        Ok(())
     }
-    out
+}
+
+/// Which way to turn toward a world point, and how far it is from the eye.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Side {
+    Ahead,
+    Left,
+    Right,
+    Behind,
+}
+
+impl Side {
+    fn arrow(self) -> Icon {
+        match self {
+            Self::Ahead => Icon::ArrowUp,
+            Self::Left => Icon::ArrowLeft,
+            Self::Right => Icon::ArrowRight,
+            Self::Behind => Icon::ArrowDown,
+        }
+    }
 }
 
 /// Left/right/ahead and distance from the player's eye to a world point.
-fn bearing(player: &ferravex_fps::Player, target: Vec3) -> (&'static str, f32) {
+fn bearing(player: &ferravex_fps::Player, target: Vec3) -> (Side, f32) {
     let delta = target - player.eye_position();
     let yaw = delta.x.atan2(-delta.z);
     let offset = (yaw - player.yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
         - std::f32::consts::PI;
     let side = if offset.abs() < 0.15 {
-        "ahead"
+        Side::Ahead
     } else if offset.abs() > 2.6 {
-        "behind"
+        Side::Behind
     } else if offset < 0. {
-        "left"
+        Side::Left
     } else {
-        "right"
+        Side::Right
     };
     (side, delta.length())
 }
@@ -166,6 +234,8 @@ pub(super) struct Layout {
     pub card: (f32, f32, f32),
     pub card_max: f32,
     pub compact: bool,
+    /// Wide screens anchor the panel's right edge; others its left edge.
+    pub wide: bool,
 }
 
 pub(super) fn layout(width: f32, height: f32) -> Option<Layout> {
@@ -228,303 +298,518 @@ pub(super) fn layout(width: f32, height: f32) -> Option<Layout> {
         card: ((width - card_width) * 0.5, card_y, card_width),
         card_max,
         compact,
+        wide,
     })
 }
 
-enum Row {
-    Text(String, u16, render::Color),
-    /// Left and right-aligned copy on one line (score and clock).
-    Pair(String, String, u16, render::Color, render::Color),
-    Bar(f32, render::Color),
-}
-
-fn drill_hint(input: &PlayerInput, index: usize) -> String {
-    let mut buffer = [0; 256];
-    let mut first = |name: &str| {
-        input.format_hint(name, &mut buffer).map_or_else(
-            |_| "?".to_owned(),
-            |hint| hint.split(" / ").next().unwrap_or("?").to_owned(),
-        )
-    };
-    match index {
-        0 => {
-            let keys = [
-                first("move_forward"),
-                first("move_left"),
-                first("move_back"),
-                first("move_right"),
-            ];
-            if keys.iter().all(|k| k.len() == 1) {
-                format!("Move: {}", keys.concat())
-            } else {
-                format!(
-                    "Move: {} / {} / {} / {}",
-                    keys[0], keys[1], keys[2], keys[3]
-                )
-            }
-        }
-        1 => {
-            let mut buffer = [0; 256];
-            format!(
-                "Fire: {}",
-                input.format_hint("fire", &mut buffer).unwrap_or("Unbound")
-            )
-        }
-        2 => {
-            let mut buffer = [0; 256];
-            format!(
-                "Reload: {}",
-                input
-                    .format_hint("reload", &mut buffer)
-                    .unwrap_or("Unbound")
-            )
-        }
-        _ => "Aim for the bullseye. Headshots pay extra.".to_owned(),
+/// A 0–1 attention pulse on simulation time (frozen in pause); steady when
+/// motion is reduced.
+fn beat(lab: &Lab, hz: f32) -> f32 {
+    if lab.feedback.policy().reduced_motion() {
+        1.
+    } else {
+        render::juice::pulse(lab.time, hz)
     }
 }
 
-fn panel_rows(lab: &Lab, input: &PlayerInput, view: u32, compact: bool) -> Vec<Row> {
-    let mut rows = full_rows(lab, input, view);
-    if compact {
-        // Two short rows: drop gold section labels and secondary detail, and
-        // shrink the score so the essentials survive.
-        rows.retain(
-            |row| !matches!(row, Row::Text(_, 14, color) if *color == GOLD || *color == TEAL),
+/// Key caps in the courtyard's stone-and-brass palette.
+fn theme() -> KitTheme {
+    KitTheme {
+        surface: render::Color::new(0.06, 0.10, 0.13, 1.),
+        raised: render::Color::new(0.17, 0.22, 0.24, 1.),
+        header: render::Color::new(0.23, 0.29, 0.31, 1.),
+        ink: INK,
+        muted: MUTED,
+        accent: GOLD,
+        ..KitTheme::default()
+    }
+}
+
+const CAP_GAP: f32 = 4.;
+
+fn cap_width(key: &str) -> f32 {
+    (width_of(key, 16.) + 24.).max(23.)
+}
+
+/// Splits a formatted binding ("Mouse 1 / Pad RT") into at most six caps.
+fn split_caps(binding: &str) -> Option<([&str; 6], usize)> {
+    let mut keys = [""; 6];
+    let mut count = 0;
+    for part in binding.split(" / ") {
+        *keys.get_mut(count)? = part;
+        count += 1;
+    }
+    Some((keys, count))
+}
+
+fn caps_width(keys: &[&str]) -> f32 {
+    keys.iter().map(|k| cap_width(k) + CAP_GAP).sum()
+}
+
+/// Draws key caps from `x`, vertically centred on `cy`; returns the end x.
+fn draw_caps(x: f32, cy: f32, keys: &[&str], alpha: f32) -> f32 {
+    let theme = theme().faded(alpha);
+    let mut cursor = x;
+    for key in keys {
+        cursor += kit::keycap(cursor, cy - 11.5, key, &theme).w + CAP_GAP;
+    }
+    cursor
+}
+
+/// Horizontal meter: a rounded track and a fill.
+fn meter(rect: Rect, fraction: f32, color: render::Color) {
+    shapes::fill_rounded_rect(rect, rect.h * 0.5, TRACK);
+    let fill = Rect::new(rect.x, rect.y, rect.w * fraction.clamp(0., 1.), rect.h);
+    if fill.w > 0.5 {
+        shapes::fill_rounded_rect(fill, rect.h * 0.5, color);
+    }
+}
+
+/// Circular progress clockwise from 12 o'clock over a faint track.
+fn ring(center: Vec2, radius: f32, width: f32, fraction: f32, color: render::Color) {
+    shapes::stroke_circle(center, radius, width, TRACK);
+    let fraction = fraction.clamp(0., 1.);
+    if fraction > 0. {
+        shapes::stroke_arc(
+            center,
+            radius,
+            -std::f32::consts::FRAC_PI_2,
+            fraction * std::f32::consts::TAU,
+            Stroke::new(width, color).cap(Cap::Round),
         );
-        for row in &mut rows {
-            if let Row::Pair(_, _, size, ..) = row {
-                *size = 16;
-            }
-        }
-        rows.retain(|row| !matches!(row, Row::Bar(..)));
     }
-    rows
 }
 
-fn full_rows(lab: &Lab, input: &PlayerInput, view: u32) -> Vec<Row> {
-    let player = lab.game.player(0).unwrap();
-    let mut rows = Vec::with_capacity(8);
-    if lab.peer.mode != 0 {
-        rows.push(Row::Text(lab.peer_status().to_owned(), 14, INK));
-        if view == 2 {
-            rows.push(Row::Text(
-                format!("North up / facing {}", direction(player.yaw)),
-                14,
-                MUTED,
-            ));
+/// Small filled dots: `lit` of `total`.
+fn pips(x: f32, cy: f32, lit: u32, total: u32, color: render::Color) -> f32 {
+    for i in 0..total {
+        let center = vec2(x + 5. + i as f32 * 13., cy);
+        if i < lit {
+            shapes::fill_circle(center, 4.5, color);
+        } else {
+            shapes::stroke_circle(center, 4., 1.5, fade(color, 0.45));
         }
-        return rows;
     }
-    let operator = lab.target_hint.map(|target| {
-        let (side, distance) = bearing(player, target.position);
-        format!("Operator {}: {side} / {distance:.0} m", target.id)
+    total as f32 * 13.
+}
+
+/// One drill per badge, in move/fire/reload/hit order.
+const DRILL_ICONS: [Icon; 4] = [Icon::Paw, Icon::Flame, Icon::Restart, Icon::Target];
+
+/// The panel surface with its brass edge, hugging `content` (never wider
+/// than the layout's panel); returns the inner left x.
+fn panel_surface(layout: Layout, content: f32, height: f32) -> f32 {
+    let (x, y, max) = layout.panel;
+    let width = (content + 24.).min(max);
+    let x = if layout.wide { x + max - width } else { x };
+    render::draw_rectangle(x, y, width, height, PANEL);
+    render::draw_rectangle(x, y, 3., height, GOLD);
+    x + 12.
+}
+
+/// What the current drill asks for under the badges.
+enum Prompt<'a> {
+    /// Movement caps (when they fit) and the distance meter.
+    Move {
+        keys: [&'a str; 4],
+        caps: bool,
+        meters: f32,
+    },
+    /// The fire or reload binding as caps, then the drill's icon.
+    Caps {
+        keys: [&'a str; 6],
+        count: usize,
+        kind: Icon,
+    },
+    /// An exceptionally long binding as whole wrapped words.
+    Text { lines: Vec<&'a str>, kind: Icon },
+    /// The reload in progress.
+    Reloading(f32),
+    /// Find and hit an operator.
+    Operator,
+}
+
+const MOVE_METER: f32 = 96.;
+
+/// Four drill badges (done, current, ahead) with the current drill's
+/// control and progress underneath, hugging their content.
+fn draw_drills(lab: &Lab, input: &PlayerInput, layout: Layout) {
+    let (_, y, width) = layout.panel;
+    let player = lab.game.player(0).unwrap();
+    let mask = lab.training_mask();
+    let next = lab
+        .training_objectives()
+        .find(|view| !lab.objectives.complete(view.index));
+    let compact = layout.compact;
+    let height = if compact { 60. } else { 92. };
+    let room = width - 24.;
+    // Badges: done drills are teal checks, the current one pulses gold.
+    let badge = if compact { 22. } else { 28. };
+    let step = if compact { 34. } else { 44. };
+    let mut move_buffers = [[0_u8; 64]; 4];
+    let mut buffer = [0; 256];
+    let prompt = next.map(|next| match next.index {
+        0 => {
+            let ObjectiveProgress::Event { count, .. } = next.progress else {
+                unreachable!()
+            };
+            let mut keys = [""; 4];
+            for ((key, buffer), action) in keys.iter_mut().zip(&mut move_buffers).zip([
+                "move_forward",
+                "move_left",
+                "move_back",
+                "move_right",
+            ]) {
+                *key = input
+                    .format_hint(action, buffer)
+                    .map_or("?", |hint| hint.split(" / ").next().unwrap_or("?"));
+            }
+            let caps = caps_width(&keys) + 4. + MOVE_METER + 52. <= room;
+            Prompt::Move {
+                keys,
+                caps,
+                meters: f32::from(count) / 100.,
+            }
+        }
+        2 if player.reload_ticks > 0 => Prompt::Reloading(
+            1. - f32::from(player.reload_ticks) / f32::from(ferravex_fps::RELOAD_TICKS),
+        ),
+        1 | 2 => {
+            let action = if next.index == 1 { "fire" } else { "reload" };
+            let binding = input.format_hint(action, &mut buffer).unwrap_or("Unbound");
+            let kind = DRILL_ICONS[next.index];
+            match split_caps(binding) {
+                Some((keys, count)) if caps_width(&keys[..count]) + 28. <= room => {
+                    Prompt::Caps { keys, count, kind }
+                }
+                // Exceptionally long profiles: whole words, then Controls.
+                _ => {
+                    let mut lines = wrap(binding, room - 26., metrics(14));
+                    if compact && lines.len() > 1 {
+                        lines.truncate(1);
+                        lines[0] = "More in Controls";
+                    }
+                    Prompt::Text { lines, kind }
+                }
+            }
+        }
+        _ => Prompt::Operator,
     });
+    let badges: f32 = 3. * step + badge;
+    let content = match &prompt {
+        Some(Prompt::Move { keys, caps, .. }) => {
+            (if *caps { caps_width(keys) + 4. } else { 0. }) + MOVE_METER + 52.
+        }
+        Some(Prompt::Caps { keys, count, .. }) => caps_width(&keys[..*count]) + 28.,
+        Some(Prompt::Text { lines, .. }) => {
+            26. + lines.iter().map(|l| width_of(l, 14.)).fold(0., f32::max)
+        }
+        Some(Prompt::Reloading(_)) => 26. + MOVE_METER + 40.,
+        Some(Prompt::Operator) => 120.,
+        None => 0.,
+    };
+    let inner = badges.max(content).min(room);
+    let left = panel_surface(layout, inner, height);
+    let row = y + if compact { 5. } else { 8. } + badge * 0.5;
+    // A finished drill's badge pops in; reduced motion keeps it still.
+    let fresh = if lab.feedback.policy().reduced_motion() {
+        0.
+    } else {
+        (lab.drill_notice / 2.5).clamp(0., 1.)
+    };
+    for (index, kind) in DRILL_ICONS.into_iter().enumerate() {
+        let center = vec2(left + badge * 0.5 + index as f32 * step, row);
+        if index > 0 {
+            let from = center.x - step + badge * 0.5 + 2.;
+            let color = if mask & (1 << (index - 1)) != 0 {
+                fade(TEAL, 0.6)
+            } else {
+                TRACK
+            };
+            render::draw_rectangle(from, row - 1., step - badge - 4., 2., color);
+        }
+        let done = mask & (1 << index) != 0;
+        let current = next.is_some_and(|view| view.index == index);
+        if done {
+            // The drill that just finished pops before settling.
+            let pop = if index == mask.count_ones() as usize - 1 && fresh > 0. {
+                1. + 0.35 * fresh * fresh
+            } else {
+                1.
+            };
+            icons::badge(Icon::Check, center, badge * pop, TEAL, PANEL);
+        } else if current {
+            let glow = 0.55 + 0.45 * beat(lab, 1.4);
+            shapes::fill_circle(center, badge * 0.5, fade(GOLD, 0.18));
+            shapes::stroke_circle(center, badge * 0.5 - 1., 2., fade(GOLD, glow));
+            icon(kind, center, badge * 0.6, GOLD);
+        } else {
+            shapes::stroke_circle(center, badge * 0.5 - 1., 1.5, TRACK);
+            icon(kind, center, badge * 0.55, fade(MUTED, 0.6));
+        }
+    }
+    let cy = if compact { y + 42. } else { y + 66. };
+    match prompt {
+        None => {}
+        Some(Prompt::Move { keys, caps, meters }) => {
+            let mut cursor = left;
+            if caps {
+                cursor = draw_caps(cursor, cy, &keys, 1.) + 4.;
+            }
+            let distance = Line::format(format_args!("{meters:.1} m"));
+            meter(
+                Rect::new(cursor, cy - 3., MOVE_METER, 6.),
+                meters / 5.,
+                GOLD,
+            );
+            label(distance.as_str(), cursor + MOVE_METER + 8., cy, 14., MUTED);
+        }
+        Some(Prompt::Caps { keys, count, kind }) => {
+            let end = draw_caps(left, cy, &keys[..count], 1.);
+            icon(kind, vec2(end + 10., cy), 20., GOLD);
+        }
+        Some(Prompt::Text { lines, kind }) => {
+            icon(kind, vec2(left + 9., cy), 18., GOLD);
+            let top = cy - (lines.len() as f32 - 1.) * 8.;
+            for (i, line) in lines.iter().enumerate() {
+                label(line, left + 26., top + i as f32 * 16., 14., MUTED);
+            }
+        }
+        Some(Prompt::Reloading(fraction)) => {
+            // Reloading: the magazine refills along the meter.
+            icon(DRILL_ICONS[2], vec2(left + 9., cy), 18., GOLD);
+            meter(
+                Rect::new(left + 26., cy - 3., (inner - 26.).min(MOVE_METER + 40.), 6.),
+                fraction,
+                GOLD,
+            );
+        }
+        Some(Prompt::Operator) => operator_row(lab, left, cy, true),
+    }
+}
+
+/// The nearest visible operator: a person, a turn arrow and its distance.
+/// `target` marks the drill's bullseye goal first.
+fn operator_row(lab: &Lab, x: f32, cy: f32, target: bool) {
+    let mut cursor = x;
+    if target {
+        icon(Icon::Target, vec2(cursor + 10., cy), 20., GOLD);
+        cursor += 26.;
+    }
+    let Some(hint) = lab.target_hint else {
+        icon(Icon::Search, vec2(cursor + 9., cy), 16., fade(MUTED, 0.7));
+        return;
+    };
+    let player = lab.game.player(0).unwrap();
+    let (side, distance) = bearing(player, hint.position);
+    icon(Icon::Person, vec2(cursor + 8., cy), 16., MUTED);
+    icon(side.arrow(), vec2(cursor + 26., cy), 16., INK);
+    let meters = Line::format(format_args!("{distance:.0} m"));
+    label(meters.as_str(), cursor + 38., cy, 14., MUTED);
+}
+
+/// Qualifier panel: score, a ring timer and streak pips toward the next
+/// multiplier, plus the nearest operator while running.
+fn draw_qualifier(lab: &Lab, layout: Layout, left_ticks: u32, running: bool) {
+    let (_, y, width) = layout.panel;
     let status = lab.qualifier.status();
-    match status.phase {
-        QualifierPhase::Locked => {
-            let done = lab.training_mask().count_ones();
-            let next = lab
-                .training_objectives()
-                .find(|view| !lab.objectives.complete(view.index));
-            if lab.drill_notice > 0. {
-                rows.push(Row::Text(format!("Drill complete! {done}/4"), 14, TEAL));
-            } else {
-                rows.push(Row::Text(format!("Drill {} of 4", done + 1), 14, GOLD));
-            }
-            if let Some(next) = next {
-                match next.index {
-                    0 => {
-                        let ObjectiveProgress::Event { count, .. } = next.progress else {
-                            unreachable!()
-                        };
-                        rows.push(Row::Text(
-                            format!("Move {:.1}/5 m", f32::from(count) / 100.),
-                            16,
-                            INK,
-                        ));
-                        rows.push(Row::Bar(f32::from(count) / 500., GOLD));
-                    }
-                    1 => rows.push(Row::Text("Fire a shot".to_owned(), 16, INK)),
-                    2 if player.reload_ticks > 0 => {
-                        rows.push(Row::Text(
-                            format!("Reloading: {:.1}s", f32::from(player.reload_ticks) / 64.),
-                            16,
-                            INK,
-                        ));
-                        rows.push(Row::Bar(
-                            1. - f32::from(player.reload_ticks)
-                                / f32::from(ferravex_fps::RELOAD_TICKS),
-                            GOLD,
-                        ));
-                    }
-                    2 => rows.push(Row::Text("Reload".to_owned(), 16, INK)),
-                    _ => rows.push(Row::Text("Hit an operator".to_owned(), 16, INK)),
-                }
-                // Onboarding: only the current drill's control, gone once learned.
-                rows.push(Row::Text(drill_hint(input, next.index), 14, MUTED));
-                if next.index == 3 {
-                    rows.extend(operator.map(|line| Row::Text(line, 14, MUTED)));
-                }
-            }
+    let compact = layout.compact;
+    let height = if compact {
+        60.
+    } else if running && lab.target_hint.is_some() {
+        96.
+    } else {
+        74.
+    };
+    let inner = (width - 24.).min(if compact { 200. } else { 236. });
+    let left = panel_surface(layout, inner, height);
+    let seconds = left_ticks.div_ceil(ferravex_fps::TICK_RATE);
+    let urgent = running && seconds <= 5;
+    let clock_color = if urgent { CORAL } else { GOLD };
+    // Ring timer on the right: drains clockwise around a clock that swells
+    // with each of the final five seconds; the digits sit beside it.
+    let radius = if compact { 13. } else { 16. };
+    let center = vec2(left + inner - radius - 2., y + 8. + radius);
+    let fraction = left_ticks as f32 / qualifier::RUN_TICKS as f32;
+    ring(
+        center,
+        radius,
+        3.5,
+        if running { fraction } else { 1. },
+        clock_color,
+    );
+    let tick = if urgent && !lab.feedback.policy().reduced_motion() {
+        let into =
+            1. - (left_ticks % ferravex_fps::TICK_RATE) as f32 / ferravex_fps::TICK_RATE as f32;
+        1. + 0.3 * (1. - into).powi(3)
+    } else {
+        1.
+    };
+    icon(Icon::Clock, center, radius * 1.05 * tick, clock_color);
+    let time = Line::format(format_args!("0:{seconds:02}"));
+    let time_size = if compact { 16. } else { 24. };
+    let time_width = width_of(time.as_str(), time_size);
+    label(
+        time.as_str(),
+        center.x - radius - 8. - time_width,
+        center.y,
+        time_size,
+        clock_color,
+    );
+    // Score with a star.
+    let score_size = if compact { 16. } else { 24. };
+    let score = Line::format(format_args!("{}", Grouped(status.score)));
+    let row = y + 8. + radius;
+    // The star swells as each score callout lands.
+    let landed = lab
+        .juice
+        .pops()
+        .last()
+        .filter(|(pop, _)| !matches!(pop, juice::Pop::Eliminated { bonus: 0 }))
+        .map_or(0., |(_, age)| (1. - age / 0.25).max(0.));
+    let swell = if lab.feedback.policy().reduced_motion() {
+        1.
+    } else {
+        1. + 0.45 * landed
+    };
+    icon(Icon::Star, vec2(left + 10., row), 20. * swell, GOLD);
+    label(score.as_str(), left + 26., row, score_size, INK);
+    // Streak: a flame, three pips per multiplier tier and the multiplier.
+    let streak_y = if compact { y + 46. } else { y + 58. };
+    let hot = status.streak > 0;
+    icon(
+        Icon::Flame,
+        vec2(left + 9., streak_y),
+        18.,
+        if hot { CORAL } else { fade(MUTED, 0.5) },
+    );
+    let tier = qualifier::HITS_PER_TIER;
+    let lit = if status.multiplier >= qualifier::MAX_MULTIPLIER {
+        tier
+    } else {
+        status.streak % tier
+    };
+    let end = left + 24. + pips(left + 24., streak_y, lit, tier, TEAL);
+    let multiplier = Line::format(format_args!("×{}", status.multiplier));
+    label(
+        multiplier.as_str(),
+        end + 6.,
+        streak_y,
+        16.,
+        if status.multiplier > 1 { TEAL } else { MUTED },
+    );
+    if running && !compact && lab.target_hint.is_some() {
+        operator_row(lab, left, y + 82., false);
+    }
+}
+
+/// Free practice: the bell to shoot for another run and the personal best.
+fn draw_debrief(lab: &Lab, layout: Layout) {
+    let (_, y, _) = layout.panel;
+    let compact = layout.compact;
+    let has_best = lab.qualifier_best().is_some() && !compact;
+    let height = if has_best { 66. } else { 40. };
+    let left = panel_surface(layout, 150., height);
+    let player = lab.game.player(0).unwrap();
+    let (side, distance) = bearing(player, qualifier::BELL);
+    let row = y + 20.;
+    // Shoot the bell (pulsing) that way to go again.
+    let swell = 18. + 3. * beat(lab, 1.2);
+    icon(Icon::Bell, vec2(left + 10., row), swell, GOLD);
+    icon(side.arrow(), vec2(left + 32., row), 16., INK);
+    let meters = Line::format(format_args!("{distance:.0} m"));
+    let end = left + 44. + label(meters.as_str(), left + 44., row, 16., GOLD);
+    icon(Icon::Restart, vec2(end + 14., row), 16., TEAL);
+    if let (true, Some(best)) = (has_best, lab.qualifier_best()) {
+        let row = y + 48.;
+        icon(Icon::Trophy, vec2(left + 9., row), 16., GOLD);
+        let best = Line::format(format_args!("{}", Grouped(best)));
+        let end = left + 24. + label(best.as_str(), left + 24., row, 16., INK);
+        if let Some(last) = lab.qualifier_result() {
+            grade_chip(vec2(end + 18., row), 20., last.grade());
         }
-        QualifierPhase::Countdown(left) => {
-            rows.push(Row::Text("Qualifier".to_owned(), 14, GOLD));
-            rows.push(Row::Text(
-                format!("Starts in {}", left.div_ceil(ferravex_fps::TICK_RATE)),
-                16,
-                INK,
-            ));
-            rows.push(Row::Text(
-                "Hit operators. Headshots pay more. Misses break your streak.".to_owned(),
-                14,
-                MUTED,
-            ));
+    }
+}
+
+/// A small rounded letter chip in the grade's colour.
+fn grade_chip(center: Vec2, size: f32, grade: Grade) {
+    let color = grade_color(grade);
+    let rect = Rect::new(center.x - size * 0.5, center.y - size * 0.5, size, size);
+    shapes::fill_rounded_rect(rect, 4., fade(color, 0.2));
+    shapes::stroke_rounded_rect(rect, 4., 1.5, color);
+    let width = width_of(grade.letter(), 16.);
+    label(grade.letter(), center.x - width * 0.5, center.y, 16., color);
+}
+
+/// Peer matches keep the authority/prediction status as text: it is state,
+/// not instruction.
+fn draw_peer(lab: &Lab, layout: Layout) {
+    let (_, y, width) = layout.panel;
+    let mut line = Line::format(format_args!("{}", lab.peer_status()));
+    let content = (width_of(line.as_str(), 14.) + 26.).min(width - 24.);
+    let left = panel_surface(layout, content, 36.);
+    icon(Icon::People, vec2(left + 9., y + 18.), 18., GOLD);
+    let budget = width - 24. - 26.;
+    while width_of(line.as_str(), 14.) > budget && line.len > 0 {
+        line.len -= 1;
+        while !line.as_str().is_char_boundary(line.len) {
+            line.len -= 1;
         }
-        QualifierPhase::Running(left) => {
-            let seconds = left.div_ceil(ferravex_fps::TICK_RATE);
-            rows.push(Row::Text("Qualifier".to_owned(), 14, GOLD));
-            rows.push(Row::Pair(
-                format!("{} pts", thousands(status.score)),
-                format!("0:{seconds:02}"),
-                24,
-                INK,
-                if seconds <= 5 { CORAL } else { GOLD },
-            ));
-            rows.push(Row::Bar(
-                left as f32 / qualifier::RUN_TICKS as f32,
-                if seconds <= 5 { CORAL } else { GOLD },
-            ));
-            rows.push(if status.streak > 0 {
-                Row::Text(
-                    format!("Streak {}  ×{}", status.streak, status.multiplier),
-                    14,
-                    TEAL,
-                )
-            } else {
-                Row::Text("No streak - land a hit".to_owned(), 14, MUTED)
-            });
-            rows.extend(operator.map(|line| Row::Text(line, 14, MUTED)));
-        }
-        QualifierPhase::Debrief(_) => {
-            rows.push(Row::Text("Free practice".to_owned(), 14, GOLD));
-            rows.push(Row::Text("Ring the bell to requalify".to_owned(), 16, INK));
-            let (side, distance) = bearing(player, qualifier::BELL);
-            rows.push(Row::Text(
-                format!("Bell: {side} / {distance:.0} m"),
-                14,
-                MUTED,
-            ));
-            if let (Some(best), Some(last)) = (lab.qualifier_best(), lab.qualifier_result()) {
-                rows.push(Row::Text(
-                    format!(
-                        "Best {} / last {} ({})",
-                        thousands(best),
-                        thousands(last.score),
-                        last.grade().letter()
-                    ),
-                    14,
-                    MUTED,
-                ));
+    }
+    label(line.as_str(), left + 26., y + 18., 14., INK);
+}
+
+/// Overview compass: north is up; the arrow shows the player's facing.
+fn draw_compass(lab: &Lab, width: f32, height: f32) {
+    let player = lab.game.player(0).unwrap();
+    let center = vec2(width - 44., height * 0.5);
+    render::draw_rectangle(center.x - 30., center.y - 40., 60., 92., PANEL);
+    shapes::fill_circle(center, 24., fade(TRACK, 0.4));
+    shapes::stroke_circle(center, 23., 1.5, fade(GOLD, 0.7));
+    // North is a gold bezel marker at the top of the dial.
+    shapes::fill_circle(center - vec2(0., 23.), 8., GOLD);
+    let n = width_of("N", 14.);
+    label("N", center.x - n * 0.5, center.y - 23., 14., PANEL);
+    let yaw = player.yaw;
+    let heading = vec2(yaw.sin(), -yaw.cos());
+    let side = vec2(-heading.y, heading.x);
+    // A slim needle: bright toward the facing, dim behind.
+    shapes::fill_triangle(
+        center + heading * 17.,
+        center + side * 4.5,
+        center - side * 4.5,
+        INK,
+    );
+    shapes::fill_triangle(
+        center - heading * 12.,
+        center + side * 4.5,
+        center - side * 4.5,
+        fade(MUTED, 0.6),
+    );
+    let facing = direction(yaw);
+    let w = width_of(facing, 16.);
+    label(facing, center.x - w * 0.5, center.y + 38., 16., INK);
+}
+
+fn draw_panel(lab: &Lab, input: &PlayerInput, view: u32, layout: Layout, width: f32, height: f32) {
+    if lab.peer.mode != 0 {
+        draw_peer(lab, layout);
+    } else {
+        match lab.qualifier.status().phase {
+            QualifierPhase::Locked => draw_drills(lab, input, layout),
+            QualifierPhase::Countdown(_) => {
+                draw_qualifier(lab, layout, qualifier::RUN_TICKS, false)
             }
+            QualifierPhase::Running(left) => draw_qualifier(lab, layout, left, true),
+            QualifierPhase::Debrief(_) => draw_debrief(lab, layout),
         }
     }
     if view == 2 {
-        rows.push(Row::Text(
-            format!("North up / facing {}", direction(player.yaw)),
-            14,
-            MUTED,
-        ));
-    }
-    rows
-}
-
-/// Largest of `size`, 16 or 14 at which both halves fit on one line.
-fn pair_size(left: &str, right: &str, size: u16, width: f32) -> u16 {
-    [size, 16, 14]
-        .into_iter()
-        .find(|&size| {
-            let m = metrics(size);
-            m.measure_line(left).unwrap().width + m.measure_line(right).unwrap().width + 12.
-                <= width
-        })
-        .unwrap_or(14)
-}
-
-/// Wrap, measure and drop trailing rows that would overflow `max_height`.
-fn measure_rows(rows: &[Row], width: f32, max_height: f32) -> (Vec<(usize, Vec<&str>)>, f32) {
-    let mut out = Vec::with_capacity(rows.len());
-    let mut height = 0.;
-    for (index, row) in rows.iter().enumerate() {
-        let (wrapped, h) = match row {
-            Row::Text(copy, size, _) => {
-                let wrapped = if *size == 14 && copy.contains(':') {
-                    // Binding hints keep the long-remap fallback.
-                    wrap(copy, width, metrics(*size))
-                } else {
-                    lines(copy, width, *size, 3)
-                };
-                let h = row_height(*size) * wrapped.len() as f32;
-                (wrapped, h)
-            }
-            Row::Pair(_, _, size, ..) => (Vec::new(), row_height(*size)),
-            Row::Bar(..) => (Vec::new(), 10.),
-        };
-        if height + h > max_height && !out.is_empty() {
-            break;
-        }
-        height += h;
-        out.push((index, wrapped));
-    }
-    (out, height)
-}
-
-fn draw_panel(lab: &Lab, input: &PlayerInput, view: u32, layout: Layout) {
-    let rows = panel_rows(lab, input, view, layout.compact);
-    if rows.is_empty() {
-        return;
-    }
-    let (x, y, width) = layout.panel;
-    let inner = width - 16.;
-    let (visible, height) = measure_rows(&rows, inner, layout.panel_max - 16.);
-    render::draw_rectangle(x, y, width, height + 16., PANEL);
-    render::draw_rectangle(x, y, 3., height + 16., GOLD);
-    let mut top = y + 8.;
-    for (index, wrapped) in visible {
-        match &rows[index] {
-            Row::Text(_, size, color) => {
-                for line in wrapped {
-                    text(line, x + 10., top + 2., *size, *color);
-                    top += row_height(*size);
-                }
-            }
-            Row::Pair(left, right, size, left_color, right_color) => {
-                let size = pair_size(left, right, *size, inner - 4.);
-                text(left, x + 10., top + 2., size, *left_color);
-                let width = metrics(size).measure_line(right).unwrap().width;
-                text(
-                    right,
-                    x + 10. + inner - 4. - width,
-                    top + 2.,
-                    size,
-                    *right_color,
-                );
-                top += row_height(size);
-            }
-            Row::Bar(fraction, color) => {
-                render::draw_rectangle(x + 10., top + 2., inner - 4., 5., fade(MUTED, 0.3));
-                render::draw_rectangle(
-                    x + 10.,
-                    top + 2.,
-                    (inner - 4.) * fraction.clamp(0., 1.),
-                    5.,
-                    *color,
-                );
-                top += 10.;
-            }
-        }
+        draw_compass(lab, width, height);
     }
 }
 
+/// Sgt. Gravel's radio chip: a speech badge, his name and a short callout.
 fn draw_radio(lab: &Lab, layout: Layout) {
     let Some((line, time)) = lab.juice.radio_line() else {
         return;
@@ -533,40 +818,28 @@ fn draw_radio(lab: &Lab, layout: Layout) {
         .min((juice::RADIO_TIME - time) / 0.12)
         .clamp(0., 1.);
     let (x, y, max_width) = layout.radio;
-    let size = if max_width >= 360. { 16 } else { 14 };
-    let wrapped = lines(line, max_width - 24., size, layout.radio_lines);
-    // Hug the copy so short lines do not leave an empty slab over the scene.
-    let header = metrics(14)
-        .measure_line("SGT. GRAVEL on the radio")
-        .unwrap()
-        .width;
-    let widest = wrapped
-        .iter()
-        .map(|copy| metrics(size).measure_line(copy).unwrap().width)
-        .fold(header.min(max_width - 24.), f32::max);
-    let width = (widest + 24.).min(max_width);
-    let height = 8. + row_height(14) + wrapped.len() as f32 * row_height(size) + 8.;
+    let size = if max_width >= 360. { 16. } else { 14. };
+    let text = width_of(line, size).min(max_width - 64.);
+    let name = width_of(quips::CALLSIGN, 14.);
+    let width = (text.max(name) + 64.).min(max_width);
+    let height = 46.;
     render::draw_rectangle(x, y, width, height, fade(PANEL, alpha));
     render::draw_rectangle(x, y, 3., height, fade(GOLD, alpha));
-    text(quips::CALLSIGN, x + 12., y + 10., 14, fade(GOLD, alpha));
-    if header + 24. <= width {
-        text(
-            "on the radio",
-            x + 12. + metrics(14).measure_line(quips::CALLSIGN).unwrap().width + 10.,
-            y + 10.,
-            14,
-            fade(MUTED, alpha),
-        );
-    }
-    for (i, copy) in wrapped.into_iter().enumerate() {
-        text(
-            copy,
-            x + 12.,
-            y + 8. + row_height(14) + 2. + i as f32 * row_height(size),
-            size,
-            fade(INK, alpha),
-        );
-    }
+    // The badge leans in as the line arrives.
+    let pop = if lab.feedback.policy().reduced_motion() {
+        1.
+    } else {
+        1. + 0.25 * ((time - (juice::RADIO_TIME - 0.2)) / 0.2).clamp(0., 1.)
+    };
+    icons::badge(
+        Icon::Chat,
+        vec2(x + 27., y + height * 0.5),
+        28. * pop,
+        fade(GOLD, alpha),
+        fade(PANEL, alpha),
+    );
+    label(quips::CALLSIGN, x + 50., y + 14., 14., fade(GOLD, alpha));
+    label(line, x + 50., y + 32., size, fade(INK, alpha));
 }
 
 fn draw_big(lab: &Lab, width: f32, height: f32) {
@@ -583,16 +856,16 @@ fn draw_big(lab: &Lab, width: f32, height: f32) {
     } else {
         1. + ((time - (juice::BIG_TIME - 0.15)) / 0.15).clamp(0., 1.) * 0.35 * policy.intensity()
     };
-    let size = ((fitted * punch / 8.).round() * 8.).clamp(16., 96.) as u16;
+    let size = ((fitted * punch / 8.).round() * 8.).clamp(16., 96.);
     let color = if copy.starts_with('G') { TEAL } else { GOLD };
-    centered(
-        copy,
-        width * 0.5,
-        height * 0.34 - f32::from(size) * 0.5,
-        size,
-        fade(color, alpha),
-        true,
-    );
+    let center = vec2(width * 0.5, height * 0.34);
+    // Countdown digits sit in a ring that drains with the beat.
+    if copy.len() == 1 && !policy.reduced_flash() {
+        let k = (time / juice::BIG_TIME).clamp(0., 1.);
+        ring(center, size * 0.75, 4., k, fade(GOLD, alpha));
+    }
+    let w = width_of(copy, size);
+    shadowed(copy, center.x - w * 0.5, center.y, size, fade(color, alpha));
 }
 
 fn draw_pops(lab: &Lab, width: f32, height: f32) {
@@ -605,25 +878,59 @@ fn draw_pops(lab: &Lab, width: f32, height: f32) {
     for (slot, (pop, age)) in lab.juice.pops().enumerate() {
         let k = age / juice::POP_TIME;
         let alpha = ((1. - k) / 0.4).clamp(0., 1.);
-        let (copy, color) = match pop {
-            juice::Pop::Points { points, multiplier } if multiplier > 1 => {
-                (format!("+{points} ×{multiplier}"), TEAL)
-            }
-            juice::Pop::Points { points, .. } => (format!("+{points}"), INK),
-            juice::Pop::Headshot { points, multiplier } if multiplier > 1 => {
-                (format!("Headshot +{points} ×{multiplier}"), GOLD)
-            }
-            juice::Pop::Headshot { points, .. } => (format!("Headshot +{points}"), GOLD),
-            juice::Pop::Eliminated => ("Eliminated!".to_owned(), CORAL),
-            juice::Pop::Bell => ("DING! +500".to_owned(), GOLD),
-            juice::Pop::HeadshotStreak(n) => (format!("{n} headshots in a row"), GOLD),
-        };
-        let size = 16;
-        let w = metrics(size).measure_line(&copy).unwrap().width;
-        let x = (width * 0.5 + 26.).min(width - w - 8.);
+        let size = 16.;
         // Newest sits beside the crosshair; older callouts stack and drift upward.
-        let y = height * 0.5 - 10. - (count - 1 - slot) as f32 * row_height(size) - rise * k;
-        shadowed(&copy, x, y, size, fade(color, alpha));
+        let cy = height * 0.5 - 2. - (count - 1 - slot) as f32 * 20. - rise * k;
+        let x = width * 0.5 + 26.;
+        let glyph = |kind: Icon, color: render::Color, at: f32| {
+            icon(kind, vec2(at + 9., cy), 18., fade(color, alpha));
+            at + 21.
+        };
+        match pop {
+            juice::Pop::Points { points, multiplier } => {
+                let copy = Line::format(format_args!("+{points}"));
+                let end = x + shadowed(copy.as_str(), x, cy, size, fade(INK, alpha));
+                multiplier_tag(end + 6., cy, multiplier, alpha);
+            }
+            juice::Pop::Headshot { points, multiplier } => {
+                let at = glyph(Icon::Target, GOLD, x);
+                let copy = Line::format(format_args!("+{points}"));
+                let end = at + shadowed(copy.as_str(), at, cy, size, fade(GOLD, alpha));
+                multiplier_tag(end + 6., cy, multiplier, alpha);
+            }
+            juice::Pop::Eliminated { bonus } => {
+                let at = glyph(Icon::Skull, CORAL, x);
+                if bonus > 0 {
+                    let copy = Line::format(format_args!("+{bonus}"));
+                    shadowed(copy.as_str(), at, cy, size, fade(CORAL, alpha));
+                }
+            }
+            juice::Pop::Bell => {
+                let at = glyph(Icon::Bell, GOLD, x);
+                let copy = Line::format(format_args!("+{}", qualifier::BELL_BONUS));
+                shadowed(copy.as_str(), at, cy, size, fade(GOLD, alpha));
+            }
+            juice::Pop::HeadshotStreak(n) => {
+                // One bullseye per headshot in a row, then a count.
+                let shown = n.min(5);
+                let mut at = x;
+                for _ in 0..shown {
+                    at = glyph(Icon::Target, GOLD, at) - 3.;
+                }
+                if n > shown {
+                    let copy = Line::format(format_args!("×{n}"));
+                    shadowed(copy.as_str(), at + 4., cy, size, fade(GOLD, alpha));
+                }
+            }
+        }
+    }
+}
+
+/// A teal `×N` beside a pop when a streak multiplied it.
+fn multiplier_tag(x: f32, cy: f32, multiplier: u32, alpha: f32) {
+    if multiplier > 1 {
+        let copy = Line::format(format_args!("×{multiplier}"));
+        shadowed(copy.as_str(), x, cy, 16., fade(TEAL, alpha));
     }
 }
 
@@ -648,19 +955,51 @@ fn draw_marker(lab: &Lab, width: f32, height: f32) {
     }
 }
 
-/// An empty magazine is the most common "why won't it fire?" moment.
-fn draw_ammo_prompt(lab: &Lab, input: &PlayerInput, width: f32, height: f32) {
+/// Weapon state at the crosshair: a refill ring while reloading, a few
+/// pips when the magazine runs low and the reload key when it is empty.
+fn draw_weapon(lab: &Lab, input: &PlayerInput, width: f32, height: f32) {
     let player = lab.game.player(0).unwrap();
-    if !player.is_alive() || player.reload_ticks > 0 || player.ammo > 0 {
+    if !player.is_alive() {
         return;
     }
+    let center = vec2(width * 0.5, height * 0.5);
+    if player.reload_ticks > 0 {
+        let fraction = 1. - f32::from(player.reload_ticks) / f32::from(ferravex_fps::RELOAD_TICKS);
+        ring(center, 22., 3., fraction, GOLD);
+        return;
+    }
+    let below = center.y + 40.;
+    if (1..=5).contains(&player.ammo) {
+        let total = u32::from(player.ammo);
+        let span = total as f32 * 13.;
+        pips(
+            center.x - span * 0.5 - 1.,
+            below - 14.,
+            total,
+            total,
+            fade(CORAL, 0.85),
+        );
+        return;
+    }
+    if player.ammo > 0 {
+        return;
+    }
+    // Empty: the most common "why won't it fire?" moment.
     let mut buffer = [0; 256];
     let hint = input
         .format_hint("reload", &mut buffer)
         .unwrap_or("Unbound");
-    let hint = hint.split(" / ").next().unwrap_or(hint);
-    let copy = format!("Empty! Reload: {hint}");
-    centered(&copy, width * 0.5, height * 0.5 + 40., 16, CORAL, true);
+    let key = hint.split(" / ").next().unwrap_or(hint);
+    let alpha = 0.7 + 0.3 * beat(lab, 2.5);
+    let width = cap_width(key) + CAP_GAP + 22.;
+    let x = center.x - width * 0.5;
+    let end = draw_caps(x, below, &[key], alpha);
+    icon(
+        Icon::Restart,
+        vec2(end + 9., below),
+        20.,
+        fade(CORAL, alpha),
+    );
 }
 
 pub(super) fn grade_color(grade: Grade) -> render::Color {
@@ -673,39 +1012,32 @@ pub(super) fn grade_color(grade: Grade) -> render::Color {
     }
 }
 
-/// The verdict line and the "one more try" hook under the results.
+/// Personal-best standing after a run: a few words and numbers.
 pub(super) fn record_lines(
     result: QualifierResult,
     previous: Option<u32>,
 ) -> (String, render::Color) {
     match previous {
-        None => ("First record set!".to_owned(), GOLD),
-        Some(best) if result.score > best => (
-            format!("New personal best! +{}", thousands(result.score - best)),
-            GOLD,
-        ),
-        Some(best) if result.score == best => ("Tied your best. Spooky.".to_owned(), INK),
+        None => ("New record!".to_owned(), GOLD),
+        Some(best) if result.score > best => {
+            (format!("New best! +{}", Grouped(result.score - best)), GOLD)
+        }
+        Some(best) if result.score == best => ("Tied!".to_owned(), INK),
         Some(best) => (
-            format!(
-                "Best {} / {} to beat it",
-                thousands(best),
-                thousands(best - result.score)
-            ),
+            format!("{} · {} to go", Grouped(best), Grouped(best - result.score)),
             INK,
         ),
     }
 }
 
-pub(super) fn next_goal(result: QualifierResult) -> String {
-    match result.grade().next() {
-        Some((grade, at)) => format!(
-            "Next: {} at {} ({} to go)",
-            grade.letter(),
-            thousands(at),
-            thousands(at - result.score)
-        ),
-        None => "Top grade. Now chase a cleaner streak.".to_owned(),
-    }
+/// The next grade's letter, its threshold and the points still needed.
+pub(super) fn next_goal(result: QualifierResult) -> Option<(Grade, String)> {
+    result.grade().next().map(|(grade, at)| {
+        (
+            grade,
+            format!("{} · {} to go", Grouped(at), Grouped(at - result.score)),
+        )
+    })
 }
 
 /// "TIME!" gets the screen to itself for a beat before the results card.
@@ -729,69 +1061,36 @@ fn time_up(lab: &Lab) -> bool {
         )
 }
 
+/// One icon-and-number stat for the results card.
+fn stat(x: f32, cy: f32, kind: Icon, value: &str, color: render::Color) -> f32 {
+    icon(kind, vec2(x + 9., cy), 18., color);
+    22. + label(value, x + 22., cy, 16., INK) + 16.
+}
+
 fn draw_card(lab: &Lab, layout: Layout) {
     let Some(result) = lab.qualifier_result() else {
         return;
     };
     let (x, y, width) = layout.card;
     let inner = width - 32.;
+    let left = x + 16.;
     let grade = result.grade();
+    let color = grade_color(grade);
     let previous = lab.previous_best;
     let new_best = previous.is_none_or(|best| result.score > best);
-    let (record, record_color) = record_lines(result, previous);
     let quip = if new_best && previous.is_some() {
         quips::NEW_BEST
     } else {
         quips::grade(grade, lab.qualifier.status().runs)
     };
-    let player = lab.game.player(0).unwrap();
-    let (side, distance) = bearing(player, qualifier::BELL);
-    let stats = format!(
-        "Hits {} / Heads {} / Elims {}",
-        result.hits, result.headshots, result.eliminations
-    );
-    let more = format!(
-        "Accuracy {}% / Best streak {}{}",
-        result.accuracy(),
-        result.best_streak,
-        if result.bell { " / Bell!" } else { "" }
-    );
-    let call = format!("Ring the bell to go again ({side}, {distance:.0} m)");
-    let quote = format!("\"{quip}\"");
-    // Short or very narrow screens keep the record and the next action first.
     let tight = layout.compact || width < 300.;
-    let badge = if tight { 48. } else { 64. };
-    let title_size = if tight { 14 } else { 16 };
-    // Beside the badge when every word fits there; otherwise its own row.
-    let title_width = width - 32. - badge - 14.;
-    let title_beside = grade
-        .title()
-        .split(' ')
-        .all(|word| metrics(title_size).measure_line(word).unwrap().width <= title_width);
-    let mut rows = if tight {
-        vec![
-            Row::Text(record, 14, record_color),
-            Row::Text(call, 14, TEAL),
-            Row::Text(stats, 14, INK),
-            Row::Text(quote, 14, GOLD),
-        ]
-    } else {
-        vec![
-            Row::Text(stats, 14, INK),
-            Row::Text(more, 14, INK),
-            Row::Bar(0., MUTED),
-            Row::Text(record, 16, record_color),
-            Row::Text(next_goal(result), 14, MUTED),
-            Row::Text(call, 14, TEAL),
-            Row::Text(quote, 14, GOLD),
-        ]
-    };
-    if !title_beside {
-        rows.insert(0, Row::Text(grade.title().to_owned(), title_size, INK));
-    }
-    let head = 8. + row_height(14) + 6. + badge + 10.;
-    let (visible, body) = measure_rows(&rows, inner, layout.card_max - head - 16.);
-    let height = head + body + 16.;
+    let badge = if tight { 52. } else { 72. };
+    // Rows under the grade header, dropped from the end when space runs out.
+    let row = 26.;
+    let rows = if tight { 4 } else { 6 };
+    let head = 14. + badge + 10.;
+    let fit = (((layout.card_max - head - 12.) / row).floor().max(0.) as usize).min(rows);
+    let height = head + fit as f32 * row + 12.;
     render::draw_rectangle(
         x,
         y,
@@ -799,65 +1098,119 @@ fn draw_card(lab: &Lab, layout: Layout) {
         height,
         render::Color::new(0.05, 0.08, 0.10, 0.94),
     );
-    render::draw_rectangle(x, y, width, 4., grade_color(grade));
-    let heading = if metrics(14).measure_line("Qualifier results").unwrap().width <= inner {
-        "Qualifier results"
-    } else {
-        "Results"
-    };
-    text(heading, x + 16., y + 12., 14, GOLD);
-    let run = format!("Run {}", lab.qualifier.status().runs);
-    let run_width = metrics(14).measure_line(&run).unwrap().width;
-    if metrics(14).measure_line(heading).unwrap().width + run_width + 12. <= inner {
-        text(&run, x + width - 16. - run_width, y + 12., 14, MUTED);
-    }
-    // Grade badge with the letter, then the silly title and the score.
-    let top = y + 8. + row_height(14) + 6.;
-    render::draw_rectangle(x + 16., top, badge, badge, fade(grade_color(grade), 0.18));
-    render::draw_rectangle_lines(x + 16., top, badge, badge, 2., grade_color(grade));
-    let letter = if tight { 32 } else { 48 };
-    centered(
-        grade.letter(),
-        x + 16. + badge * 0.5,
-        top + (badge - f32::from(letter) * 7. / 8.) * 0.5,
-        letter,
-        grade_color(grade),
-        false,
+    render::draw_rectangle(x, y, width, 4., color);
+    // The run number as a small chip in the corner.
+    let run = Line::format(format_args!("#{}", lab.qualifier.status().runs));
+    let run_width = width_of(run.as_str(), 14.);
+    label(
+        run.as_str(),
+        x + width - 16. - run_width,
+        y + 18.,
+        14.,
+        MUTED,
     );
-    let right = x + 16. + badge + 14.;
-    let mut line_top = top + 2.;
-    if title_beside {
-        for copy in lines(grade.title(), title_width, title_size, 2) {
-            text(copy, right, line_top, title_size, INK);
-            line_top += row_height(title_size);
-        }
+    // Big letter grade, the silly title and the score.
+    let top = y + 14.;
+    let fresh = if new_best && !lab.feedback.policy().reduced_flash() {
+        0.2 + 0.15 * beat(lab, 1.)
+    } else {
+        0.18
+    };
+    render::draw_rectangle(left, top, badge, badge, fade(color, fresh));
+    render::draw_rectangle_lines(left, top, badge, badge, 2., color);
+    let letter = if tight { 40. } else { 56. };
+    let letter_width = width_of(grade.letter(), letter);
+    label(
+        grade.letter(),
+        left + (badge - letter_width) * 0.5,
+        top + badge * 0.5 + 1.,
+        letter,
+        color,
+    );
+    let right = left + badge + 14.;
+    let title_size = if tight { 14. } else { 16. };
+    let title_room = x + width - 16. - run_width - 8. - right;
+    if width_of(grade.title(), title_size) <= title_room {
+        label(grade.title(), right, top + 12., title_size, INK);
     }
-    let score = format!("{} pts", thousands(result.score));
-    let score_size = [if tight { 16 } else { 24 }, 16, 14]
-        .into_iter()
-        .find(|&size| metrics(size).measure_line(&score).unwrap().width <= title_width)
-        .unwrap_or(14);
-    text(
-        &score,
-        right,
-        (top + badge - row_height(score_size)).max(line_top),
+    let score = Line::format(format_args!("{}", Grouped(result.score)));
+    let score_size = if tight { 16. } else { 32. };
+    icon(Icon::Star, vec2(right + 10., top + badge - 18.), 20., GOLD);
+    label(
+        score.as_str(),
+        right + 26.,
+        top + badge - 18.,
         score_size,
         GOLD,
     );
-    let mut top = y + head;
-    for (index, wrapped) in visible {
-        match &rows[index] {
-            Row::Text(_, size, color) => {
-                for line in wrapped {
-                    text(line, x + 16., top + 2., *size, *color);
-                    top += row_height(*size);
+    // Body rows, in priority order for tight cards.
+    let player = lab.game.player(0).unwrap();
+    let (side, distance) = bearing(player, qualifier::BELL);
+    let hits = Line::format(format_args!("{}", result.hits));
+    let heads = Line::format(format_args!("{}", result.headshots));
+    let elims = Line::format(format_args!("{}", result.eliminations));
+    let accuracy = Line::format(format_args!("{}%", result.accuracy()));
+    let streak = Line::format(format_args!("{}", result.best_streak));
+    let (record, record_color) = record_lines(result, previous);
+    let goal = next_goal(result);
+    let meters = Line::format(format_args!("{distance:.0} m"));
+    let quote = Line::format(format_args!("\"{quip}\""));
+    // Tight cards lead with the record and the bell, then hits and the quip.
+    let order: &[usize] = if tight {
+        &[3, 5, 1, 6]
+    } else {
+        &[1, 2, 3, 4, 5, 6]
+    };
+    for (i, &kind) in order.iter().take(fit).enumerate() {
+        let cy = y + head + row * (i as f32 + 0.5);
+        match kind {
+            1 => {
+                let mut at = left;
+                at += stat(at, cy, Icon::Check, hits.as_str(), TEAL);
+                at += stat(at, cy, Icon::Target, heads.as_str(), GOLD);
+                stat(at, cy, Icon::Skull, elims.as_str(), CORAL);
+            }
+            2 => {
+                let mut at = left;
+                at += stat(at, cy, Icon::Eye, accuracy.as_str(), TEAL);
+                at += stat(at, cy, Icon::Flame, streak.as_str(), CORAL);
+                if result.bell {
+                    icon(Icon::Bell, vec2(at + 9., cy), 18., GOLD);
                 }
             }
-            Row::Bar(..) => {
-                render::draw_rectangle(x + 16., top + 4., inner, 1., fade(MUTED, 0.4));
-                top += 10.;
+            3 => {
+                icon(Icon::Trophy, vec2(left + 9., cy), 18., GOLD);
+                label(&record, left + 24., cy, 16., record_color);
             }
-            Row::Pair(..) => {}
+            4 => match &goal {
+                Some((next, copy)) => {
+                    icon(Icon::ArrowUp, vec2(left + 9., cy), 16., MUTED);
+                    grade_chip(vec2(left + 32., cy), 20., *next);
+                    label(copy, left + 48., cy, 14., MUTED);
+                }
+                None => {
+                    icon(Icon::Crown, vec2(left + 9., cy), 18., GOLD);
+                    label("Top grade!", left + 24., cy, 16., GOLD);
+                }
+            },
+            5 => {
+                // Shoot the bell to go again: bell, direction, distance.
+                icon(Icon::Target, vec2(left + 9., cy), 16., TEAL);
+                icon(Icon::Bell, vec2(left + 30., cy), 18., GOLD);
+                icon(side.arrow(), vec2(left + 50., cy), 16., INK);
+                let end = left + 62. + label(meters.as_str(), left + 62., cy, 14., TEAL);
+                icon(Icon::Restart, vec2(end + 14., cy), 16., TEAL);
+            }
+            _ => {
+                let mut line = Line::format(format_args!("{}", quote.as_str()));
+                while width_of(line.as_str(), 14.) > inner && line.len > 0 {
+                    line.len -= 1;
+                    while !line.as_str().is_char_boundary(line.len) {
+                        line.len -= 1;
+                    }
+                }
+                label(line.as_str(), left, cy, 14., GOLD);
+            }
         }
     }
 }
@@ -872,7 +1225,7 @@ pub(super) fn draw(lab: &Lab, input: &PlayerInput, width: f32, height: f32, view
     if card_visible(lab) {
         draw_card(lab, layout);
     } else if !time_up(lab) {
-        draw_panel(lab, input, view, layout);
+        draw_panel(lab, input, view, layout, width, height);
         if lab.peer.mode == 0 {
             draw_radio(lab, layout);
         }
@@ -880,7 +1233,7 @@ pub(super) fn draw(lab: &Lab, input: &PlayerInput, width: f32, height: f32, view
     if view == 1 {
         draw_marker(lab, width, height);
         draw_pops(lab, width, height);
-        draw_ammo_prompt(lab, input, width, height);
+        draw_weapon(lab, input, width, height);
     }
     if lab.peer.mode == 0 {
         draw_big(lab, width, height);
@@ -949,5 +1302,27 @@ mod tests {
         let bounded = wrap(&huge, width, metrics);
         assert_eq!(bounded.len(), 3);
         assert_eq!(bounded[2], "More in Controls");
+        // Ordinary remaps become whole key caps from a 390px host's panel
+        // (316px of content); the 276px host spells them out as above.
+        let (keys, count) = split_caps("Right Ctrl / Right Shift").unwrap();
+        assert_eq!(&keys[..count], ["Right Ctrl", "Right Shift"]);
+        let needed = caps_width(&keys[..count]) + 28.;
+        let narrow = layout(390., 682.).unwrap().panel.2 - 24.;
+        assert!(needed <= narrow, "{needed} > {narrow}");
+        assert!(needed > layout(276., 640.).unwrap().panel.2 - 24.);
+        assert!(
+            split_caps(&huge).is_none(),
+            "huge profiles fall back to text"
+        );
+    }
+
+    #[test]
+    fn grouped_digits_match_thousands_without_allocating_per_frame() {
+        for value in [0, 7, 999, 1000, 10_310, 1_234_567, u32::MAX] {
+            let line = Line::format(format_args!("{}", Grouped(value)));
+            assert_eq!(line.as_str(), thousands(value));
+        }
+        assert_eq!(thousands(1_234_567), "1,234,567");
+        assert_eq!(thousands(1_000_001), "1,000,001");
     }
 }

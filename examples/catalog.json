@@ -921,7 +921,7 @@
     "host": "mosslight",
     "genre": "Turn-based dungeon expedition",
     "description": "Collect the key on each floor, reach the stairs, and defeat the final boss.",
-    "controls": "Arrows Move/Attack \u00b7 Act Guard/Exit \u00b7 X Heal \u00b7 C Burst \u00b7 1-3 Relic",
+    "controls": "Arrows Move/Attack \u00b7 Act Guard/Exit \u00b7 X Heal \u00b7 C Burst \u00b7 1-3 Relic \u00b7 Click Move/Use",
     "image": "mosslight.png",
     "source": "examples/mosslight/README.md"
   },
@@ -957,7 +957,7 @@
     "host": "hearthharvest",
     "genre": "Farming and village management",
     "description": "Complete three orders and finish day 14 with at least 80 coins.",
-    "controls": "Arrows Select \u00b7 Act Work/Buy \u00b7 X Crop/Sell \u00b7 C Sleep \u00b7 1-5 Panels",
+    "controls": "Arrows Select \u00b7 Act Work/Buy \u00b7 X Seed/Sell \u00b7 C Sleep \u00b7 1-5 Pages",
     "image": "hearthharvest.png",
     "source": "examples/hearthharvest/README.md"
   },
@@ -969,7 +969,7 @@
     "host": "paper-alibi",
     "genre": "Detective deduction adventure",
     "description": "Solve six cases by collecting evidence and checking witness statements.",
-    "controls": "1-4 Tabs \u00b7 Arrows Select \u00b7 Act Inspect \u00b7 X Notebook \u00b7 C Connect",
+    "controls": "1-4 Tabs \u00b7 Arrows Select \u00b7 Act Inspect \u00b7 C Connect \u00b7 X Notebook",
     "image": "paper-alibi.png",
     "source": "examples/paper-alibi/README.md"
   },
@@ -1041,7 +1041,7 @@
     "host": "prism-foundry",
     "genre": "Optical logic puzzle",
     "description": "Turn mirrors and filters to light every target. Solve twelve puzzles.",
-    "controls": "Arrows Select \u00b7 Act Rotate \u00b7 X Undo \u00b7 C Reset \u00b7 4 Hint \u00b7 5 Check",
+    "controls": "Arrows Select \u00b7 Act Rotate \u00b7 X Undo \u00b7 C Reset \u00b7 4 Hint \u00b7 5 Seal",
     "image": "prism-foundry.png",
     "source": "examples/prism-foundry/README.md"
   },
@@ -1065,7 +1065,7 @@
     "host": "wildfire-watch",
     "genre": "Wildfire emergency strategy",
     "description": "Evacuate every resident and contain the fire in six missions.",
-    "controls": "1-3 Crew \u00b7 Arrows Target \u00b7 Act Work \u00b7 X Firebreak \u00b7 C End Turn",
+    "controls": "1-3 Crew \u00b7 Arrows Target \u00b7 Act Work \u00b7 X Break \u00b7 4 Air drop \u00b7 5 Forecast \u00b7 C End turn",
     "image": "wildfire-watch.png",
     "source": "examples/wildfire-watch/README.md"
   },
@@ -1101,7 +1101,7 @@
     "host": "velvet-heist",
     "genre": "Stealth infiltration campaign",
     "description": "Collect every record and return to the exit without getting caught.",
-    "controls": "Arrows Move \u00b7 Act Interact \u00b7 X Crouch \u00b7 C Distract",
+    "controls": "Arrows Move \u00b7 Act Interact \u00b7 X Crouch \u00b7 C Throw coin \u00b7 Click Aim",
     "image": "velvet-heist.png",
     "source": "examples/velvet-heist/README.md"
   },
@@ -1113,7 +1113,7 @@
     "host": "tin-automata",
     "genre": "Robot programming puzzles",
     "description": "Program the robot to deliver every parcel. Solve twelve puzzles.",
-    "controls": "Left/Right Command \u00b7 Up/Down Tape \u00b7 Act Write \u00b7 X Delete \u00b7 1 Run \u00b7 2 Step",
+    "controls": "Left/Right Command \u00b7 Up/Down Tape \u00b7 Act Write \u00b7 X Delete \u00b7 1 Run \u00b7 2 Step \u00b7 C Stop \u00b7 3 Undo \u00b7 4 Clear \u00b7 5 Hint",
     "image": "tin-automata.png",
     "source": "examples/tin-automata/README.md"
   },
@@ -1137,7 +1137,7 @@
     "host": "stormbound",
     "genre": "Naval artillery campaign",
     "description": "Sink the enemy ship in eight battles. Adjust for distance and wind.",
-    "controls": "Arrows Aim/Power \u00b7 Act Fire \u00b7 1-3 Ammo \u00b7 X Aim Guide \u00b7 C Retreat",
+    "controls": "Arrows Aim \u00b7 Act Fire \u00b7 1-3 Ammo \u00b7 X Hint \u00b7 C Retreat \u00b7 1-4 Shipyard",
     "image": "stormbound.png",
     "source": "examples/stormbound/README.md"
   },
@@ -1149,7 +1149,7 @@
     "host": "crown-council",
     "genre": "Kingdom strategy",
     "description": "Make 30 decisions while keeping every resource above zero.",
-    "controls": "1-3 Choose \u00b7 Arrows Select \u00b7 Act Confirm \u00b7 X Projects \u00b7 C History",
+    "controls": "1-3 Choose \u00b7 Arrows Select \u00b7 Act Confirm \u00b7 X Works \u00b7 C History",
     "image": "crown-council.png",
     "source": "examples/crown-council/README.md"
   }

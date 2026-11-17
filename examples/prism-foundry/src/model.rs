@@ -23,6 +23,19 @@ const HISTORY: usize = 128;
 pub(crate) const BOARD_X: f32 = 28.;
 pub(crate) const BOARD_Y: f32 = 160.;
 pub(crate) const TILE: f32 = 52.;
+/// Seal / continue button as `[x, y, w, h]` in logical units.
+pub(crate) const SEAL_BUTTON: [f32; 4] = [622., 510., 310., 42.];
+/// Undo, reset and hint buttons as `[x, y, w, h]`. A click takes exactly the
+/// same rule path as X, C and 4.
+pub(crate) const TOOL_BUTTONS: [[f32; 4]; 3] = [
+    [630., 458., 92., 40.],
+    [731., 458., 92., 40.],
+    [832., 458., 92., 40.],
+];
+pub(crate) const UNDO: usize = 0;
+pub(crate) const RESET: usize = 1;
+pub(crate) const HINT: usize = 2;
+const EVENTS: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Kind {
@@ -76,6 +89,74 @@ struct Change {
     piece: usize,
     before: u8,
 }
+/// Something the most recent tick accepted (or refused), for presentation
+/// effects only. Piece numbers index the current chamber's pieces.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Event {
+    /// A device turned to its next dial setting.
+    Turned(u8),
+    /// Undo restored this device's previous setting.
+    Undone(u8),
+    /// Every dial returned to its starting setting.
+    Reset,
+    /// The engineer hint was revealed.
+    Hint,
+    /// This lock now receives exactly its color.
+    Lit(u8),
+    /// This lock lost its exact match.
+    Dimmed(u8),
+    /// Every lock matches after this change.
+    Ready,
+    /// A seal attempt was rejected.
+    Rejected,
+    /// The chamber was sealed with this many stars.
+    Sealed(u8),
+    /// The next chamber opened.
+    Opened,
+    /// A command had nothing to act on.
+    Refused(Refusal),
+}
+/// What refused a command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Refusal {
+    /// Rotate aimed at this cell, which holds no turnable device.
+    Cell(u8, u8),
+    Undo,
+    Reset,
+    Hint,
+}
+/// Bounded per-tick event list. Rules never read it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Events {
+    list: [Event; EVENTS],
+    len: usize,
+}
+impl Events {
+    const fn new() -> Self {
+        Self {
+            list: [Event::Opened; EVENTS],
+            len: 0,
+        }
+    }
+    fn push(&mut self, event: Event) {
+        if self.len < EVENTS {
+            self.list[self.len] = event;
+            self.len += 1;
+        }
+    }
+    pub(crate) fn as_slice(&self) -> &[Event] {
+        &self.list[..self.len]
+    }
+}
+impl PartialEq for Events {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_slice() == other.as_slice()
+    }
+}
+impl Eq for Events {}
+fn inside(p: Vec2, [x, y, w, h]: [f32; 4]) -> bool {
+    p.x >= x && p.x < x + w && p.y >= y && p.y < y + h
+}
 
 /// One twelve-chamber campaign. Construction and updates do not access a renderer.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -95,7 +176,11 @@ pub struct Game {
     score: u32,
     pub(crate) age: u32,
     pub(crate) phase_age: u32,
-    pub(crate) notice: &'static str,
+    /// Presentation only: the tick (`age`) each device last changed, for its
+    /// turning animation. Zero means it has not moved in this chamber.
+    pub(crate) turned: [u32; MAX_PIECES],
+    /// Presentation only: what the latest non-terminal tick accepted.
+    pub(crate) events: Events,
 }
 impl Default for Game {
     fn default() -> Self {
@@ -127,7 +212,8 @@ impl Game {
             score: 0,
             age: 0,
             phase_age: 0,
-            notice: "Follow the beam. Click a dial or use arrows and Space.",
+            turned: [0; MAX_PIECES],
+            events: Events::new(),
         };
         game.load();
         game
@@ -155,7 +241,7 @@ impl Game {
         self.resets = 0;
         self.mistakes = 0;
         self.hinted = false;
-        self.notice = "Match every lock, then press 5 to seal this chamber.";
+        self.turned = [0; MAX_PIECES];
         self.retrace();
     }
     /// Current chamber, numbered 1 through 12.
@@ -192,11 +278,15 @@ impl Game {
             })
             .sum()
     }
-    pub(crate) fn selected(&self) -> Option<usize> {
+    /// The piece on board cell (`x`, `y`), if any.
+    pub(crate) fn piece_at(&self, x: u8, y: u8) -> Option<usize> {
         self.content()
             .pieces
             .iter()
-            .position(|p| (p.x, p.y) == self.cursor)
+            .position(|p| (p.x, p.y) == (x, y))
+    }
+    pub(crate) fn selected(&self) -> Option<usize> {
+        self.piece_at(self.cursor.0, self.cursor.1)
     }
     pub(crate) fn locks(&self) -> (usize, usize) {
         let mut lit = 0;
@@ -208,6 +298,86 @@ impl Game {
             }
         }
         (lit, total)
+    }
+    /// Stars a seal would award with these counts. Sealing uses exactly this
+    /// rule; the workbench uses it to preview pace and the cost of a command.
+    pub(crate) fn rating(&self, moves: u32, hinted: bool, resets: u16, mistakes: u16) -> u8 {
+        let par = self.par();
+        if moves <= par && !hinted && resets == 0 && mistakes == 0 {
+            3
+        } else if moves <= par * 2 && resets <= 2 {
+            2
+        } else {
+            1
+        }
+    }
+    /// Stars the current arrangement would earn if it were sealed now.
+    pub(crate) fn pace(&self) -> u8 {
+        self.rating(self.moves, self.hinted, self.resets, self.mistakes)
+    }
+    /// The device undo would restore next.
+    pub(crate) fn last_change(&self) -> Option<usize> {
+        self.history_len
+            .checked_sub(1)
+            .map(|i| self.history[i].piece)
+    }
+    /// The light paths if device `index` were turned once more (read-only).
+    pub(crate) fn preview_turn(&self, index: usize) -> Option<Trace> {
+        let count = self.content().pieces.get(index)?.kind.dial_count();
+        if count == 0 {
+            return None;
+        }
+        let mut dials = self.dials;
+        dials[index] = (dials[index] + 1) % count;
+        Some(trace(self.content().pieces, &dials))
+    }
+    /// The light paths after one undo (read-only).
+    pub(crate) fn preview_undo(&self) -> Option<Trace> {
+        let change = self.history[..self.history_len].last()?;
+        let mut dials = self.dials;
+        dials[change.piece] = change.before;
+        Some(trace(self.content().pieces, &dials))
+    }
+    /// The light paths after a reset, when one would change anything.
+    pub(crate) fn preview_reset(&self) -> Option<Trace> {
+        if self.moves == 0 {
+            return None;
+        }
+        let mut dials = [0; MAX_PIECES];
+        for (i, piece) in self.content().pieces.iter().enumerate() {
+            dials[i] = piece.start;
+        }
+        Some(trace(self.content().pieces, &dials))
+    }
+    /// Bit `i` is set when piece `i` is a lock receiving exactly its color.
+    fn lock_mask(&self) -> u32 {
+        let mut mask = 0;
+        for (i, piece) in self.content().pieces.iter().enumerate() {
+            if let Kind::Receiver(target) = piece.kind
+                && self.trace.received[i] == target
+            {
+                mask |= 1 << i;
+            }
+        }
+        mask
+    }
+    /// Retrace after a dial change and record which locks lit or dimmed.
+    fn retrace_noting(&mut self) {
+        let before = self.lock_mask();
+        self.retrace();
+        let after = self.lock_mask();
+        for i in 0..MAX_PIECES {
+            let bit = 1 << i;
+            if after & bit != 0 && before & bit == 0 {
+                self.events.push(Event::Lit(i as u8));
+            } else if before & bit != 0 && after & bit == 0 {
+                self.events.push(Event::Dimmed(i as u8));
+            }
+        }
+        let (lit, total) = self.locks();
+        if lit == total && after != before {
+            self.events.push(Event::Ready);
+        }
     }
     fn retrace(&mut self) {
         self.trace = trace(self.content().pieces, &self.dials);
@@ -229,65 +399,73 @@ impl Game {
         self.history_len += 1;
         self.dials[index] = (self.dials[index] + 1) % count;
         self.moves = self.moves.saturating_add(1);
-        self.retrace();
-        self.notice = if self.locks().0 == self.locks().1 {
-            "All locks match! Press 5 to seal the chamber."
-        } else {
-            "Trace the branches. Only exact colors light a lock."
-        };
+        self.turned[index] = self.age;
+        self.events.push(Event::Turned(index as u8));
+        self.retrace_noting();
         Cue::Action
+    }
+    /// Rotate the device under the cursor, or record what refused it.
+    fn rotate_selected(&mut self) -> Cue {
+        match self.selected() {
+            Some(i) if self.content().pieces[i].kind.dial_count() > 0 => self.rotate(i),
+            _ => {
+                let (x, y) = self.cursor;
+                self.events.push(Event::Refused(Refusal::Cell(x, y)));
+                Cue::None
+            }
+        }
     }
     fn seal(&mut self) -> Cue {
         let (lit, total) = self.locks();
         if lit != total {
             self.mistakes = self.mistakes.saturating_add(1);
-            self.notice = "Seal rejected: every lock must match its exact color.";
+            self.events.push(Event::Rejected);
             return Cue::Bad;
         }
-        let stars =
-            if self.moves <= self.par() && !self.hinted && self.resets == 0 && self.mistakes == 0 {
-                3
-            } else if self.moves <= self.par() * 2 && self.resets <= 2 {
-                2
-            } else {
-                1
-            };
+        let stars = self.pace();
         self.stars[self.level] = stars;
         self.score += 1000 + u32::from(stars) * 250;
         self.phase_age = 0;
+        self.events.push(Event::Sealed(stars));
         if self.level == CHAMBERS.len() - 1 {
             self.phase = Phase::Finished;
-            self.notice = "The Daybreak Engine is awake. Light returns to the city.";
             Cue::Win
         } else {
             self.phase = Phase::Cleared;
-            self.notice = "Chamber sealed. Space opens the next chamber.";
             Cue::Good
         }
     }
     /// Execute one 60 Hz input snapshot. Only pressed edges rotate, undo or seal.
     /// Terminal calls are inert. X undoes up to 128 retained turns; C resets locally.
+    /// Clicking the workbench's undo, reset, hint or seal button is the same
+    /// command as its key.
     pub fn tick(&mut self, input: &Input) -> Cue {
         if self.phase == Phase::Finished {
             return Cue::None;
         }
+        self.events = Events::new();
         self.age = self.age.saturating_add(1);
         self.phase_age = self.phase_age.saturating_add(1);
-        let button = input.click
-            && input.pointer.x >= 622.
-            && input.pointer.x < 932.
-            && input.pointer.y >= 510.
-            && input.pointer.y < 552.;
+        let button = input.click && inside(input.pointer, SEAL_BUTTON);
         if self.phase == Phase::Cleared {
             if input.primary || input.slot == Some(5) || button {
                 self.level += 1;
                 self.load();
+                self.events.push(Event::Opened);
                 return Cue::Good;
             }
             return Cue::None;
         }
-        if input.secondary {
+        let tool = if input.click {
+            TOOL_BUTTONS
+                .iter()
+                .position(|area| inside(input.pointer, *area))
+        } else {
+            None
+        };
+        if input.secondary || tool == Some(UNDO) {
             if self.history_len == 0 {
+                self.events.push(Event::Refused(Refusal::Undo));
                 return Cue::None;
             }
             self.history_len -= 1;
@@ -296,30 +474,36 @@ impl Game {
             let piece = self.content().pieces[change.piece];
             self.cursor = (piece.x, piece.y);
             self.moves = self.moves.saturating_sub(1);
-            self.retrace();
-            self.notice = "Last turn undone. The previous light path is restored.";
+            self.turned[change.piece] = self.age;
+            self.events.push(Event::Undone(change.piece as u8));
+            self.retrace_noting();
             return Cue::Action;
         }
-        if input.tertiary {
+        if input.tertiary || tool == Some(RESET) {
             if self.moves == 0 {
+                self.events.push(Event::Refused(Refusal::Reset));
                 return Cue::None;
             }
             for (i, piece) in self.content().pieces.iter().enumerate() {
+                if self.dials[i] != piece.start {
+                    self.turned[i] = self.age;
+                }
                 self.dials[i] = piece.start;
             }
             self.moves = 0;
             self.history_len = 0;
             self.resets = self.resets.saturating_add(1);
-            self.retrace();
-            self.notice = "Chamber reset. Prior hints and seal attempts still count.";
+            self.events.push(Event::Reset);
+            self.retrace_noting();
             return Cue::Action;
         }
-        if input.slot == Some(4) {
+        if input.slot == Some(4) || tool == Some(HINT) {
             if self.hinted {
+                self.events.push(Event::Refused(Refusal::Hint));
                 return Cue::None;
             }
             self.hinted = true;
-            self.notice = "Engineer hint unlocked; this chamber can earn two stars.";
+            self.events.push(Event::Hint);
             return Cue::Action;
         }
         if input.slot == Some(5) || button {
@@ -343,11 +527,11 @@ impl Game {
             let y = (input.pointer.y - BOARD_Y) / TILE;
             if x >= 0. && x < COLS as f32 && y >= 0. && y < ROWS as f32 {
                 self.cursor = (x as u8, y as u8);
-                return self.selected().map_or(Cue::None, |i| self.rotate(i));
+                return self.rotate_selected();
             }
         }
         if input.primary {
-            return self.selected().map_or(Cue::None, |i| self.rotate(i));
+            return self.rotate_selected();
         }
         if previous != self.cursor {
             Cue::Action

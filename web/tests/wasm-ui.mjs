@@ -133,13 +133,16 @@ for(const width of [1280,390,320]){
   return out;
  };
  const hud=findPanel(.78),countdown=findPanel(.94);
+ // Laps and gates are pips and a segmented meter (no text), so the bar's
+ // cream runs are exactly its three numbers: speed, lap time and race time.
  const header=runs(hud+48,countdown).filter(r=>r.top<80);
- assert.equal(header.length,5,'lap, speed, lap time, gates and race time are rendered');
+ assert.equal(header.length,3,'speed, lap time and race time are rendered');
  for(const r of header)assert.ok(r.left>=8&&r.right<=width-8,`rally HUD stays inside ${width}px viewport: ${JSON.stringify(r)}`);
- const [lap,speed,lapTime,gates,raceTime]=header;
- assert.ok(speed.left-lap.right>=8,'lap and speed stay separate');
- assert.ok(speed.right<=width-72,'the fullscreen menu corner stays clear');
- assert.ok(raceTime.left-gates.right>=8,'race time remains separate from gate progress');
+ const [speed,lapTime,raceTime]=header;
+ const apart=(a,b)=>a.right+8<=b.left||b.right+8<=a.left||a.bottom<=b.top||b.bottom<=a.top;
+ assert.ok(apart(speed,lapTime)&&apart(speed,raceTime)&&apart(lapTime,raceTime),'speed, lap time and race time stay separate');
+ for(const r of header)assert.ok(r.right<=width-72||r.top>=60,`the fullscreen menu corner stays clear: ${JSON.stringify(r)}`);
+ assert.ok(speed.right<=width-72,'speed clears the fullscreen menu corner');
  // Rounded panel fans begin at their center; inspect the full opaque core.
  const panelPoints=[];
  for(let i=0;i<v.length;i+=8)if(color(i,[.12,.19,.17,.94]))panelPoints.push(point(i));
@@ -158,8 +161,10 @@ for(const [width,height] of [[320,480],[390,844],[844,390]]){
  const v=new Float32Array(e.memory.buffer,e.ferravex_vertices(),e.ferravex_vertex_count()*8);
  const bounds=(color,size,maxY=32)=>{
   const points=[];
-  for(let at=0;at+48<=v.length;at+=48){
-   if(!color.every((c,n)=>Math.abs(v[at+4+n]-c)<1e-5))continue;
+  // Scan every vertex: HUD icons drawn before the header (triangle fans of
+  // any length) need not leave glyph quads on a six-vertex boundary.
+  for(let at=0;at+48<=v.length;at+=8){
+   if(!Array.from({length:6},(_,i)=>at+i*8).every(i=>color.every((c,n)=>Math.abs(v[i+4+n]-c)<1e-5)))continue;
    const q=Array.from({length:6},(_,i)=>[(v[at+i*8]+1)*width/2,(1-v[at+i*8+1])*height/2]);
    const ys=q.map(p=>p[1]),xs=q.map(p=>p[0]);
    if(Math.max(...ys)>maxY||Math.min(...ys)<0||Math.abs(Math.max(...ys)-Math.min(...ys)-size/8)>.01)continue;

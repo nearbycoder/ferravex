@@ -17,14 +17,10 @@ pub const META: Meta = Meta {
     subtitle: "Train routing",
     controls: "Left/Right Select | Act Operate | X Run/Pause | C Retry",
     help: &[
-        "Route every train to its matching platform without collisions.",
-        "West points lead to A (north) and B (south); east points lead to C (north) and D (south). STRAIGHT continues along the main line.",
-        "Click one of the six bottom controls, or select with Left/Right and press Space. Up/Down cycle a control; 1-5 select the first five controls.",
-        "A green gate or bridge signal admits ONE train, then returns to red. The bridge is a single track: opposing trains collide. Fast mail can catch slow freight.",
-        "X stops railway time so you can study the timetable and change controls. Plan freely. Points cannot be changed while a train is within their protected area.",
-        "Late trains still count, but lose punctuality bonuses. Gold: no delay. Silver: at most 45 seconds combined delay. Deliver everyone before the closing bell.",
-        "Bridge inspections block new entrances during the marked times. Trains already crossing may finish. Rain and snow reduce speed.",
-        "C spends one of three career retries to replay a shift. Wrong platforms, collisions and the closing bell are incidents. R starts the whole career again.",
+        "Send each train to the platform matching its colored letter.",
+        "Click points to pick a branch; dashes show the route.",
+        "Click a lamp: green admits one train. Meeting trains crash.",
+        "X stops the clock to plan. Late trains cost stars.",
     ],
     accent: Color::new(0.92, 0.73, 0.40, 1.),
 };

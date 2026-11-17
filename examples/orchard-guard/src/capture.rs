@@ -9,7 +9,9 @@
 //! - `ORCHARD_LAZY_FROM=N` does the same from render frame `N` onward.
 //! - `ORCHARD_SELECT=P` selects plot `P` (0-based) on frame 5.
 //! - `ORCHARD_FAKE_BEST=SCORE` pretends an earlier best existed at the finish.
-use super::{Action, Campaign, Conf, Outcome, save::Best};
+//! - `ORCHARD_ACTION=seed|frost|upgrade|wave|miss` with `ORCHARD_ACTION_AT=N`
+//!   issues that command on render frame `N` (for refusal feedback reviews).
+use super::{Action, Campaign, Conf, Kind, Outcome, save::Best};
 
 fn number<T: std::str::FromStr>(name: &str) -> Option<T> {
     std::env::var(name).ok()?.parse().ok()
@@ -33,6 +35,7 @@ pub(super) struct Capture {
     defenseless_from: Option<u32>,
     select: Option<usize>,
     fake_best: Option<u64>,
+    command: Option<(u32, Action)>,
 }
 
 impl Capture {
@@ -48,6 +51,17 @@ impl Capture {
                 .or_else(|| number("ORCHARD_LAZY_FROM")),
             select: number("ORCHARD_SELECT"),
             fake_best: number("ORCHARD_FAKE_BEST"),
+            command: number("ORCHARD_ACTION_AT").and_then(|at| {
+                let action = match std::env::var("ORCHARD_ACTION").ok()?.as_str() {
+                    "seed" => Action::Build(Kind::Seed),
+                    "frost" => Action::Build(Kind::Frost),
+                    "upgrade" => Action::Upgrade,
+                    "wave" => Action::Wave,
+                    "miss" => Action::Select(None),
+                    _ => return None,
+                };
+                Some((at, action))
+            }),
         }
     }
 
@@ -60,6 +74,9 @@ impl Capture {
         }
         if self.frame == 5 && self.select.is_some() {
             return Some(Action::Select(self.select));
+        }
+        if let Some((_, action)) = self.command.filter(|(at, _)| *at == self.frame) {
+            return Some(action);
         }
         (self.defenseless()
             && !campaign.game.active

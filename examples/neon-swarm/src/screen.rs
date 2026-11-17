@@ -1,6 +1,12 @@
 //! Game-owned screen composition. World fitting and simulation stay independent.
+//!
+//! The compact header speaks the wide HUD's pictogram language: `Ui` labels
+//! carry only names and numbers, and [`ScreenLayout::hud_icons`] paints the
+//! matching pictograms beside them after `Ui::paint`.
+use crate::hud::{Line, line};
 use crate::juice::Juice;
 use crate::{AMBER, CORAL, CYAN, FLOOR, INK, MUTED, PAPER, game::*, hint, quips};
+use ferravex_render::icons::{self, Icon};
 use ferravex_render::{
     canvas::Canvas2D,
     input::{
@@ -13,6 +19,8 @@ use ferravex_render::{
 
 const TEXT: f32 = 14.;
 const TALL_HEADER: f32 = 100.;
+/// Room left of a compact label for its pictogram.
+const ICON_GAP: f32 = 22.;
 /// Top-right CSS-px region owned by the browser fullscreen menu button.
 pub(crate) const CORNER: [f32; 2] = [72., 60.];
 const ROW: f32 = 20.;
@@ -175,117 +183,252 @@ impl ScreenLayout {
         draw_circle(knob.x, knob.y, 12., CYAN);
         draw_rectangle(button.x, button.y, button.w, button.h, FLOOR);
         draw_rectangle_lines(button.x, button.y, button.w, button.h, 2., CYAN);
-        crate::label("DASH", button.x + 11., button.y + 34., 14, CYAN);
+        icons::draw(Icon::Bolt, button.center(), 30., CYAN);
         set_camera(&self.canvas.camera());
         ferravex_render::set_world_colors(false);
         true
     }
 
-    pub fn hud(&self, ui: &mut Ui, game: &Game, juice: &Juice) {
-        ui.push_clip(self.header).unwrap();
-        ui.panel(self.header, INK).unwrap();
+    /// Where each compact header element goes; shared by the `Ui` labels and
+    /// the pictograms painted after them.
+    fn header_layout(&self) -> HeaderLayout {
         let inner = self.header.inset([8.; 4]).unwrap();
         let y = inner.min[1];
-        // Row one is the announcer: banners and callouts replace the wave line.
-        let (top, color) = if let Some(remaining) = game.wave_clear_remaining() {
-            (
-                format!("WAVE {} CLEAR · NEXT {remaining:.1}s", game.wave),
-                CYAN,
-            )
-        } else if game.wave_banner > 0. {
-            (
-                format!("WAVE {}: {}", game.wave, quips::wave_name(game.wave)),
-                AMBER,
-            )
-        } else if let Some(callout) = &juice.callout {
-            (callout.head.to_string(), callout.color)
-        } else {
-            (
-                format!("WAVE {}/3 · {} LEFT", game.wave, game.remaining_enemies()),
-                CYAN,
-            )
-        };
-        let score = format!(
-            "{} x{}",
-            crate::hud::thousands(game.score.total()),
-            game.score.multiplier()
-        );
         // Rows above the corner end before the fullscreen menu button.
         let clear =
             (self.viewport.bounds().size[0] - CORNER[0] - inner.min[0]).clamp(0., inner.size[0]);
+        let (top, count, score, stats) = if self.header.size[1] < TALL_HEADER {
+            // Wide but short windows: everything fits left of the corner in
+            // three rows, so the header covers less of the arena.
+            let score_width = 120_f32.min(clear * 0.4);
+            let top_width = clear - score_width - 4.;
+            let count = 56_f32.min(top_width * 0.3);
+            (
+                rect(inner.min[0], y, top_width - count, 20.),
+                rect(inner.min[0] + top_width - count, y, count, 20.),
+                rect(inner.min[0] + clear - score_width, y, score_width, 20.),
+                rect(inner.min[0], y + 20., clear, 40.),
+            )
+        } else {
+            let count = 56_f32.min(clear * 0.3);
+            (
+                rect(inner.min[0], y, clear - count, 20.),
+                rect(inner.min[0] + clear - count, y, count, 20.),
+                rect(inner.min[0], y + 20., clear, 20.),
+                rect(inner.min[0], y + 44., inner.size[0], 40.),
+            )
+        };
+        let mut slots = hud_slots(stats, 4, ((stats.size[0] - 8.) * 0.5).max(1.), ROW, 0.).unwrap();
+        let cells: [UiRect; 4] = std::array::from_fn(|_| slots.next().unwrap());
+        HeaderLayout {
+            top,
+            count,
+            score,
+            cells,
+        }
+    }
+
+    pub fn hud(&self, ui: &mut Ui, game: &Game, juice: &Juice) {
+        ui.push_clip(self.header).unwrap();
+        ui.panel(self.header, INK).unwrap();
+        let layout = self.header_layout();
+        let short = self.header.size[1] < TALL_HEADER;
+        // Row one is the announcer: banners and callouts replace the wave name.
+        let (top, color) = if game.wave_clear_remaining().is_some() {
+            (Line::from("WAVE CLEAR"), CYAN)
+        } else if game.wave_banner > 0. {
+            (Line::from(quips::wave_name(game.wave)), AMBER)
+        } else if let Some(callout) = &juice.callout {
+            (callout.head, callout.color)
+        } else {
+            (Line::from(quips::wave_name(game.wave)), CYAN)
+        };
+        line(ui, shifted(layout.top, 34.), top.as_str(), TEXT, color);
+        let left = game.remaining_enemies();
+        ui.label(
+            layout.count,
+            line!("{left}").as_str(),
+            TextStyle {
+                size: TEXT,
+                color: if game.final_drone() { CORAL } else { PAPER },
+                align: Align::Right,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let tier = crate::juice::tier_color(if game.score.chain() > 0 {
             game.score.multiplier()
         } else {
             0
         });
-        let stats = if self.header.size[1] < TALL_HEADER {
-            // Wide but short windows: everything fits left of the corner in
-            // three rows, so the header covers less of the arena.
-            let score_width = 120_f32.min(clear * 0.4);
-            line(
-                ui,
-                rect(inner.min[0], y, clear - score_width - 4., 20.),
-                &top,
-                TEXT,
-                color,
-            );
-            ui.label(
-                rect(inner.min[0] + clear - score_width, y, score_width, 20.),
-                &score,
-                TextStyle {
-                    size: TEXT,
-                    color: tier,
-                    align: Align::Right,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-            rect(inner.min[0], y + 20., clear, 40.)
-        } else {
-            line(ui, rect(inner.min[0], y, clear, 20.), &top, TEXT, color);
-            line(
-                ui,
-                rect(inner.min[0], y + 20., clear, 20.),
-                &format!("SCORE {score}"),
-                TEXT,
-                tier,
-            );
-            rect(inner.min[0], y + 44., inner.size[0], 40.)
-        };
-        let mut slots = hud_slots(stats, 4, ((stats.size[0] - 8.) * 0.5).max(1.), ROW, 0.).unwrap();
-        let cells: [UiRect; 4] = std::array::from_fn(|_| slots.next().unwrap());
+        let score = line!(
+            "{} ×{}",
+            crate::hud::thousands(game.score.total()),
+            game.score.multiplier()
+        );
+        ui.label(
+            shifted(layout.score, ICON_GAP),
+            score.as_str(),
+            TextStyle {
+                size: TEXT,
+                color: tier,
+                align: if short { Align::Right } else { Align::Left },
+                ..Default::default()
+            },
+        )
+        .unwrap();
         // Fixed-size labels ellipsize at absurdly small widths; no font fitting.
+        let cells = layout.cells;
         line(
             ui,
-            cells[0],
-            &format!("HEALTH {}", game.health),
+            shifted(cells[0], ICON_GAP),
+            line!("{}", game.health).as_str(),
             15.,
             if game.health <= 30 { CORAL } else { PAPER },
         );
         line(
             ui,
-            cells[1],
-            &format!("SHIELD {}", game.shield.value().ceil() as u32),
+            shifted(cells[1], ICON_GAP),
+            line!("{}", game.shield.value().ceil() as u32).as_str(),
             15.,
             crate::draw::BATTERY,
         );
         let ammo = if game.magazine.reloading() {
-            format!("RECHARGE {:.1}s", game.magazine.remaining())
+            line!("{:.1}s", game.magazine.remaining())
         } else {
-            format!("CELLS {}/12", game.magazine.loaded())
+            line!("{}/12", game.magazine.loaded())
         };
-        line(ui, cells[2], &ammo, TEXT, MUTED);
+        line(
+            ui,
+            shifted(cells[2], ICON_GAP),
+            ammo.as_str(),
+            TEXT,
+            if game.magazine.reloading() {
+                AMBER
+            } else {
+                MUTED
+            },
+        );
         let dash = game.dash_availability();
         let ready = dash.check().is_ok();
         let dash = if ready {
-            "DASH READY".to_owned()
+            Line::from("READY")
         } else if game.phase != Phase::Playing {
-            "DASH OFFLINE".to_owned()
+            Line::from("—")
         } else {
-            format!("DASH {:.1}s", dash.cooldown_remaining)
+            line!("{:.1}s", dash.cooldown_remaining)
         };
-        line(ui, cells[3], &dash, TEXT, if ready { CYAN } else { MUTED });
+        line(
+            ui,
+            shifted(cells[3], ICON_GAP),
+            dash.as_str(),
+            TEXT,
+            if ready { CYAN } else { MUTED },
+        );
         ui.pop_clip();
+    }
+
+    /// Pictograms for the compact header, painted after `Ui::paint` so they
+    /// sit on top of its panel: wave pips, a drone by the count, a star by the
+    /// score, then heart, shield, battery and bolt by their numbers.
+    pub fn hud_icons(&self, game: &Game) {
+        set_default_camera();
+        let layout = self.header_layout();
+        let pixels = self.viewport.pixels();
+        let scale = self.viewport.scale();
+        let at = |r: UiRect, dx: f32| {
+            vec2(
+                pixels.min[0] + (r.min[0] + dx) * scale,
+                pixels.min[1] + (r.min[1] + r.size[1] * 0.5) * scale,
+            )
+        };
+        let header_bottom = self.header.min[1] + self.header.size[1];
+        let visible = |r: UiRect| r.min[1] + r.size[1] <= header_bottom + 0.5 && r.size[0] > 24.;
+        if visible(layout.top) {
+            for w in 1..=3_u32 {
+                let color = if w < game.wave {
+                    CYAN
+                } else if w == game.wave {
+                    AMBER
+                } else {
+                    Color::new(1., 1., 1., 0.15)
+                };
+                let a = at(layout.top, 2. + (w - 1) as f32 * 10.);
+                ferravex_render::shapes::fill_capsule(
+                    a,
+                    a + vec2(6. * scale, 0.),
+                    2. * scale,
+                    color,
+                );
+            }
+        }
+        if visible(layout.count) {
+            let text = line!("{}", game.remaining_enemies());
+            let width = get_default_font()
+                .try_metrics(TEXT as u16, 1.)
+                .and_then(|m| m.measure_line(text.as_str()))
+                .map_or(0., |m| m.width);
+            let c = at(layout.count, layout.count.size[0] - width - 12.);
+            let r = 6. * scale;
+            let diamond = [
+                c + vec2(0., -r),
+                c + vec2(r, 0.),
+                c + vec2(0., r),
+                c + vec2(-r, 0.),
+            ];
+            ferravex_render::shapes::polyline(
+                &diamond,
+                ferravex_render::shapes::Stroke::new(1.5 * scale, CORAL).closed(true),
+            );
+        }
+        let short = self.header.size[1] < TALL_HEADER;
+        if visible(layout.score) {
+            let dx = if short {
+                // Right-aligned: the star sits left of the measured score.
+                let score = line!(
+                    "{} ×{}",
+                    crate::hud::thousands(game.score.total()),
+                    game.score.multiplier()
+                );
+                let width = get_default_font()
+                    .try_metrics(TEXT as u16, 1.)
+                    .and_then(|m| m.measure_line(score.as_str()))
+                    .map_or(0., |m| m.width);
+                layout.score.size[0] - width - 12.
+            } else {
+                ICON_GAP - 12.
+            };
+            icons::draw(
+                Icon::Star,
+                at(layout.score, dx),
+                14. * scale,
+                crate::juice::GOLD,
+            );
+        }
+        let low = game.health <= 30;
+        let ready = game.dash_availability().check().is_ok();
+        for (cell, icon, color) in [
+            (layout.cells[0], Icon::Heart, if low { CORAL } else { CYAN }),
+            (layout.cells[1], Icon::Shield, crate::draw::BATTERY),
+            (
+                layout.cells[2],
+                Icon::Battery,
+                if game.magazine.reloading() {
+                    AMBER
+                } else {
+                    MUTED
+                },
+            ),
+            (
+                layout.cells[3],
+                Icon::Bolt,
+                if ready { CYAN } else { MUTED },
+            ),
+        ] {
+            if visible(cell) {
+                icons::draw(icon, at(cell, ICON_GAP - 12.), 15. * scale, color);
+            }
+        }
     }
 
     pub fn overlay(
@@ -359,6 +502,23 @@ impl ScreenLayout {
         )
         .unwrap();
         ui.pop_clip();
+    }
+}
+
+/// Compact header placements shared by labels and pictograms.
+struct HeaderLayout {
+    top: UiRect,
+    count: UiRect,
+    score: UiRect,
+    cells: [UiRect; 4],
+}
+
+/// `rect` with its left edge moved right by `dx` (room for a pictogram).
+fn shifted(rect: UiRect, dx: f32) -> UiRect {
+    let dx = dx.min(rect.size[0]);
+    UiRect {
+        min: [rect.min[0] + dx, rect.min[1]],
+        size: [rect.size[0] - dx, rect.size[1]],
     }
 }
 
@@ -692,7 +852,7 @@ mod tests {
                 if callout {
                     juice.callout(
                         "A VERY LONG ANNOUNCER CALLOUT".into(),
-                        "WITH A LONG SUBTITLE LINE".into(),
+                        Some(crate::juice::Badge::new(Icon::Gem, "+12345".into(), CYAN)),
                         CYAN,
                         Priority::Epic,
                     );

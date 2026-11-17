@@ -599,7 +599,7 @@ fn capacity_rejection_is_atomic_and_reset_restores_drop_sequence_and_available_s
             ..Default::default()
         },
     );
-    assert!(lab.feedback.starts_with("Body limit reached"));
+    assert_eq!(lab.notice, Notice::DropFull);
     lab.advance(
         0.,
         Commands {

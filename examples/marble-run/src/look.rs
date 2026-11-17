@@ -1,9 +1,11 @@
 //! Marble Run's art direction in one place: post-processing per scene, the
-//! HUD/menu palette, rounded panels, the modern/classic type pairing and a
-//! fixed-capacity text line so steady-state HUD frames format without heap
-//! allocation.
+//! HUD/menu palette, rounded panels, the modern/classic type pairing, the
+//! pictogram vocabulary (one icon per idea, everywhere), an allocation-free
+//! row layout for icon + number stats and key caps, and a fixed-capacity text
+//! line so steady-state HUD frames format without heap allocation.
 use ferravex_engine::play::tween::Motion;
 use ferravex_render::{
+    icons::{self, Icon, IconStyle},
     post::PostFx,
     prelude::*,
     shapes::{self, Fill, Shadow},
@@ -11,6 +13,34 @@ use ferravex_render::{
     ui::kit::{self, KitTheme},
 };
 use std::fmt::{self, Write};
+
+/// The game's pictograms. The same idea always uses the same icon.
+pub(crate) mod glyph {
+    use ferravex_render::icons::Icon;
+    pub const CRYSTAL: Icon = Icon::Gem;
+    pub const TIME: Icon = Icon::Clock;
+    pub const MEDAL: Icon = Icon::Trophy;
+    pub const BEST: Icon = Icon::Crown;
+    pub const CHECKPOINT: Icon = Icon::Flag;
+    pub const FALL: Icon = Icon::Skull;
+    pub const BONK: Icon = Icon::Hammer;
+    pub const ATTEMPT: Icon = Icon::Restart;
+    pub const BRAKE: Icon = Icon::Hand;
+    pub const OVERVIEW: Icon = Icon::Eye;
+    pub const RECOVER: Icon = Icon::Undo;
+    pub const COURSES: Icon = Icon::Map;
+    pub const CONTROLS: Icon = Icon::Gamepad;
+    pub const RESUME: Icon = Icon::Play;
+    pub const NEXT: Icon = Icon::ArrowRight;
+    pub const SECRET: Icon = Icon::Question;
+    pub const DIFFICULTY: Icon = Icon::Bolt;
+    pub const PAUSED: Icon = Icon::Pause;
+    pub const WARNING: Icon = Icon::Alert;
+    pub const DONE: Icon = Icon::Check;
+    pub const START: Icon = Icon::Home;
+    pub const AIM: Icon = Icon::Target;
+    pub const SPEED: Icon = Icon::Bolt;
+}
 
 /// Warm cream ink for copy on dark glass.
 pub(crate) const INK: Color = Color::new(0.97, 0.94, 0.86, 1.);
@@ -143,15 +173,176 @@ pub(crate) fn glass(rect: Rect, radius: f32, alpha: f32) {
     shapes::stroke_rounded_rect(rect, radius, 1., fade(Color::new(1., 1., 1., 0.1), alpha));
 }
 
-/// Width of a kit key prompt without drawing it (mirrors `kit::key_prompt`).
-pub(crate) fn prompt_width(keys: &[&str], action: &str, theme: &KitTheme) -> f32 {
+/// Draw `icon` centred on `center` with the HUD's soft drop shadow.
+pub(crate) fn icon(icon: Icon, center: Vec2, size: f32, color: Color) {
+    if color.a <= 0. {
+        return;
+    }
+    icons::draw_styled(
+        icon,
+        center,
+        size,
+        IconStyle::new(color).shadow(fade(SHADOW, color.a)),
+    );
+}
+
+/// The game's own marble: cream with a spinning gold band. Used for the logo
+/// and the roll prompt (there is no stock marble pictogram).
+pub(crate) fn marble(c: Vec2, r: f32, spin: f32, alpha: f32) {
+    if alpha <= 0. || r <= 0. {
+        return;
+    }
+    shapes::fill_circle(
+        c,
+        r,
+        Fill::radial(
+            c - vec2(r * 0.35, r * 0.35),
+            r * 1.4,
+            fade(Color::new(1., 0.98, 0.92, 1.), alpha),
+            fade(Color::new(0.78, 0.72, 0.6, 1.), alpha),
+        ),
+    );
+    let band = vec2(spin.cos(), spin.sin()) * r * 0.82;
+    shapes::fill_capsule(c - band, c + band, r * 0.22, fade(GOLD, alpha));
+    shapes::stroke_circle(
+        c,
+        r,
+        (r * 0.12).clamp(1., 1.5),
+        fade(Color::new(0.05, 0.1, 0.11, 0.8), alpha),
+    );
+}
+
+/// A pictogram: a stock icon, or the game's own marble.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Glyph {
+    Icon(Icon),
+    Marble,
+}
+
+impl Glyph {
+    pub fn draw(self, center: Vec2, size: f32, color: Color) {
+        match self {
+            Self::Icon(i) => icon(i, center, size, color),
+            Self::Marble => marble(center, size * 0.42, 0.6, color.a),
+        }
+    }
+}
+
+/// One element of a centred stat row: pictograms, numbers and key caps.
+/// Rows are laid out from stack slices, so drawing them never allocates.
+#[derive(Clone, Copy)]
+pub(crate) enum Item<'a> {
+    /// A pictogram at the row's icon size.
+    Icon(Glyph, Color),
+    /// A pictogram at an explicit size.
+    Small(Glyph, Color, f32),
+    Text(&'a str, TextStyle),
+    /// A key cap in the row's kit theme.
+    Key(&'a str),
+    /// `lit` of `total` progress dots.
+    Pips(usize, usize, Color),
+    /// Extra space between groups.
+    Space(f32),
+}
+
+const PIP_STEP: f32 = 12.;
+const PIP_R: f32 = 4.;
+
+/// A row of progress dots from `x`, centred on `mid`: lit dots are filled.
+pub(crate) fn pips(x: f32, mid: f32, lit: usize, total: usize, color: Color, alpha: f32) {
+    for i in 0..total {
+        let c = vec2(x + PIP_R + i as f32 * PIP_STEP, mid);
+        if i < lit {
+            shapes::fill_circle(c, PIP_R, fade(color, alpha));
+        } else {
+            shapes::stroke_circle(c, PIP_R, 1.5, fade(INK, 0.45 * alpha));
+        }
+    }
+}
+
+const ITEM_GAP: f32 = 5.;
+
+fn keycap_height(theme: &KitTheme) -> f32 {
+    theme.body * 1.5 + 2.
+}
+
+fn keycap_width(label: &str, theme: &KitTheme) -> f32 {
     let style = TextStyle::modern(theme.body, theme.ink);
-    let h = theme.body * 1.5 + 2.;
-    let caps: f32 = keys
-        .iter()
-        .map(|k| (text_width(k, style) + kit::SPACE[2] * 2.).max(h - 3.) + kit::SPACE[0])
-        .sum();
-    caps + kit::SPACE[0] + text_width(action, style)
+    (text_width(label, style) + kit::SPACE[2] * 2.).max(keycap_height(theme) - 3.)
+}
+
+impl Item<'_> {
+    fn width(&self, size: f32, theme: &KitTheme) -> f32 {
+        match *self {
+            Self::Icon(..) => size,
+            Self::Small(_, _, s) => s,
+            Self::Text(label, style) => text_width(label, style),
+            Self::Key(label) => keycap_width(label, theme),
+            Self::Pips(_, total, _) => (total as f32 * PIP_STEP - (PIP_STEP - 2. * PIP_R)).max(0.),
+            Self::Space(gap) => gap,
+        }
+    }
+}
+
+/// Total width of `items` at icon `size`.
+pub(crate) fn row_width(items: &[Item], size: f32, theme: &KitTheme) -> f32 {
+    let mut width = 0.;
+    for (i, item) in items.iter().enumerate() {
+        if i > 0 && !matches!(item, Item::Space(_)) && !matches!(items[i - 1], Item::Space(_)) {
+            width += ITEM_GAP;
+        }
+        width += item.width(size, theme);
+    }
+    width
+}
+
+/// Draw `items` left to right from `x`, vertically centred on `mid`, and
+/// return the drawn width. Colors fade with `theme.alpha`.
+pub(crate) fn draw_row(items: &[Item], x: f32, mid: f32, size: f32, theme: &KitTheme) -> f32 {
+    let mut cursor = x;
+    let alpha = theme.alpha;
+    for (i, item) in items.iter().enumerate() {
+        if i > 0 && !matches!(item, Item::Space(_)) && !matches!(items[i - 1], Item::Space(_)) {
+            cursor += ITEM_GAP;
+        }
+        let w = item.width(size, theme);
+        match *item {
+            Item::Icon(glyph, color) => {
+                glyph.draw(vec2(cursor + w * 0.5, mid), w, fade(color, alpha))
+            }
+            Item::Small(glyph, color, s) => {
+                glyph.draw(vec2(cursor + s * 0.5, mid), s, fade(color, alpha))
+            }
+            Item::Text(label, style) => {
+                let style = style.with_color(fade(style.color, alpha));
+                draw_text_styled(label, cursor, style.centered_baseline(mid), style);
+            }
+            Item::Key(label) => {
+                kit::keycap(
+                    cursor,
+                    mid - (keycap_height(theme) - 3.) * 0.5,
+                    label,
+                    theme,
+                );
+            }
+            Item::Pips(lit, total, color) => pips(cursor, mid, lit, total, color, alpha),
+            Item::Space(_) => {}
+        }
+        cursor += w;
+    }
+    cursor - x
+}
+
+/// Draw `items` centred on `cx`; returns the row width.
+pub(crate) fn draw_row_centered(
+    items: &[Item],
+    cx: f32,
+    mid: f32,
+    size: f32,
+    theme: &KitTheme,
+) -> f32 {
+    let width = row_width(items, size, theme);
+    draw_row(items, cx - width * 0.5, mid, size, theme)
 }
 
 /// A fixed-capacity, stack-allocated text line. Formatting into it never

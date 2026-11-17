@@ -34,11 +34,14 @@ The sandbox starts running immediately. Autoplay lets the original scene settle 
 The movement keys or left stick move the virtual cursor. The south face button
 also activates on-screen buttons. Current bindings and remapping are in
 **Game menu → Controls** (or F2); the table above lists defaults. Buttons are
-grouped make / toys / time (BALL CRATE DROP · PULSE CHAOS DOMINO · PAUSE STEP
-RESET): one row on wide screens, five-and-four at medium widths and a 3×3 grid
-on phones, never below a 14 px label. Hovering a button (or the virtual cursor)
-shows what it does and its current binding. STEP is disabled while running,
-PULSE while paused or recharging, and DROP/CHAOS at capacity.
+icon-first, each with its current key cap, and grouped make / toys / time
+(BALL CRATE DROP · PULSE CHAOS DOMINO · PAUSE STEP RESET): one row on wide
+screens, five-and-four at medium widths and a 3×3 grid on phones. A tool shows
+its 16 px name while hovered (or the virtual cursor is on it) or selected, in a
+bubble when the button is too narrow. STEP is disabled while running, PULSE
+while paused or recharging (a ring on its icon fills as it recharges), and
+DROP/CHAOS at capacity. A refused press shakes the tool red with a one- or
+two-word note: Full, Paused, Pause first or the seconds left to recharge.
 Drop previews use the same projection and clamped placement as the scene.
 Fullscreen uses the actual viewport and hides page navigation; the inline page
 retains its native scrolling links.
@@ -51,8 +54,9 @@ retains its native scrolling links.
 - **DOMINO** rebuilds the scene as eleven domino planks with a kicker ball that
   rolls off the left platform; RESET rebuilds whichever scene is active, and
   DOMINO again returns to the workshop. Goals and bests survive scene swaps.
-- **Goals** (one at a time in the top bar, with a progress underline and an
-  in-scene target line for heights): LIFTOFF (pulse something past 11 m),
+- **Goals** (one at a time in the top bar as goal pips, the goal's pictogram
+  and name, the key cap of the tool that advances it and a progress bar toward
+  a flagged target; heights also get a flagged in-scene target line): LIFTOFF (pulse something past 11 m),
   SKYSCRAPER (rest something with its top 7.5 m up), DEMOLITION (50 solid bonks
   inside one simulated second) and DOMINO RUN (topple all eleven). Each grants
   a rank, from LAB INTERN to PROFESSOR OF CHAOS, and all four bring up a LAB
@@ -70,26 +74,32 @@ first 2.5 seconds of settling do not count as demolition unless CHAOS is used.
 
 ## Feel and feedback
 
-Accepted impacts throw sparks and briefly flash the bodies involved, new bodies
-pop in with a puff, pulses burst and kick the camera, and a big pile-up (a
+Accepted impacts throw sparks and briefly flash the bodies involved, hard hits
+thump a small shockwave ring, new bodies pop in with a puff and a ring, pulses
+burst and kick the camera, goals ring out under confetti, and a big pile-up (a
 weighted rumble of impacts) gets a "TIMBER!"-style callout with a short zoom
 toward the collapse and cinematic letterbox bars. That beat is a camera effect
-only; the simulation keeps its fixed 120 Hz tick. Short rotating quips never
-repeat back to back. Onboarding hints fade once you have dropped and pulsed
-(or after 30 seconds); on tall narrow screens a HOW TO LAB card uses the sky
-above the lab, which also shows a faint grid for launched bodies.
+only; the simulation keeps its fixed 120 Hz tick. Callouts are headlines of at
+most three words with a pictogram or an icon stat (CHAOS shows its glyph and
++14), and rotating quips never repeat back to back. Onboarding is contextual: a
+pointer icon rides the cursor until the first drop, the tool the current goal
+needs glows (with a chevron on the one-row palette) until you first use it,
+and while paused an I key cap appears over bodies until the first inspection.
+On tall narrow screens the sky above the lab shows a tapping hand until the
+first drop and a faint grid for launched bodies. The title card is the name,
+the toy box and "Make a mess".
 
-Press **I** over a body to pin its inspection. The steady white outline and footer identify its scene number, shape, awake/asleep/pending-wake state, speed and last-tick contact count. Inspection is read-only and does not wake bodies. A miss clears selection; successful drops select the new body. Reset clears body selection while preserving the shape chosen for future drops. The scene and inspection remain frozen until STEP or resume.
+Press **I** over a body to pin its inspection. The steady white outline and an icon tag riding above the body show its scene number and shape, awake/asleep/waking state, speed and last-tick contact count. Inspection is read-only and does not wake bodies. A miss clears selection; successful drops select the new body. Reset clears body selection while preserving the shape chosen for future drops. The scene and inspection remain frozen until STEP or resume.
 
 Pausing freezes body motion, simulation ticks and physics/audio cooldowns. You can still select and place shapes while paused; they remain still until you resume or step. Each **N / STEP** press advances exactly one 1/120-second tick and leaves the session paused; holding a button does not continuously step. STEP while running adds no extra tick. Running drop/pulse edges are consumed on actual fixed ticks, so a zero-tick render frame retains a quick tap and catch-up ticks do not repeat it. UI drop/pulse requests each have one pending slot; repeated requests before a tick coalesce. Paused drops remain immediate editor operations. Pulse is available only while running and has a 0.65-second simulation-time cooldown; pulses wake bodies and pass through the normal solver.
 
-In the workshop, reset restores the initial 34 dynamic bodies and joints (the domino run rebuilds its eleven planks, kicker ball and joints), clears accumulated time, cooldowns, pending commands, body selection, pulse visuals and frame statistics, and preserves the selected shape and pause state. Reset (and a scene swap, which is a rebuild) takes priority over other inputs in the same frame, so a pending drop or CHAOS cannot leak into the rebuilt scene. The body cap rejects further drops with a visible explanation. Closing Controls/Details or regaining focus preserves a manually paused session; inactive time is not accumulated. Focus/control suspension and pause transitions discard stale queued commands.
+In the workshop, reset restores the initial 34 dynamic bodies and joints (the domino run rebuilds its eleven planks, kicker ball and joints), clears accumulated time, cooldowns, pending commands, body selection, pulse visuals and frame statistics, and preserves the selected shape and pause state. Reset (and a scene swap, which is a rebuild) takes priority over other inputs in the same frame, so a pending drop or CHAOS cannot leak into the rebuilt scene. The body cap rejects further drops with a red Full note on the refusing tool and a red body counter. Closing Controls/Details or regaining focus preserves a manually paused session; inactive time is not accumulated. Focus/control suspension and pause transitions discard stale queued commands.
 
 The renderer and built-in glyphs are first-party, with no external assets. The existing native `physics_2d::run()` entry point and browser exports are unchanged. The private lab controller uses checked session construction and `GameSession::step_paused()`, retaining the fractional clock remainder without toggling lifecycle state. Rendering uses the current body pose while paused, so single steps are visible immediately. HUD sizing uses checked bitmap measurements and buttons use the shared enabled/selected styling.
 
 Impact audio now requires an accepted solid contact start and a sufficient velocity change; gravity, joint correction alone and sensors cannot manufacture a collision cue. The pulse cue follows an accepted impulse. Audio remains on the game's creating thread through `GameAudio`.
 
-Every presentation frame reads the shared `render::preferences` policy, including paused, Controls/Details, focus-suspended and zero-tick frames. Either reduced motion or reduced flashes clears the expanding pulse ring immediately and suppresses new rings; returning to standard settings cannot revive an old ring. Intensity scales the ring's opacity. Its cosmetic lifetime is separate from the physics cooldown and can finish while paused. Reduced motion also clears and blocks sparks, shake, spawn pop-ins and the collapse zoom/letterbox; reduced flashes clears and blocks hit flashes. Callout text stays readable but no longer rises. Sparks and flashes age with simulation time, so pausing freezes them for inspection; text and camera effects age with bounded render time. Body motion, impulses, audio, inspection outlines and fixed-tick progression are unchanged by these preferences. The lab adds no preference store or export.
+Every presentation frame reads the shared `render::preferences` policy, including paused, Controls/Details, focus-suspended and zero-tick frames. Either reduced motion or reduced flashes clears the expanding pulse ring immediately and suppresses new rings; returning to standard settings cannot revive an old ring. Intensity scales the ring's opacity. Its cosmetic lifetime is separate from the physics cooldown and can finish while paused. Reduced motion also clears and blocks sparks, shake, spawn pop-ins, shockwave rings, refusal shakes and the collapse zoom/letterbox; reduced flashes clears and blocks hit flashes and shockwave rings. Callout text stays readable but no longer rises. Sparks and flashes age with simulation time, so pausing freezes them for inspection; text and camera effects age with bounded render time. Body motion, impulses, audio, inspection outlines and fixed-tick progression are unchanged by these preferences. The lab adds no preference store or export.
 
 This sandbox has no win condition. Validate contacts, visible rotations, stable resting bodies, spawn limits and pause/reset. It does not establish general physics accuracy: supported shapes, joints and CCD limits are documented in the physics crate README. See the `ferravex-physics` README for the solver's precise scope.
 
@@ -101,8 +111,10 @@ Toy tests cover goal calibration (no goal, collapse or flight from the untouched
 settle; pulses reach LIFTOFF, two stacked crates reach SKYSCRAPER, CHAOS reaches
 DEMOLITION, the domino run topples all eleven), deterministic and bounded CHAOS,
 tick-only CHAOS edges, scene toggles, the lost-and-found net, the secret,
-policy clearing without revival, pause-frozen effects, quip rotation, records
-that never come from autoplay, onboarding fade and grouped button readability.
+policy clearing without revival, pause-frozen effects, quip rotation and the
+three-word callout budget, refusal notes that play once, goal-to-tool hints,
+records that never come from autoplay, onboarding fade and grouped button
+readability.
 
 Regression tests cover pause/resume without catch-up, single stepping and resumed fractional time, reset precedence and restored state, zero/catch-up tick command consumption, paused drops and shape overrides, body bounds/capacity, pulse gating/cooldowns, real-contact feedback, compound queries and truncation, read-only/stale selection, remapped hints, preference transitions without revived effects, and equal settling results at 30/60/144 Hz render rates on the tested native target. Existing solver/constraint tests remain. These checks do not claim cross-platform bitwise determinism or replace fresh Wasm/browser/native visual verification, which remains with the integration owner.
 

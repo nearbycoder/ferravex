@@ -1,6 +1,117 @@
 //! Pure, bounded rules for a complete stellar salvage expedition.
 use crate::content::*;
+use crate::layout::{button_hit, choice_at, row_at, star_at, tab_at};
 use ferravex_arcade::{Cue, Input, Outcome};
+
+/// Why a command was refused. Nothing is spent when one is recorded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Refusal {
+    /// No charted lane joins the current and selected sectors.
+    NoLane,
+    /// At least this much fuel is needed.
+    Fuel(u16),
+    /// At least this many credits are needed.
+    Credits(u16),
+    /// At least this many units of a cargo kind are needed.
+    Cargo(usize, u16),
+    /// The recipe's materials are not all aboard.
+    Materials,
+    /// The hold lacks the free space this needs.
+    Space,
+    /// The recipe's relic has not been recovered.
+    Relic(usize),
+    /// The sector must be surveyed first.
+    Unsurveyed,
+    /// The deposit is exhausted.
+    Depleted,
+    /// Already surveyed, claimed, built or spent.
+    Done,
+    /// The fuel tank is already full.
+    TankFull,
+    /// The hull is already intact.
+    HullFull,
+    /// Only Loom Dock and Verdant Archive offer this service.
+    Station,
+    /// The gate stands at Loom Dock.
+    Home,
+    /// The ship is already at Loom Dock.
+    Docked,
+    /// The gate needs all three mechanisms.
+    Mechanisms,
+    /// Loom's landmark is the gate itself, opened from the Mission panel.
+    Gate,
+}
+
+/// What one tick accepted (or refused), for presentation only: the view turns
+/// these into effects where they happened. Rules never read them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Event {
+    /// A lane jump left `from` for `to`, spending one fuel and one watch.
+    Launch { from: usize, to: usize },
+    /// The ship reached `sector`; `first` marks the first visit.
+    Arrive { sector: usize, first: bool },
+    /// Hull lost (after shielding) at the ship's sector.
+    Damage { sector: usize, amount: u16 },
+    /// The first survey of `sector`.
+    Survey { sector: usize },
+    /// `amount` units of cargo `kind` extracted at `sector`.
+    Extract {
+        sector: usize,
+        kind: usize,
+        amount: u16,
+    },
+    /// A landmark claimed directly; `gain` is its clamped variable reward
+    /// (fuel at Glass Comet, hull at Far Beacon).
+    Landmark { sector: usize, gain: u16 },
+    /// An encounter opened at `sector`.
+    Encounter { sector: usize },
+    /// An encounter approach was accepted; `bonus` marks the Choir dive's
+    /// extra crystal.
+    Resolve {
+        sector: usize,
+        encounter: Encounter,
+        choice: usize,
+        bonus: bool,
+    },
+    /// The crew withdrew from the Choir at no cost.
+    Withdraw { sector: usize },
+    /// A recipe was fabricated.
+    Forge { recipe: usize },
+    /// Ship service `row` was accepted; `gain` is the fuel, hull or credits added.
+    Service { row: usize, kind: usize, gain: u16 },
+    /// The one-use distress tow hauled the ship home from `from`.
+    Tow { from: usize },
+    /// One unit of cargo `kind` was jettisoned.
+    Jettison { kind: usize },
+    /// The gate opened; the expedition is won.
+    Gate,
+    /// The star collapsed at the deadline.
+    Collapse,
+    /// The hull failed.
+    Breach,
+    /// A command was refused at the current focus; nothing was spent.
+    Refuse(Refusal),
+}
+
+/// The bounded event list of the most recent tick.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Feed {
+    slots: [Option<Event>; 8],
+}
+impl Feed {
+    fn clear(&mut self) {
+        self.slots = [None; 8];
+    }
+    fn push(&mut self, event: Event) {
+        if let Some(slot) = self.slots.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(event);
+        }
+    }
+    /// Events in the order they were accepted.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = Event> + '_ {
+        self.slots.iter().map_while(|slot| *slot)
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Encounter {
@@ -59,9 +170,8 @@ pub struct Game {
     pub(crate) choice: usize,
     pub(crate) points: u32,
     pub(crate) result: Outcome,
-    pub(crate) ticks: u64,
-    pub(crate) notice: String,
-    pub(crate) logs: [String; 4],
+    /// What the most recent tick did; presentation only.
+    pub(crate) events: Feed,
 }
 impl Default for Game {
     fn default() -> Self {
@@ -100,9 +210,7 @@ impl Game {
             choice: 0,
             points: 0,
             result: Outcome::Playing,
-            ticks: 0,
-            notice: "Recover three relics, forge their mechanisms, and return to the gate.".into(),
-            logs: std::array::from_fn(|_| String::new()),
+            events: Feed::default(),
         }
     }
     /// Current chart index; names and artwork are authored presentation data.
@@ -141,44 +249,163 @@ impl Game {
             .iter()
             .any(|&(x, y)| (x == a && y == b) || (x == b && y == a))
     }
-    fn say(&mut self, message: impl Into<String>) {
-        self.notice = message.into();
+    /// Record a refusal; the caller returns without spending anything.
+    fn refuse(&mut self, reason: Refusal) {
+        self.events.push(Event::Refuse(reason));
     }
-    fn record(&mut self, message: impl Into<String>) {
-        let text = message.into();
-        self.notice = text.clone();
-        self.logs.rotate_left(1);
-        self.logs[3] = text;
+    fn emit(&mut self, event: Event) {
+        self.events.push(event);
     }
     fn spend_watch(&mut self) -> bool {
         self.watch = self.watch.saturating_add(1);
         if self.watch >= DEADLINE {
             self.result = Outcome::Lost;
-            self.record("The star collapses before the ark can cross. The expedition is over.");
+            self.emit(Event::Collapse);
             false
         } else {
             true
         }
     }
     fn damage(&mut self, raw: u16) {
-        let amount = if self.upgrades[0] {
+        let amount = self.shielded(raw);
+        let lost = amount.min(self.hull);
+        self.hull = self.hull.saturating_sub(amount);
+        if lost > 0 {
+            self.emit(Event::Damage {
+                sector: self.sector,
+                amount: lost,
+            });
+        }
+        if self.hull == 0 {
+            self.result = Outcome::Lost;
+            self.emit(Event::Breach);
+        }
+    }
+    /// Hull lost to `raw` damage once a Radiant Shield halves it, rounding up.
+    pub(crate) fn shielded(&self, raw: u16) -> u16 {
+        if self.upgrades[0] {
             raw.div_ceil(2)
         } else {
             raw
+        }
+    }
+    pub(crate) fn hold_free(&self) -> u16 {
+        self.hold_max() - self.hold_used()
+    }
+    /// Units one extraction of cargo `kind` would recover here.
+    pub(crate) fn extraction(&self, kind: usize) -> u16 {
+        let quantity = if self.upgrades[2] { 3 } else { 2 };
+        quantity
+            .min(self.sites[self.sector].stock[kind])
+            .min(self.hold_free())
+    }
+    /// Why a jump to sector `to` would be refused, if it would.
+    pub(crate) fn jump_refusal(&self, to: usize) -> Option<Refusal> {
+        if !Self::adjacent(self.sector, to) {
+            Some(Refusal::NoLane)
+        } else if self.fuel == 0 {
+            Some(Refusal::Fuel(1))
+        } else {
+            None
+        }
+    }
+    /// Why Survey row `row` would be refused here, if it would.
+    pub(crate) fn work_refusal(&self, row: usize) -> Option<Refusal> {
+        let site = self.sites[self.sector];
+        match row {
+            0 => site.scanned.then_some(Refusal::Done),
+            _ if !site.scanned => Some(Refusal::Unsurveyed),
+            1..=3 => (self.extraction(row - 1) == 0).then_some(if self.hold_free() == 0 {
+                Refusal::Space
+            } else {
+                Refusal::Depleted
+            }),
+            4 => self.landmark_refusal(),
+            _ => None,
+        }
+    }
+    fn landmark_refusal(&self) -> Option<Refusal> {
+        if self.sites[self.sector].claimed {
+            return Some(Refusal::Done);
+        }
+        match self.sector {
+            0 => Some(Refusal::Gate),
+            1 | 5 if self.hold_free() < 2 => Some(Refusal::Space),
+            2 if self.fuel == self.fuel_max() => Some(Refusal::TankFull),
+            _ => None,
+        }
+    }
+    /// Why encounter approach `choice` would be refused, if it would.
+    pub(crate) fn approach_refusal(&self, encounter: Encounter, choice: usize) -> Option<Refusal> {
+        match (encounter, choice) {
+            (Encounter::Choir, 0) if self.fuel == 0 => Some(Refusal::Fuel(1)),
+            (Encounter::Sentinel, 0) if self.cargo[2] < 2 => Some(Refusal::Cargo(2, 2)),
+            (Encounter::Sentinel, 1) if self.credits < 30 => Some(Refusal::Credits(30)),
+            (Encounter::Privateers, 0) if self.cargo[0] == 0 => Some(Refusal::Cargo(0, 1)),
+            (Encounter::Privateers, 0) if self.hold_free() < 2 => Some(Refusal::Space),
+            (Encounter::Privateers, 1) if self.fuel < 2 => Some(Refusal::Fuel(2)),
+            _ => None,
+        }
+    }
+    /// Why recipe `row` would be refused, if it would.
+    pub(crate) fn forge_refusal(&self, row: usize) -> Option<Refusal> {
+        let Some(recipe) = RECIPES.get(row) else {
+            return Some(Refusal::Done);
         };
-        self.hull = self.hull.saturating_sub(amount);
-        if self.hull == 0 {
-            self.result = Outcome::Lost;
-            self.record("Hull breach. Your last transmission gives the ark a map, but no escape.");
+        let done = if row < 3 {
+            self.components[row]
+        } else {
+            self.upgrades[row - 3]
+        };
+        if done {
+            Some(Refusal::Done)
+        } else if row < 3 && !self.relics[row] {
+            Some(Refusal::Relic(row))
+        } else if (0..3).any(|i| self.cargo[i] < recipe.cost[i]) {
+            Some(Refusal::Materials)
+        } else {
+            None
+        }
+    }
+    /// Why ship service `row` would be refused here, if it would.
+    pub(crate) fn service_refusal(&self, row: usize) -> Option<Refusal> {
+        let station = CHART[self.sector].station;
+        match row {
+            0 if self.cargo[1] == 0 => Some(Refusal::Cargo(1, 1)),
+            0 if self.fuel == self.fuel_max() => Some(Refusal::TankFull),
+            1 if self.cargo[0] == 0 => Some(Refusal::Cargo(0, 1)),
+            1 if self.cargo[2] == 0 => Some(Refusal::Cargo(2, 1)),
+            1 if self.hull == 100 => Some(Refusal::HullFull),
+            2..=4 if !station => Some(Refusal::Station),
+            2 if self.credits < 15 => Some(Refusal::Credits(15)),
+            2 if self.fuel == self.fuel_max() => Some(Refusal::TankFull),
+            3 if self.credits < 20 => Some(Refusal::Credits(20)),
+            3 if self.hull == 100 => Some(Refusal::HullFull),
+            4 if self.cargo[self.sell_kind] == 0 => Some(Refusal::Cargo(self.sell_kind, 1)),
+            5 if !self.tow => Some(Refusal::Done),
+            5 if self.sector == 0 => Some(Refusal::Docked),
+            _ => None,
+        }
+    }
+    /// The ending bonus for crossing on `watch` with the current hull and credits.
+    pub(crate) fn escape_bonus(&self, watch: u16) -> u32 {
+        1200 + u32::from(DEADLINE.saturating_sub(watch)) * 25
+            + u32::from(self.hull) * 3
+            + self.credits.min(500)
+    }
+    /// Why opening the gate would be refused, if it would.
+    pub(crate) fn gate_refusal(&self) -> Option<Refusal> {
+        if self.sector != 0 {
+            Some(Refusal::Home)
+        } else if self.built() != 3 {
+            Some(Refusal::Mechanisms)
+        } else {
+            None
         }
     }
     fn jump(&mut self) -> Cue {
-        if !Self::adjacent(self.sector, self.selected) {
-            self.say("No charted lane to that star. Select a connected sector.");
-            return Cue::None;
-        }
-        if self.fuel == 0 {
-            self.say("No fuel. Condense a crystal or use the one-use distress tow on Ship [4].");
+        if let Some(reason) = self.jump_refusal(self.selected) {
+            self.refuse(reason);
             return Cue::None;
         }
         self.fuel -= 1;
@@ -191,88 +418,62 @@ impl Game {
             remaining: 120,
             total: 120,
         });
-        self.record(format!(
-            "Lane engaged: {}. One fuel and one watch spent.",
-            CHART[self.selected].name
-        ));
+        self.emit(Event::Launch {
+            from: self.sector,
+            to: self.selected,
+        });
         Cue::Action
     }
     fn survey(&mut self) -> Cue {
-        if self.row == 0 {
-            if self.sites[self.sector].scanned {
-                self.say("This sector is already mapped. Its deposits do not regenerate.");
-                return Cue::None;
+        if let Some(reason) = self.work_refusal(self.row) {
+            self.refuse(reason);
+            return Cue::None;
+        }
+        match self.row {
+            0 => {
+                self.sites[self.sector].scanned = true;
+                self.points += 75;
+                self.emit(Event::Survey {
+                    sector: self.sector,
+                });
+                if self.spend_watch() {
+                    Cue::Good
+                } else {
+                    Cue::Bad
+                }
             }
-            self.sites[self.sector].scanned = true;
-            self.points += 75;
-            self.record(format!(
-                "Survey complete: {}. The local caches are now marked.",
-                CHART[self.sector].name
-            ));
-            return if self.spend_watch() {
-                Cue::Good
-            } else {
-                Cue::Bad
-            };
-        }
-        if !self.sites[self.sector].scanned {
-            self.say("Scan this sector first: select Survey sector and press Space.");
-            return Cue::None;
-        }
-        if self.row == 4 {
-            return self.explore();
-        }
-        if !(1..=3).contains(&self.row) {
-            return Cue::None;
-        }
-        let kind = self.row - 1;
-        let quantity = if self.upgrades[2] { 3 } else { 2 };
-        let amount = quantity
-            .min(self.sites[self.sector].stock[kind])
-            .min(self.hold_max() - self.hold_used());
-        if amount == 0 {
-            self.say(if self.hold_used() == self.hold_max() {
-                "Cargo full. Forge, sell, or X-jettison a selected resource."
-            } else {
-                "That deposit is exhausted. The chart shows other sources."
-            });
-            return Cue::None;
-        }
-        self.sites[self.sector].stock[kind] -= amount;
-        self.cargo[kind] += amount;
-        self.record(format!(
-            "Recovered {amount} {}. Radiation costs {} hull before shielding.",
-            RESOURCE_NAMES[kind], CHART[self.sector].extraction_damage
-        ));
-        self.damage(CHART[self.sector].extraction_damage);
-        if self.result == Outcome::Playing {
-            self.spend_watch();
-        }
-        if self.result == Outcome::Lost {
-            Cue::Bad
-        } else {
-            Cue::Good
+            1..=3 => {
+                let kind = self.row - 1;
+                let amount = self.extraction(kind);
+                self.sites[self.sector].stock[kind] -= amount;
+                self.cargo[kind] += amount;
+                self.emit(Event::Extract {
+                    sector: self.sector,
+                    kind,
+                    amount,
+                });
+                self.damage(CHART[self.sector].extraction_damage);
+                if self.result == Outcome::Playing {
+                    self.spend_watch();
+                }
+                if self.result == Outcome::Lost {
+                    Cue::Bad
+                } else {
+                    Cue::Good
+                }
+            }
+            4 => self.explore(),
+            _ => Cue::None,
         }
     }
+    /// Claim the surveyed, unclaimed landmark here (refusals already checked).
     fn explore(&mut self) -> Cue {
-        if self.sites[self.sector].claimed {
-            self.say("This landmark has already been recovered. There is nothing left to claim.");
-            return Cue::None;
-        }
         match self.sector {
-            0 => {
-                self.say("The gate awaits three mechanisms. Open Mission [5] when they are ready.");
-                Cue::None
-            }
             1 => {
-                if self.hold_max() - self.hold_used() < 2 {
-                    self.say("The freight cache needs two free cargo spaces.");
-                    return Cue::None;
-                }
                 self.cargo[0] += 2;
                 self.sites[1].claimed = true;
                 self.points += 100;
-                self.record("A buried freight capsule yields two alloy and a fragment of the old colony flag.");
+                self.emit(Event::Landmark { sector: 1, gain: 2 });
                 if self.spend_watch() {
                     Cue::Good
                 } else {
@@ -280,14 +481,14 @@ impl Game {
                 }
             }
             2 => {
-                if self.fuel == self.fuel_max() {
-                    self.say("Your fuel tank is full. Leave this one-use collector for later.");
-                    return Cue::None;
-                }
+                let before = self.fuel;
                 self.fuel = (self.fuel + 4).min(self.fuel_max());
                 self.sites[2].claimed = true;
                 self.points += 100;
-                self.record("The comet collector transfers its final four fuel units. The collector falls dark.");
+                self.emit(Event::Landmark {
+                    sector: 2,
+                    gain: self.fuel - before,
+                });
                 if self.spend_watch() {
                     Cue::Good
                 } else {
@@ -299,9 +500,10 @@ impl Game {
                 self.sites[3].claimed = true;
                 self.points += 250;
                 self.credits += 20;
-                self.record(
-                    "Navigator's key recovered. The Beacon spindle recipe is now unlocked.",
-                );
+                self.emit(Event::Landmark {
+                    sector: 3,
+                    gain: 20,
+                });
                 if self.spend_watch() {
                     Cue::Good
                 } else {
@@ -311,20 +513,15 @@ impl Game {
             4 => {
                 self.encounter = Some(Encounter::Choir);
                 self.choice = 0;
+                self.emit(Event::Encounter { sector: 4 });
                 Cue::Action
             }
             5 => {
-                if self.hold_max() - self.hold_used() < 2 {
-                    self.say("The archive's seed crystals need two free cargo spaces.");
-                    return Cue::None;
-                }
                 self.cargo[1] += 2;
                 self.credits += 15;
                 self.sites[5].claimed = true;
                 self.points += 150;
-                self.record(
-                    "The archive entrusts two seed crystals and 15 credits to the ark's new world.",
-                );
+                self.emit(Event::Landmark { sector: 5, gain: 2 });
                 if self.spend_watch() {
                     Cue::Good
                 } else {
@@ -334,11 +531,13 @@ impl Game {
             6 => {
                 self.encounter = Some(Encounter::Privateers);
                 self.choice = 0;
+                self.emit(Event::Encounter { sector: 6 });
                 Cue::Action
             }
             7 => {
                 self.encounter = Some(Encounter::Sentinel);
                 self.choice = 0;
+                self.emit(Event::Encounter { sector: 7 });
                 Cue::Action
             }
             8 => {
@@ -346,8 +545,12 @@ impl Game {
                 self.sites[8].claimed = true;
                 self.credits += 25;
                 self.points += 350;
+                let before = self.hull;
                 self.hull = (self.hull + 10).min(100);
-                self.record("Nine engineers rescued. They patch ten hull and pledge 25 credits to the gate.");
+                self.emit(Event::Landmark {
+                    sector: 8,
+                    gain: self.hull - before,
+                });
                 if self.spend_watch() {
                     Cue::Good
                 } else {
@@ -361,82 +564,62 @@ impl Game {
         let Some(encounter) = self.encounter else {
             return Cue::None;
         };
+        if let Some(reason) = self.approach_refusal(encounter, self.choice) {
+            self.refuse(reason);
+            return Cue::None;
+        }
+        let mut bonus = false;
         match (encounter, self.choice) {
             (Encounter::Choir, 0) => {
-                if self.fuel == 0 {
-                    self.say(
-                        "The probe needs one fuel. Choose a different approach or return later.",
-                    );
-                    return Cue::None;
-                }
                 self.fuel -= 1;
                 self.relics[1] = true;
-                self.record("A powered probe lifts the Singing lens without cracking your hull.");
             }
             (Encounter::Choir, 1) => {
                 self.damage(18);
                 self.relics[1] = true;
                 if self.hold_used() < self.hold_max() {
                     self.cargo[1] += 1;
+                    bonus = true;
                 }
-                self.record("You dive into the fracture: Singing lens and a crystal recovered, 18 hull at risk.");
             }
             (Encounter::Choir, 2) => {
                 self.encounter = None;
-                self.record("The Choir falls quiet. You can return to this decision later.");
+                self.emit(Event::Withdraw {
+                    sector: self.sector,
+                });
                 return Cue::Action;
             }
             (Encounter::Sentinel, 0) => {
-                if self.cargo[2] < 2 {
-                    self.say("The override requires two circuits. No resources were spent.");
-                    return Cue::None;
-                }
                 self.cargo[2] -= 2;
                 self.relics[2] = true;
-                self.record("Two circuits persuade the sentinel to release its Heart core.");
             }
             (Encounter::Sentinel, 1) => {
-                if self.credits < 30 {
-                    self.say("The sentinel's toll is 30 credits. Choose another approach.");
-                    return Cue::None;
-                }
                 self.credits -= 30;
                 self.relics[2] = true;
-                self.record("The ancient toll is paid. The Sentinel core is yours.");
             }
             (Encounter::Sentinel, 2) => {
                 self.damage(34);
                 self.relics[2] = true;
-                self.record(
-                    "The vault yields to force. You recover its core through a storm of shrapnel.",
-                );
             }
             (Encounter::Privateers, 0) => {
-                if self.cargo[0] == 0 || self.hold_max() - self.hold_used() < 2 {
-                    self.say("The trade needs one alloy and two free cargo spaces for a net gain of two units.");
-                    return Cue::None;
-                }
                 self.cargo[0] -= 1;
                 self.cargo[2] += 3;
-                self.record("A fair trade: one alloy for three privateer circuits.");
             }
             (Encounter::Privateers, 1) => {
-                if self.fuel < 2 {
-                    self.say("Escaping the privateers needs two fuel.");
-                    return Cue::None;
-                }
                 self.fuel -= 2;
-                self.record("You burn two fuel and leave the privateers behind.");
             }
             (Encounter::Privateers, 2) => {
                 self.damage(22);
                 self.credits += 40;
-                self.record(
-                    "You take the captain's purse: 40 credits, but the guns scar your hull.",
-                );
             }
             _ => return Cue::None,
         }
+        self.emit(Event::Resolve {
+            sector: self.sector,
+            encounter,
+            choice: self.choice,
+            bonus,
+        });
         self.sites[self.sector].claimed = true;
         self.encounter = None;
         self.points += 250;
@@ -453,24 +636,8 @@ impl Game {
         let Some(recipe) = RECIPES.get(self.row) else {
             return Cue::None;
         };
-        let done = if self.row < 3 {
-            self.components[self.row]
-        } else {
-            self.upgrades[self.row - 3]
-        };
-        if done {
-            self.say("That mechanism is already fitted. It cannot be crafted twice.");
-            return Cue::None;
-        }
-        if self.row < 3 && !self.relics[self.row] {
-            self.say(format!(
-                "Missing relic: {}. Recover it from {}.",
-                RELIC_NAMES[self.row], CHART[RELIC_SECTORS[self.row]].name
-            ));
-            return Cue::None;
-        }
-        if (0..3).any(|i| self.cargo[i] < recipe.cost[i]) {
-            self.say("Not enough materials. The selected recipe lists every required cargo unit.");
+        if let Some(reason) = self.forge_refusal(self.row) {
+            self.refuse(reason);
             return Cue::None;
         }
         for i in 0..3 {
@@ -483,10 +650,7 @@ impl Game {
             self.upgrades[self.row - 3] = true;
             self.points += 100;
         }
-        self.record(format!(
-            "{} fabricated and fitted. Its materials have been consumed.",
-            recipe.name
-        ));
+        self.emit(Event::Forge { recipe: self.row });
         if self.spend_watch() {
             Cue::Good
         } else {
@@ -494,84 +658,75 @@ impl Game {
         }
     }
     fn service(&mut self) -> Cue {
+        if let Some(reason) = self.service_refusal(self.row) {
+            self.refuse(reason);
+            return Cue::None;
+        }
         match self.row {
             0 => {
-                if self.cargo[1] == 0 || self.fuel == self.fuel_max() {
-                    self.say("Condensing needs one crystal and room in the fuel tank.");
-                    return Cue::None;
-                }
+                let before = self.fuel;
                 self.cargo[1] -= 1;
                 self.fuel = (self.fuel + 3).min(self.fuel_max());
-                self.record("One crystal condensed into up to three fuel units.");
+                self.emit(Event::Service {
+                    row: 0,
+                    kind: 1,
+                    gain: self.fuel - before,
+                });
             }
             1 => {
-                if self.cargo[0] == 0 || self.cargo[2] == 0 || self.hull == 100 {
-                    self.say("A field patch needs one alloy, one circuit and damaged hull.");
-                    return Cue::None;
-                }
+                let before = self.hull;
                 self.cargo[0] -= 1;
                 self.cargo[2] -= 1;
                 self.hull = (self.hull + 25).min(100);
-                self.record("One alloy and one circuit seal 25 hull damage.");
+                self.emit(Event::Service {
+                    row: 1,
+                    kind: 0,
+                    gain: self.hull - before,
+                });
             }
             2 => {
-                if !CHART[self.sector].station || self.credits < 15 || self.fuel == self.fuel_max()
-                {
-                    self.say("Fuel service: dock at Loom or Verdant, bring 15 credits, and leave tank space.");
-                    return Cue::None;
-                }
+                let before = self.fuel;
                 self.credits -= 15;
                 self.fuel = (self.fuel + 5).min(self.fuel_max());
-                self.record("Station fuel purchased: up to five units for 15 credits.");
+                self.emit(Event::Service {
+                    row: 2,
+                    kind: 0,
+                    gain: self.fuel - before,
+                });
             }
             3 => {
-                if !CHART[self.sector].station || self.credits < 20 || self.hull == 100 {
-                    self.say("Dry dock: Loom or Verdant, 20 credits, and damaged hull required.");
-                    return Cue::None;
-                }
+                let before = self.hull;
                 self.credits -= 20;
                 self.hull = (self.hull + 45).min(100);
-                self.record("The dry dock repairs up to 45 hull for 20 credits.");
+                self.emit(Event::Service {
+                    row: 3,
+                    kind: 0,
+                    gain: self.hull - before,
+                });
             }
             4 => {
-                if !CHART[self.sector].station || self.cargo[self.sell_kind] == 0 {
-                    self.say(
-                        "Sell cargo only at Loom or Verdant. X changes the selected resource.",
-                    );
-                    return Cue::None;
-                }
                 self.cargo[self.sell_kind] -= 1;
-                let price = [8, 12, 16][self.sell_kind];
-                self.credits += price;
-                self.record(format!(
-                    "Sold one {} for {price} credits.",
-                    RESOURCE_NAMES[self.sell_kind]
-                ));
+                let price = SELL_PRICE[self.sell_kind];
+                self.credits += u32::from(price);
+                self.emit(Event::Service {
+                    row: 4,
+                    kind: self.sell_kind,
+                    gain: price,
+                });
             }
             5 => {
-                if !self.tow {
-                    self.say(
-                        "The one-use tow has been spent. Refuel from crystals, or R to begin anew.",
-                    );
-                    return Cue::None;
-                }
-                if self.sector == 0 {
-                    self.say("Already at Loom Dock. The distress charge is preserved.");
-                    return Cue::None;
-                }
+                let from = self.sector;
                 self.tow = false;
                 self.sector = 0;
                 self.selected = 1;
                 self.fuel = 5;
+                self.emit(Event::Tow { from });
                 self.damage(15);
                 for _ in 0..5 {
                     if self.result == Outcome::Playing {
                         self.spend_watch();
                     }
                 }
-                self.record(
-                    "Distress tow: Loom Dock, five fuel, fifteen hull damage and six watches lost.",
-                );
             }
             _ => return Cue::None,
         }
@@ -585,27 +740,16 @@ impl Game {
         }
     }
     fn open_gate(&mut self) -> Cue {
-        if self.sector != 0 {
-            self.say("The ark and gate are at Loom Dock. Bring the mechanisms home.");
-            return Cue::None;
-        }
-        if self.built() != 3 {
-            self.say("All three gate mechanisms must be fabricated before the ark can cross.");
+        if let Some(reason) = self.gate_refusal() {
+            self.refuse(reason);
             return Cue::None;
         }
         if !self.spend_watch() {
             return Cue::Bad;
         }
-        self.points += 1200
-            + u32::from(DEADLINE - self.watch) * 25
-            + u32::from(self.hull) * 3
-            + self.credits.min(500);
+        self.points += self.escape_bonus(self.watch);
         self.result = Outcome::Won;
-        self.record(if self.crew {
-            "The gate blooms. The ark and all nine engineers cross into a new dawn."
-        } else {
-            "The gate blooms. The ark crosses, carrying the unanswered beacon in its log."
-        });
+        self.emit(Event::Gate);
         Cue::Win
     }
     fn rows(&self) -> usize {
@@ -628,21 +772,20 @@ impl Game {
         if self.result != Outcome::Playing {
             return Cue::None;
         }
-        self.ticks = self.ticks.wrapping_add(1);
+        self.events.clear();
         if let Some(mut flight) = self.transit {
             flight.remaining = flight.remaining.saturating_sub(1);
             if flight.remaining == 0 {
                 self.sector = flight.to;
                 self.transit = None;
-                if !self.sites[self.sector].visited {
+                let first = !self.sites[self.sector].visited;
+                self.emit(Event::Arrive {
+                    sector: self.sector,
+                    first,
+                });
+                if first {
                     self.sites[self.sector].visited = true;
                     self.damage(CHART[self.sector].arrival_damage);
-                }
-                if self.result == Outcome::Playing {
-                    self.record(format!(
-                        "Arrived at {}. Survey [2] reveals finite deposits and landmarks.",
-                        CHART[self.sector].name
-                    ));
                 }
                 return if self.result == Outcome::Lost {
                     Cue::Bad
@@ -661,16 +804,11 @@ impl Game {
                 self.choice = (self.choice + 1) % 3;
             }
             let mut act = input.primary;
-            if input.click {
-                for i in 0..3 {
-                    if (130. ..830.).contains(&input.pointer.x)
-                        && (330. + i as f32 * 62. ..378. + i as f32 * 62.)
-                            .contains(&input.pointer.y)
-                    {
-                        self.choice = i;
-                        act = true;
-                    }
-                }
+            if input.click
+                && let Some(i) = choice_at(input.pointer)
+            {
+                self.choice = i;
+                act = true;
             }
             return if act { self.resolve() } else { Cue::None };
         }
@@ -681,10 +819,9 @@ impl Game {
             return Cue::Action;
         }
         if input.click
-            && (116. ..145.).contains(&input.pointer.y)
-            && (24. ..936.).contains(&input.pointer.x)
+            && let Some(page) = tab_at(input.pointer)
         {
-            self.switch_page(((input.pointer.x - 24.) / 184.) as usize);
+            self.switch_page(page);
             return Cue::Action;
         }
         if self.page == 0 {
@@ -707,10 +844,7 @@ impl Game {
             let kind = self.row - 1;
             if self.cargo[kind] > 0 {
                 self.cargo[kind] -= 1;
-                self.record(format!(
-                    "Jettisoned one {}. No credits or score awarded.",
-                    RESOURCE_NAMES[kind]
-                ));
+                self.emit(Event::Jettison { kind });
                 return Cue::Action;
             }
         }
@@ -721,25 +855,19 @@ impl Game {
         let mut act = input.primary;
         if input.click {
             if self.page == 0 {
-                for (i, site) in CHART.iter().enumerate() {
-                    let dx = input.pointer.x - site.x;
-                    let dy = input.pointer.y - site.y;
-                    if dx * dx + dy * dy < 29. * 29. {
-                        self.selected = i;
-                    }
+                if let Some(i) = star_at(input.pointer) {
+                    // Clicking the already selected star confirms the jump,
+                    // exactly as the confirm button and Space do.
+                    act |= i == self.selected;
+                    self.selected = i;
                 }
-            } else if self.page < 4 && (640. ..922.).contains(&input.pointer.x) {
-                let top = if self.page == 1 { 282. } else { 230. };
-                for i in 0..self.rows() {
-                    let y = top + i as f32 * 34.;
-                    if (y..y + 30.).contains(&input.pointer.y) {
-                        self.row = i;
-                        act = true;
-                    }
-                }
-            }
-            if (640. ..922.).contains(&input.pointer.x) && (526. ..556.).contains(&input.pointer.y)
+            } else if self.page < 4
+                && let Some(i) = row_at(self.page, self.rows(), input.pointer)
             {
+                self.row = i;
+                act = true;
+            }
+            if button_hit(input.pointer) {
                 act = true;
             }
         }
@@ -976,7 +1104,12 @@ mod tests {
                 break;
             }
         }
-        assert_eq!(game.result, Outcome::Won, "{}", game.notice);
+        assert_eq!(
+            game.result,
+            Outcome::Won,
+            "{:?}",
+            (game.watch, game.hull, game.sector)
+        );
         assert!(game.components.iter().all(|&built| built));
         assert!(game.relics.iter().all(|&found| found));
         assert!(game.crew);
@@ -1325,5 +1458,155 @@ mod tests {
             Cue::None
         );
         assert_eq!(game, frozen);
+    }
+
+    #[test]
+    fn clicking_the_selected_star_again_jumps_like_the_confirm_button() {
+        let click = |game: &mut Game, i: usize| {
+            game.step(&Input {
+                click: true,
+                pointer: Vec2::new(CHART[i].x, CHART[i].y),
+                ..Input::default()
+            })
+        };
+        let mut game = Game::new();
+        assert_eq!(
+            click(&mut game, 2),
+            Cue::None,
+            "the first click only selects"
+        );
+        assert_eq!((game.selected, game.watch, game.fuel), (2, 0, 8));
+        assert!(game.transit.is_none());
+        assert_eq!(click(&mut game, 2), Cue::Action, "the second click jumps");
+        assert_eq!((game.watch, game.fuel), (1, 7));
+        assert_eq!(game.transit.map(|flight| flight.to), Some(2));
+        assert_eq!(
+            game.events.iter().collect::<Vec<_>>(),
+            vec![Event::Launch { from: 0, to: 2 }]
+        );
+        // An unconnected star refuses exactly like Space would, spending nothing.
+        let mut game = Game::new();
+        click(&mut game, 8);
+        let before = stores(&game);
+        assert_eq!(click(&mut game, 8), Cue::None);
+        assert_eq!(stores(&game), before);
+        assert_eq!(
+            game.events.iter().collect::<Vec<_>>(),
+            vec![Event::Refuse(Refusal::NoLane)]
+        );
+    }
+
+    #[test]
+    fn events_record_one_tick_and_refusals_spend_nothing() {
+        let mut game = Game::new();
+        accept(&mut game, 1, 1);
+        assert_eq!(
+            game.events.iter().collect::<Vec<_>>(),
+            vec![Event::Refuse(Refusal::Unsurveyed)]
+        );
+        assert_eq!(game.watch, 0);
+        game.step(&Input::default());
+        assert_eq!(game.events.iter().count(), 0, "the feed is per tick");
+        assert_eq!(accept(&mut game, 1, 0), Cue::Good);
+        assert_eq!(
+            game.events.iter().collect::<Vec<_>>(),
+            vec![Event::Survey { sector: 0 }]
+        );
+        // A hazardous first arrival records the arrival and the hull it cost.
+        let mut game = Game::new();
+        game.sector = 1;
+        game.selected = 3;
+        accept(&mut game, 0, 0);
+        for _ in 0..120 {
+            game.step(&Input::default());
+        }
+        assert_eq!(
+            game.events.iter().collect::<Vec<_>>(),
+            vec![
+                Event::Arrive {
+                    sector: 3,
+                    first: true
+                },
+                Event::Damage {
+                    sector: 3,
+                    amount: 6
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn previews_match_what_the_rules_accept() {
+        let mut game = Game::new();
+        let mut checked = 0;
+        for tick in 0..3000 {
+            if tick % 24 == 0
+                && game.result == Outcome::Playing
+                && game.transit.is_none()
+                && game.encounter.is_none()
+            {
+                for (page, rows) in [(0, SECTORS), (1, 5), (2, 6), (3, 6), (4, 1)] {
+                    for row in 0..rows {
+                        let mut probe = game.clone();
+                        probe.page = page;
+                        probe.row = row;
+                        probe.selected = row;
+                        let refusal = match page {
+                            0 => probe.jump_refusal(row),
+                            1 => probe.work_refusal(row),
+                            2 => probe.forge_refusal(row),
+                            3 => probe.service_refusal(row),
+                            _ => probe.gate_refusal(),
+                        };
+                        let cue = probe.step(&Input {
+                            primary: true,
+                            ..Input::default()
+                        });
+                        assert_eq!(
+                            refusal.is_none(),
+                            cue != Cue::None,
+                            "page {page} row {row} at tick {tick}"
+                        );
+                        if let Some(reason) = refusal {
+                            assert_eq!(
+                                probe.events.iter().collect::<Vec<_>>(),
+                                vec![Event::Refuse(reason)]
+                            );
+                        }
+                        checked += 1;
+                    }
+                }
+                for (sector, encounter) in [
+                    (4, Encounter::Choir),
+                    (7, Encounter::Sentinel),
+                    (6, Encounter::Privateers),
+                ] {
+                    for choice in 0..3 {
+                        let mut probe = game.clone();
+                        probe.sector = sector;
+                        probe.encounter = Some(encounter);
+                        probe.choice = choice;
+                        let refusal = probe.approach_refusal(encounter, choice);
+                        let cue = probe.step(&Input {
+                            primary: true,
+                            ..Input::default()
+                        });
+                        assert_eq!(
+                            refusal.is_none(),
+                            cue != Cue::None,
+                            "{encounter:?} {choice}"
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+            let input = game.pilot(tick);
+            game.step(&input);
+            if game.result != Outcome::Playing {
+                break;
+            }
+        }
+        assert_eq!(game.result, Outcome::Won);
+        assert!(checked > 1500, "{checked}");
     }
 }

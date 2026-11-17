@@ -36,7 +36,7 @@ use toys::{Fun, Scenario};
 const MAX_BODIES: usize = 240;
 const TICK_HZ: f64 = 120.0;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Shape {
     Ball(f32),
     Box(Vec2),
@@ -343,10 +343,68 @@ struct Lab {
     impact_cooldown: f32,
     impact: Option<(f32, Surface)>,
     pulsed: bool,
-    feedback: &'static str,
-    feedback_time: f32,
+    /// The latest accepted or refused command, for presentation only. The HUD
+    /// shows refusals as a red wobble and a short popup on the tool involved.
+    notice: Notice,
+    /// Increments with every notice, so presentation reacts exactly once.
+    notice_serial: u32,
     pending: LabCommands,
     selected: Option<RigidBodyHandle>,
+}
+
+/// What the lab last did with a command. Presentation maps these to icons,
+/// key caps and one- or two-word popups instead of sentences.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Notice {
+    /// Freshly opened lab.
+    Ready,
+    /// RESET or a scene swap rebuilt the scene.
+    Rebuilt,
+    Paused,
+    Resumed,
+    /// One manual tick while paused.
+    Stepped,
+    /// STEP pressed while running.
+    StepWhileRunning,
+    Dropped,
+    /// A drop at a non-finite position.
+    DropRejected,
+    /// A drop refused by the body cap.
+    DropFull,
+    Chaos,
+    /// CHAOS refused by the body cap.
+    ChaosFull,
+    Pulsed,
+    /// A pulse requested while paused.
+    PulsePaused,
+    PulseRecharging,
+    /// A pulse at a non-finite position.
+    PulseRejected,
+    /// Inspection pinned a body.
+    Selected,
+    /// Inspection found nothing and cleared the selection.
+    Missed,
+}
+
+/// How the solver currently treats a body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Rest {
+    Awake,
+    Waking,
+    Asleep,
+}
+
+/// Read-only diagnostics for the inspected body, drawn as an icon tag.
+#[derive(Clone, Copy, Debug)]
+struct Selection {
+    /// One-based scene number.
+    number: usize,
+    shape: Shape,
+    rest: Rest,
+    speed: f32,
+    /// Last-tick solid contact pairs.
+    contacts: usize,
+    position: Vec2,
 }
 
 /// At most one pending UI drop and pulse; repeated zero-tick requests coalesce.
@@ -435,16 +493,16 @@ impl Lab {
             impact_cooldown: 0.,
             impact: None,
             pulsed: false,
-            feedback: "Drop a shape. Pause to inspect or single-step.",
-            feedback_time: 5.,
+            notice: Notice::Ready,
+            notice_serial: 0,
             pending: LabCommands::default(),
             selected: None,
         }
     }
 
-    fn notice(&mut self, message: &'static str) {
-        self.feedback = message;
-        self.feedback_time = 2.5;
+    fn notice(&mut self, notice: Notice) {
+        self.notice = notice;
+        self.notice_serial = self.notice_serial.wrapping_add(1);
     }
 
     fn reset(&mut self) {
@@ -458,30 +516,21 @@ impl Lab {
         self.pulsed = false;
         self.pending = LabCommands::default();
         self.selected = None;
-        self.notice(match (self.fun.scenario, paused) {
-            (Scenario::Workshop, true) => "Scene reset. Still paused; STEP advances one tick.",
-            (Scenario::Workshop, false) => "Scene reset. Original 34 bodies restored.",
-            (Scenario::Dominoes, true) => "Domino run set. Still paused; STEP advances one tick.",
-            (Scenario::Dominoes, false) => "Domino run set. Here comes the kicker ball.",
-        });
+        self.notice(Notice::Rebuilt);
     }
 
     /// One deterministic CHAOS burst, bounded by the body cap.
     fn chaos(&mut self) {
         let count = self.sandbox.chaos(self.fun.chaos_serial);
         if count == 0 {
-            self.notice("Body limit reached (240). RESET clears the scene.");
+            self.notice(Notice::ChaosFull);
             return;
         }
         self.fun.touch();
         self.fun.chaos_serial = self.fun.chaos_serial.wrapping_add(1);
         self.fun.stats.chaos += 1;
         self.fun.events.chaos += count;
-        self.notice(if self.session.is_paused() {
-            "CHAOS placed. It waits for STEP or RESUME."
-        } else {
-            "CHAOS delivered."
-        });
+        self.notice(Notice::Chaos);
     }
 
     fn drop_position(position: Vec2) -> Vec2 {
@@ -500,28 +549,23 @@ impl Lab {
     fn select_body(&mut self, inspection: Option<&Inspection>) {
         self.selected = inspection.and_then(|query| query.body(&self.sandbox));
         self.notice(if self.selected.is_some() {
-            "Body selected. Outline follows its pose; diagnostics are read-only."
+            Notice::Selected
         } else {
-            "No dynamic body at cursor. Selection cleared."
+            Notice::Missed
         });
     }
 
-    fn selected_label(&self) -> String {
-        let Some(handle) = self.selected else {
-            return "No body selected / inspect at cursor or drop a shape".into();
-        };
-        let Some((index, body)) = self
+    /// Read-only diagnostics for the selected body, or `None` when nothing is
+    /// selected or the selected body no longer exists.
+    fn selection(&self) -> Option<Selection> {
+        let handle = self.selected?;
+        let (index, body) = self
             .sandbox
             .bodies
             .iter()
             .enumerate()
-            .find(|(_, body)| body.handle == handle)
-        else {
-            return "Selected body unavailable".into();
-        };
-        let Some(sleep) = self.sandbox.physics.sleep_state(handle) else {
-            return "Selected body unavailable".into();
-        };
+            .find(|(_, body)| body.handle == handle)?;
+        let sleep = self.sandbox.physics.sleep_state(handle)?;
         let rigid = &self.sandbox.physics.bodies[handle];
         let contacts = self
             .sandbox
@@ -534,24 +578,20 @@ impl Lab {
                         .any(|id| self.sandbox.physics.colliders[*id].parent() == Some(handle))
             })
             .count();
-        let shape = match body.shape {
-            Shape::Ball(_) => "BALL",
-            Shape::Box(_) => "BOX",
-            Shape::Dumbbell => "COMPOUND",
-            Shape::Plank(_) => "DOMINO",
-        };
-        let state = if sleep.sleeping {
-            "ASLEEP"
-        } else if sleep.wake_requested {
-            "WAKING"
-        } else {
-            "AWAKE"
-        };
-        format!(
-            "#{} {shape} {state} / v{:.1} / {contacts} contacts",
-            index + 1,
-            rigid.linvel().length()
-        )
+        Some(Selection {
+            number: index + 1,
+            shape: body.shape,
+            rest: if sleep.sleeping {
+                Rest::Asleep
+            } else if sleep.wake_requested {
+                Rest::Waking
+            } else {
+                Rest::Awake
+            },
+            speed: rigid.linvel().length(),
+            contacts,
+            position: rigid.translation(),
+        })
     }
 
     #[cfg(test)]
@@ -591,10 +631,6 @@ impl Lab {
         self.impact = None;
         self.pulsed = false;
         self.fun.begin_frame();
-        if elapsed_seconds.is_finite() {
-            self.feedback_time =
-                (self.feedback_time - elapsed_seconds.clamp(0., 0.1) as f32).max(0.);
-        }
         // Reset (or a scene toggle, which is a rebuild) wins over every edge
         // from this frame, including pending drops and CHAOS.
         if input.reset || toys.scene {
@@ -612,9 +648,9 @@ impl Lab {
             self.pending = LabCommands::default();
             self.session.toggle_pause();
             self.notice(if self.session.is_paused() {
-                "Paused. Drops stay still; STEP advances one tick."
+                Notice::Paused
             } else {
-                "Simulation resumed."
+                Notice::Resumed
             });
         }
         if let Some(ball) = input.ball {
@@ -630,11 +666,11 @@ impl Lab {
 
         let frame = if input.single_step && self.session.is_paused() {
             let frame = self.session.step_paused().expect("paused lab step");
-            self.notice("Advanced one tick (8.33 ms). Still paused.");
+            self.notice(Notice::Stepped);
             frame
         } else {
             if input.single_step {
-                self.notice("Pause before single-stepping.");
+                self.notice(Notice::StepWhileRunning);
             }
             self.session.advance(if input.toggle_pause {
                 0.
@@ -669,32 +705,26 @@ impl Lab {
         if let Some((position, force_crate)) = pending.drop.or(actions.drop) {
             let ball = self.ball && !force_crate;
             if !position.is_finite() {
-                self.notice("Drop rejected: position must be finite.");
+                self.notice(Notice::DropRejected);
             } else if self.sandbox.spawn(Self::drop_position(position), ball) {
                 self.fun.stats.drops += 1;
                 self.selected = self.sandbox.bodies.last().map(|body| body.handle);
-                self.notice(if self.session.is_paused() {
-                    "Shape placed. Paused until STEP or RESUME."
-                } else if ball {
-                    "Ball dropped."
-                } else {
-                    "Crate dropped."
-                });
+                self.notice(Notice::Dropped);
             } else {
-                self.notice("Body limit reached (240). RESET clears the scene.");
+                self.notice(Notice::DropFull);
             }
         }
         if let Some(center) = pending.pulse.or(actions.pulse) {
             if self.session.is_paused() {
-                self.notice("Resume the simulation to pulse.");
+                self.notice(Notice::PulsePaused);
             } else if center.is_finite() && self.sandbox.pulse(center) {
                 self.pulsed = true;
                 self.fun.stats.pulses += 1;
-                self.notice("Pulse applied.");
+                self.notice(Notice::Pulsed);
             } else if !center.is_finite() {
-                self.notice("Pulse rejected: position must be finite.");
+                self.notice(Notice::PulseRejected);
             } else {
-                self.notice("Pulse recharging.");
+                self.notice(Notice::PulseRecharging);
             }
         }
         if std::mem::take(&mut self.fun.pending_chaos) | chaos {
@@ -835,6 +865,8 @@ async fn game() {
 
         clear_background(ui::BACKGROUND);
         let mut clicked = [false; presentation::BUTTONS];
+        // Presses on a disabled tool get refusal feedback instead of nothing.
+        let mut refused = [false; presentation::BUTTONS];
         let mut hovered = None;
         for (i, click) in clicked.iter_mut().enumerate() {
             let rect = layout.button(i);
@@ -844,11 +876,12 @@ async fn game() {
                 hovered = Some(i);
             }
             let mouse_clicked = rect.contains(mouse) && clicked_mouse;
-            *click = active
+            let pressed = active
                 && !card_closed
-                && lab.button_enabled(i)
                 && (mouse_clicked
                     || (primary && player_input.cursor_is_virtual() && rect.contains(pointer)));
+            *click = pressed && lab.button_enabled(i);
+            refused[i] = pressed && !lab.button_enabled(i);
         }
         if clicked[0] {
             input.ball = Some(true);
@@ -936,6 +969,10 @@ async fn game() {
             if *clicked {
                 hud.tool_kick(i);
             }
+            if refused[i] {
+                hud.refuse(&lab, i);
+                sound.cue(Cue::Failure, 0.3);
+            }
         }
         if active && !lab.session.is_paused() && !motion.is_reduced() {
             ambient += dt.clamp(0., 0.1);
@@ -974,10 +1011,11 @@ async fn game() {
         {
             sound.cue(Cue::Success, 0.5);
         }
-        if let Some(headline) = bests.update(&lab.fun) {
+        if let Some(best) = bests.update(&lab.fun) {
             juice.toast(
-                "NEW PERSONAL BEST!",
-                headline,
+                "New best!",
+                Some(look::Glyph::Pict(ferravex_render::icons::Icon::Trophy)),
+                Some((best.glyph, best.value)),
                 juice::GOLD,
                 2.6,
                 juice::Priority::Alert,
@@ -1015,8 +1053,8 @@ async fn game() {
             juice: &juice,
             bests: &bests,
             input: &player_input,
-            hovered,
             inspection,
+            pointer: pointer_in_scene.then_some(pointer),
             active,
             tools,
         };
@@ -1185,7 +1223,7 @@ mod tests {
             assert_eq!(lab.impact_cooldown, 0.);
             assert!(lab.impact.is_none());
             assert!(!lab.pulsed);
-            assert!(lab.feedback.starts_with("Scene reset."));
+            assert_eq!(lab.notice, Notice::Rebuilt);
             lab.session.set_paused(false);
             assert_eq!(lab.update(0.5 / TICK_HZ, LabInput::default()).steps, 0);
         }
@@ -1264,7 +1302,7 @@ mod tests {
             },
         );
         assert_eq!(lab.sandbox.bodies.len(), initial_count + 1);
-        assert!(lab.feedback.starts_with("Drop rejected"));
+        assert_eq!(lab.notice, Notice::DropRejected);
         for _ in 0..MAX_BODIES {
             lab.update(
                 0.,
@@ -1276,7 +1314,7 @@ mod tests {
         }
         assert_eq!(lab.sandbox.bodies.len(), MAX_BODIES);
         assert_eq!(lab.sandbox.physics.bodies.len(), MAX_BODIES + 8);
-        assert!(lab.feedback.starts_with("Body limit reached"));
+        assert_eq!(lab.notice, Notice::DropFull);
     }
 
     #[test]
@@ -1521,7 +1559,11 @@ mod tests {
         assert!(query.report.total > 0);
         lab.select_body(Some(&query));
         assert_eq!(lab.selected, Some(handle));
-        assert!(lab.selected_label().contains("COMPOUND"));
+        assert_eq!(lab.notice, Notice::Selected);
+        let selection = lab.selection().unwrap();
+        assert!(matches!(selection.shape, Shape::Dumbbell));
+        assert_eq!(selection.number, lab.sandbox.bodies.len());
+        assert_eq!(selection.position, vec2(8.2, 10.));
         assert_eq!(lab.sandbox.physics.sleep_state(handle), Some(sleep));
         assert_eq!(poses(&lab.sandbox), before);
         assert_eq!(lab.session.tick(), 0);
@@ -1541,12 +1583,16 @@ mod tests {
             Some(handle)
         );
         lab.sandbox.physics.remove_body(handle);
-        assert_eq!(lab.selected_label(), "Selected body unavailable");
+        assert!(
+            lab.selected.is_some() && lab.selection().is_none(),
+            "stale selection"
+        );
         lab.reset();
         assert!(lab.selected.is_none());
         let miss = lab.sandbox.inspect(vec2(0., 12.)).unwrap();
         lab.select_body(Some(&miss));
         assert!(lab.selected.is_none());
+        assert_eq!(lab.notice, Notice::Missed);
     }
 
     #[test]

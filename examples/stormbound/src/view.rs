@@ -1,38 +1,84 @@
-//! Read-only presentation: a living sea chart, ships, shot arcs and the gun deck.
+//! Read-only presentation: a living sea, ships that wear their wounds, shot
+//! arcs and a gun deck of dials, meters and ammunition racks. Drawing only
+//! reads the model; effects come only from the events a tick accepted.
 use crate::{
     Game, Phase,
-    model::{Ammo, Ship, Trace},
+    content::Tactic,
+    layout::{
+        AMMO, ANGLE, ANGLE_DOWN, ANGLE_UP, BAR, CARD, FIRE, METER, POWER, POWER_DOWN, POWER_UP,
+        RETIRE, RETRY, SAIL, SCENE, SHOP, START, TABLE,
+    },
+    model::{Ammo, Cause, Event, Preview, Ship, Trace},
 };
-use ferravex_arcade::shapes::{self, Fill};
-use ferravex_arcade::typography::{TextAlign, TextStyle, draw_text_styled, text_width, wrap_text};
+use ferravex_arcade::shapes::{self, Fill, Shadow, Stroke};
+use ferravex_arcade::typography::{TextAlign, TextStyle, draw_text_styled, text_width};
 use ferravex_arcade::*;
+use std::f32::consts::PI;
 
 const GOLD: Color = Color::new(0.97, 0.76, 0.37, 1.);
 const CREAM: Color = Color::new(0.93, 0.88, 0.72, 1.);
 const TEAL: Color = Color::new(0.37, 0.82, 0.75, 1.);
-const RED: Color = Color::new(0.96, 0.46, 0.35, 1.);
+const RED: Color = Color::new(0.96, 0.44, 0.34, 1.);
 const STEEL: Color = Color::new(0.62, 0.70, 0.78, 1.);
 const SOFT: Color = Color::new(0.76, 0.80, 0.82, 1.);
-const DARK: Color = Color::new(0.055, 0.09, 0.12, 1.);
+const FOAM: Color = Color::new(0.82, 0.94, 0.96, 1.);
+const FLAME: Color = Color::new(1., 0.6, 0.26, 1.);
+const SMOKE: Color = Color::new(0.55, 0.58, 0.62, 1.);
+const SPLINTER: Color = Color::new(0.66, 0.47, 0.28, 1.);
 const SKY_TOP: Color = Color::new(0.04, 0.07, 0.13, 1.);
-const SKY_LOW: Color = Color::new(0.16, 0.24, 0.31, 1.);
-const SEA_TOP: Color = Color::new(0.11, 0.33, 0.38, 1.);
-const SEA_LOW: Color = Color::new(0.02, 0.11, 0.16, 1.);
+const SKY_LOW: Color = Color::new(0.17, 0.25, 0.32, 1.);
+const SEA_TOP: Color = Color::new(0.10, 0.31, 0.36, 1.);
+const SEA_LOW: Color = Color::new(0.02, 0.10, 0.15, 1.);
 const WOOD: Color = Color::new(0.45, 0.32, 0.21, 1.);
-const PARTS: [&str; 4] = ["Stern", "Hold", "Bow", "Mast"];
-const AMMO: [&str; 3] = ["Round", "Chain", "Shell"];
-/// The waterline in canvas units.
-const WATER: f32 = 429.;
+const CLOTH: Color = Color::new(0.94, 0.90, 0.78, 1.);
+const FORECAST: Color = Color::new(0.62, 0.92, 0.90, 1.);
+const HISTORY: Color = Color::new(0.85, 0.72, 0.42, 1.);
+const ORDER: [Ammo; 3] = [Ammo::Round, Ammo::Chain, Ammo::Shell];
+const DIGITS: [&str; 4] = ["1", "2", "3", "4"];
+
+/// World to canvas: one canvas unit per world unit, x from the chart's left
+/// edge and y up from sea level.
+const X0: f32 = 60.;
+const Y0: f32 = 430.;
+/// The drawn waterline (world height 6).
+const WATER: f32 = 424.;
+/// The wind gauge over the sea.
+const GAUGE: Vec2 = vec2(480., 137.);
+/// Header spots that effects rise from.
+const LIFEBOATS_AT: Vec2 = vec2(812., 81.);
+/// The dock card's salvage purse.
+const PURSE_AT: Vec2 = vec2(690., 186.);
 
 fn screen(p: Vec2) -> Vec2 {
-    vec2(30. + p.x * 0.79, 432. - p.y * 0.56)
+    vec2(X0 + p.x, Y0 - p.y)
 }
-fn in_sea(p: Vec2) -> bool {
-    (23. ..=668.).contains(&p.x) && (117. ..=458.).contains(&p.y)
+fn in_scene(p: Vec2) -> bool {
+    p.x >= SCENE.x + 2.
+        && p.x <= SCENE.right() - 2.
+        && p.y >= SCENE.y + 2.
+        && p.y <= SCENE.bottom() - 2.
+}
+/// Canvas rectangle of a hull section (0-2) or the mast (3); it matches the
+/// part's collision box exactly.
+fn part_rect(ship: Ship, part: usize) -> Rect {
+    let c = screen(ship.section_center(part));
+    if part == 3 {
+        Rect::new(c.x - 5., c.y - 35., 10., 70.)
+    } else {
+        Rect::new(c.x - 15., c.y - 14., 30., 28.)
+    }
+}
+/// Where a part's numbers float.
+fn part_top(ship: Ship, part: usize) -> Vec2 {
+    let r = part_rect(ship, part);
+    vec2(r.center().x, r.y - 12.)
+}
+fn muzzle(ship: Ship, player: bool) -> Vec2 {
+    screen(vec2(ship.x + if player { 50. } else { -50. }, 40.))
 }
 
 // ---------------------------------------------------------------------------
-// Typography and surfaces.
+// Small drawing vocabulary.
 
 fn plain(size: f32, color: Color) -> TextStyle {
     TextStyle::modern(size, color)
@@ -40,119 +86,14 @@ fn plain(size: f32, color: Color) -> TextStyle {
 fn say(value: &str, x: f32, y: f32, s: TextStyle) -> f32 {
     draw_text_styled(value, x, y, s).width
 }
-fn say_fit(value: &str, x: f32, y: f32, max: f32, s: TextStyle) -> f32 {
-    let w = text_width(value, s);
-    let s = if w > max && w > 0. {
-        s.with_size(s.size * max / w)
-    } else {
-        s
-    };
-    draw_text_styled(value, x, y, s).width
+/// Draw `value` centered on (`cx`, `cy`); returns its width.
+fn say_mid(value: &str, cx: f32, cy: f32, s: TextStyle) -> f32 {
+    let s = s.with_align(TextAlign::Center);
+    draw_text_styled(value, cx, s.centered_baseline(cy), s).width
 }
-fn eyebrow(value: &str, x: f32, y: f32, color: Color) -> f32 {
-    say(value, x, y, plain(11., color).with_letter_spacing(1.5))
-}
-fn para(value: &str, x: f32, y: f32, max: f32, s: TextStyle, line: f32) -> f32 {
-    let mut baseline = y;
-    for row in wrap_text(value, max, s) {
-        draw_text_styled(row, x, baseline, s);
-        baseline += line;
-    }
-    baseline
-}
-/// Raised panel: offset shadow, hairline rim and a softly lit gradient.
-fn slab(x: f32, y: f32, w: f32, h: f32, fill: Color) {
-    rounded(x, y + 4., w, h, 11., Color::new(0., 0., 0., 0.32 * fill.a));
-    rounded_gradient(
-        x,
-        y,
-        w,
-        h,
-        11.,
-        Color::new(1., 1., 1., 0.12 * fill.a),
-        Color::new(1., 1., 1., 0.04 * fill.a),
-    );
-    rounded_gradient(
-        x + 1.,
-        y + 1.,
-        w - 2.,
-        h - 2.,
-        10.,
-        lighten(fill, 0.035),
-        darken(fill, 0.04),
-    );
-}
-/// Rimmed tile: gold when selected, a quiet hairline otherwise.
-fn tile(x: f32, y: f32, w: f32, h: f32, selected: bool, dim: bool) {
-    let a = if dim { 0.55 } else { 1. };
-    if selected {
-        rounded_gradient(x, y, w, h, 8., lighten(GOLD, 0.2), darken(GOLD, 0.3));
-        rounded_gradient(
-            x + 1.5,
-            y + 1.5,
-            w - 3.,
-            h - 3.,
-            6.5,
-            Color::new(0.20, 0.22, 0.20, 1.),
-            Color::new(0.12, 0.14, 0.14, 1.),
-        );
-    } else {
-        rounded(x, y, w, h, 8., Color::new(1., 1., 1., 0.08 * a));
-        rounded_gradient(
-            x + 1.,
-            y + 1.,
-            w - 2.,
-            h - 2.,
-            7.,
-            Color::new(0.11, 0.16, 0.20, a),
-            Color::new(0.08, 0.12, 0.15, a),
-        );
-    }
-}
-/// Small tinted pill; returns its width.
-fn pill(label: &str, x: f32, y: f32, color: Color) -> f32 {
-    let s = plain(12., color);
-    let w = text_width(label, s) + 14.;
-    rounded(x, y, w, 19., 9.5, with_alpha(color, 0.16));
-    draw_text_styled(label, x + 7., s.centered_baseline(y + 9.5), s);
-    w
-}
-fn pill_width(label: &str) -> f32 {
-    text_width(label, plain(12., CREAM)) + 14.
-}
-fn button(x: f32, y: f32, w: f32, h: f32, key: &str, label: &str, primary: bool) {
-    rounded(x, y + 3., w, h, 10., Color::new(0., 0., 0., 0.35));
-    if primary {
-        rounded_gradient(x, y, w, h, 10., lighten(GOLD, 0.25), darken(GOLD, 0.15));
-    } else {
-        rounded_gradient(
-            x,
-            y,
-            w,
-            h,
-            10.,
-            Color::new(0.20, 0.28, 0.34, 1.),
-            Color::new(0.12, 0.18, 0.23, 1.),
-        );
-    }
-    let ink = if primary { INK } else { CREAM };
-    let st = plain(13., ink);
-    let cap = (text_width(key, st) + 12.).max(20.);
-    let total = cap + 7. + text_width(label, st);
-    keycap(key, label, x + (w - total) * 0.5, y + (h - 20.) * 0.5, ink);
-}
-/// A thin bar for dense instrument rows (cheaper than a full meter).
-fn bar(x: f32, y: f32, w: f32, fraction: f32, color: Color) {
-    let f = if fraction.is_finite() {
-        fraction.clamp(0., 1.)
-    } else {
-        0.
-    };
-    draw_rectangle(x, y, w, 4., Color::new(0., 0., 0., 0.45));
-    if f > 0. {
-        draw_rectangle(x, y, w * f, 4., color);
-        draw_rectangle(x, y, w * f, 1., with_alpha(lighten(color, 0.4), 0.7));
-    }
+/// Draw `value` vertically centered on `cy` from `x`; returns its width.
+fn say_left(value: &str, x: f32, cy: f32, s: TextStyle) -> f32 {
+    draw_text_styled(value, x, s.centered_baseline(cy), s).width
 }
 /// Soft alpha-blended light pool (stays in the main batch, unlike additive glows).
 fn halo(x: f32, y: f32, r: f32, color: Color) {
@@ -162,56 +103,229 @@ fn halo(x: f32, y: f32, r: f32, color: Color) {
 fn fract(v: f32) -> f32 {
     v - v.floor()
 }
-/// Gradient colour of the sky at canvas height `y`.
-fn sky_at(y: f32) -> Color {
-    shapes::mix(SKY_TOP, SKY_LOW, ((y - 116.) / 344.).clamp(0., 1.))
+fn hovered(r: Rect) -> bool {
+    r.contains(pointer())
 }
-fn sea_at(y: f32) -> Color {
-    shapes::mix(SEA_TOP, SEA_LOW, ((y - WATER) / 31.).clamp(0., 1.))
+fn cross(c: Vec2, r: f32, width: f32, color: Color) {
+    draw_line(c.x - r, c.y - r, c.x + r, c.y + r, width, color);
+    draw_line(c.x - r, c.y + r, c.x + r, c.y - r, width, color);
 }
-fn ammo_icon(ammo: Ammo, x: f32, y: f32, r: f32, a: f32) {
-    let iron = Color::new(0.16, 0.17, 0.19, a);
-    let shine = with_alpha(CREAM, 0.8 * a);
+fn chevron(x: f32, y: f32, dir: f32, s: f32, color: Color) {
+    draw_line(x - dir * s * 0.5, y - s, x + dir * s * 0.5, y, 2., color);
+    draw_line(x + dir * s * 0.5, y, x - dir * s * 0.5, y + s, 2., color);
+}
+/// A compact key cap for hints inside buttons; returns its width.
+fn mini_cap(key: &str, x: f32, y: f32, a: f32) -> f32 {
+    let s = plain(11., with_alpha(PAPER, a));
+    let w = (text_width(key, s) + 8.).max(15.);
+    let h = 15.;
+    rounded(x, y + 1.5, w, h, 3.5, Color::new(0., 0., 0., 0.45 * a));
+    rounded_gradient(
+        x,
+        y,
+        w,
+        h,
+        3.5,
+        Color::new(0.24, 0.28, 0.34, a),
+        Color::new(0.13, 0.16, 0.21, a),
+    );
+    say_mid(key, x + w * 0.5, y + h * 0.5, s);
+    w
+}
+/// An iron ball with a moonlit highlight.
+fn iron(p: Vec2, r: f32, a: f32) {
+    shapes::fill_circle(
+        p,
+        r,
+        Fill::radial(
+            p - vec2(r * 0.4, r * 0.4),
+            r * 1.6,
+            Color::new(0.52, 0.54, 0.58, a),
+            Color::new(0.08, 0.09, 0.11, a),
+        ),
+    );
+    shapes::fill_circle(
+        p - vec2(r * 0.36, r * 0.4),
+        r * 0.24,
+        Color::new(1., 0.97, 0.88, 0.7 * a),
+    );
+}
+/// The game's own symbol for each ammunition, used on racks, buttons and shots.
+fn ammo_glyph(ammo: Ammo, c: Vec2, r: f32, a: f32) {
     match ammo {
-        Ammo::Round => {
-            draw_circle(x, y, r, iron);
-            draw_circle(x, y, r * 0.75, Color::new(0.30, 0.31, 0.33, a));
-            draw_circle(x - r * 0.35, y - r * 0.35, r * 0.28, shine);
-        }
+        Ammo::Round => iron(c, r, a),
         Ammo::Chain => {
-            draw_line(
-                x - r,
-                y + r * 0.4,
-                x + r,
-                y - r * 0.4,
-                1.5,
-                with_alpha(STEEL, a),
-            );
-            for d in [-1., 1.] {
-                draw_circle(
-                    x + d * r,
-                    y - d * r * 0.4,
-                    r * 0.6,
-                    Color::new(0.30, 0.31, 0.33, a),
-                );
-                draw_circle(x + d * r - 1., y - d * r * 0.4 - 1., r * 0.2, shine);
+            let d = vec2(r * 0.9, -r * 0.5);
+            for k in 0..5 {
+                let p = c - d + d * (k as f32 * 0.5);
+                shapes::stroke_circle(p, r * 0.2, r * 0.1 + 0.6, with_alpha(STEEL, a));
             }
+            iron(c - d, r * 0.6, a);
+            iron(c + d, r * 0.6, a);
         }
         Ammo::Shell => {
-            draw_circle(x, y + 1., r, Color::new(0.30, 0.10, 0.08, a));
-            draw_circle(x, y + 1., r * 0.7, Color::new(0.55, 0.18, 0.12, a));
-            draw_line(
-                x + r * 0.4,
-                y - r * 0.6,
-                x + r,
-                y - r * 1.3,
-                1.5,
-                with_alpha(CREAM, a),
+            let body = c + vec2(0., r * 0.12);
+            shapes::fill_circle(
+                body,
+                r * 0.9,
+                Fill::radial(
+                    body - vec2(r * 0.35, r * 0.35),
+                    r * 1.5,
+                    Color::new(0.86, 0.36, 0.22, a),
+                    Color::new(0.24, 0.06, 0.05, a),
+                ),
             );
-            draw_circle(x + r, y - r * 1.3, 1.6, Color::new(1., 0.75, 0.3, a));
+            shapes::fill_circle(
+                body - vec2(r * 0.34, r * 0.38),
+                r * 0.2,
+                Color::new(1., 0.9, 0.8, 0.6 * a),
+            );
+            let neck = body + vec2(r * 0.45, -r * 0.78);
+            shapes::fill_circle(neck, r * 0.24 + 0.5, Color::new(0.3, 0.3, 0.32, a));
+            let spark = c + vec2(r * 1.0, -r * 1.25);
+            draw_line(neck.x, neck.y, spark.x, spark.y, 1.4, with_alpha(CREAM, a));
+            halo(
+                spark.x,
+                spark.y,
+                r * 0.7 + 2.,
+                Color::new(1., 0.7, 0.3, 0.6 * a),
+            );
+            shapes::fill_circle(spark, r * 0.2 + 0.6, Color::new(1., 0.85, 0.4, a));
         }
     }
 }
+/// A hull or mast meter: the live fraction, a pulsing ghost of what a
+/// previewed shot or purchase would change, and a red cross once destroyed.
+#[allow(clippy::too_many_arguments)]
+fn part_meter(
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    hp: u16,
+    max: u16,
+    ghost: Option<u16>,
+    color: Color,
+    blink: f32,
+) {
+    let frac = |v: u16| (f32::from(v) / f32::from(max.max(1))).clamp(0., 1.);
+    rounded(
+        x - 1.,
+        y - 1.,
+        w + 2.,
+        h + 2.,
+        h * 0.5 + 1.,
+        Color::new(1., 1., 1., 0.1),
+    );
+    rounded(x, y, w, h, h * 0.5, Color::new(0.01, 0.03, 0.05, 0.85));
+    let now = frac(hp);
+    if hp == 0 && ghost.is_none_or(|g| g == 0) {
+        cross(vec2(x + w * 0.5, y + h * 0.5), 2.6, 1.4, RED);
+        return;
+    }
+    let tint = if now < 0.34 { RED } else { color };
+    if now > 0. {
+        rounded(x, y, (w * now).max(h), h, h * 0.5, tint);
+    }
+    if let Some(g) = ghost {
+        let then = frac(g);
+        let (a, b) = if then < now { (then, now) } else { (now, then) };
+        if b > a {
+            let tone = if then < now {
+                Color::new(1., 1., 1., 0.3 + 0.55 * blink)
+            } else {
+                with_alpha(TEAL, 0.3 + 0.4 * blink)
+            };
+            rounded(x + w * a, y, (w * (b - a)).max(2.), h, h * 0.5, tone);
+        }
+    }
+}
+/// Three hull sections as one segmented meter, stern to bow from left to
+/// right as on the chart, each chunk sized by its maximum.
+fn hull_bar(x: f32, y: f32, w: f32, h: f32, ship: Ship, color: Color, ghost: Option<[u16; 4]>) {
+    let total: f32 = ship.max[..3].iter().map(|&m| f32::from(m)).sum::<f32>();
+    let gap = 3.;
+    let usable = w - gap * 2.;
+    let blink = 0.5 + 0.5 * (clock() * 7.).sin();
+    let mut sx = x;
+    for part in 0..3 {
+        let sw = usable * f32::from(ship.max[part]) / total.max(1.);
+        part_meter(
+            sx,
+            y,
+            sw,
+            h,
+            ship.hp[part],
+            ship.max[part],
+            ghost.map(|g| g[part]),
+            color,
+            blink,
+        );
+        sx += sw + gap;
+    }
+}
+/// A raised, clickable button with a key cap, an icon and at most one word.
+fn action_button(rect: Rect, key: &str, glyph: Icon, label: &str, primary: bool, enabled: bool) {
+    let hover = enabled && hovered(rect);
+    let lift = if hover { 2. } else { 0. };
+    let r = Rect::new(rect.x, rect.y - lift, rect.w, rect.h);
+    let a = if enabled { 1. } else { 0.45 };
+    if primary && enabled {
+        let breath = pulse(clock(), 0.45);
+        shapes::drop_shadow(
+            r,
+            12.,
+            Shadow::soft(with_alpha(GOLD, 0.16 + 0.2 * breath)).blur(16. + 8. * breath),
+        );
+    }
+    shapes::drop_shadow(
+        r,
+        12.,
+        Shadow::soft(Color::new(0., 0., 0., 0.35 * a))
+            .offset(vec2(0., 3. + lift))
+            .blur(10. + 4. * lift),
+    );
+    if primary {
+        let top = lighten(GOLD, 0.25 + if hover { 0.1 } else { 0. });
+        rounded_gradient(
+            r.x,
+            r.y,
+            r.w,
+            r.h,
+            12.,
+            with_alpha(top, a),
+            with_alpha(darken(GOLD, 0.12), a),
+        );
+    } else {
+        let top = if hover {
+            Color::new(0.25, 0.33, 0.40, a)
+        } else {
+            Color::new(0.20, 0.27, 0.33, a)
+        };
+        rounded_gradient(
+            r.x,
+            r.y,
+            r.w,
+            r.h,
+            12.,
+            top,
+            Color::new(0.12, 0.17, 0.22, a),
+        );
+        outline(r.x, r.y, r.w, r.h, 12., 1., Color::new(1., 1., 1., 0.1 * a));
+    }
+    let ink = if primary { INK } else { CREAM };
+    let s = style(19., with_alpha(ink, a));
+    let cap = text_width(key, plain(11., PAPER)) + 8.;
+    let total = cap.max(15.) + 10. + 20. + 8. + text_width(label, s);
+    let mut x = r.center().x - total * 0.5;
+    let cy = r.center().y;
+    x += mini_cap(key, x, cy - 7.5, a) + 10.;
+    icon(glyph, x + 10., cy, 20., with_alpha(ink, a));
+    say_left(label, x + 28., cy, s);
+}
+
+// ---------------------------------------------------------------------------
+// Host hooks.
 
 impl ArcadeGame for Game {
     fn new() -> Self {
@@ -225,15 +339,15 @@ impl ArcadeGame for Game {
     }
     fn hud(&self) -> Hud {
         Hud {
-            stage: format!(
-                "Island {} of 8 · {}",
-                self.battle_number(),
-                self.battle_info().island
-            ),
-            objective: "Sink the enemy ship.".into(),
+            stage: self.battle_info().island.to_string(),
+            objective: "Sink the enemy ship".into(),
             status: format!(
-                "{} harbors freed | {} salvage | {} lifeboats",
-                self.wins, self.credits, self.lifeboats
+                "{} Hull {}, enemy hull {}, {} salvage, {} lifeboats.",
+                self.log,
+                self.hull(),
+                self.ships[1].hull(),
+                self.credits,
+                self.lifeboats
             ),
             score: self.score,
         }
@@ -247,62 +361,372 @@ impl ArcadeGame for Game {
     fn bot_input(&self, tick: u64) -> Input {
         self.pilot(tick)
     }
+    fn progress(&self) -> Option<(u32, u32)> {
+        Some((self.battle_number() as u32, 8))
+    }
+    fn effects(&self, _cue: Cue, fx: &mut Juice) {
+        for event in self.events.iter() {
+            self.feedback(event, fx);
+        }
+    }
+    fn draw_objective(&self, area: Rect) -> bool {
+        self.versus(area);
+        true
+    }
+    fn draw_result(&self, area: Rect) -> bool {
+        self.results(area);
+        true
+    }
 }
 
 impl Game {
-    fn render(&self) {
-        self.draw_sea();
-        self.draw_instruments();
-        self.draw_log();
-        if matches!(
-            self.phase,
-            Phase::Briefing | Phase::Dock | Phase::Setback | Phase::Liberated | Phase::Sunk
-        ) {
-            self.draw_overlay();
-        }
-    }
-    fn overlay_open(&self) -> bool {
-        matches!(
-            self.phase,
-            Phase::Briefing | Phase::Dock | Phase::Setback | Phase::Liberated | Phase::Sunk
-        )
-    }
-    fn time(&self) -> f32 {
-        (self.ticks % 1_000_000) as f32
-    }
     fn enemy_color(&self) -> Color {
         let [r, g, b] = self.battle_info().color;
         Color::new(r, g, b, 1.)
     }
-    fn draw_sea(&self) {
-        let t = self.time();
-        // Night sky with a warm haze along the horizon.
-        rounded_gradient(20., 116., 650., 344., 12., SKY_TOP, SKY_LOW);
+    fn modal_open(&self) -> bool {
+        matches!(self.phase, Phase::Briefing | Phase::Dock | Phase::Setback)
+    }
+    /// The ammunition whose damage the forecast previews: the hovered rack,
+    /// otherwise the loaded one.
+    fn preview_ammo(&self) -> Ammo {
+        let p = pointer();
+        AMMO.iter()
+            .position(|r| r.contains(p))
+            .map_or(self.setting.ammo, |i| ORDER[i])
+    }
+    fn setback_cause(&self) -> Cause {
+        if self.hull() == 0 {
+            Cause::Sunk
+        } else if self.ammo.iter().all(|&n| n == 0) {
+            Cause::Empty
+        } else {
+            Cause::Retreat
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Effects: every accepted event is felt where it happened.
+
+    fn feedback(&self, event: Event, fx: &mut Juice) {
+        let foe = self.ships[1];
+        match event {
+            Event::Engaged => {
+                let ship = self.ships[0];
+                fx.ring(screen(vec2(ship.x, 60.)), TEAL, 64.);
+                fx.sparkle(screen(vec2(ship.x, 118.)), TEAL);
+            }
+            Event::Fired { player, at } => {
+                let p = screen(at);
+                fx.burst(p, if player { FLAME } else { RED }, 18);
+                fx.ring(p, with_alpha(CREAM, 0.75), 26.);
+                if player {
+                    fx.shake(0.12);
+                }
+            }
+            Event::Hit {
+                side,
+                part,
+                at,
+                before,
+                after,
+                armor,
+            } => {
+                let p = screen(at);
+                let ship = self.ships[side];
+                let color = if side == 1 { GOLD } else { RED };
+                let lost: u16 = (0..4).map(|q| before[q].saturating_sub(after[q])).sum();
+                if lost == 0 {
+                    fx.burst(p, STEEL, 10);
+                    fx.ring(p, STEEL, 30.);
+                    fx.popup_icon(p - vec2(0., 18.), Icon::Shield, "Blocked", STEEL);
+                } else {
+                    fx.burst(p, FLAME, 26);
+                    fx.burst(p, SPLINTER, 12);
+                    fx.ring(p, color, 44.);
+                    // One number, the shot's total (as the aim preview showed
+                    // it), over the struck part; shell splash erupts on each
+                    // neighbouring section it reached.
+                    fx.popup(part_top(ship, part), &format!("-{lost}"), color);
+                    for q in 0..4 {
+                        if before[q] == after[q] {
+                            continue;
+                        }
+                        if q != part {
+                            let c = part_rect(ship, q).center();
+                            fx.burst(c, FLAME, 12);
+                            fx.ring(c, with_alpha(color, 0.8), 26.);
+                        }
+                        if after[q] == 0 {
+                            let c = part_rect(ship, q).center();
+                            fx.burst(c, FLAME, 30);
+                            fx.burst(c, SMOKE, 14);
+                            fx.ring(c, color, 64.);
+                            if q == 3 {
+                                fx.callout(vec2(c.x.clamp(150., 810.), 262.), "Mast down!", color);
+                                if side == 0 {
+                                    let m = METER.center();
+                                    fx.popup_icon(m - vec2(0., 30.), Icon::Lock, "76", RED);
+                                }
+                            }
+                        }
+                    }
+                    if side == 1 {
+                        fx.shake(if part == 3 { 0.2 } else { 0.26 });
+                    }
+                }
+                if armor[0] > armor[1] {
+                    // Stacks above the damage number at the same spot.
+                    let a = armor[0] - armor[1];
+                    let top = part_top(ship, part);
+                    fx.popup_icon(top, Icon::Shield, &format!("-{a}"), STEEL);
+                }
+            }
+            Event::Splash { at } => {
+                let p = vec2(screen(at).x, WATER);
+                if in_scene(p) {
+                    fx.burst(p, FOAM, 20);
+                    fx.ring(p, with_alpha(FOAM, 0.85), 34.);
+                    fx.popup(p - vec2(0., 30.), "Miss", SOFT);
+                }
+            }
+            Event::Loaded(ammo) => {
+                let c = AMMO[ammo.index()].center();
+                fx.ring(c, GOLD, 34.);
+                fx.sparkle(c - vec2(0., 8.), GOLD);
+            }
+            Event::Table(on) => fx.ring(TABLE.center(), if on { GOLD } else { SOFT }, 30.),
+            Event::Empty(ammo) => {
+                let c = AMMO[ammo.index()].center();
+                fx.shake(0.14);
+                fx.ring(c, RED, 36.);
+                fx.popup(c - vec2(0., 38.), "Empty", RED);
+            }
+            Event::EnemyAims => fx.ring(muzzle(foe, false), with_alpha(RED, 0.85), 30.),
+            Event::Fouled => {
+                fx.popup_icon(
+                    muzzle(foe, false) - vec2(0., 34.),
+                    Icon::Hourglass,
+                    "Skipped",
+                    STEEL,
+                );
+            }
+            Event::Gust(wind) => {
+                fx.ring(GAUGE, CREAM, 70.);
+                let arrow = if wind > 0. {
+                    Icon::ArrowRight
+                } else {
+                    Icon::ArrowLeft
+                };
+                fx.popup_icon(GAUGE + vec2(0., 30.), arrow, "", CREAM);
+            }
+            Event::Sank { salvage } => {
+                let c = screen(vec2(foe.x, 40.));
+                fx.burst(c, GOLD, 44);
+                fx.burst(c, FLAME, 26);
+                fx.ring(c, GOLD, 96.);
+                fx.confetti(c - vec2(0., 20.), 60);
+                fx.popup_icon(c - vec2(0., 70.), Icon::Coin, &format!("+{salvage}"), GOLD);
+                fx.callout(vec2(480., 236.), "Harbor free!", GOLD);
+            }
+            Event::Bought { slot, cost } => {
+                let c = SHOP[slot - 1].center();
+                fx.ring(c, TEAL, 48.);
+                fx.sparkle(c, TEAL);
+                let (glyph, gain) = shop_gain(slot);
+                fx.popup_icon(c - vec2(0., 22.), glyph, gain, TEAL);
+                fx.popup_icon(
+                    PURSE_AT + vec2(0., 20.),
+                    Icon::Coin,
+                    &format!("-{cost}"),
+                    GOLD,
+                );
+            }
+            Event::Refused { slot, short } => {
+                let c = SHOP[slot - 1].center();
+                fx.shake(0.12);
+                fx.ring(c, RED, 44.);
+                if short > 0 {
+                    fx.popup_icon(c - vec2(0., 22.), Icon::Coin, &format!("Need {short}"), RED);
+                } else {
+                    let word = if slot == 1 { "Full" } else { "Max" };
+                    fx.popup_icon(c - vec2(0., 22.), Icon::Check, word, SOFT);
+                }
+            }
+            Event::Sailed => {}
+            Event::Setback(cause) => {
+                let p = screen(vec2(self.ships[0].x, 40.));
+                if cause == Cause::Sunk {
+                    fx.burst(p, SMOKE, 36);
+                    fx.burst(p, FLAME, 26);
+                    fx.ring(p, RED, 90.);
+                } else {
+                    fx.ring(p, SOFT, 70.);
+                }
+            }
+            Event::Rescued => {
+                let p = screen(vec2(self.ships[0].x, 60.));
+                fx.ring(p, TEAL, 90.);
+                fx.sparkle(p, TEAL);
+                fx.callout(vec2(480., 236.), "Retry", TEAL);
+                fx.popup_icon(LIFEBOATS_AT + vec2(0., 18.), Icon::Ship, "-1", CREAM);
+            }
+            Event::Retired => fx.vignette(Color::new(0.1, 0.12, 0.2, 0.5)),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Header and results.
+
+    /// Your hull against the enemy's, then lifeboats and salvage.
+    fn versus(&self, area: Rect) {
+        let cy = area.y + area.h * 0.5;
+        let (you, foe) = (self.ships[0], self.ships[1]);
+        let foe_color = self.enemy_color();
+        let bar_w = 214.;
+        let digits = style(18., CREAM);
+        let mut x = area.x + 2.;
+        icon(Icon::Flag, x + 9., cy, 18., TEAL);
+        x += 26.;
+        hull_bar(x, cy - 5., bar_w, 10., you, TEAL, None);
+        x += bar_w + 10.;
+        say_left(&you.hull().to_string(), x, cy, digits);
+        // The target: sink every enemy section.
+        let mid = area.x + 330.;
+        icon(Icon::Target, mid, cy, 20., GOLD);
+        let num = style(18., CREAM).with_align(TextAlign::Right);
+        draw_text_styled(
+            &foe.hull().to_string(),
+            mid + 66.,
+            num.centered_baseline(cy),
+            num,
+        );
+        hull_bar(mid + 76., cy - 5., bar_w, 10., foe, foe_color, None);
+        icon(Icon::Flag, mid + 76. + bar_w + 17., cy, 18., foe_color);
+        // Lifeboats (retries) and salvage.
+        let x = LIFEBOATS_AT.x - 12.;
+        for i in 0..2 {
+            let lit = i < self.lifeboats;
+            let color = if lit { CREAM } else { with_alpha(MUTED, 0.3) };
+            icon(Icon::Ship, x + i as f32 * 24., cy, 19., color);
+        }
+        icon_value(
+            Icon::Coin,
+            &self.credits.to_string(),
+            x + 54.,
+            cy,
+            18.,
+            GOLD,
+        );
+    }
+    /// Rank, harbors freed, accuracy and lifeboats kept.
+    fn results(&self, area: Rect) {
+        let y = area.y + 18.;
+        icon(Icon::Crown, area.x + 16., y, 28., GOLD);
+        say_left(self.rank(), area.x + 40., y, style(26., GOLD));
+        let accuracy = if self.shots == 0 {
+            0
+        } else {
+            u32::from(self.hits) * 100 / u32::from(self.shots)
+        };
+        let gap = 12.;
+        let w = (area.w - gap * 2.) / 3.;
+        let top = area.y + 50.;
+        let h = 78.;
+        for i in 0..3 {
+            let x = area.x + i as f32 * (w + gap);
+            rounded(x, top, w, h, 14., Color::new(1., 1., 1., 0.05));
+            outline(x, top, w, h, 14., 1., Color::new(1., 1., 1., 0.07));
+            let cy = top + h * 0.5;
+            match i {
+                0 => {
+                    icon(Icon::Anchor, x + 34., cy, 30., TEAL);
+                    say_left(&format!("{}/8", self.wins), x + 60., cy, style(30., CREAM));
+                }
+                1 => {
+                    icon(Icon::Target, x + 34., cy, 30., GOLD);
+                    say_left(&format!("{accuracy}%"), x + 60., cy, style(30., CREAM));
+                }
+                _ => {
+                    for boat in 0..2 {
+                        let lit = boat < self.lifeboats;
+                        let color = if lit { CREAM } else { with_alpha(MUTED, 0.3) };
+                        icon(Icon::Ship, x + 40. + boat as f32 * 44., cy, 34., color);
+                    }
+                }
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // The chart.
+
+    fn render(&self) {
+        let t = clock();
+        self.draw_sky(t);
+        self.draw_islands();
+        self.draw_sea(t);
+        trajectory(&self.history, with_alpha(HISTORY, 0.45), 1.6);
+        let aiming = self.phase == Phase::Aim;
+        let preview = if aiming {
+            self.preview(self.preview_ammo())
+        } else {
+            None
+        };
+        if aiming {
+            self.draw_forecast(t);
+        }
+        self.draw_ship(self.ships[0], true, TEAL, t);
+        self.draw_ship(self.ships[1], false, self.enemy_color(), t);
+        self.draw_waterline(t);
+        self.draw_meters(0, preview, t);
+        self.draw_meters(1, preview, t);
+        if aiming {
+            self.draw_target(t);
+            self.draw_dial();
+        }
+        self.draw_shot(t);
+        self.draw_impact();
+        self.draw_telegraphs(t);
+        self.draw_wind(t);
+        if aiming {
+            self.draw_preview(preview, t);
+            self.draw_retreat_hint();
+        }
+        self.draw_tooltip();
+        self.draw_deck(t);
+        if self.modal_open() {
+            self.draw_modal(t);
+        }
+    }
+    fn draw_sky(&self, t: f32) {
+        let s = SCENE;
+        rounded_gradient(s.x, s.y, s.w, s.h, 12., SKY_TOP, SKY_LOW);
+        let haze = Rect::new(s.x, WATER - 120., s.w, 120.);
         shapes::fill_rounded_rect(
-            Rect::new(20., 330., 650., 99.),
+            haze,
             0.,
             Fill::vertical(
-                Rect::new(20., 330., 650., 99.),
+                haze,
                 Color::new(0.55, 0.40, 0.30, 0.),
                 Color::new(0.55, 0.40, 0.30, 0.16),
             ),
         );
-        for i in 0..24_u32 {
-            let x = 36. + ((i * 211 + 37) % 610) as f32;
-            let y = 176. + ((i * 97 + 11) % 150) as f32;
-            let a = 0.18 + 0.22 * (0.5 + 0.5 * (t * 0.035 + i as f32 * 1.7).sin());
-            let s = if i % 5 == 0 { 2. } else { 1.3 };
-            draw_rectangle(x, y, s, s, Color::new(0.9, 0.92, 1., a));
+        for i in 0..34_u32 {
+            let x = s.x + 16. + ((i * 263 + 41) % 888) as f32;
+            let y = s.y + 46. + ((i * 97 + 13) % 196) as f32;
+            let a = 0.14 + 0.26 * (0.5 + 0.5 * (t * 1.9 + i as f32 * 1.7).sin());
+            let size = if i % 5 == 0 { 2. } else { 1.3 };
+            draw_rectangle(x, y, size, size, Color::new(0.9, 0.92, 1., a));
         }
-        // A full moon with soft craters and halo.
-        let moon = vec2(598., 214.);
-        halo(moon.x, moon.y, 60., Color::new(0.95, 0.85, 0.55, 0.2));
+        let moon = vec2(866., 196.);
+        halo(moon.x, moon.y, 66., Color::new(0.95, 0.85, 0.55, 0.18));
         shapes::fill_circle(
             moon,
-            19.,
+            20.,
             Fill::radial(
                 moon - vec2(6., 6.),
-                28.,
+                30.,
                 Color::new(0.98, 0.95, 0.82, 1.),
                 Color::new(0.78, 0.72, 0.55, 1.),
             ),
@@ -319,117 +743,25 @@ impl Game {
             2.5,
             Color::new(0.70, 0.64, 0.48, 0.4),
         );
-        self.draw_weather(t);
-        self.draw_islands();
-        self.draw_water(t, moon.x);
-        if !self.overlay_open() {
-            self.draw_chart_labels();
-        }
-        // Shot history and the gunner's forecast.
-        trajectory(&self.history, Color::new(0.85, 0.72, 0.42, 0.42), 1.5);
-        if self.phase == Phase::Aim {
-            let trace = &self.forecast.trace;
-            for (i, p) in trace.points[..trace.len].iter().enumerate() {
-                let q = screen(*p);
-                if i % 2 == 0 && in_sea(q) {
-                    let fade = 1. - 0.5 * i as f32 / trace.len.max(1) as f32;
-                    draw_poly(
-                        q.x,
-                        q.y,
-                        6,
-                        1.6,
-                        0.,
-                        Color::new(0.62, 0.92, 0.90, 0.85 * fade),
-                    );
-                }
-            }
-            let end = screen(self.forecast.end);
-            if in_sea(end) {
-                let color = match self.forecast.contact {
-                    Some((1, _)) => GOLD,
-                    Some(_) => RED,
-                    None => SOFT,
-                };
-                let pulse = 0.5 + 0.5 * (t * 0.12).sin();
-                shapes::stroke_circle(end, 7., 1.5, color);
-                shapes::stroke_circle(
-                    end,
-                    10. + pulse * 3.,
-                    1.,
-                    with_alpha(color, 0.45 * (1. - pulse)),
-                );
-                for (dx, dy) in [(1., 0.), (-1., 0.), (0., 1.), (0., -1.)] {
-                    draw_line(
-                        end.x + dx * 4.,
-                        end.y + dy * 4.,
-                        end.x + dx * 10.,
-                        end.y + dy * 10.,
-                        1.2,
-                        color,
-                    );
-                }
-            }
-        }
-        self.draw_ship(self.ships[0], true, TEAL, t);
-        self.draw_ship(self.ships[1], false, self.enemy_color(), t);
-        // Live shot: a trail that brightens toward the ball.
-        let n = self.trace.len;
-        for (i, pair) in self.trace.points[..n].windows(2).enumerate() {
-            let a = screen(pair[0]);
-            let b = screen(pair[1]);
-            if in_sea(a) && in_sea(b) {
-                let k = (i + 1) as f32 / n as f32;
-                draw_line(
-                    a.x,
-                    a.y,
-                    b.x,
-                    b.y,
-                    1. + k * 1.5,
-                    Color::new(1., 0.90, 0.65, 0.12 + 0.6 * k),
-                );
-            }
-        }
-        if let Some(ball) = self.ball {
-            let p = screen(ball.pos);
-            if in_sea(p) {
-                let hot = if ball.ammo == Ammo::Shell {
-                    Color::new(1., 0.62, 0.32, 0.5)
-                } else {
-                    Color::new(1., 0.92, 0.7, 0.3)
-                };
-                halo(p.x, p.y, 9., hot);
-                match ball.ammo {
-                    Ammo::Chain => {
-                        let spin = t * 0.4;
-                        let d = vec2(spin.cos(), spin.sin()) * 4.5;
-                        draw_line(p.x - d.x, p.y - d.y, p.x + d.x, p.y + d.y, 1.4, STEEL);
-                        draw_circle(p.x - d.x, p.y - d.y, 2.6, Color::new(0.2, 0.2, 0.22, 1.));
-                        draw_circle(p.x + d.x, p.y + d.y, 2.6, Color::new(0.2, 0.2, 0.22, 1.));
-                    }
-                    _ => {
-                        let r = if ball.ammo == Ammo::Shell { 4.6 } else { 3.8 };
-                        draw_circle(p.x, p.y, r, Color::new(0.14, 0.14, 0.16, 1.));
-                        draw_circle(p.x - r * 0.35, p.y - r * 0.35, r * 0.35, CREAM);
-                    }
-                }
-            }
-        }
-        self.draw_impact();
-    }
-    fn draw_weather(&self, t: f32) {
-        // Clouds drift downwind; calm air still breathes slowly east.
+        // Clouds and streaks drift downwind; calm air still breathes east.
         let drift = if self.wind == 0. {
-            0.04
+            2.4
         } else {
-            self.wind * 0.012
+            self.wind * 0.9
         };
-        for (i, (bx, by, w)) in [(120., 214., 74.), (330., 246., 96.), (520., 292., 64.)]
-            .into_iter()
-            .enumerate()
+        for (i, (bx, by, w)) in [
+            (140., 206., 80.),
+            (380., 244., 104.),
+            (620., 192., 70.),
+            (790., 266., 88.),
+        ]
+        .into_iter()
+        .enumerate()
         {
-            let span = 520.;
-            let x = 80. + fract((bx - 80. + t * drift * (1. + i as f32 * 0.25)) / span) * span;
-            let edge = ((x - 80.) / 40.).min((600. - x) / 40.).clamp(0., 1.);
+            let span = s.w + 160.;
+            let x = s.x - 80.
+                + fract((bx + 80. - s.x + t * drift * (1. + i as f32 * 0.2)) / span) * span;
+            let edge = ((x - s.x) / 60.).min((s.right() - x) / 60.).clamp(0., 1.);
             let c = Color::new(0.62, 0.70, 0.80, 0.13 * edge);
             for (dx, dy, len, r) in [
                 (0., 0., 1., 3.5),
@@ -446,269 +778,367 @@ impl Game {
             }
         }
         if self.wind != 0. {
-            let len = 14. + self.wind.abs() * 1.4;
-            for i in 0..7 {
+            let len = 16. + self.wind.abs() * 1.8;
+            let span = s.w - len - 20.;
+            for i in 0..9 {
                 let fi = i as f32;
-                let y = 200. + ((i * 41) % 180) as f32;
-                let span = 590. - len;
-                let x =
-                    40. + fract((fi * 0.37 + t * self.wind * 0.0009 * (1. + fi * 0.1)) * 1.) * span;
-                draw_line(x, y, x + len, y, 1., Color::new(0.8, 0.88, 0.95, 0.11));
+                let y = 176. + ((i * 37) % 196) as f32;
+                let x = s.x
+                    + 10.
+                    + fract(fi * 0.37 + t * self.wind * 9. * (1. + fi * 0.08) / span) * span;
+                draw_line(x, y, x + len, y, 1., Color::new(0.8, 0.88, 0.95, 0.12));
             }
         }
     }
     fn draw_islands(&self) {
-        // Far, hazy range, then the nearer islands with a lit flank.
-        for n in 0..5 {
-            let x = 150. + n as f32 * 112.;
-            let peak = 390. - ((self.battle * 13 + n * 29) % 34) as f32;
+        let base = WATER + 1.;
+        for n in 0..7 {
+            let x = 110. + n as f32 * 123.;
+            let peak = 362. - ((self.battle * 13 + n * 29) % 40) as f32;
             draw_triangle(
-                vec2(x - 70., WATER + 1.),
+                vec2(x - 84., base),
                 vec2(x, peak),
-                vec2(x + 70., WATER + 1.),
+                vec2(x + 84., base),
                 Color::new(0.12, 0.19, 0.25, 0.9),
             );
         }
-        for n in 0..4 {
-            let x = 235. + n as f32 * 105.;
-            let peak = 367. - ((self.battle * 17 + n * 23) % 63) as f32;
-            let base = WATER + 1.;
+        for n in 0..5 {
+            let x = 290. + n as f32 * 128.;
+            let peak = 350. - ((self.battle * 17 + n * 23) % 58) as f32;
             draw_triangle(
-                vec2(x - 55., base),
+                vec2(x - 60., base),
                 vec2(x, peak),
-                vec2(x + 58., base),
+                vec2(x + 64., base),
                 Color::new(0.09, 0.21, 0.24, 1.),
             );
             draw_triangle(
-                vec2(x - 55., base),
+                vec2(x - 60., base),
                 vec2(x, peak),
                 vec2(x - 6., base),
                 Color::new(0.13, 0.28, 0.30, 1.),
             );
             draw_triangle(
-                vec2(x - 15., peak + 19.),
+                vec2(x - 16., peak + 20.),
                 vec2(x, peak),
-                vec2(x + 17., peak + 21.),
+                vec2(x + 18., peak + 22.),
                 Color::new(0.30, 0.42, 0.40, 1.),
             );
         }
     }
-    fn draw_water(&self, t: f32, moon_x: f32) {
-        let top = Rect::new(20., WATER, 650., 19.);
-        shapes::fill_rounded_rect(
-            top,
-            0.,
-            Fill::vertical(top, sea_at(WATER), sea_at(WATER + 19.)),
-        );
-        rounded_gradient(20., 436., 650., 24., 12., sea_at(436.), sea_at(460.));
+    fn draw_sea(&self, t: f32) {
+        let s = SCENE;
+        let mid = shapes::mix(SEA_TOP, SEA_LOW, 0.55);
+        let body = Rect::new(s.x, WATER, s.w, s.bottom() - WATER - 14.);
+        shapes::fill_rounded_rect(body, 0., Fill::vertical(body, SEA_TOP, mid));
+        rounded_gradient(s.x, s.bottom() - 28., s.w, 28., 12., mid, SEA_LOW);
         draw_line(
-            20.,
+            s.x,
             WATER,
-            670.,
+            s.right(),
             WATER,
             1.,
-            Color::new(0.55, 0.78, 0.80, 0.35),
+            Color::new(0.55, 0.78, 0.80, 0.4),
         );
         // Moonlit glitter and rolling crests.
-        for k in 0..5 {
-            let y = WATER + 3. + k as f32 * 4.;
-            let w = 22. - k as f32 * 3. + (t * 0.06 + k as f32).sin() * 4.;
+        for k in 0..6 {
+            let y = WATER + 4. + k as f32 * 6.;
+            let w = 26. - k as f32 * 3. + (t * 3.6 + k as f32).sin() * 4.;
             draw_line(
-                moon_x - w,
+                866. - w,
                 y,
-                moon_x + w,
+                866. + w,
                 y,
                 1.,
                 Color::new(1., 0.95, 0.75, 0.22 - k as f32 * 0.03),
             );
         }
-        for row in 0..3 {
-            let alpha = 0.32 - row as f32 * 0.08;
-            let y0 = WATER + 6. + row as f32 * 8.;
-            for n in 0..14 {
-                let span = 620.;
-                let x = 24.
+        for row in 0..4 {
+            let alpha = 0.3 - row as f32 * 0.06;
+            let y0 = WATER + 8. + row as f32 * 12.;
+            for n in 0..18 {
+                let span = s.w - 30.;
+                let x = s.x
+                    + 6.
                     + fract(
-                        (n as f32 * 47. + row as f32 * 19. + t * (0.18 + row as f32 * 0.05)) / span,
+                        (n as f32 * 53. + row as f32 * 19. + t * (11. + row as f32 * 3.)) / span,
                     ) * span;
-                let y = y0 + (t * 0.035 + n as f32 * 0.9).sin() * 1.5;
+                let y = y0 + (t * 2.1 + n as f32 * 0.9).sin() * 1.5;
                 let len = 10. + ((n * 7 + row * 3) % 9) as f32;
-                if x + len < 666. {
+                if x + len < s.right() - 4. {
                     draw_line(x, y, x + len, y, 1.2, Color::new(0.55, 0.80, 0.82, alpha));
                 }
             }
         }
     }
-    fn draw_chart_labels(&self) {
-        let info = self.battle_info();
-        say(info.island, 36., 146., style(19., CREAM));
-        say(
-            &format!("{} aboard {}", info.captain, info.ship),
-            36.,
-            165.,
-            plain(12., with_alpha(SOFT, 0.85)),
+    /// The water's near edge lapping over both keels, with foam and reflections.
+    fn draw_waterline(&self, t: f32) {
+        let s = SCENE;
+        let band = Rect::new(s.x, WATER - 2., s.w, 7.);
+        shapes::fill_rounded_rect(
+            band,
+            0.,
+            Fill::vertical(band, with_alpha(SEA_TOP, 0.65), with_alpha(SEA_TOP, 0.9)),
         );
-        // Wind gauge and engagement facts.
-        let right = 656.;
-        let range = format!("Range {}", (self.ships[1].x - self.ships[0].x) as u16);
-        let exchange = format!("Exchange {}", self.round);
-        let rw = pill_width(&range);
-        let ew = pill_width(&exchange);
-        pill(&range, right - rw, 128., SOFT);
-        pill(&exchange, right - rw - 6. - ew, 128., SOFT);
-        let strength = self.wind.abs() as u16;
-        let (dir, label) = if self.wind < 0. {
-            (-1., format!("{strength} west"))
-        } else if self.wind > 0. {
-            (1., format!("{strength} east"))
-        } else {
-            (0., "Calm".to_string())
-        };
-        let vs = plain(13., GOLD);
-        let arrow = if dir == 0. {
-            10.
-        } else {
-            12. + self.wind.abs() * 1.1
-        };
-        let ew = text_width("WIND", plain(11., MUTED).with_letter_spacing(1.5));
-        let w = 12. + ew + 8. + text_width(&label, vs) + 10. + arrow + 12.;
-        let x = right - w;
-        let y = 154.;
-        rounded(x, y, w, 24., 12., Color::new(0.02, 0.05, 0.08, 0.6));
-        eyebrow(
-            "WIND",
-            x + 12.,
-            plain(11., MUTED).centered_baseline(y + 12.),
-            MUTED,
+        draw_line(
+            s.x,
+            WATER - 2.,
+            s.right(),
+            WATER - 2.,
+            1.,
+            Color::new(0.6, 0.85, 0.86, 0.35),
         );
-        let tx = x + 12. + ew + 8.;
-        let lw = say(&label, tx, vs.centered_baseline(y + 12.), vs);
-        let ax = tx + lw + 10.;
-        let cy = y + 12.;
-        if dir == 0. {
-            shapes::stroke_circle(vec2(ax + 5., cy), 4., 1.5, GOLD);
-        } else {
-            let (a, b) = if dir > 0. {
-                (ax, ax + arrow)
-            } else {
-                (ax + arrow, ax)
-            };
-            draw_line(a, cy, b, cy, 2., GOLD);
-            draw_triangle(
-                vec2(b, cy),
-                vec2(b - dir * 6., cy - 4.),
-                vec2(b - dir * 6., cy + 4.),
-                GOLD,
-            );
+        for (side, ship) in self.ships.iter().enumerate() {
+            let color = if side == 0 { TEAL } else { self.enemy_color() };
+            let x = X0 + ship.x;
+            for k in 0..3 {
+                let y = WATER + 4. + k as f32 * 4.;
+                let wobble = (t * 2.4 + k as f32 * 1.3 + side as f32).sin() * 3.;
+                let w = 34. - k as f32 * 8.;
+                draw_line(
+                    x - w + wobble,
+                    y,
+                    x + w + wobble,
+                    y,
+                    1.6,
+                    with_alpha(color, 0.16 - k as f32 * 0.04),
+                );
+            }
+            for end in [-1., 1.] {
+                let fx = x + end * (46. + (t * 3. + end).sin() * 2.);
+                draw_line(
+                    fx - 6.,
+                    WATER - 1.,
+                    fx + 6.,
+                    WATER - 1.,
+                    1.4,
+                    Color::new(0.85, 0.95, 0.95, 0.35),
+                );
+            }
         }
     }
     fn draw_ship(&self, ship: Ship, player: bool, color: Color, t: f32) {
-        let bob = (t * 0.05 + if player { 0. } else { 1.7 }).sin() * 0.8;
-        let lift = vec2(0., bob);
-        let center = screen(vec2(ship.x, 24.)) + lift;
-        let hull_dark = darken(color, 0.55);
-        // Each solid hull section matches its collision box; wrecked sections
-        // are charred stubs, never invisible intact hitboxes.
-        for part in 0..3 {
-            let p = screen(ship.section_center(part)) + lift;
-            let live = ship.hp[part] > 0;
-            let (mut l, mut r) = (p.x - 11.9, p.x + 11.9);
-            let (mut bl, mut br) = (l, r);
-            if part == 0 {
-                l -= 2.;
-                bl += 7.;
-            }
-            if part == 2 {
-                r += 3.;
-                br -= 7.;
-            }
-            let (top, mid, bottom) = (p.y - 7.8, p.y - 1.5, p.y + 7.8);
-            if live {
-                draw_triangle(vec2(l, top), vec2(r, top), vec2(r, mid), color);
-                draw_triangle(vec2(l, top), vec2(r, mid), vec2(l, mid), color);
-                let ml = l + (bl - l) * 0.35;
-                let mr = r + (br - r) * 0.35;
-                draw_triangle(vec2(ml, mid), vec2(mr, mid), vec2(br, bottom), hull_dark);
-                draw_triangle(vec2(ml, mid), vec2(br, bottom), vec2(bl, bottom), hull_dark);
-                draw_line(l, top, r, top, 1.2, with_alpha(lighten(color, 0.5), 0.9));
-                draw_rectangle(p.x - 3., p.y - 5., 6., 4., Color::new(0.04, 0.05, 0.06, 1.));
-                if ship.armor[part] > 0 {
-                    draw_rectangle(ml + 1., p.y + 2., mr - ml - 2., 3., STEEL);
-                    draw_rectangle(ml + 1., p.y + 2., mr - ml - 2., 1., lighten(STEEL, 0.4));
-                }
-            } else {
-                let char = Color::new(0.10, 0.08, 0.07, 1.);
-                draw_triangle(
-                    vec2(bl, p.y + 2.),
-                    vec2(br, p.y + 4.),
-                    vec2(br, bottom),
-                    char,
-                );
-                draw_triangle(vec2(bl, p.y + 2.), vec2(br, bottom), vec2(bl, bottom), char);
-                draw_line(bl + 2., p.y + 2., bl + 6., p.y - 3., 2., darken(color, 0.4));
-                draw_line(br - 2., p.y + 3., br - 7., p.y - 2., 2., darken(color, 0.4));
-                let ember = 0.5 + 0.5 * (t * 0.2 + part as f32 * 2.).sin();
-                draw_rectangle(
-                    p.x - 1.5,
-                    p.y + 1.,
-                    3.,
-                    2.,
-                    Color::new(1., 0.5, 0.2, 0.4 + 0.5 * ember),
-                );
-                for k in 0..3 {
-                    let ph = fract(t * 0.012 + k as f32 / 3. + part as f32 * 0.37);
-                    let q = vec2(
-                        p.x + (ph * 6. + k as f32).sin() * 3. + ph * self.wind * 0.8,
-                        p.y - 4. - ph * 34.,
-                    );
-                    if in_sea(q) {
-                        draw_poly(
-                            q.x,
-                            q.y,
-                            10,
-                            2.5 + ph * 5.,
-                            0.,
-                            Color::new(0.55, 0.58, 0.62, 0.3 * (1. - ph)),
-                        );
-                    }
-                }
-            }
-            // Foam at the waterline and a section integrity bar below it.
-            draw_line(
-                bl - 2.,
-                WATER - 1. + bob,
-                br + 2.,
-                WATER - 1. + bob,
-                1.4,
-                Color::new(0.85, 0.95, 0.95, 0.3),
-            );
-            let frac = f32::from(ship.hp[part]) / f32::from(ship.max[part].max(1));
-            bar(p.x - 10., 440., 20., frac, if live { color } else { RED });
-        }
         let side = if player { 1. } else { -1. };
-        // Bowsprit at the leading end and a lantern at the stern.
-        let bow_part = if player { 2 } else { 0 };
-        if ship.hp[bow_part] > 0 {
-            let b = screen(ship.section_center(bow_part)) + lift;
-            let bx = b.x + side * 12.;
-            draw_line(bx, b.y - 6., bx + side * 13., b.y - 12., 2., WOOD);
+        let sway = (t * 1.5 + if player { 0. } else { 1.9 }).sin() * 1.1;
+        let bow = if player { 2 } else { 0 };
+        let stern = 2 - bow;
+        self.draw_rig(ship, player, color, t, sway);
+        let dark = darken(color, 0.58);
+        for part in 0..3 {
+            let r = part_rect(ship, part);
+            let top = r.y + sway;
+            let bottom = r.bottom() + 3. + sway;
+            let mid = top + 11.;
+            let (mut lt, mut rt, mut lb, mut rb) = (r.x, r.right(), r.x, r.right());
+            // The bow overhangs and sweeps in below; the stern ends in a transom.
+            if part == bow {
+                if player {
+                    rt += 9.;
+                    rb -= 12.;
+                } else {
+                    lt -= 9.;
+                    lb += 12.;
+                }
+            } else if part == stern {
+                if player {
+                    lt -= 3.;
+                    lb += 7.;
+                } else {
+                    rt += 3.;
+                    rb -= 7.;
+                }
+            }
+            let along = |a: f32, b: f32, y: f32| a + (b - a) * (y - top) / (bottom - top);
+            let (lm, rm) = (along(lt, lb, mid), along(rt, rb, mid));
+            let cx = r.center().x;
+            if ship.hp[part] == 0 {
+                draw_wreck(lb, rb, top, bottom, cx, color, t, part, self.wind);
+                continue;
+            }
+            let upper = Rect::new(lt.min(lb), top, rt.max(rb) - lt.min(lb), mid - top);
+            shapes::fill_polygon(
+                &[vec2(lt, top), vec2(rt, top), vec2(rm, mid), vec2(lm, mid)],
+                Fill::vertical(upper, lighten(color, 0.14), color),
+            );
+            let lower = Rect::new(upper.x, mid, upper.w, bottom - mid);
+            shapes::fill_polygon(
+                &[
+                    vec2(lm, mid),
+                    vec2(rm, mid),
+                    vec2(rb, bottom),
+                    vec2(lb, bottom),
+                ],
+                Fill::vertical(lower, dark, darken(color, 0.74)),
+            );
+            // Plank seams, the rail and the wale.
+            let seam = with_alpha(darken(color, 0.4), 0.5);
+            for y in [top + 8.5, mid + 5., mid + 10.] {
+                draw_line(
+                    along(lt, lb, y) + 1.,
+                    y,
+                    along(rt, rb, y) - 1.,
+                    y,
+                    0.8,
+                    seam,
+                );
+            }
+            draw_line(lt, top, rt, top, 1.6, lighten(color, 0.5));
+            draw_line(lm, mid, rm, mid, 1.2, darken(color, 0.3));
+            draw_rectangle(cx - 4., top + 2.5, 8., 5., Color::new(0.04, 0.05, 0.06, 1.));
+            // Armor plating along the waterline, thicker with more armor.
+            let armor = ship.armor[part];
+            if armor > 0 {
+                let th = 2. + f32::from(armor.min(10)) * 0.25;
+                let y = bottom - 6.;
+                let (pl, pr) = (along(lt, lb, y) + 1., along(rt, rb, y) - 1.);
+                draw_rectangle(pl, y - th, pr - pl, th, STEEL);
+                draw_line(pl, y - th, pr, y - th, 1., lighten(STEEL, 0.45));
+                let mut rx = pl + 3.;
+                while rx < pr - 2. {
+                    draw_rectangle(rx, y - th * 0.5 - 0.5, 1., 1., darken(STEEL, 0.45));
+                    rx += 6.;
+                }
+            }
+            // Wounds grow as integrity falls: cracks, scorch, then flames.
+            let health = f32::from(ship.hp[part]) / f32::from(ship.max[part].max(1));
+            let ink = Stroke::new(1.3, Color::new(0.10, 0.06, 0.04, 0.85));
+            if health < 0.75 {
+                shapes::polyline(
+                    &[
+                        vec2(cx - 9., top + 2.),
+                        vec2(cx - 5., top + 7.),
+                        vec2(cx - 8., top + 11.),
+                        vec2(cx - 3., top + 17.),
+                    ],
+                    ink,
+                );
+            }
+            if health < 0.45 {
+                halo(cx + 5., top + 9., 9., Color::new(0.05, 0.03, 0.02, 0.55));
+                shapes::polyline(
+                    &[
+                        vec2(cx + 10., top + 1.),
+                        vec2(cx + 6., top + 6.),
+                        vec2(cx + 9., top + 10.),
+                    ],
+                    ink,
+                );
+            }
+            if health < 0.25 {
+                for k in 0..3 {
+                    let fx = cx - 6. + k as f32 * 6.;
+                    let h = 5. + 3. * (t * 11. + k as f32 * 2.1 + part as f32).sin().abs();
+                    draw_triangle(
+                        vec2(fx - 3., top),
+                        vec2(fx + 3., top),
+                        vec2(fx + self.wind * 0.12, top - h),
+                        Color::new(1., 0.55 + 0.1 * k as f32, 0.2, 0.9),
+                    );
+                }
+            }
         }
-        let stern_part = 2 - bow_part;
-        if ship.hp[stern_part] > 0 {
-            let s = screen(ship.section_center(stern_part)) + lift;
-            let lx = s.x - side * 9.;
-            let flicker = 0.75 + 0.25 * (t * 0.23 + side).sin();
-            draw_line(lx, s.y - 8., lx, s.y - 13., 1., WOOD);
-            halo(lx, s.y - 14., 6., Color::new(1., 0.8, 0.4, 0.45 * flicker));
-            draw_rectangle(
-                lx - 1.5,
-                s.y - 16.,
+        // Bowsprit forward and a lantern astern.
+        if ship.hp[bow] > 0 {
+            let r = part_rect(ship, bow);
+            let x = if player { r.right() + 7. } else { r.x - 7. };
+            let y = r.y + sway + 1.;
+            draw_line(x - side * 3., y + 1., x + side * 18., y - 9., 2.4, WOOD);
+        }
+        if ship.hp[stern] > 0 {
+            let r = part_rect(ship, stern);
+            let lx = if player { r.x + 1. } else { r.right() - 1. };
+            let y = r.y + sway;
+            let flicker = 0.75 + 0.25 * (t * 13. + side).sin();
+            draw_line(lx, y, lx, y - 7., 1.2, WOOD);
+            halo(lx, y - 9., 8., Color::new(1., 0.8, 0.4, 0.45 * flicker));
+            draw_rectangle(lx - 2., y - 11., 4., 4., Color::new(1., 0.86, 0.5, flicker));
+        }
+        self.draw_cannon(ship, player, t, sway);
+    }
+    fn draw_rig(&self, ship: Ship, player: bool, color: Color, t: f32, sway: f32) {
+        let side = if player { 1. } else { -1. };
+        let x = X0 + ship.x;
+        let deck = 392. + sway;
+        let head = 317. + sway;
+        if ship.hp[3] == 0 {
+            // A stump, a fallen spar and torn cloth on the deck.
+            draw_line(x, deck, x, deck - 13., 4., darken(WOOD, 0.3));
+            draw_line(
+                x - 28.,
+                deck - 5.,
+                x + 24.,
+                deck + 1.,
                 3.,
-                3.,
-                Color::new(1., 0.86, 0.5, flicker),
+                darken(WOOD, 0.2),
+            );
+            draw_triangle(
+                vec2(x - 18., deck - 4.),
+                vec2(x + 2., deck - 2.),
+                vec2(x - 10., deck + 3.),
+                Color::new(0.72, 0.68, 0.58, 1.),
+            );
+            return;
+        }
+        let bow_tip = vec2(x + side * 70., deck - 9.);
+        let stern_end = vec2(x - side * 50., deck - 1.);
+        let rope = with_alpha(CREAM, 0.32);
+        draw_line(x, head + 3., bow_tip.x, bow_tip.y, 0.9, rope);
+        draw_line(x, head + 3., stern_end.x, stern_end.y, 0.9, rope);
+        draw_triangle(
+            vec2(x + side * 3., head + 12.),
+            vec2(bow_tip.x - side * 6., bow_tip.y + 1.),
+            vec2(x + side * 5., deck - 9.),
+            Color::new(0.86, 0.82, 0.70, 0.94),
+        );
+        shapes::fill_capsule(vec2(x, deck), vec2(x, head), 2.2, WOOD);
+        draw_line(x - 1., deck, x - 1., head, 1., lighten(WOOD, 0.3));
+        let yard = head + 7.;
+        draw_line(x - 22., yard, x + 22., yard, 2.4, WOOD);
+        let billow = (self.wind * 0.35).clamp(-5., 5.) + (t * 1.7 + side).sin() * 0.8;
+        let torn = ship.hp[3] * 2 < ship.max[3];
+        let drop = if torn { 30. } else { 42. };
+        let (a, b) = (vec2(x - 20., yard + 1.), vec2(x + 20., yard + 1.));
+        let (c, d) = (
+            vec2(x + 21. + billow, yard + drop),
+            vec2(x - 19. + billow, yard + drop),
+        );
+        draw_triangle(a, b, c, CLOTH);
+        draw_triangle(a, c, d, CLOTH);
+        let top_mid = vec2(x, yard + 1.);
+        let bottom_mid = vec2(x + 1. + billow, yard + drop);
+        let shade = Color::new(0.72, 0.68, 0.58, 1.);
+        if billow >= 0. {
+            draw_triangle(top_mid, b, c, shade);
+            draw_triangle(top_mid, c, bottom_mid, shade);
+        } else {
+            draw_triangle(a, top_mid, bottom_mid, shade);
+            draw_triangle(a, bottom_mid, d, shade);
+        }
+        // A stripe in the ship's colors across the sail.
+        let band = yard + drop * 0.55;
+        draw_line(
+            x - 19.5 + billow * 0.55,
+            band,
+            x + 20.5 + billow * 0.55,
+            band,
+            3.,
+            with_alpha(color, 0.75),
+        );
+        draw_line(
+            d.x,
+            d.y,
+            c.x,
+            c.y,
+            1.5,
+            with_alpha(darken(color, 0.2), 0.95),
+        );
+        if torn {
+            draw_triangle(
+                vec2(x - 5. + billow, d.y),
+                vec2(x + 2. + billow, d.y - 9.),
+                vec2(x + 7. + billow, d.y),
+                SKY_LOW,
             );
         }
-        // Flags stream downwind; in calm air they hang toward the bow.
         let stream = if self.wind > 0. {
             1.
         } else if self.wind < 0. {
@@ -716,151 +1146,268 @@ impl Game {
         } else {
             side
         };
-        let base = screen(vec2(ship.x, 38.)) + lift;
-        let top = screen(vec2(ship.x, 110.)) + lift;
-        if ship.hp[3] > 0 {
-            draw_line(base.x, base.y, top.x, top.y - 2., 3.5, WOOD);
-            draw_line(
-                base.x - 1.,
-                base.y,
-                top.x - 1.,
-                top.y - 2.,
-                1.,
-                lighten(WOOD, 0.3),
-            );
-            draw_line(top.x - 17., top.y + 7., top.x + 17., top.y + 7., 2., WOOD);
-            draw_line(
-                top.x,
-                top.y + 2.,
-                center.x - 33.,
-                center.y - 8.,
-                0.8,
-                with_alpha(CREAM, 0.35),
-            );
-            draw_line(
-                top.x,
-                top.y + 2.,
-                center.x + 33.,
-                center.y - 8.,
-                0.8,
-                with_alpha(CREAM, 0.35),
-            );
-            let billow = (self.wind * 0.3).clamp(-4., 4.) + (t * 0.05).sin() * 0.6;
-            let torn = ship.hp[3] * 2 < ship.max[3];
-            let drop = if torn { 18. } else { 27. };
-            let (a, b) = (vec2(top.x - 15., top.y + 8.), vec2(top.x + 15., top.y + 8.));
-            let (c, d) = (
-                vec2(top.x + 16. + billow, top.y + 8. + drop),
-                vec2(top.x - 14. + billow, top.y + 8. + drop),
-            );
-            let sail = Color::new(0.94, 0.90, 0.78, 1.);
-            draw_triangle(a, b, c, sail);
-            draw_triangle(a, c, d, sail);
-            let mid_top = vec2(top.x, top.y + 8.);
-            let mid_bottom = vec2(top.x + 1. + billow, top.y + 8. + drop);
-            let shade = Color::new(0.70, 0.66, 0.56, 1.);
-            if billow >= 0. {
-                draw_triangle(mid_top, b, c, shade);
-                draw_triangle(mid_top, c, mid_bottom, shade);
-            } else {
-                draw_triangle(a, mid_top, mid_bottom, shade);
-                draw_triangle(a, mid_bottom, d, shade);
-            }
-            draw_line(d.x, d.y, c.x, c.y, 1.5, with_alpha(color, 0.9));
-            if torn {
-                draw_triangle(
-                    vec2(top.x - 4. + billow, d.y),
-                    vec2(top.x + 2. + billow, d.y - 7.),
-                    vec2(top.x + 6. + billow, d.y),
-                    sky_at(d.y),
-                );
-            }
-            let flutter = (t * 0.16 + side).sin() * 2.;
-            draw_triangle(
-                vec2(top.x, top.y - 3.),
-                vec2(top.x + stream * 19., top.y + 0.5 + flutter),
-                vec2(top.x, top.y + 5.),
-                color,
-            );
-        } else {
-            draw_line(base.x, base.y, base.x, base.y - 9., 3.5, darken(WOOD, 0.3));
-            draw_line(
-                center.x - 22.,
-                center.y - 12.,
-                center.x + 20.,
-                center.y - 7.,
-                2.5,
-                darken(WOOD, 0.2),
-            );
-            draw_triangle(
-                vec2(center.x - 12., center.y - 11.),
-                vec2(center.x + 4., center.y - 9.),
-                vec2(center.x - 6., center.y - 4.),
-                Color::new(0.7, 0.66, 0.56, 1.),
-            );
-        }
-        // Cannon on its carriage.
-        let start = screen(vec2(ship.x + side * 40., 38.)) + lift;
-        let angle = if player {
+        let flutter = (t * 7. + side).sin() * 2.;
+        draw_triangle(
+            vec2(x, head - 5.),
+            vec2(x + stream * 22., head - 1. + flutter),
+            vec2(x, head + 4.),
+            color,
+        );
+    }
+    fn draw_cannon(&self, ship: Ship, player: bool, t: f32, sway: f32) {
+        let side = if player { 1. } else { -1. };
+        let pivot = screen(vec2(ship.x + side * 38., 41.)) + vec2(0., sway);
+        let enemy_laying =
+            matches!(self.phase, Phase::EnemyReady) || self.ball.is_some_and(|b| !b.from_player);
+        let degrees = if player {
             f32::from(self.setting.angle)
+        } else if enemy_laying {
+            f32::from(self.enemy_setting.angle)
         } else {
             35.
+        };
+        let angle = degrees.to_radians();
+        let tip = pivot + vec2(side * angle.cos(), -angle.sin()) * 15.;
+        draw_rectangle(pivot.x - 6., pivot.y - 1., 12., 5., darken(WOOD, 0.15));
+        for dx in [-3.5, 3.5] {
+            shapes::fill_circle(pivot + vec2(dx, 4.), 2.2, darken(WOOD, 0.45));
         }
-        .to_radians();
-        let tip = vec2(
-            start.x + side * 13. * angle.cos(),
-            start.y - 13. * angle.sin(),
-        );
-        draw_rectangle(start.x - 4., start.y - 1., 8., 4., darken(WOOD, 0.2));
+        shapes::fill_capsule(pivot, tip, 3.2, Color::new(0.12, 0.13, 0.15, 1.));
         draw_line(
-            start.x,
-            start.y,
-            tip.x,
-            tip.y,
-            5.,
-            Color::new(0.10, 0.11, 0.13, 1.),
-        );
-        draw_line(
-            start.x,
-            start.y - 1.5,
+            pivot.x,
+            pivot.y - 1.5,
             tip.x,
             tip.y - 1.5,
             1.,
-            Color::new(0.45, 0.48, 0.52, 1.),
+            Color::new(0.47, 0.50, 0.55, 1.),
         );
         let firing = self
             .ball
             .is_some_and(|b| b.from_player == player && self.trace.len <= 3);
         if firing {
-            halo(tip.x, tip.y, 16., Color::new(1., 0.7, 0.3, 0.8));
-            draw_poly(
-                tip.x + side * 4.,
-                tip.y - 2.,
-                8,
-                5.,
-                0.,
-                Color::new(0.85, 0.85, 0.82, 0.5),
-            );
+            halo(tip.x, tip.y, 20., Color::new(1., 0.7, 0.3, 0.85));
         } else if !player && self.phase == Phase::EnemyReady {
-            let fuse = 0.5 + 0.5 * (t * 0.3).sin();
+            let fuse = pulse(t, 3.);
             halo(
-                start.x,
-                start.y,
-                7.,
-                Color::new(1., 0.6, 0.2, 0.35 + 0.4 * fuse),
+                pivot.x,
+                pivot.y,
+                10.,
+                Color::new(1., 0.55, 0.2, 0.35 + 0.45 * fuse),
+            );
+            draw_rectangle(
+                pivot.x - side * 5. - 1.,
+                pivot.y - 4.,
+                2.,
+                2.,
+                Color::new(1., 0.85, 0.4, 0.5 + 0.5 * fuse),
             );
         }
-        let name = if player {
-            "Free Flag"
-        } else {
-            self.battle_info().ship
-        };
-        let ns = plain(11., with_alpha(lighten(color, 0.2), 0.9))
-            .with_letter_spacing(0.5)
-            .with_align(TextAlign::Center);
-        let half = text_width(name, ns) * 0.5;
-        draw_text_styled(name, center.x.clamp(24. + half, 666. - half), 474., ns);
     }
+    /// A protractor around your cannon: the needle is the current elevation,
+    /// a gold notch the last shot and a teal diamond the firing table.
+    fn draw_dial(&self) {
+        let ship = self.ships[0];
+        let pivot = screen(vec2(ship.x + 38., 41.));
+        let r = 52.;
+        let to = |deg: f32| {
+            let rad = deg.to_radians();
+            vec2(rad.cos(), -rad.sin())
+        };
+        let (start, sweep) = ((-70_f32).to_radians(), 55_f32.to_radians());
+        let angle = f32::from(self.setting.angle);
+        shapes::fill_sector(pivot, r, start, sweep, Color::new(0.02, 0.06, 0.09, 0.32));
+        shapes::fill_sector(
+            pivot,
+            r,
+            -angle.to_radians(),
+            (angle - 15.).to_radians(),
+            with_alpha(TEAL, 0.14),
+        );
+        shapes::stroke_arc(
+            pivot,
+            r,
+            start,
+            sweep,
+            Stroke::new(1.4, with_alpha(SOFT, 0.55)),
+        );
+        for k in 0..=11 {
+            let d = to(15. + k as f32 * 5.);
+            let major = k % 3 == 0;
+            let a = pivot + d * (r - if major { 8. } else { 4. });
+            let b = pivot + d * r;
+            draw_line(
+                a.x,
+                a.y,
+                b.x,
+                b.y,
+                if major { 1.5 } else { 1. },
+                with_alpha(SOFT, if major { 0.75 } else { 0.45 }),
+            );
+        }
+        if let Some(last) = self.last_setting {
+            let d = to(f32::from(last.angle));
+            let (tip, base) = (pivot + d * (r + 2.), pivot + d * (r + 10.));
+            let n = vec2(-d.y, d.x) * 4.;
+            draw_triangle(tip, base + n, base - n, with_alpha(GOLD, 0.9));
+        }
+        if self.show_table {
+            let c = pivot + to(f32::from(self.table.angle)) * (r + 9.);
+            shapes::fill_polygon(
+                &[
+                    c + vec2(0., -5.),
+                    c + vec2(5., 0.),
+                    c + vec2(0., 5.),
+                    c + vec2(-5., 0.),
+                ],
+                TEAL,
+            );
+        }
+        let d = to(angle);
+        let (a, b) = (pivot + d * 20., pivot + d * (r + 3.));
+        draw_line(a.x, a.y, b.x, b.y, 2., TEAL);
+        halo(b.x, b.y, 10., with_alpha(TEAL, 0.5));
+        shapes::fill_circle(b, 3.6, lighten(TEAL, 0.35));
+    }
+    /// The predicted flight as marching dots and an aim marker where it ends.
+    fn draw_forecast(&self, t: f32) {
+        let trace = &self.forecast.trace;
+        let n = trace.len.max(1) as f32;
+        for (i, p) in trace.points[..trace.len].iter().enumerate().step_by(2) {
+            let q = screen(*p);
+            if !in_scene(q) {
+                continue;
+            }
+            let wave = 0.5 + 0.5 * (i as f32 * 0.42 - t * 7.).sin();
+            let a = (0.42 + 0.5 * wave) * (1. - 0.35 * i as f32 / n);
+            shapes::fill_circle(q, 1.5 + 0.7 * wave, with_alpha(FORECAST, a));
+        }
+    }
+    /// The aim marker and an outline around the part the shot would strike.
+    fn draw_target(&self, t: f32) {
+        let end = screen(self.forecast.end);
+        let end = vec2(end.x, end.y.min(WATER));
+        let color = match self.forecast.contact {
+            Some((1, _)) => GOLD,
+            Some(_) => RED,
+            None => SOFT,
+        };
+        let beat = pulse(t, 1.4);
+        if let Some((side, part)) = self.forecast.contact {
+            let r = part_rect(self.ships[side], part);
+            outline(
+                r.x - 3.,
+                r.y - 3.,
+                r.w + 6.,
+                r.h + 6.,
+                5.,
+                1.6,
+                with_alpha(color, 0.45 + 0.45 * beat),
+            );
+        }
+        if !in_scene(end) {
+            return;
+        }
+        shapes::stroke_circle(end, 7., 1.6, color);
+        shapes::stroke_circle(
+            end,
+            11. + beat * 5.,
+            1.2,
+            with_alpha(color, 0.55 * (1. - beat)),
+        );
+        for (dx, dy) in [(1., 0.), (-1., 0.), (0., 1.), (0., -1.)] {
+            draw_line(
+                end.x + dx * 4.,
+                end.y + dy * 4.,
+                end.x + dx * 10.,
+                end.y + dy * 10.,
+                1.3,
+                color,
+            );
+        }
+    }
+    /// Section meters under each hull and a mast meter beneath them.
+    fn draw_meters(&self, side: usize, preview: Option<Preview>, t: f32) {
+        let ship = self.ships[side];
+        let color = if side == 0 { TEAL } else { self.enemy_color() };
+        let ghost = preview.filter(|p| p.side == side).map(|p| p.after);
+        let blink = 0.5 + 0.5 * (t * 8.).sin();
+        for part in 0..3 {
+            let r = part_rect(ship, part);
+            part_meter(
+                r.x + 2.,
+                433.,
+                r.w - 4.,
+                5.,
+                ship.hp[part],
+                ship.max[part],
+                ghost.map(|g| g[part]),
+                color,
+                blink,
+            );
+        }
+        let x = X0 + ship.x;
+        let mast = with_alpha(SOFT, 0.75);
+        draw_line(x - 30., 446., x - 30., 438., 1.4, mast);
+        draw_triangle(
+            vec2(x - 30., 438.),
+            vec2(x - 24., 440.),
+            vec2(x - 30., 442.),
+            mast,
+        );
+        part_meter(
+            x - 20.,
+            441.,
+            50.,
+            4.,
+            ship.hp[3],
+            ship.max[3],
+            ghost.map(|g| g[3]),
+            color,
+            blink,
+        );
+    }
+    fn draw_shot(&self, t: f32) {
+        let n = self.trace.len;
+        for (i, pair) in self.trace.points[..n].windows(2).enumerate() {
+            let a = screen(pair[0]);
+            let b = screen(pair[1]);
+            if in_scene(a) && in_scene(b) {
+                let k = (i + 1) as f32 / n as f32;
+                draw_line(
+                    a.x,
+                    a.y,
+                    b.x,
+                    b.y,
+                    1. + k * 1.8,
+                    Color::new(1., 0.90, 0.65, 0.12 + 0.6 * k),
+                );
+            }
+        }
+        let Some(ball) = self.ball else {
+            return;
+        };
+        let p = screen(ball.pos);
+        if !in_scene(p) {
+            return;
+        }
+        let hot = if ball.ammo == Ammo::Shell {
+            Color::new(1., 0.62, 0.32, 0.55)
+        } else {
+            Color::new(1., 0.92, 0.7, 0.32)
+        };
+        halo(p.x, p.y, 12., hot);
+        if ball.ammo == Ammo::Chain {
+            let spin = t * 14.;
+            let d = vec2(spin.cos(), spin.sin()) * 5.5;
+            draw_line(p.x - d.x, p.y - d.y, p.x + d.x, p.y + d.y, 1.4, STEEL);
+            iron(p - d, 3., 1.);
+            iron(p + d, 3., 1.);
+        } else {
+            ammo_glyph(ball.ammo, p, 4.6, 1.);
+        }
+    }
+    /// A tick-timed water column where a ball splashed down and a flash where
+    /// one struck; numbers and debris come from the effects layer.
     fn draw_impact(&self) {
         let Some(impact) = self.impact else {
             return;
@@ -869,529 +1416,935 @@ impl Game {
             return;
         }
         let p = screen(impact);
-        if !in_sea(p) {
-            return;
-        }
         let splash = impact.y <= 0.5;
         let total = if splash { 35. } else { 50. };
         let k = ((total - f32::from(self.impact_ticks)) / total).clamp(0., 1.);
         if splash {
-            let h = 28. * (k * std::f32::consts::PI).sin();
-            let foam = Color::new(0.85, 0.95, 0.97, 0.75 * (1. - k));
-            draw_triangle(
-                vec2(p.x - 6., WATER),
-                vec2(p.x - 1., WATER - h),
-                vec2(p.x + 1., WATER),
-                foam,
-            );
-            draw_triangle(
-                vec2(p.x - 1., WATER),
-                vec2(p.x + 2., WATER - h * 0.75),
-                vec2(p.x + 6., WATER),
-                foam,
-            );
-            let spread = 6. + k * 30.;
-            draw_line(
-                p.x - spread - 8.,
-                WATER + 2.,
-                p.x - spread,
-                WATER + 2.,
-                1.5,
-                foam,
-            );
-            draw_line(
-                p.x + spread,
-                WATER + 2.,
-                p.x + spread + 8.,
-                WATER + 2.,
-                1.5,
-                foam,
-            );
-            for n in 0..6 {
-                let a = 0.5 + n as f32 * 0.42;
-                let q = vec2(
-                    p.x + a.cos() * k * 26.,
-                    WATER - (a.sin() * 34. * k - 42. * k * k).max(0.),
-                );
-                if in_sea(q) {
-                    draw_rectangle(q.x - 1., q.y - 1., 2., 2., foam);
-                }
+            if !(SCENE.x + 8. ..=SCENE.right() - 8.).contains(&p.x) {
+                return;
             }
-            return;
-        }
-        let hit = self.last_damage > 0;
-        if hit && k < 0.6 {
+            let h = 44. * (k * PI).sin();
+            let foam = Color::new(0.85, 0.95, 0.97, 0.8 * (1. - k));
+            draw_triangle(
+                vec2(p.x - 8., WATER),
+                vec2(p.x - 1., WATER - h),
+                vec2(p.x + 2., WATER),
+                foam,
+            );
+            draw_triangle(
+                vec2(p.x - 2., WATER),
+                vec2(p.x + 3., WATER - h * 0.72),
+                vec2(p.x + 8., WATER),
+                foam,
+            );
+            let spread = 8. + k * 34.;
+            for dir in [-1., 1.] {
+                let x = p.x + dir * spread;
+                draw_line(x - 5., WATER + 2., x + 5., WATER + 2., 1.5, foam);
+            }
+        } else if self.last_damage > 0 && k < 0.6 && in_scene(p) {
             halo(
                 p.x,
                 p.y,
-                10. + 16. * (1. - k),
+                12. + 22. * (1. - k),
                 Color::new(1., 0.55, 0.2, 0.9 * (1. - k / 0.6)),
             );
         }
-        let ring = if hit { GOLD } else { STEEL };
-        shapes::stroke_circle(
-            p,
-            5. + k * 20.,
-            2. * (1. - k) + 0.5,
-            with_alpha(ring, 1. - k),
-        );
-        for n in 0..7 {
-            let a = 0.3 + n as f32 * 0.42;
-            let q = p + vec2(a.cos() * k * 30., -a.sin() * k * 32. + k * k * 30.);
-            if in_sea(q) {
-                let c = if n % 2 == 0 {
-                    Color::new(1., 0.7, 0.35, 1. - k)
+    }
+    /// The enemy's fuse timer while it lays a volley, and a warning when its
+    /// next return will be a double broadside.
+    fn draw_telegraphs(&self, t: f32) {
+        let foe = self.ships[1];
+        let at = screen(vec2(foe.x, 140.)) + vec2(0., bob(t, 1.2, 2.5));
+        if self.phase == Phase::EnemyReady {
+            let done = 1. - f32::from(self.timer) / 65.;
+            halo(at.x, at.y, 24., with_alpha(RED, 0.28));
+            shapes::fill_circle(at, 13., Color::new(0.06, 0.03, 0.03, 0.85));
+            ring_meter(at.x, at.y, 13., 3., done, RED);
+            icon(Icon::Alert, at.x, at.y, 13., RED);
+        } else if self.phase == Phase::Aim && self.double_volley_due() {
+            icon_chip(Icon::Bomb, "x2", at.x - 26., at.y - 10., 14., RED);
+        }
+    }
+    /// Whether the enemy's return to this exchange is a double broadside: the
+    /// Bell Brothers fire twice every third exchange unless fallen rigging
+    /// skips an odd exchange's volley altogether.
+    fn double_volley_due(&self) -> bool {
+        self.battle_info().tactic == Tactic::Broadside
+            && self.round.is_multiple_of(3)
+            && !(self.ships[1].hp[3] == 0 && self.round % 2 == 1)
+    }
+    fn draw_wind(&self, t: f32) {
+        let c = GAUGE;
+        let (w, h) = (176., 30.);
+        let r = Rect::new(c.x - w * 0.5, c.y - h * 0.5, w, h);
+        rounded(r.x, r.y, r.w, r.h, 15., Color::new(0.02, 0.05, 0.08, 0.66));
+        outline(r.x, r.y, r.w, r.h, 15., 1., Color::new(1., 1., 1., 0.08));
+        icon(Icon::Wind, r.x + 19., c.y, 18., CREAM);
+        let strength = self.wind.abs();
+        let (x0, x1) = (r.x + 40., r.right() - 46.);
+        if self.wind == 0. {
+            shapes::stroke_circle(vec2((x0 + x1) * 0.5, c.y), 4., 1.5, SOFT);
+        } else {
+            let dir = self.wind.signum();
+            let span = x1 - x0;
+            draw_line(x0, c.y, x1, c.y, 1.2, with_alpha(CREAM, 0.22));
+            let n = ((strength / 3.).ceil() as usize).clamp(1, 5);
+            let flow = fract(t * (0.35 + strength * 0.04));
+            for k in 0..n {
+                let u = fract((k as f32 + flow) / n as f32);
+                let x = if dir > 0. {
+                    x0 + u * span
                 } else {
-                    Color::new(0.35, 0.25, 0.18, 1. - k)
+                    x1 - u * span
                 };
-                draw_rectangle(q.x - 1.5, q.y - 1.5, 3., 3., c);
+                let fade = (u * 4.).min((1. - u) * 4.).clamp(0., 1.);
+                chevron(x, c.y, dir, 6., with_alpha(GOLD, fade));
             }
         }
-        let label = if hit {
-            format!("-{}", self.last_damage)
-        } else {
-            "Armor held".to_string()
+        say_mid(
+            &(strength.round() as u16).to_string(),
+            r.right() - 24.,
+            c.y,
+            style(18., GOLD),
+        );
+        // Powder Rose's gusts reverse after every exchange.
+        if self.battle_info().tactic == Tactic::Bomber {
+            icon_badge(
+                Icon::Restart,
+                r.right() + 16.,
+                c.y,
+                24.,
+                Color::new(0.30, 0.12, 0.08, 0.95),
+                FLAME,
+            );
+        }
+    }
+    /// The damage the aimed shot would deal, floating over its target.
+    fn draw_preview(&self, preview: Option<Preview>, t: f32) {
+        let Some(p) = preview else {
+            return;
         };
-        let s = style(
-            if hit { 17. } else { 12. },
-            with_alpha(if hit { GOLD } else { STEEL }, 1. - k * k),
-        )
-        .with_align(TextAlign::Center);
-        let half = text_width(&label, s) * 0.5;
-        draw_text_styled(
-            &label,
-            p.x.clamp(30. + half, 660. - half),
-            (p.y - 16. - k * 14.).max(190.),
-            s,
+        let ship = self.ships[p.side];
+        let lost: u16 = (0..4).map(|q| p.before[q].saturating_sub(p.after[q])).sum();
+        let color = if p.side == 1 { GOLD } else { RED };
+        let anchor = part_top(ship, p.part) + vec2(0., -10. + bob(t, 1.1, 2.));
+        let label = if lost > 0 {
+            format!("-{lost}")
+        } else {
+            "0".to_string()
+        };
+        let s = plain(16., color);
+        let glyph = if p.side == 0 {
+            Some((Icon::Alert, RED))
+        } else if lost == 0 {
+            Some((Icon::Shield, STEEL))
+        } else {
+            None
+        };
+        let gw = if glyph.is_some() { 18. } else { 0. };
+        let w = text_width(&label, s) + gw + 18.;
+        let x = (anchor.x - w * 0.5).clamp(SCENE.x + 6., SCENE.right() - w - 6.);
+        let r = Rect::new(x, anchor.y - 12., w, 24.);
+        draw_triangle(
+            vec2(anchor.x - 5., r.bottom() - 1.),
+            vec2(anchor.x + 5., r.bottom() - 1.),
+            vec2(anchor.x, r.bottom() + 5.),
+            Color::new(0.02, 0.04, 0.06, 0.88),
+        );
+        rounded(r.x, r.y, r.w, r.h, 12., Color::new(0.02, 0.04, 0.06, 0.88));
+        outline(r.x, r.y, r.w, r.h, 12., 1.2, with_alpha(color, 0.75));
+        let mut tx = r.x + 9.;
+        if let Some((g, c)) = glyph {
+            icon(g, tx + 7., anchor.y, 14., c);
+            tx += gw;
+        }
+        say_left(&label, tx, anchor.y, s);
+    }
+    fn draw_retreat_hint(&self) {
+        let x = SCENE.x + 14.;
+        let cy = SCENE.y + 21.;
+        let w = mini_cap("C", x, cy - 7.5, 0.85);
+        icon(
+            Icon::Flag,
+            x + w + 13.,
+            cy,
+            16.,
+            Color::new(0.9, 0.92, 0.94, 0.8),
         );
     }
-    fn draw_instruments(&self) {
-        slab(682., 116., 258., 452., DARK);
-        let x = 700.;
-        let right = 922.;
-        eyebrow("GUN DECK", x, 142., with_alpha(GOLD, 0.85));
-        let (phase, tone) = match self.phase {
-            Phase::Aim => ("Your shot", TEAL),
-            Phase::Flight => {
-                if self.ball.is_some_and(|b| b.from_player) {
-                    ("Shot away", GOLD)
-                } else {
-                    ("Incoming", RED)
-                }
-            }
-            Phase::EnemyReady => ("Enemy aims", RED),
-            Phase::Dock => ("In harbor", TEAL),
-            Phase::Briefing => ("Briefing", SOFT),
-            Phase::Setback => ("Lifeboats", RED),
-            Phase::Liberated => ("Victory", GOLD),
-            Phase::Sunk => ("Sunk", RED),
-        };
-        let pw = pill_width(phase);
-        pill(phase, right - pw, 129., tone);
-        divider(x, 156., 222., with_alpha(GOLD, 0.25));
-
-        // Elevation and powder.
-        eyebrow("ANGLE", x, 174., MUTED);
-        say(
-            "← →",
-            796. - text_width("← →", plain(11., MUTED)),
-            174.,
-            plain(11., MUTED),
-        );
-        say(
-            &format!("{}°", self.setting.angle),
-            x,
-            207.,
-            style(26., TEAL),
-        );
-        bar(
-            x,
-            214.,
-            96.,
-            (f32::from(self.setting.angle) - 15.) / 55.,
-            TEAL,
-        );
-        let px = 812.;
-        let limit = self.power_limit();
-        eyebrow("POWDER", px, 174., MUTED);
-        say(
-            "↑ ↓",
-            right - text_width("↑ ↓", plain(11., MUTED)),
-            174.,
-            plain(11., MUTED),
-        );
-        let w = say(&self.setting.power.to_string(), px, 207., style(26., TEAL));
-        say(
-            &format!("/ {limit}"),
-            px + w + 5.,
-            207.,
-            plain(13., if limit < 90 { RED } else { MUTED }),
-        );
-        bar(
-            px,
-            214.,
-            110.,
-            (f32::from(self.setting.power) - 25.) / f32::from(limit.saturating_sub(25).max(1)),
-            TEAL,
-        );
-
-        // Ammunition racks.
-        for (i, name) in AMMO.iter().enumerate() {
-            let tx = x + i as f32 * 76.;
-            let ty = 228.;
-            let selected = self.setting.ammo.index() == i;
-            let empty = self.ammo[i] == 0;
-            tile(tx, ty, 70., 48., selected, empty && !selected);
-            let a = if empty { 0.45 } else { 1. };
-            let ammo = [Ammo::Round, Ammo::Chain, Ammo::Shell][i];
-            ammo_icon(ammo, tx + 16., ty + 18., 6.5, a);
-            let count = format!("×{}", self.ammo[i]);
-            let cs = plain(16., with_alpha(if selected { GOLD } else { CREAM }, a));
-            say(&count, tx + 62. - text_width(&count, cs), ty + 24., cs);
-            say(name, tx + 8., ty + 41., plain(11., with_alpha(SOFT, a)));
-            let key = (i + 1).to_string();
-            let ks = plain(10., MUTED);
-            say(&key, tx + 62. - text_width(&key, ks), ty + 41., ks);
+    /// Exact integrity (and armor) of the hovered ship part.
+    fn draw_tooltip(&self) {
+        if self.modal_open() {
+            return;
         }
+        let p = pointer();
+        if !SCENE.contains(p) {
+            return;
+        }
+        for (side, ship) in self.ships.iter().enumerate() {
+            for part in 0..4 {
+                if !part_rect(*ship, part).contains(p) {
+                    continue;
+                }
+                let color = if side == 0 { TEAL } else { self.enemy_color() };
+                let label = format!("{}/{}", ship.hp[part], ship.max[part]);
+                let armor = if part < 3 { ship.armor[part] } else { 0 };
+                let s = plain(14., CREAM);
+                let armor_label = armor.to_string();
+                let aw = if armor > 0 {
+                    18. + text_width(&armor_label, s) + 8.
+                } else {
+                    0.
+                };
+                let w = text_width(&label, s) + 20. + aw;
+                let at = vec2(part_rect(*ship, part).center().x, 464.);
+                let x = (at.x - w * 0.5).clamp(SCENE.x + 6., SCENE.right() - w - 6.);
+                rounded(
+                    x,
+                    at.y - 12.,
+                    w,
+                    24.,
+                    12.,
+                    Color::new(0.02, 0.04, 0.06, 0.92),
+                );
+                outline(x, at.y - 12., w, 24., 12., 1.2, with_alpha(color, 0.8));
+                let tx = x + 10. + say_left(&label, x + 10., at.y, s);
+                if armor > 0 {
+                    icon(Icon::Shield, tx + 15., at.y, 13., STEEL);
+                    say_left(&armor_label, tx + 24., at.y, plain(14., STEEL));
+                }
+                return;
+            }
+        }
+    }
 
-        // Forecast and navigator.
-        eyebrow("FORECAST", x, 298., MUTED);
-        let (forecast, fc) = match self.forecast.contact {
-            Some((1, part)) => (format!("Enemy {}", PARTS[part].to_lowercase()), GOLD),
-            Some((_, part)) => (format!("Own {}!", PARTS[part].to_lowercase()), RED),
-            None => ("Open water".to_string(), SOFT),
-        };
-        say_fit(&forecast, x, 316., 104., plain(14., fc));
-        eyebrow("TABLE", px, 298., MUTED);
-        if self.show_table {
-            say_fit(
-                &format!(
-                    "{}° · {} · {}",
-                    self.table.angle,
-                    self.table.power,
-                    self.table.ammo.name()
-                ),
-                px,
-                316.,
-                110.,
-                plain(14., TEAL),
+    // -----------------------------------------------------------------------
+    // The gun deck.
+
+    fn draw_deck(&self, t: f32) {
+        let aim = self.phase == Phase::Aim;
+        let b = BAR;
+        shapes::drop_shadow(
+            b,
+            12.,
+            Shadow::soft(Color::new(0., 0., 0., 0.38))
+                .offset(vec2(0., 4.))
+                .blur(14.),
+        );
+        rounded_gradient(
+            b.x,
+            b.y,
+            b.w,
+            b.h,
+            12.,
+            Color::new(0.09, 0.125, 0.16, 1.),
+            Color::new(0.05, 0.075, 0.10, 1.),
+        );
+        outline(b.x, b.y, b.w, b.h, 12., 1., Color::new(1., 1., 1., 0.07));
+        let a = if aim { 1. } else { 0.5 };
+        for well in [ANGLE, POWER] {
+            rounded(
+                well.x,
+                well.y,
+                well.w,
+                well.h,
+                10.,
+                Color::new(0., 0., 0., 0.2),
             );
-        } else {
-            say("Hidden", px, 316., plain(14., with_alpha(SOFT, 0.6)));
+            outline(
+                well.x,
+                well.y,
+                well.w,
+                well.h,
+                10.,
+                1.,
+                Color::new(1., 1., 1., 0.05),
+            );
+        }
+        stepper(ANGLE_DOWN, Icon::ArrowLeft, aim, a);
+        stepper(ANGLE_UP, Icon::ArrowRight, aim, a);
+        let cx = (ANGLE_DOWN.right() + ANGLE_UP.x) * 0.5 - 3.;
+        let cy = ANGLE.center().y;
+        let w = say_mid(
+            &self.setting.angle.to_string(),
+            cx,
+            cy,
+            style(28., with_alpha(TEAL, a)),
+        );
+        shapes::stroke_circle(
+            vec2(cx + w * 0.5 + 5., cy - 9.),
+            3.,
+            1.5,
+            with_alpha(TEAL, a),
+        );
+        stepper(POWER_DOWN, Icon::ArrowDown, aim, a);
+        stepper(POWER_UP, Icon::ArrowUp, aim, a);
+        say_mid(
+            &self.setting.power.to_string(),
+            (POWER_DOWN.right() + METER.x) * 0.5,
+            POWER.center().y,
+            style(28., with_alpha(TEAL, a)),
+        );
+        self.draw_power_meter(a, t);
+        for i in 0..3 {
+            self.draw_rack(i, aim, t);
+        }
+        self.draw_table_toggle(aim, a);
+        self.draw_fire(aim, t);
+    }
+    /// Powder as a charge meter: the fill, a gold notch for the last shot, a
+    /// teal diamond for the firing table and a locked zone without a mast.
+    fn draw_power_meter(&self, a: f32, t: f32) {
+        let m = METER;
+        let (lo, hi) = (25., 90.);
+        let at = |v: f32| m.x + (v - lo) / (hi - lo) * m.w;
+        rounded(
+            m.x - 1.,
+            m.y - 1.,
+            m.w + 2.,
+            m.h + 2.,
+            7.,
+            Color::new(1., 1., 1., 0.12 * a),
+        );
+        rounded(m.x, m.y, m.w, m.h, 6., Color::new(0.01, 0.02, 0.04, 0.9));
+        let power = f32::from(self.setting.power);
+        let fill = Rect::new(m.x, m.y, (at(power) - m.x).max(m.h), m.h);
+        shapes::fill_rounded_rect(
+            fill,
+            6.,
+            Fill::horizontal(m, with_alpha(TEAL, a), with_alpha(FLAME, a)),
+        );
+        // A glint sweeps along the charge.
+        let glint = m.x + fract(t * 0.6) * fill.w;
+        halo(glint, m.center().y, 7., Color::new(1., 1., 1., 0.25 * a));
+        for v in (30..90).step_by(5) {
+            let x = at(v as f32);
+            draw_line(
+                x,
+                m.y + 3.,
+                x,
+                m.bottom() - 3.,
+                1.,
+                Color::new(0., 0., 0., 0.3),
+            );
+        }
+        let limit = f32::from(self.power_limit());
+        if limit < hi {
+            let x = at(limit);
+            rounded(
+                x,
+                m.y,
+                m.right() - x,
+                m.h,
+                6.,
+                Color::new(0.5, 0.12, 0.1, 0.85 * a),
+            );
+            let mut hx = x + 3.;
+            while hx < m.right() - 2. {
+                draw_line(
+                    hx,
+                    m.bottom() - 2.,
+                    hx + 4.,
+                    m.y + 2.,
+                    1.,
+                    with_alpha(RED, 0.8 * a),
+                );
+                hx += 6.;
+            }
+            icon(
+                Icon::Lock,
+                (x + m.right()) * 0.5,
+                m.y - 9.,
+                13.,
+                with_alpha(RED, a),
+            );
         }
         if let Some(last) = self.last_setting {
-            say(
-                &format!("Last shot {}° · {} powder", last.angle, last.power),
-                x,
-                336.,
-                plain(12., MUTED),
+            let x = at(f32::from(last.power));
+            draw_triangle(
+                vec2(x, m.bottom() + 2.),
+                vec2(x - 4., m.bottom() + 9.),
+                vec2(x + 4., m.bottom() + 9.),
+                with_alpha(GOLD, 0.9 * a),
             );
         }
-        divider(x, 348., 222., with_alpha(GOLD, 0.25));
-
-        // Both hulls, section by section, under one shared header.
-        let col = |part: usize| x + 52. + part as f32 * 43.;
-        eyebrow("HULL", x, 368., MUTED);
-        for (part, label) in PARTS.iter().enumerate() {
-            say(label, col(part), 368., plain(10., MUTED));
-        }
-        for side in 0..2 {
-            let y = 392. + side as f32 * 40.;
-            let ship = self.ships[side];
-            let color = if side == 0 { TEAL } else { self.enemy_color() };
-            say(
-                if side == 0 { "You" } else { "Foe" },
-                x,
-                y,
-                plain(14., color),
+        if self.show_table {
+            let c = vec2(at(f32::from(self.table.power)), m.y - 7.);
+            shapes::fill_polygon(
+                &[
+                    c + vec2(0., -4.5),
+                    c + vec2(4.5, 0.),
+                    c + vec2(0., 4.5),
+                    c + vec2(-4.5, 0.),
+                ],
+                with_alpha(TEAL, a),
             );
-            say(&ship.hull().to_string(), x, y + 15., plain(11., MUTED));
-            for part in 0..4 {
-                let cx = col(part);
-                let live = ship.hp[part] > 0;
-                bar(
-                    cx,
-                    y - 9.,
-                    38.,
-                    f32::from(ship.hp[part]) / f32::from(ship.max[part].max(1)),
-                    color,
-                );
-                say(
-                    &ship.hp[part].to_string(),
-                    cx,
-                    y + 9.,
-                    plain(12., if live { CREAM } else { RED }),
-                );
-            }
         }
-        let mut ux = x;
-        for (label, level) in ["Guns", "Plating", "Magazine"].iter().zip(self.upgrades) {
-            let text = format!("{label} {level}");
-            ux += pill(&text, ux, 476., if level > 0 { GOLD } else { MUTED }) + 6.;
-        }
-        let k = 506.;
-        let w = keycap("Space", "Fire", x, k, SOFT);
-        keycap("X", "Table", x + w + 16., k, SOFT);
-        let w = keycap("C", "Retreat", x, k + 28., SOFT);
-        keycap("1-3", "Ammo", x + w + 16., k + 28., SOFT);
+        let knob = vec2(at(power), m.center().y);
+        shapes::fill_circle(knob, 6., with_alpha(CREAM, a));
+        shapes::stroke_circle(knob, 6., 1.5, with_alpha(darken(FLAME, 0.2), a));
     }
-    fn draw_log(&self) {
-        slab(20., 480., 650., 88., DARK);
-        eyebrow("SHIP'S LOG", 36., 502., with_alpha(GOLD, 0.85));
-        if self.phase == Phase::EnemyReady {
-            let label = format!("{} readies a volley", self.battle_info().captain);
-            let w = pill_width(&label);
-            pill(&label, 654. - w, 489., RED);
+    fn draw_rack(&self, i: usize, aim: bool, t: f32) {
+        let rect = AMMO[i];
+        let ammo = ORDER[i];
+        let count = self.ammo[i];
+        let selected = self.setting.ammo == ammo;
+        let empty = count == 0;
+        let hover = aim && hovered(rect);
+        let lift = if selected {
+            3.
+        } else if hover {
+            2.
         } else {
-            // Legend for the chart's two arcs.
-            let ls = plain(11., MUTED);
-            let fw = text_width("Forecast", ls);
-            let fx = 654. - fw;
-            say("Forecast", fx, 502., ls);
-            for d in 0..4 {
-                draw_poly(
-                    fx - 26. + d as f32 * 5.,
-                    498.,
-                    6,
-                    1.4,
-                    0.,
-                    Color::new(0.62, 0.92, 0.90, 0.85),
-                );
-            }
-            let lw = text_width("Last shot", ls);
-            let lx = fx - 40. - lw;
-            say("Last shot", lx, 502., ls);
-            draw_line(
-                lx - 22.,
-                498.,
-                lx - 6.,
-                498.,
-                1.5,
-                Color::new(0.85, 0.72, 0.42, 0.7),
+            0.
+        };
+        let r = Rect::new(rect.x, rect.y - lift, rect.w, rect.h);
+        let base = if aim { 1. } else { 0.55 };
+        let a = base * if empty && !selected { 0.55 } else { 1. };
+        if selected && aim {
+            halo(
+                r.center().x,
+                r.center().y,
+                54.,
+                with_alpha(GOLD, 0.1 + 0.08 * pulse(t, 0.8)),
             );
         }
-        para(self.log, 36., 527., 618., plain(15., CREAM), 19.);
-    }
-    fn draw_overlay(&self) {
-        let (x, y, w, h) = (40., 134., 610., 316.);
-        rounded(
-            20.,
-            116.,
-            650.,
-            344.,
-            12.,
-            Color::new(0.01, 0.03, 0.05, 0.55),
+        shapes::drop_shadow(
+            r,
+            10.,
+            Shadow::soft(Color::new(0., 0., 0., 0.4 * a))
+                .offset(vec2(0., 2. + lift))
+                .blur(8. + lift * 2.),
         );
-        slab(x, y, w, h, Color::new(0.06, 0.09, 0.12, 0.98));
-        rounded(x + 24., y, 72., 3., 1.5, GOLD);
-        let lx = x + 24.;
-        let max = w - 48.;
+        if selected {
+            rounded_gradient(
+                r.x,
+                r.y,
+                r.w,
+                r.h,
+                10.,
+                with_alpha(lighten(GOLD, 0.2), base),
+                with_alpha(darken(GOLD, 0.25), base),
+            );
+            rounded_gradient(
+                r.x + 2.,
+                r.y + 2.,
+                r.w - 4.,
+                r.h - 4.,
+                8.,
+                Color::new(0.19, 0.20, 0.18, base),
+                Color::new(0.10, 0.12, 0.12, base),
+            );
+        } else {
+            let top = if hover {
+                Color::new(0.20, 0.27, 0.33, a)
+            } else {
+                Color::new(0.15, 0.20, 0.25, a)
+            };
+            rounded_gradient(
+                r.x,
+                r.y,
+                r.w,
+                r.h,
+                10.,
+                top,
+                Color::new(0.10, 0.14, 0.18, a),
+            );
+            let rim = if hover {
+                with_alpha(TEAL, 0.7)
+            } else {
+                Color::new(1., 1., 1., 0.08 * a)
+            };
+            outline(r.x, r.y, r.w, r.h, 10., 1.2, rim);
+        }
+        mini_cap(DIGITS[i], r.x + 6., r.y + 6., a);
+        let glyph = vec2(r.x + 28., r.y + 27.);
+        ammo_glyph(ammo, glyph, 9.5, a);
+        if empty {
+            cross(glyph, 7., 2.2, with_alpha(RED, 0.9 * base));
+        }
+        let ink = if selected { GOLD } else { CREAM };
+        let s = style(22., with_alpha(ink, a)).with_align(TextAlign::Right);
+        draw_text_styled(
+            &count.to_string(),
+            r.right() - 9.,
+            s.centered_baseline(r.y + 25.),
+            s,
+        );
+        // One pip per round this island started with.
+        let cap = [8, 2, 2 + self.upgrades[2]][i].max(count);
+        let gap = 7.;
+        let x0 = r.center().x - (f32::from(cap) - 1.) * gap * 0.5;
+        for k in 0..cap {
+            let p = vec2(x0 + f32::from(k) * gap, r.bottom() - 9.);
+            if k < count {
+                shapes::fill_circle(p, 2.3, with_alpha(ink, 0.9 * a));
+            } else {
+                shapes::stroke_circle(p, 2., 1., with_alpha(SOFT, 0.35 * a));
+            }
+        }
+        if self.show_table && self.table.ammo == ammo {
+            icon_badge(
+                Icon::Bulb,
+                r.right() - 4.,
+                r.y + 4.,
+                18.,
+                with_alpha(TEAL, a),
+                with_alpha(INK, a),
+            );
+        }
+    }
+    fn draw_table_toggle(&self, aim: bool, a: f32) {
+        let r = TABLE;
+        let on = self.show_table;
+        let hover = aim && hovered(r);
+        let lift = if hover { 2. } else { 0. };
+        let y = r.y - lift;
+        if on {
+            halo(r.center().x, y + 22., 26., with_alpha(GOLD, 0.3 * a));
+        }
+        let top = if hover {
+            Color::new(0.20, 0.27, 0.33, a)
+        } else {
+            Color::new(0.15, 0.20, 0.25, a)
+        };
+        rounded_gradient(r.x, y, r.w, r.h, 10., top, Color::new(0.10, 0.14, 0.18, a));
+        let rim = if on {
+            with_alpha(GOLD, 0.8 * a)
+        } else if hover {
+            with_alpha(TEAL, 0.7)
+        } else {
+            Color::new(1., 1., 1., 0.08 * a)
+        };
+        outline(r.x, y, r.w, r.h, 10., 1.2, rim);
+        let ink = if on {
+            with_alpha(GOLD, a)
+        } else {
+            with_alpha(MUTED, a)
+        };
+        icon(Icon::Bulb, r.center().x, y + 21., 24., ink);
+        mini_cap("X", r.center().x - 7.5, y + 36., a);
+    }
+    fn draw_fire(&self, aim: bool, t: f32) {
+        let ready = aim && self.ammo[self.setting.ammo.index()] > 0;
+        let hover = ready && hovered(FIRE);
+        let lift = if hover { 2. } else { 0. };
+        let r = Rect::new(FIRE.x, FIRE.y - lift, FIRE.w, FIRE.h);
+        if ready {
+            let breath = pulse(t, 0.6);
+            shapes::drop_shadow(
+                r,
+                12.,
+                Shadow::soft(with_alpha(GOLD, 0.2 + 0.25 * breath)).blur(14. + 10. * breath),
+            );
+        }
+        shapes::drop_shadow(
+            r,
+            12.,
+            Shadow::soft(Color::new(0., 0., 0., 0.4))
+                .offset(vec2(0., 3. + lift))
+                .blur(10.),
+        );
+        let a = if ready { 1. } else { 0.45 };
+        if ready {
+            let top = lighten(GOLD, if hover { 0.32 } else { 0.22 });
+            rounded_gradient(r.x, r.y, r.w, r.h, 12., top, darken(GOLD, 0.14));
+        } else {
+            rounded_gradient(
+                r.x,
+                r.y,
+                r.w,
+                r.h,
+                12.,
+                Color::new(0.20, 0.24, 0.28, 1.),
+                Color::new(0.12, 0.15, 0.18, 1.),
+            );
+        }
+        let ink = if ready { INK } else { with_alpha(SOFT, 0.6) };
+        let cy = r.center().y;
+        ammo_glyph(
+            self.setting.ammo,
+            vec2(r.x + 26., cy + 1.),
+            10.,
+            if ready { 1. } else { 0.5 },
+        );
+        say_left("Fire", r.x + 46., cy - 1., style(22., ink));
+        let cap = text_width("Space", plain(11., PAPER)) + 8.;
+        mini_cap("Space", r.right() - cap - 8., cy - 7.5, a);
+    }
+
+    // -----------------------------------------------------------------------
+    // Modal cards: briefing, dock and setback.
+
+    fn draw_modal(&self, t: f32) {
+        rounded(
+            SCENE.x,
+            SCENE.y,
+            SCENE.w,
+            SCENE.h,
+            12.,
+            Color::new(0.01, 0.03, 0.05, 0.6),
+        );
+        let c = CARD;
+        card(c.x, c.y, c.w, c.h, Color::new(0.07, 0.10, 0.13, 0.98));
+        rounded(c.x + 32., c.y, 72., 3., 1.5, GOLD);
         match self.phase {
-            Phase::Briefing => {
-                let info = self.battle_info();
-                eyebrow(
-                    &format!("CHAPTER {} OF 8", self.battle_number()),
-                    lx,
-                    y + 32.,
-                    GOLD,
-                );
-                say(info.island, lx, y + 64., style(26., CREAM));
-                say(
-                    &format!("{} aboard {}", info.captain, info.ship),
-                    lx,
-                    y + 89.,
-                    plain(13., MUTED),
-                );
-                let after = para(info.story, lx, y + 120., max, plain(16., CREAM), 21.);
-                let cy = after - 6.;
-                rounded(lx, cy, max, 32., 8., with_alpha(TEAL, 0.12));
-                rounded(lx, cy, 3., 32., 1.5, TEAL);
-                let ns = plain(14., TEAL);
-                let nw = say("Navigator", lx + 14., ns.centered_baseline(cy + 16.), ns);
-                say_fit(
-                    info.advice,
-                    lx + 24. + nw,
-                    ns.centered_baseline(cy + 16.),
-                    max - nw - 36.,
-                    plain(14., CREAM),
-                );
-                let ky = y + 214.;
-                let mut kx = lx;
-                for (key, label) in [
-                    ("← →", "Angle"),
-                    ("↑ ↓", "Powder"),
-                    ("1-3", "Ammo"),
-                    ("X", "Firing table"),
-                ] {
-                    kx += keycap(key, label, kx, ky, SOFT) + 18.;
-                }
-                button(
-                    lx,
-                    y + 252.,
-                    300.,
-                    40.,
-                    "Space",
-                    "Raise the free flag",
-                    true,
-                );
-            }
-            Phase::Dock => {
-                eyebrow("HARBOR LIBERATED", lx, y + 32., GOLD);
-                say("Shipwright", lx, y + 64., style(26., CREAM));
-                let credits = format!("{} salvage", self.credits);
-                let cw = pill_width(&credits);
-                pill(&credits, x + w - 24. - cw, y + 46., GOLD);
-                say(
-                    &format!(
-                        "Hull {} / 195  ·  Mast {} / 50",
-                        self.hull(),
-                        self.ships[0].hp[3]
-                    ),
-                    lx,
-                    y + 86.,
-                    plain(13., MUTED),
-                );
-                for (i, (name, detail)) in [
-                    ("Patch", "+80 hull, +25 mast"),
-                    ("Long guns", "+8 direct damage"),
-                    ("Plating", "+5 armor per level"),
-                    ("Magazine", "+1 shell per island"),
-                ]
-                .iter()
-                .enumerate()
-                {
-                    let tx = lx + (i % 2) as f32 * 287.;
-                    let ty = y + 102. + (i / 2) as f32 * 62.;
-                    let cost = self.cost(i + 1);
-                    let affordable = cost.is_some_and(|v| v <= self.credits);
-                    tile(tx, ty, 275., 54., false, cost.is_none());
-                    keycap(&(i + 1).to_string(), "", tx + 12., ty + 17., SOFT);
-                    let a = if cost.is_some() { 1. } else { 0.5 };
-                    say(name, tx + 44., ty + 24., plain(15., with_alpha(CREAM, a)));
-                    say(
-                        detail,
-                        tx + 44.,
-                        ty + 42.,
-                        plain(12., with_alpha(SOFT, 0.85 * a)),
-                    );
-                    let price = cost.map_or(
-                        if i == 0 {
-                            "Full".to_string()
-                        } else {
-                            "Maxed".to_string()
-                        },
-                        |v| format!("{v}"),
-                    );
-                    let color = if affordable {
-                        GOLD
-                    } else if cost.is_some() {
-                        RED
-                    } else {
-                        MUTED
-                    };
-                    let pw = pill_width(&price);
-                    pill(&price, tx + 263. - pw, ty + 8., color);
-                }
-                button(
-                    lx,
-                    y + 240.,
-                    300.,
-                    40.,
-                    "Space",
-                    "Sail on, ammo refilled",
-                    true,
-                );
-                para(
-                    "Hull damage carries over. Ammo and plating refill.",
-                    lx + 318.,
-                    y + 256.,
-                    max - 318.,
-                    plain(12., MUTED),
-                    16.,
-                );
-            }
-            Phase::Setback => {
-                eyebrow("SETBACK", lx, y + 32., RED);
-                say("The sea claims this sortie", lx, y + 64., style(24., CREAM));
-                let after = para(self.log, lx, y + 98., max, plain(16., CREAM), 21.);
-                para(
-                    "Retry resets this island. Missed shots still count toward accuracy.",
-                    lx,
-                    after + 6.,
-                    max,
-                    plain(13., MUTED),
-                    18.,
-                );
-                if self.lifeboats > 0 {
-                    button(
-                        lx,
-                        y + 240.,
-                        270.,
-                        40.,
-                        "C",
-                        &format!("Retry ({} lifeboats left)", self.lifeboats),
-                        true,
-                    );
-                    button(lx + 286., y + 240., 160., 40., "Space", "Retire", false);
-                } else {
-                    button(lx, y + 240., 220., 40., "Space", "Retire", true);
-                }
-            }
-            Phase::Liberated => {
-                eyebrow("ALL EIGHT HARBORS FREE", lx, y + 32., GOLD);
-                say(
-                    "Eight harbors. One free sea.",
-                    lx,
-                    y + 64.,
-                    style(26., CREAM),
-                );
-                eyebrow("RANK", lx, y + 112., MUTED);
-                say(self.rank(), lx, y + 144., style(28., TEAL));
-                eyebrow("SCORE", lx + 300., y + 112., MUTED);
-                say(
-                    &self.score.to_string(),
-                    lx + 300.,
-                    y + 144.,
-                    style(28., GOLD),
-                );
-                say(
-                    &format!(
-                        "{} of {} shots hit  ·  {} lifeboats kept",
-                        self.hits, self.shots, self.lifeboats
-                    ),
-                    lx,
-                    y + 178.,
-                    plain(14., SOFT),
-                );
-                say(
-                    "Try fewer shells and no firing table for a higher rank.",
-                    lx,
-                    y + 204.,
-                    plain(13., MUTED),
-                );
-                keycap("R", "Start a new voyage", lx, y + 254., SOFT);
-            }
-            Phase::Sunk => {
-                eyebrow("VOYAGE ENDED", lx, y + 32., RED);
-                say("The free flag falls", lx, y + 64., style(26., CREAM));
-                say("No lifeboats remaining.", lx, y + 92., plain(15., SOFT));
-                eyebrow("HARBORS FREED", lx, y + 132., MUTED);
-                say(
-                    &format!("{} of 8", self.wins),
-                    lx,
-                    y + 164.,
-                    style(28., TEAL),
-                );
-                eyebrow("SCORE", lx + 300., y + 132., MUTED);
-                say(
-                    &self.score.to_string(),
-                    lx + 300.,
-                    y + 164.,
-                    style(28., GOLD),
-                );
-                keycap("R", "Start a new voyage", lx, y + 254., SOFT);
-            }
+            Phase::Briefing => self.briefing_card(t),
+            Phase::Dock => self.dock_card(),
+            Phase::Setback => self.setback_card(t),
             _ => {}
+        }
+    }
+    fn briefing_card(&self, t: f32) {
+        let info = self.battle_info();
+        let color = self.enemy_color();
+        let x = CARD.x + 32.;
+        // The enemy's colors fly over the card.
+        let e = vec2(CARD.right() - 96., CARD.y + 104. + bob(t, 0.6, 3.));
+        halo(e.x, e.y, 64., with_alpha(color, 0.22));
+        icon(Icon::Flag, e.x, e.y, 76., color);
+        say(info.island, x, CARD.y + 62., style(32., CREAM));
+        let cy = CARD.y + 92.;
+        let names = plain(15., lighten(color, 0.3));
+        icon(Icon::Person, x + 8., cy, 16., color);
+        let w = say_left(info.captain, x + 22., cy, names);
+        icon(Icon::Ship, x + 22. + w + 20., cy, 16., color);
+        say_left(info.ship, x + 22. + w + 34., cy, names);
+        // The one line that matters: how this captain fights.
+        let tactic = tactic_icon(info.tactic);
+        icon_badge(
+            tactic,
+            x + 16.,
+            CARD.y + 138.,
+            32.,
+            with_alpha(color, 0.25),
+            lighten(color, 0.35),
+        );
+        say_left(info.story, x + 42., CARD.y + 138., style(18., CREAM));
+        // The conditions: wind, armor and the enemy's integrity.
+        let cy = CARD.y + 196.;
+        let mut cx = x;
+        let size = 15.;
+        let chip_y = cy - size * 0.725;
+        let wind = self.wind.abs().round() as u16;
+        cx += icon_chip(Icon::Wind, &wind.to_string(), cx, chip_y, size, CREAM) + 4.;
+        if self.wind != 0. {
+            let arrow = if self.wind > 0. {
+                Icon::ArrowRight
+            } else {
+                Icon::ArrowLeft
+            };
+            cx += icon_chip(arrow, "", cx, chip_y, size, CREAM) + 10.;
+        } else {
+            cx += 6.;
+        }
+        let armor = self.ships[1].armor[0];
+        if armor > 0 {
+            cx += icon_chip(Icon::Shield, &armor.to_string(), cx, chip_y, size, STEEL) + 10.;
+        }
+        icon_chip(
+            Icon::Flag,
+            &self.ships[1].hull().to_string(),
+            cx,
+            chip_y,
+            size,
+            color,
+        );
+        action_button(START, "Space", Icon::Flag, "Engage", true, true);
+    }
+    fn dock_card(&self) {
+        let x = CARD.x + 32.;
+        let you = self.ships[0];
+        icon(Icon::Anchor, x + 13., CARD.y + 48., 26., GOLD);
+        say_left("Shipyard", x + 34., CARD.y + 48., style(28., CREAM));
+        let purse = style(26., GOLD).with_align(TextAlign::Right);
+        let w = draw_text_styled(
+            &self.credits.to_string(),
+            CARD.right() - 32.,
+            purse.centered_baseline(PURSE_AT.y),
+            purse,
+        )
+        .width;
+        icon(
+            Icon::Coin,
+            CARD.right() - 32. - w - 16.,
+            PURSE_AT.y,
+            24.,
+            GOLD,
+        );
+        // Hover a repair to preview its effect on the hull and mast.
+        let repaired = (hovered(SHOP[0]) && self.cost(1).is_some()).then(|| {
+            let mut ship = you;
+            ship.repair(80);
+            ship.hp
+        });
+        let cy = CARD.y + 86.;
+        icon(Icon::Flag, x + 8., cy, 16., TEAL);
+        hull_bar(x + 24., cy - 5., 196., 10., you, TEAL, repaired);
+        let s = plain(14., SOFT);
+        let most: u16 = you.max[..3].iter().sum();
+        say_left(&format!("{}/{most}", you.hull()), x + 230., cy, s);
+        let mx = x + 336.;
+        let mast = with_alpha(SOFT, 0.8);
+        draw_line(mx, cy + 6., mx, cy - 7., 1.6, mast);
+        draw_triangle(
+            vec2(mx, cy - 7.),
+            vec2(mx + 8., cy - 4.),
+            vec2(mx, cy - 1.),
+            mast,
+        );
+        part_meter(
+            mx + 14.,
+            cy - 4.,
+            84.,
+            8.,
+            you.hp[3],
+            you.max[3],
+            repaired.map(|hp| hp[3]),
+            TEAL,
+            0.5 + 0.5 * (clock() * 7.).sin(),
+        );
+        say_left(&format!("{}/{}", you.hp[3], you.max[3]), mx + 108., cy, s);
+        for i in 0..4 {
+            self.shop_card(i);
+        }
+        action_button(SAIL, "Space", Icon::Ship, "Sail", true, true);
+        // Sailing refills every magazine.
+        let cy = SAIL.center().y;
+        let mut gx = SAIL.right() + 28.;
+        icon(Icon::Restart, gx, cy, 18., SOFT);
+        gx += 22.;
+        for ammo in ORDER {
+            ammo_glyph(ammo, vec2(gx, cy + 1.), 7., 0.9);
+            gx += 22.;
+        }
+    }
+    fn shop_card(&self, i: usize) {
+        let rect = SHOP[i];
+        let slot = i + 1;
+        let cost = self.cost(slot);
+        let affordable = cost.is_some_and(|c| c <= self.credits);
+        let hover = hovered(rect) && cost.is_some();
+        let lift = if hover { 2. } else { 0. };
+        let r = Rect::new(rect.x, rect.y - lift, rect.w, rect.h);
+        let a = if cost.is_some() { 1. } else { 0.5 };
+        shapes::drop_shadow(
+            r,
+            10.,
+            Shadow::soft(Color::new(0., 0., 0., 0.35 * a))
+                .offset(vec2(0., 2. + lift))
+                .blur(8.),
+        );
+        let top = if hover {
+            Color::new(0.19, 0.26, 0.32, a)
+        } else {
+            Color::new(0.14, 0.19, 0.24, a)
+        };
+        rounded_gradient(
+            r.x,
+            r.y,
+            r.w,
+            r.h,
+            10.,
+            top,
+            Color::new(0.09, 0.13, 0.17, a),
+        );
+        let rim = if hover && affordable {
+            with_alpha(TEAL, 0.8)
+        } else if hover {
+            with_alpha(RED, 0.7)
+        } else {
+            Color::new(1., 1., 1., 0.08)
+        };
+        outline(r.x, r.y, r.w, r.h, 10., 1.2, rim);
+        mini_cap(DIGITS[i], r.x + 8., r.y + 8., a);
+        let (glyph, gain) = shop_gain(slot);
+        let cy = r.center().y;
+        icon(glyph, r.x + 48., cy, 30., with_alpha(TEAL, a));
+        let gx = r.x + 70.;
+        let gw = say_left(gain, gx, cy - 1., style(22., with_alpha(CREAM, a)));
+        if slot == 4 {
+            ammo_glyph(Ammo::Shell, vec2(gx + gw + 12., cy), 7., a);
+        }
+        // Upgrade levels as pips (two each).
+        if slot > 1 {
+            let level = self.upgrades[slot - 2];
+            for k in 0..2_u8 {
+                let p = vec2(gx + 4. + f32::from(k) * 11., r.bottom() - 10.);
+                if k < level {
+                    shapes::fill_circle(p, 3.2, with_alpha(TEAL, a));
+                } else {
+                    shapes::stroke_circle(p, 3., 1.2, with_alpha(SOFT, 0.5 * a));
+                }
+            }
+        }
+        // Price, or a check when nothing is left to buy.
+        let right = r.right() - 12.;
+        match cost {
+            Some(price) => {
+                let color = if affordable { GOLD } else { RED };
+                let s = style(18., color).with_align(TextAlign::Right);
+                let w =
+                    draw_text_styled(&price.to_string(), right, s.centered_baseline(cy), s).width;
+                icon(Icon::Coin, right - w - 12., cy, 18., color);
+            }
+            None => icon(Icon::Check, right - 10., cy, 20., TEAL),
+        }
+    }
+    fn setback_card(&self, t: f32) {
+        let cx = CARD.center().x;
+        let (glyph, title, color) = match self.setback_cause() {
+            Cause::Sunk => (Icon::Skull, "Sunk", RED),
+            Cause::Empty => (Icon::Crate, "Out of shot", RED),
+            Cause::Retreat => (Icon::Flag, "Retreat", CREAM),
+        };
+        let e = vec2(cx, CARD.y + 80. + bob(t, 0.6, 2.));
+        halo(e.x, e.y, 58., with_alpha(color, 0.18));
+        icon(glyph, e.x, e.y, 66., color);
+        say_mid(title, cx, CARD.y + 152., style(32., CREAM));
+        // Lifeboats left; the one a retry would spend pulses while hovered.
+        let cy = CARD.y + 200.;
+        let spending = self.lifeboats > 0 && hovered(RETRY);
+        for i in 0..2_u8 {
+            let lit = i < self.lifeboats;
+            let next = spending && i + 1 == self.lifeboats;
+            let c = if next {
+                with_alpha(CREAM, 0.35 + 0.65 * pulse(t, 2.))
+            } else if lit {
+                CREAM
+            } else {
+                with_alpha(MUTED, 0.3)
+            };
+            icon(Icon::Ship, cx - 22. + f32::from(i) * 44., cy, 32., c);
+        }
+        let lifeboats = self.lifeboats > 0;
+        action_button(RETRY, "C", Icon::Restart, "Retry", true, lifeboats);
+        if lifeboats {
+            // The price, inside the button: one lifeboat.
+            let lift = if hovered(RETRY) { 2. } else { 0. };
+            let cy = RETRY.center().y - lift;
+            let right = RETRY.right() - 14.;
+            icon(Icon::Ship, right - 8., cy, 16., INK);
+            say_left("-1", right - 36., cy, style(16., INK));
+        }
+        action_button(RETIRE, "Space", Icon::Flag, "Retire", false, true);
+    }
+}
+
+/// A stepper key: an arrow that nudges angle or powder by one.
+fn stepper(r: Rect, glyph: Icon, enabled: bool, a: f32) {
+    let hover = enabled && hovered(r);
+    let lift = if hover { 1.5 } else { 0. };
+    rounded(
+        r.x,
+        r.y + 2.,
+        r.w,
+        r.h,
+        7.,
+        Color::new(0., 0., 0., 0.45 * a),
+    );
+    let top = if hover {
+        Color::new(0.28, 0.34, 0.40, a)
+    } else {
+        Color::new(0.22, 0.27, 0.33, a)
+    };
+    rounded_gradient(
+        r.x,
+        r.y - lift,
+        r.w,
+        r.h,
+        7.,
+        top,
+        Color::new(0.13, 0.17, 0.21, a),
+    );
+    if hover {
+        outline(r.x, r.y - lift, r.w, r.h, 7., 1.2, with_alpha(TEAL, 0.85));
+    }
+    let ink = if hover { PAPER } else { SOFT };
+    icon(
+        glyph,
+        r.center().x,
+        r.center().y - lift,
+        14.,
+        with_alpha(ink, a),
+    );
+}
+/// What each dock purchase adds, as an icon and a number.
+fn shop_gain(slot: usize) -> (Icon, &'static str) {
+    match slot {
+        1 => (Icon::Wrench, "+80"),
+        2 => (Icon::Sword, "+8"),
+        3 => (Icon::Shield, "+5"),
+        _ => (Icon::Crate, "+1"),
+    }
+}
+/// Each captain's signature, as one pictogram.
+fn tactic_icon(tactic: Tactic) -> Icon {
+    match tactic {
+        Tactic::Apprentice => Icon::Sprout,
+        Tactic::Gunner => Icon::Bolt,
+        Tactic::Rigger => Icon::Wind,
+        Tactic::Ironwall => Icon::Shield,
+        Tactic::Lobber => Icon::ArrowUp,
+        Tactic::Bomber => Icon::Flame,
+        Tactic::Broadside => Icon::Bomb,
+        Tactic::Admiral => Icon::Target,
+    }
+}
+/// A destroyed section: a charred stub with embers and drifting smoke.
+#[allow(clippy::too_many_arguments)]
+fn draw_wreck(
+    lb: f32,
+    rb: f32,
+    top: f32,
+    bottom: f32,
+    cx: f32,
+    color: Color,
+    t: f32,
+    part: usize,
+    wind: f32,
+) {
+    let char = Color::new(0.10, 0.08, 0.07, 1.);
+    let stub = top + 15.;
+    shapes::fill_polygon(
+        &[
+            vec2(lb, stub),
+            vec2(rb, stub + 2.),
+            vec2(rb - 1., bottom),
+            vec2(lb + 1., bottom),
+        ],
+        char,
+    );
+    // Jagged broken planks.
+    for (x, h) in [(lb + 3., 6.), (cx - 2., 9.), (rb - 5., 5.)] {
+        draw_triangle(
+            vec2(x - 3., stub + 1.),
+            vec2(x + 3., stub + 1.),
+            vec2(x + 1., stub - h),
+            darken(color, 0.55),
+        );
+    }
+    let ember = pulse(t + part as f32 * 0.7, 1.3);
+    draw_rectangle(
+        cx - 2.,
+        stub + 3.,
+        4.,
+        2.,
+        Color::new(1., 0.5, 0.2, 0.4 + 0.5 * ember),
+    );
+    for k in 0..3 {
+        let ph = fract(t * 0.45 + k as f32 / 3. + part as f32 * 0.37);
+        let q = vec2(
+            cx + (ph * 6. + k as f32).sin() * 3. + ph * wind * 1.2,
+            stub - 4. - ph * 42.,
+        );
+        if in_scene(q) {
+            shapes::fill_circle(
+                q,
+                2.5 + ph * 6.,
+                Color::new(0.55, 0.58, 0.62, 0.3 * (1. - ph)),
+            );
         }
     }
 }
@@ -1400,8 +2353,87 @@ fn trajectory(trace: &Trace, color: Color, width: f32) {
     for pair in trace.points[..trace.len].windows(2) {
         let a = screen(pair[0]);
         let b = screen(pair[1]);
-        if in_sea(a) && in_sea(b) {
+        if in_scene(a) && in_scene(b) {
             draw_line(a.x, a.y, b.x, b.y, width, color);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn finish(game: &mut Game) {
+        for tick in 0..100_000 {
+            game.step(&game.pilot(tick));
+            if game.outcome() != Outcome::Playing {
+                return;
+            }
+        }
+    }
+    #[test]
+    fn progress_pips_count_islands_from_first_to_last() {
+        let mut game = Game::new();
+        assert_eq!(ArcadeGame::progress(&game), Some((1, 8)));
+        finish(&mut game);
+        assert_eq!(game.outcome(), Outcome::Won);
+        assert_eq!(ArcadeGame::progress(&game), Some((8, 8)));
+        assert_eq!(game.hud().stage, "Storm Crown");
+        assert!(game.hud().objective.split_whitespace().count() <= 5);
+    }
+    #[test]
+    fn the_double_broadside_is_telegraphed_only_when_it_will_come() {
+        let mut game = Game::new();
+        game.round = 3;
+        assert!(
+            !game.double_volley_due(),
+            "only the Bell Brothers fire twice"
+        );
+        game.battle = 6;
+        assert!(game.double_volley_due());
+        game.round = 4;
+        assert!(!game.double_volley_due());
+        // Fallen rigging skips odd exchanges' volleys entirely.
+        game.ships[1].hp[3] = 0;
+        game.round = 3;
+        assert!(!game.double_volley_due());
+        game.round = 6;
+        assert!(game.double_volley_due());
+    }
+    #[test]
+    fn a_landed_shot_bursts_and_pops_its_damage_at_the_struck_section() {
+        let mut game = Game::new();
+        let mut fx = Juice::new();
+        for tick in 0..2_000 {
+            let cue = game.step(&game.pilot(tick));
+            if let Some(Event::Hit { side: 1, .. }) = game.events.iter().next() {
+                ArcadeGame::effects(&game, cue, &mut fx);
+                break;
+            }
+        }
+        let counts = fx.counts();
+        assert!(counts.sparks >= 20, "{counts:?}");
+        assert!(counts.popups >= 1 && counts.rings >= 1, "{counts:?}");
+    }
+    #[test]
+    fn refused_fire_is_felt_at_the_empty_rack_and_quiet_ticks_show_nothing() {
+        let mut game = Game::new();
+        game.step(&Input {
+            primary: true,
+            ..Input::default()
+        });
+        game.ammo[0] = 0;
+        game.step(&Input {
+            primary: true,
+            ..Input::default()
+        });
+        let mut fx = Juice::new();
+        ArcadeGame::effects(&game, Cue::None, &mut fx);
+        assert_eq!(game.events.iter().count(), 1);
+        assert!(fx.counts().rings == 1 && fx.counts().popups == 1);
+        // Nothing accepted, nothing shown.
+        game.step(&Input::default());
+        let mut quiet = Juice::new();
+        ArcadeGame::effects(&game, Cue::None, &mut quiet);
+        assert!(quiet.is_idle());
     }
 }

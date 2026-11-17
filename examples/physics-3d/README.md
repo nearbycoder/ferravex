@@ -29,16 +29,19 @@ Drag with the left mouse button or touch the scene to orbit; arrows/WASD and gam
 | Show engine stats | G | — | — |
 
 These are default bindings. Change them in **Game menu → Controls** (or F2).
-The footer shows state, body count and ten grouped buttons (CRATE BALL DROP ·
-PULSE BOWL CHAOS · PAUSE STEP VIEW RESET): one row on wide screens, two at
-medium widths and three or four on phones, never below a 14 px label. Hovering
-a button explains it with its current binding. Shape buttons highlight the
-selected repeat-drop shape. STEP is disabled while running, PULSE while paused
-or recharging, and BOWL/CHAOS at capacity. Rejected actions show short
-feedback. Per-frame query, timing and sleep counters live in the optional
-**G** engine stats panel (tick, awake/asleep, contacts, the camera ray probe's
-hits and nearest distance, pulse readiness, bonks per second and toppled stack
-crates), so the playfield stays clean.
+The footer shows a status row of icons (run state, the body count against its
+cap and the G stats key) over ten grouped icon-first buttons with key caps
+(CRATE BALL DROP · PULSE BOWL CHAOS · PAUSE STEP VIEW RESET): one row on wide
+screens, two at medium widths and three or four on phones. A tool shows its
+16 px name while hovered or selected, in a bubble when the button is too narrow.
+Shape buttons highlight the selected repeat-drop shape. STEP is disabled while
+running, PULSE while paused or recharging (a ring on its icon fills as it
+recharges), and BOWL/CHAOS at capacity. A refused press shakes the tool red
+with a one- or two-word note (Full, Paused, Pause first or the seconds left).
+Per-frame query, timing and sleep counters live in the optional **G** engine
+stats panel as icon readouts (tick, awake/asleep, contacts, the camera ray
+probe's hits and nearest distance, pulse readiness, bonks per second and
+toppled stack crates), so the playfield stays clean.
 
 ## Toys, goals and bests
 
@@ -48,7 +51,9 @@ crates), so the playfield stays clean.
   Five simulated seconds later it gets a call: GUTTER BALL, A LITTLE NUDGE,
   SPARE-ISH, STRIKE! (8+ crates) or TURKEY! MEGA STRIKE! (20+).
 - **CHAOS** drops a deterministic swirling ring of sixteen crates and balls.
-- **Goals**, one at a time in the top bar: STRIKE (topple 10 stack crates with a
+- **Goals**, one at a time in the top bar as goal pips, the goal's pictogram
+  and name, the key cap of the tool that advances it and a progress bar toward
+  a flagged target (one segment per crate for STRIKE): STRIKE (topple 10 stack crates with a
   bowl), AIRTIME (pulse something 7 m up), AVALANCHE (50 solid bonks in one
   simulated second) and CLEAN SWEEP (topple all 30 stack crates; orbit and bowl
   from new angles). Ranks run from YARD TRAINEE to YARDMASTER GENERAL, and all
@@ -68,12 +73,18 @@ seconds only count after a bowl or CHAOS.
 
 ## Feel and feedback
 
-Accepted impacts throw sparks and flash crate frames, new bodies arrive with a
-puff, pulses burst and shake the camera, and a big pile-up gets a short camera
-push-in toward the collapse with cinematic letterbox bars plus a rotating
-callout. These are camera and overlay effects only: the simulation keeps its
-fixed 120 Hz tick and the ray probe samples the steady orbit. Onboarding text
-in the footer fades after you have bowled and pulsed, or after 30 seconds.
+Accepted impacts throw sparks and flash crate frames, hard hits thump a small
+floor ring, new bodies and bowls arrive with a puff and a ring, pulses burst,
+shake the camera and send a glowing ring across the floor, strikes and goals
+ring out around the stack, and a big pile-up gets a short camera push-in
+toward the collapse with cinematic letterbox bars plus a rotating callout.
+Callouts are headlines of at most three words with a pictogram or an icon stat
+(a bowl call shows the crates it toppled). These are camera and overlay
+effects only: the simulation keeps its fixed 120 Hz tick and the ray probe
+samples the steady orbit. Onboarding is contextual: a hand sweeping along an
+arc shows that dragging orbits the yard until you first orbit or zoom, and the
+tool the current goal needs glows (with a chevron on the one-row palette)
+until you first use it.
 
 Pausing discards elapsed inactive time. Drops while paused appear immediately but remain frozen until a manual step or resume. Each press of N/STEP calls `GameSession::step_paused`, advances exactly 1/120 second, increments the shared session tick and remains paused. Fractional time from before pausing is preserved for resume. Pausing and manual stepping synchronize interpolation history, so resuming before the next tick does not rewind the inspected pose. The keyboard step action while running gives a pause prompt. RESET restores the original 39 bodies, selected crate, camera, clock, impact cooldown and pulse state, then resumes. Reset wins over other actions in the same frame. VIEW restores only the camera, with an immediate camera cut instead of smoothing from the previous view.
 
@@ -85,7 +96,7 @@ This sandbox has no win condition. Check stacking, angular response, ball contac
 
 Press F, the gamepad left shoulder or PULSE for a mass-normalized radial kick, with a 0.65-second simulation cooldown. Pulses wake bodies and pass through the normal physics solver. Pulse taps wait for an actual running tick, survive zero-tick frames and fire once through catch-up; reset, pause and input-context transitions discard pending requests. Shape drops remain immediate inspector edits, including while paused. Impact sounds now require an accepted solid contact-start event and sufficient normal relative speed; free fall and joint corrections alone do not trigger them.
 
-The shared `render::preferences` policy is read every presentation frame, including Controls, paused and zero-tick frames, before feedback and camera sampling. Either reduced motion or reduced flashes suppresses and clears the expanding pulse ring; re-enabling cannot revive an old ring. Its presentation lifetime expires independently of the physics cooldown. Reduced motion also cuts camera smoothing, and clears and blocks sparks, shake and the collapse push-in/letterbox, while retaining deliberate orbit/zoom input. Reduced flashes clears and blocks crate hit flashes. Callout text stays readable without rising. Sparks and flashes age with simulation time (pausing freezes them); text and camera effects age with bounded render time. Motion and flash choices remain independent, and neither changes physics. Camera inputs reject nonfinite values, bound pitch/distance and wrap yaw; presentation deltas are bounded separately from fixed simulation time.
+The shared `render::preferences` policy is read every presentation frame, including Controls, paused and zero-tick frames, before feedback and camera sampling. Either reduced motion or reduced flashes suppresses and clears the expanding pulse ring; re-enabling cannot revive an old ring. Its presentation lifetime expires independently of the physics cooldown. Reduced motion also cuts camera smoothing, and clears and blocks sparks, shake, floor rings, refusal shakes and the collapse push-in/letterbox, while retaining deliberate orbit/zoom input. Reduced flashes clears and blocks crate hit flashes and floor rings. Callout text stays readable without rising. Sparks and flashes age with simulation time (pausing freezes them); text and camera effects age with bounded render time. Motion and flash choices remain independent, and neither changes physics. Camera inputs reject nonfinite values, bound pitch/distance and wrap yaw; presentation deltas are bounded separately from fixed simulation time.
 
 Debug builds (never release or Wasm) accept review hooks for screenshots:
 `PHYSICS_LAB_WINDOW=390x720`, `PHYSICS_LAB_FOCUS=1`, `PHYSICS_LAB_GOALS=N` and
@@ -95,8 +106,9 @@ Toy tests cover goal calibration (an untouched yard completes nothing; one
 bowl topples 10+ crates; a pulse reaches 7 m; CHAOS reaches 50 bonks and a
 collapse; three orbiting bowls with pulses clean-sweep the stack), deterministic
 bounded bowl/CHAOS edits, the pedestal secret, lost-and-found, policy clearing
-without revival, single bowl calls, quip rotation, records never written by
-autoplay, onboarding fade and readable ten-button layouts.
+without revival, single bowl calls with their crate count, quip rotation and
+the three-word callout budget, refusal notes that play once, records never
+written by autoplay, onboarding fade and readable ten-button layouts.
 
 Targeted tests exercise pause/no catch-up, shared manual tick accounting and fractional resume, real PlayerInput controller taps over zero/catch-up/menu frames, shape selection and capacity rejection, reset precedence, contact-only sound, bounded ray queries and immediate query edits, live sleep/contact counts, independent preference suppression without effect revival, camera bounds/rate behavior, remapped hints, fixed physics at supplied render rates, responsive button bounds and the existing solver/terrain/joint checks. Native graphics, browser rendering and Wasm behavior require separate platform validation; headless unit tests do not establish those results.
 

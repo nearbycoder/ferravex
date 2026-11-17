@@ -1043,6 +1043,7 @@ async fn game() {
             &controls.input,
         );
         let footer = (!network || diagnostics) && replays.footer_visible(diagnostics);
+        let mut info_card: Option<(f32, f32, cards::InfoStyle)> = None;
         let bots_named = !network;
         let shown_board = if mode == Mode::Practice {
             &board
@@ -1116,14 +1117,15 @@ async fn game() {
                     .as_ref()
                     .and_then(|r| r.get(cards::RECORD_ID, cards::RECORD_RULES))
                     .map(|r| (r.score, r.runs));
-                let colors = if host.has_played() {
+                let style = if host.has_played() {
                     cards::pause_rows(&board, best.map(|b| b.0), game.tick / 640, &mut info_rows);
-                    cards::PAUSE_COLORS
+                    cards::PAUSE_STYLE
                 } else {
                     cards::briefing_rows(best, &controls.input, &mut info_rows);
-                    cards::BRIEFING_COLORS
+                    cards::BRIEFING_STYLE
                 };
-                cards::info(&mut hud_ui, left, bottom, &info_rows, colors);
+                cards::info(&mut hud_ui, left, bottom, &info_rows, style);
+                info_card = Some((left, bottom, style));
             }
         }
         if footer && !finished_practice {
@@ -1137,6 +1139,13 @@ async fn game() {
             style::motion(),
         );
         hud_ui.paint();
+        // Card pictograms sit on top of the `Ui` panels they decorate.
+        if let Some((left, bottom, style)) = info_card {
+            cards::info_glyphs(left, bottom, &info_rows, style);
+        }
+        if !active && let Some(r) = results.as_ref().filter(|_| finished_practice) {
+            cards::results_glyphs(r);
+        }
         if !active && !finished_practice {
             hud::menu_overlay(
                 &menu_fx,

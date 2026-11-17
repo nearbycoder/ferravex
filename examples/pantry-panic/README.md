@@ -15,10 +15,11 @@ for fixed ticks, input, sound cues, menus, field guide, results and local record
 
 ## Open the doors
 
-Enter starts the shared host, then Space opens the first service. The in-game
-briefing shows the day's menu and quota. Every service allows one missed guest;
-a second missed guest fails that service. Complete all seven services to finish
-the restaurant's story.
+Enter starts the shared host, then Space opens the first service. The briefing
+card shows tonight's dishes (how many guests will order each, with a **New** tag
+on first-time dishes), the guests as tokens, a heart for the one miss the quota
+allows and the closing clock. A second missed guest fails that service. Complete
+all seven services to finish the restaurant's story.
 
 | Service | Guests / quota | New challenge |
 | --- | --- | --- |
@@ -30,11 +31,33 @@ the restaurant's story.
 | The Critic's Table | 7 / 6 | All five regular dishes, arriving every 17 seconds |
 | The Lantern Banquet | 8 / 7 | Six recipes, including the four-ingredient House Feast |
 
-Arrivals follow a fixed menu and schedule. Three tickets can be visible at once;
-if the window is full, the next scheduled arrival waits for a free ticket. Each
-guest's patience begins when that ticket actually appears. Tickets show dish,
-base payment and remaining patience; the line below previews the next arrival.
-The kitchen also has an overall closing deadline.
+Arrivals follow a fixed menu and schedule. Three tables seat guests; when all
+are taken, the next scheduled guest waits in the doorway and their patience
+begins only once seated. A seated guest's speech bubble shows the dish, the
+ingredients it needs underneath, and a patience ring that turns from green to
+gold to red as their face sours. The door's ring fills toward the next arrival
+and shows that guest's dish. The kitchen also has an overall closing deadline.
+
+## Reading the kitchen
+
+The screen explains itself with pictures rather than sentences:
+
+- **Header:** service pips and name; one token per guest (check = served,
+  person = seated, hollow = still to come, cross = left hungry), a heart for the
+  miss allowance, and the closing clock ring.
+- **Cook:** a bubble above the cook shows what they hold. Standing at a station
+  where Space does something shows a key cap with its outcome, such as a coin
+  and `-2` at a pantry, `Hold` at the board, or the exact `+N` a guest will pay.
+- **Stations:** the station underfoot glows gold; stations that take the next
+  step with the food in hand pulse; pantries dim when coins run short. The
+  board and burners draw progress rings, a ready pot shows a check and a
+  draining ring that flashes red before it burns, and a burnt pot smokes.
+- **Side panel:** recipe thumbnails (C or click), the selected recipe's dish,
+  ingredients and route (board, bowl, pot with cook time, plate, bell), coins,
+  retries, waste and equipment levels.
+- **Feedback:** purchases, prep, cooking, serving (a coin popup at the table),
+  burns, departures and refusals each play a small effect where they happen;
+  a mashed key repeats a refusal at most twice a second.
 
 ## Controls
 
@@ -42,21 +65,24 @@ The kitchen also has an overall closing deadline.
 | --- | --- |
 | Arrows / WASD | Move the cook |
 | Click a station or floor tile | Walk to that station's marked access tile or the chosen floor tile |
+| Click the station you stand at | Use it, exactly like Space |
 | Space / Enter | Use the adjacent station; open or continue a service |
 | Hold Space / Enter at CHOP | Prepare the ingredient in your hands |
 | X / E | Discard held food; with empty hands at MIX, clear its bowl; beside a burned pot, clean the burner |
 | C / Q | Cycle the six recipe cards |
-| Click an order ticket | Show its recipe |
+| Click a seated guest or recipe thumbnail | Show that recipe |
 | 1 / 2 / 3 between services | Buy knife / shoes / burner upgrade |
-| H | Open the paginated field guide, which pauses the game |
+| H | Open the short field guide, which pauses the game |
 | Esc / P | Pause |
 | R | Start a whole new restaurant career |
 | M | Toggle sound |
 | F2 | Shared control editor |
 
-The marked floor squares identify each station's interaction position. Finish
-moving onto the square before tapping Space. Clicking a station moves the cook;
-it does not perform an interaction or bypass preparation time.
+The bracketed floor squares identify each station's interaction position, and
+hovering a station or tile previews the walking route. Finish moving onto the
+square before tapping Space. A click on a distant station only walks there; a
+click on the station underfoot uses it like Space, and clicking never replaces
+holding Space to prepare food.
 
 ## From pantry to table
 
@@ -70,9 +96,9 @@ it does not perform an interaction or bypass preparation time.
 4. **Lift:** with empty hands, press Space at MIX to lift an exact, complete
    recipe. A bowl with an invalid combination stays on the counter until corrected
    by adding ingredients or cleared with X.
-5. **Cook:** put a mixed hot recipe on either empty burner. A green timer and
-   sound cue announce readiness. Return with empty hands and press Space to take
-   it. Salad skips this step.
+5. **Cook:** put a mixed hot recipe on either empty burner. A gold ring fills
+   while it cooks; a check, green ring and sound cue announce readiness. Return
+   with empty hands and press Space to take it. Salad skips this step.
 6. **Plate and serve:** press Space at PLATE, then at SERVE. A matching waiting
    guest pays once, and your hands become empty. The oldest matching ticket is
    served first. Wrong dishes remain in your hands and award nothing.
@@ -126,9 +152,10 @@ you chose; changing it never alters food already in the kitchen.
 `content.rs` contains the seven menus, six recipes and station locations.
 `model.rs` is an integer-tick, renderer-independent state machine with fixed arrays
 for three orders and two pots, a four-bit mixing bowl and bounded campaign
-counters. `view.rs` draws the kitchen, cook, food, tickets, recipe book and service
-menus with procedural shapes and measured text. No external assets or libraries
-are used.
+counters, plus a bounded presentation-event feed that rules never read and state
+equality ignores. `view.rs` draws the dining room, kitchen, cook, food, recipe
+book and service cards with procedural shapes and engine pictograms, and turns
+the feed into effects. No external assets or libraries are used.
 
 ```sh
 cargo test -p pantry-panic --offline --locked -j 2
@@ -136,11 +163,13 @@ cargo clippy -p pantry-panic --all-targets --offline --locked -j 2 -- -D warning
 cargo run -p pantry-panic --offline --locked -j 2 -- --headless
 ```
 
-The implementation check passed 16 behavioral tests and one executed API doctest,
+The implementation check passed 27 behavioral tests and one executed API doctest,
 strict package Clippy and scoped formatting. Tests cover paid collection, chopping,
 recipe validation, both burners, cooking and burning, plating and serving,
-patience, quotas, retries, upgrade caps, pointer positions, terminal stability and
-an exact replay of a complete legal campaign. The full playthrough begins with
+patience, quotas, retries, upgrade caps, pointer positions, click-to-use, recipe
+selection by pointer, the presentation feed and its refusal throttle, the exact
+payout preview, header progress, effects for serving, burning and refusals,
+terminal stability and an exact replay of a complete legal campaign. The full playthrough begins with
 `Game::new()` and changes state only through ordinary `Input` passed to `step`.
 
 The legal pilot completes all seven services at tick 46,003: 42 dishes, 21 stars,

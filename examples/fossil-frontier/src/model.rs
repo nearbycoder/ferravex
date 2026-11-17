@@ -20,6 +20,144 @@ pub(crate) const GRID_X: f32 = 28.;
 pub(crate) const GRID_Y: f32 = 180.;
 pub(crate) const PITCH_X: f32 = 68.;
 pub(crate) const PITCH_Y: f32 = 60.;
+/// Dig-page action buttons as `[x, y, w, h]`, shared by drawing and clicks.
+pub(crate) const DIG_BUTTON: [f32; 4] = [610., 306., 306., 34.];
+pub(crate) const SURVEY_BUTTON: [f32; 4] = [610., 346., 306., 34.];
+/// The Lab's species chooser: six equal chips across this strip.
+pub(crate) const SPECIES_BAR: [f32; 4] = [332., 425., 586., 40.];
+/// The setback dialog's Recover button.
+pub(crate) const RECOVER_BUTTON: [f32; 4] = [182., 426., 596., 44.];
+/// Atlas reference card `i` as `[x, y, w, h]`.
+pub(crate) fn atlas_card(i: usize) -> [f32; 4] {
+    [
+        38. + (i % 3) as f32 * 304.,
+        186. + (i / 3) as f32 * 178.,
+        290.,
+        168.,
+    ]
+}
+/// Museum placard `i` as `[x, y, w, h]`.
+pub(crate) fn placard(i: usize) -> [f32; 4] {
+    [38. + i as f32 * 150., 448., 142., 78.]
+}
+/// Half-open hit test; non-finite points are never inside.
+pub(crate) fn inside(p: Vec2, r: [f32; 4]) -> bool {
+    p.x >= r[0] && p.x < r[0] + r[2] && p.y >= r[1] && p.y < r[1] + r[3]
+}
+/// Where an accepted or refused action happened, for presentation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Spot {
+    Tile(usize),
+    Lab,
+    Camp(usize),
+}
+/// Why an action was refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Lack {
+    /// Nothing to do there (cleared rock, a known cross, no sample).
+    Nothing,
+    Supplies(u16),
+    Daylight(u16),
+    Coins(u32),
+    Renown(u16),
+    /// No supply packs left at this camp.
+    Stock,
+    /// Supply storage is full.
+    Storage,
+    /// The upgrade track is complete.
+    Maxed,
+    /// The permit's last day is already under way.
+    Days,
+    /// Daylight is still full; resting would buy nothing.
+    Morning,
+    /// The signature part and another identification are still missing.
+    Ready,
+}
+/// What one executed tick accepted or refused, recorded for presentation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Event {
+    /// The permit briefing closed and fieldwork began.
+    Began,
+    Tool(usize),
+    /// A survey centred on `at` revealed the cells in the `revealed` bit mask.
+    Survey {
+        at: usize,
+        revealed: u64,
+    },
+    /// A stroke removed `removed` layers and cost the fossil `loss` condition.
+    Cut {
+        at: usize,
+        removed: u8,
+        loss: u8,
+        exposed: bool,
+        empty: bool,
+    },
+    /// An exposed specimen was jacketed into tray `slot`.
+    Jacket {
+        at: usize,
+        slot: usize,
+    },
+    /// A destroyed specimen was lifted; nothing reached the tray.
+    Ruined {
+        at: usize,
+    },
+    Refused {
+        spot: Spot,
+        lack: Lack,
+    },
+    Identified {
+        slot: usize,
+        grant: u32,
+        renown: u16,
+    },
+    /// Research rejected; the coins and renown actually lost.
+    Rejected {
+        slot: usize,
+        coins: u32,
+        renown: u16,
+    },
+    Rested {
+        light: u16,
+    },
+    Bought,
+    Upgraded(usize),
+    /// Permit `site` (zero-based) closed with `medals`.
+    Advanced {
+        site: usize,
+        medals: u8,
+    },
+    /// The final permit closed and the museum opened.
+    Opened {
+        medals: u8,
+    },
+    Recovered,
+    Setback,
+    Closed,
+}
+/// The events of the latest executed tick. [`Game::step`] clears it first and
+/// the rules never read it, so it takes no part in equality: snapshots and
+/// replays compare expedition state only.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Feed([Option<Event>; 4]);
+impl PartialEq for Feed {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+impl Eq for Feed {}
+impl Feed {
+    fn clear(&mut self) {
+        self.0 = [None; 4];
+    }
+    fn push(&mut self, event: Event) {
+        if let Some(slot) = self.0.iter_mut().find(|e| e.is_none()) {
+            *slot = Some(event);
+        }
+    }
+    pub(crate) fn iter(&self) -> impl Iterator<Item = Event> + '_ {
+        self.0.iter().flatten().copied()
+    }
+}
 /// Expedition phases; the shared host separately owns pause, help and restart.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
@@ -123,7 +261,7 @@ pub struct Game {
     pub(crate) medals: [u8; 6],
     pub(crate) score: u32,
     pub(crate) strikes: u16,
-    pub(crate) notice: &'static str,
+    pub(crate) feed: Feed,
     start: Start,
 }
 impl Default for Game {
@@ -157,7 +295,7 @@ impl Game {
             medals: [0; 6],
             score: 0,
             strikes: 0,
-            notice: "Survey with X. Colored traces reveal possible specimens.",
+            feed: Feed::default(),
             start: Start {
                 coins: 65,
                 score: 0,
@@ -208,16 +346,26 @@ impl Game {
     pub(crate) fn content(&self) -> &'static Site {
         &SITES[self.index]
     }
+    /// The depth cell `i` had when this permit opened.
+    pub(crate) fn initial_depth(&self, i: usize) -> u8 {
+        self.content()
+            .finds
+            .iter()
+            .find(|f| f.y * COLS + f.x == i)
+            .map_or(
+                2 + ((i * 7 + self.index * 3) % 4) as u8 + self.index as u8,
+                |f| f.depth,
+            )
+    }
     fn load(&mut self) {
+        let depths: [u8; CELLS] = core::array::from_fn(|i| self.initial_depth(i));
         self.cells = [Cell::default(); CELLS];
-        for (i, c) in self.cells.iter_mut().enumerate() {
-            c.depth = 2 + ((i * 7 + self.index * 3) % 4) as u8 + self.index as u8;
+        for (c, depth) in self.cells.iter_mut().zip(depths) {
+            c.depth = depth;
             c.hard = SITES[self.index].rock;
         }
         for (n, f) in self.content().finds.iter().enumerate() {
-            let c = &mut self.cells[f.y * COLS + f.x];
-            c.find = Some(n);
-            c.depth = f.depth;
+            self.cells[f.y * COLS + f.x].find = Some(n);
         }
         self.samples = [None; 4];
         self.cursor = 0;
@@ -229,7 +377,6 @@ impl Game {
         self.day = 1;
         self.daylight = self.content().daylight;
         self.packs = 5;
-        self.notice = "X surveys this tile and its neighbors. Look for pale fossil traces.";
         self.phase = Phase::Briefing;
         self.start = Start {
             coins: self.coins,
@@ -250,58 +397,116 @@ impl Game {
                 >= 2
     }
     pub(crate) fn tool_stats(&self, at: usize) -> (u8, u16, u16) {
+        self.tool_power(self.tool, at)
+    }
+    /// Layers removed, supplies and daylight for one stroke of `tool` at `at`.
+    pub(crate) fn tool_power(&self, tool: usize, at: usize) -> (u8, u16, u16) {
         let hard = self.cells[at].hard;
-        match self.tool {
+        match tool {
             0 => (1, 1, 3 - u16::from(self.upgrades[0])),
             1 => (2u8.saturating_sub(hard / 2).max(1), 2, 2),
             _ => ((4 + 2 * self.upgrades[1]).saturating_sub(hard).max(1), 3, 1),
         }
     }
-    fn pay(&mut self, kits: u16, time: u16) -> bool {
-        if self.kits < kits {
-            self.notice = "Not enough supplies. Camp sells twelve units for ten coins.";
-            return false;
+    /// Condition one stroke of `tool` would cost the fossil at `at`: zero for
+    /// the brush, for cuts that stop above the fossil and for empty rock.
+    pub(crate) fn cut_loss(&self, at: usize, tool: usize) -> u8 {
+        let c = self.cells[at];
+        let (power, _, _) = self.tool_power(tool, at);
+        match c.find {
+            Some(n) if power >= c.depth && tool > 0 => {
+                let base = u16::from(self.content().finds[n].fragile)
+                    + u16::from(power - c.depth) * 10
+                    + if tool == 2 { 20 } else { 0 };
+                base.saturating_sub(u16::from(self.upgrades[0]) * 8)
+                    .min(100) as u8
+            }
+            _ => 0,
         }
-        if self.daylight < time {
-            self.notice = "Not enough daylight. Rest at camp or recover this permit.";
-            return false;
+    }
+    /// Medals the tray's identified specimens would earn this permit.
+    pub(crate) fn permit_medals(&self) -> u8 {
+        let (n, total) = self
+            .samples
+            .iter()
+            .flatten()
+            .filter(|s| s.identified)
+            .fold((0_u16, 0_u16), |(n, t), s| {
+                (n + 1, t + u16::from(s.quality))
+            });
+        if n == 0 {
+            return 0;
         }
-        self.kits -= kits;
-        self.daylight -= time;
-        true
+        let quality = total / n;
+        if n == 4 && quality >= 90 {
+            3
+        } else if n >= 3 && quality >= 60 {
+            2
+        } else {
+            1
+        }
+    }
+    /// Score for closing this permit with `medals`.
+    pub(crate) fn permit_score(&self, medals: u8) -> u32 {
+        1000 + u32::from(self.daylight) * 5 + u32::from(medals) * 200
+    }
+    fn refuse(&mut self, spot: Spot, lack: Lack) -> Cue {
+        self.feed.push(Event::Refused { spot, lack });
+        Cue::None
+    }
+    fn pay(&mut self, kits: u16, time: u16, spot: Spot) -> bool {
+        let lack = if self.kits < kits {
+            Lack::Supplies(kits)
+        } else if self.daylight < time {
+            Lack::Daylight(time)
+        } else {
+            self.kits -= kits;
+            self.daylight -= time;
+            return true;
+        };
+        self.refuse(spot, lack);
+        false
+    }
+    /// Whether cell `i` lies in the survey cross centred on cell `at`.
+    pub(crate) fn in_cross(at: usize, i: usize) -> bool {
+        (i % COLS).abs_diff(at % COLS) + (i / COLS).abs_diff(at / COLS) <= 1
     }
     fn survey(&mut self) -> Cue {
-        let x = self.cursor % COLS;
-        let y = self.cursor / COLS;
-        let near = |i: usize| (i % COLS).abs_diff(x) + (i / COLS).abs_diff(y) <= 1;
-        if !(0..CELLS).any(|i| near(i) && !self.cells[i].known) {
+        let at = self.cursor;
+        let spot = Spot::Tile(at);
+        if !(0..CELLS).any(|i| Self::in_cross(at, i) && !self.cells[i].known) {
+            return self.refuse(spot, Lack::Nothing);
+        }
+        if !self.pay(1, 2, spot) {
             return Cue::None;
         }
-        if !self.pay(1, 2) {
-            return Cue::None;
-        }
+        let mut revealed = 0_u64;
         for (i, c) in self.cells.iter_mut().enumerate() {
-            if near(i) {
+            if Self::in_cross(at, i) {
+                if !c.known {
+                    revealed |= 1 << i;
+                }
                 c.known = true;
             }
         }
-        self.notice = "Survey complete. Traces mark fossils; numbered tiles show remaining depth.";
+        self.feed.push(Event::Survey { at, revealed });
         Cue::Action
     }
     fn dig(&mut self) -> Cue {
-        let c = self.cells[self.cursor];
+        let at = self.cursor;
+        let spot = Spot::Tile(at);
+        let c = self.cells[at];
         if c.taken || (c.depth == 0 && c.find.is_none()) {
-            return Cue::None;
+            return self.refuse(spot, Lack::Nothing);
         }
         if c.depth == 0 {
             let Some(n) = c.find else { return Cue::None };
-            if !self.pay(1, 2) {
+            if !self.pay(1, 2, spot) {
                 return Cue::None;
             }
-            self.cells[self.cursor].taken = true;
+            self.cells[at].taken = true;
             if c.quality == 0 {
-                self.notice =
-                    "This specimen was destroyed. Its context remains in the field notes.";
+                self.feed.push(Event::Ruined { at });
                 return Cue::Bad;
             }
             self.samples[n] = Some(Sample {
@@ -310,75 +515,77 @@ impl Game {
                 identified: false,
             });
             self.sample = n;
-            self.notice = "Specimen jacketed. Open the Lab to read its traits and identify it.";
+            self.feed.push(Event::Jacket { at, slot: n });
             return Cue::Good;
         }
-        let (power, kits, time) = self.tool_stats(self.cursor);
-        if !self.pay(kits, time) {
+        let (power, kits, time) = self.tool_stats(at);
+        let loss = self.cut_loss(at, self.tool);
+        if !self.pay(kits, time, spot) {
             return Cue::None;
         }
-        let cell = &mut self.cells[self.cursor];
+        let cell = &mut self.cells[at];
         cell.depth = cell.depth.saturating_sub(power);
         self.strikes += 1;
-        if let Some(n) = c.find
-            && power >= c.depth
-            && self.tool > 0
-        {
-            let base = u16::from(self.content().finds[n].fragile)
-                + u16::from(power - c.depth) * 10
-                + if self.tool == 2 { 20 } else { 0 };
-            let damage = base.saturating_sub(u16::from(self.upgrades[0]) * 8);
-            self.cells[self.cursor].quality = c.quality.saturating_sub(damage.min(100) as u8);
+        if loss > 0 {
+            self.cells[at].quality = c.quality.saturating_sub(loss);
         }
-        if self.cells[self.cursor].depth == 0 {
-            self.cells[self.cursor].known = true;
-            self.notice = if c.find.is_some() {
-                "Fossil exposed. Space jackets it; rough tools may have reduced its condition."
-            } else {
-                "Bedrock reached. This tile contains no specimen."
-            };
-        } else {
-            self.notice = "Overburden removed. Stop rough tools before they reach the fossil."
+        let cell = self.cells[at];
+        if cell.depth == 0 {
+            self.cells[at].known = true;
         }
-        if c.find.is_some() && self.cells[self.cursor].quality < c.quality {
+        self.feed.push(Event::Cut {
+            at,
+            removed: c.depth - cell.depth,
+            loss: c.quality - cell.quality,
+            exposed: cell.depth == 0 && c.find.is_some(),
+            empty: cell.depth == 0 && c.find.is_none(),
+        });
+        if c.find.is_some() && cell.quality < c.quality {
             Cue::Bad
         } else {
             Cue::Action
         }
     }
     fn research(&mut self) -> Cue {
-        let Some(s) = self.samples[self.sample] else {
-            return Cue::None;
+        let slot = self.sample;
+        let Some(s) = self.samples[slot].filter(|s| !s.identified) else {
+            return self.refuse(Spot::Lab, Lack::Nothing);
         };
-        if s.identified {
-            return Cue::None;
-        }
-        if !self.pay(1, 2) {
+        if !self.pay(1, 2, Spot::Lab) {
             return Cue::None;
         }
         if self.choice != s.kind {
-            self.coins = self.coins.saturating_sub(6);
-            self.renown = self.renown.saturating_sub(1);
-            self.notice =
-                "Identification rejected: compare both traits with the Atlas. Six coins lost.";
+            let (coins, renown) = (self.coins.min(6), self.renown.min(1));
+            self.coins -= coins;
+            self.renown -= renown;
+            self.feed.push(Event::Rejected {
+                slot,
+                coins,
+                renown,
+            });
             return Cue::Bad;
         }
-        self.samples[self.sample].as_mut().unwrap().identified = true;
-        self.museum[self.index * 4 + self.sample] = Record {
+        self.samples[slot].as_mut().unwrap().identified = true;
+        self.museum[self.index * 4 + slot] = Record {
             quality: s.quality,
             identified: true,
         };
         let grant = SPECIES[s.kind].value * u32::from(s.quality) / 100;
+        let renown = if s.quality >= 80 { 3 } else { 1 };
         self.coins += grant;
-        self.renown += if s.quality >= 80 { 3 } else { 1 };
+        self.renown += renown;
         self.score += grant * 12 + u32::from(s.quality) * 2;
-        self.notice = "Identification accepted. Museum funding and research renown awarded once.";
+        self.feed.push(Event::Identified {
+            slot,
+            grant,
+            renown,
+        });
         Cue::Good
     }
     fn recover(&mut self) -> Cue {
         if self.retries == 0 {
             self.phase = Phase::Lost;
-            self.notice = "No recovery grants remain. The expedition closes.";
+            self.feed.push(Event::Closed);
             return Cue::Bad;
         }
         self.retries -= 1;
@@ -391,86 +598,81 @@ impl Game {
             *r = Record::default();
         }
         self.load();
-        self.notice =
-            "Permit recovered. This site's earnings, purchases and specimens were rolled back.";
+        self.feed.push(Event::Recovered);
         Cue::Action
     }
     pub(crate) fn upgrade_cost(&self, which: usize) -> u32 {
         (if which == 0 { 35 } else { 40 }) + u32::from(self.upgrades[which]) * 35
     }
+    /// Why camp action `row` would be refused right now, if it would be.
+    pub(crate) fn camp_lack(&self, row: usize) -> Option<Lack> {
+        match row {
+            0 if self.day >= 3 => Some(Lack::Days),
+            0 if self.daylight == self.content().daylight => Some(Lack::Morning),
+            0 if self.coins < 12 => Some(Lack::Coins(12)),
+            1 if self.packs == 0 => Some(Lack::Stock),
+            1 if self.coins < 10 => Some(Lack::Coins(10)),
+            1 if self.kits > 108 => Some(Lack::Storage),
+            2 | 3 => {
+                let u = row - 2;
+                let cost = self.upgrade_cost(u);
+                let need = 3 + u16::from(self.upgrades[u]) * 3;
+                if self.upgrades[u] >= 2 {
+                    Some(Lack::Maxed)
+                } else if self.coins < cost {
+                    Some(Lack::Coins(cost))
+                } else if self.renown < need {
+                    Some(Lack::Renown(need))
+                } else {
+                    None
+                }
+            }
+            4 if !self.ready() => Some(Lack::Ready),
+            _ => None,
+        }
+    }
     fn camp(&mut self) -> Cue {
+        if let Some(lack) = self.camp_lack(self.row) {
+            return self.refuse(Spot::Camp(self.row), lack);
+        }
         match self.row {
             0 => {
-                if self.day >= 3 || self.daylight == self.content().daylight || self.coins < 12 {
-                    return Cue::None;
-                }
                 self.coins -= 12;
                 self.day += 1;
+                let light = self.content().daylight - self.daylight;
                 self.daylight = self.content().daylight;
-                self.notice = "Camp rested. A new field day begins; three days cover one permit.";
+                self.feed.push(Event::Rested { light });
                 Cue::Good
             }
             1 => {
-                if self.packs == 0 || self.coins < 10 || self.kits > 108 {
-                    return Cue::None;
-                }
                 self.coins -= 10;
                 self.kits += 12;
                 self.packs -= 1;
-                self.notice = "Twelve supply units purchased. This camp has a finite stock.";
+                self.feed.push(Event::Bought);
                 Cue::Good
             }
             2 | 3 => {
                 let u = self.row - 2;
-                let cost = self.upgrade_cost(u);
-                if self.upgrades[u] >= 2
-                    || self.coins < cost
-                    || self.renown < 3 + u16::from(self.upgrades[u]) * 3
-                {
-                    return Cue::None;
-                }
-                self.coins -= cost;
+                self.coins -= self.upgrade_cost(u);
                 self.upgrades[u] += 1;
-                self.notice =
-                    "Field equipment upgraded. Improved tools persist after successful permits.";
+                self.feed.push(Event::Upgraded(u));
                 Cue::Good
             }
             4 => {
-                if !self.ready() {
-                    self.notice =
-                        "Need the signature part and at least one other identified specimen.";
-                    return Cue::None;
-                }
-                let n = self
-                    .samples
-                    .iter()
-                    .flatten()
-                    .filter(|s| s.identified)
-                    .count();
-                let quality = self
-                    .samples
-                    .iter()
-                    .flatten()
-                    .filter(|s| s.identified)
-                    .map(|s| u16::from(s.quality))
-                    .sum::<u16>()
-                    / n as u16;
-                self.medals[self.index] = if n == 4 && quality >= 90 {
-                    3
-                } else if n >= 3 && quality >= 60 {
-                    2
-                } else {
-                    1
-                };
-                self.score +=
-                    1000 + u32::from(self.daylight) * 5 + u32::from(self.medals[self.index]) * 200;
+                let medals = self.permit_medals();
+                self.medals[self.index] = medals;
+                self.score += self.permit_score(medals);
                 self.coins += 30;
                 if self.index == 5 {
                     self.phase = Phase::Complete;
                     self.score += 3000 + u32::from(self.renown) * 20;
-                    self.notice = "The Dawn Giant stands again. The basin museum opens its doors.";
+                    self.feed.push(Event::Opened { medals });
                     Cue::Win
                 } else {
+                    self.feed.push(Event::Advanced {
+                        site: self.index,
+                        medals,
+                    });
                     self.index += 1;
                     self.kits = (self.kits + 16).min(120);
                     self.load();
@@ -492,8 +694,7 @@ impl Game {
             || (self.daylight == 0 && (self.day >= 3 || self.coins < 12));
         if hopeless {
             self.phase = Phase::Setback;
-            self.notice =
-                "This permit cannot meet its museum obligations. Space uses a recovery grant.";
+            self.feed.push(Event::Setback);
             Cue::Bad
         } else {
             Cue::None
@@ -501,6 +702,7 @@ impl Game {
     }
     /// Execute one fixed tick. Only fresh command edges cause field work or spending.
     pub fn step(&mut self, input: &Input) -> Cue {
+        self.feed.clear();
         if self.outcome() != Outcome::Playing {
             return Cue::None;
         }
@@ -508,12 +710,15 @@ impl Game {
             Phase::Briefing => {
                 if input.primary || input.click {
                     self.phase = Phase::Field;
+                    self.feed.push(Event::Began);
                     return Cue::Action;
                 }
                 return Cue::None;
             }
             Phase::Setback => {
-                return if input.primary {
+                // Its button spends the grant exactly as Space does.
+                let button = input.click && inside(input.pointer, RECOVER_BUTTON);
+                return if input.primary || button {
                     self.recover()
                 } else {
                     Cue::None
@@ -562,6 +767,9 @@ impl Game {
                     self.cursor = ny * COLS + nx;
                     cue = Cue::Action
                 }
+                // The panel's Dig and Survey buttons take the same rule path
+                // as Space and X.
+                let mut button = None;
                 if input.click {
                     if let Some(at) = Self::tile_at(input.pointer) {
                         if self.cursor == at {
@@ -578,16 +786,21 @@ impl Game {
                             return Cue::None;
                         }
                         self.tool = tool;
+                        self.feed.push(Event::Tool(tool));
                         return Cue::Action;
                     }
+                    button = [DIG_BUTTON, SURVEY_BUTTON]
+                        .iter()
+                        .position(|r| inside(input.pointer, *r));
                 }
                 if input.tertiary {
                     self.tool = (self.tool + 1) % 3;
+                    self.feed.push(Event::Tool(self.tool));
                     return Cue::Action;
                 }
-                if input.secondary {
+                if input.secondary || button == Some(1) {
                     cue = self.survey()
-                } else if input.primary {
+                } else if input.primary || button == Some(0) {
                     cue = self.dig()
                 }
             }
@@ -622,7 +835,13 @@ impl Game {
                     if (332. ..=918.).contains(&input.pointer.x)
                         && (425. ..=465.).contains(&input.pointer.y)
                     {
-                        self.choice = (self.choice + 1) % 6;
+                        // Each chip names one species, as Left/Right would.
+                        let [x, _, w, _] = SPECIES_BAR;
+                        let pick = (((input.pointer.x - x) / (w / 6.)) as usize).min(5);
+                        if self.choice == pick {
+                            return Cue::None;
+                        }
+                        self.choice = pick;
                         return Cue::Action;
                     }
                     if (332. ..=918.).contains(&input.pointer.x)
@@ -653,22 +872,25 @@ impl Game {
                     cue = self.camp()
                 }
             }
-            Page::Museum => {
-                if input.left_pressed {
+            Page::Museum | Page::Atlas => {
+                // Clicking a placard or reference card highlights it, as the
+                // arrow keys do.
+                let atlas = self.page == Page::Atlas;
+                let card = if atlas { atlas_card } else { placard };
+                if input.click
+                    && let Some(i) = (0..6).find(|&i| inside(input.pointer, card(i)))
+                {
+                    if self.choice == i {
+                        return Cue::None;
+                    }
+                    self.choice = i;
+                    return Cue::Action;
+                }
+                if input.left_pressed || (atlas && input.up_pressed) {
                     self.choice = (self.choice + 5) % 6;
                     cue = Cue::Action
                 }
-                if input.right_pressed {
-                    self.choice = (self.choice + 1) % 6;
-                    cue = Cue::Action
-                }
-            }
-            Page::Atlas => {
-                if input.left_pressed || input.up_pressed {
-                    self.choice = (self.choice + 5) % 6;
-                    cue = Cue::Action
-                }
-                if input.right_pressed || input.down_pressed {
+                if input.right_pressed || (atlas && input.down_pressed) {
                     self.choice = (self.choice + 1) % 6;
                     cue = Cue::Action
                 }
@@ -834,22 +1056,22 @@ impl Game {
             self.camp_command(4)
         }
     }
-    /// Text for the final career report; safe to call during an unfinished permit.
+    /// One-sentence career report; safe to call during an unfinished permit.
     pub fn summary(&self) -> String {
-        format!(
-            "{} of 6 sites completed. {} museum specimens, {} Giant parts. {} medals and {} points. {} coins remain. {}",
-            self.medals.iter().filter(|&&m| m > 0).count(),
-            self.identified(),
-            self.museum_pieces(),
-            self.medals.iter().map(|&m| u32::from(m)).sum::<u32>(),
-            self.score,
-            self.coins,
-            if self.outcome() == Outcome::Won {
-                "The Dawn Giant stands in the new basin museum."
-            } else {
-                "Careful fieldwork preserves the story in every stone."
-            }
-        )
+        let sites = self.medals.iter().filter(|&&m| m > 0).count();
+        let medals = self.medals.iter().map(|&m| u32::from(m)).sum::<u32>();
+        let found = self.identified();
+        if self.outcome() == Outcome::Won {
+            format!(
+                "The museum opened with {found} specimens, {medals} medals and {} points.",
+                self.score
+            )
+        } else {
+            format!(
+                "Completed {sites} of 6 sites with {found} specimens, {medals} medals and {} points.",
+                self.score
+            )
+        }
     }
 }
 
@@ -1383,5 +1605,167 @@ mod tests {
                 && other.piece != site.piece
                 && other.strata != site.strata));
         }
+    }
+    fn click_on(r: [f32; 4]) -> Input {
+        Input {
+            click: true,
+            pointer: Vec2::new(r[0] + r[2] * 0.5, r[1] + r[3] * 0.5),
+            ..Input::default()
+        }
+    }
+    #[test]
+    fn panel_buttons_take_the_same_rule_path_as_their_keys() {
+        let survey = Input {
+            secondary: true,
+            ..Input::default()
+        };
+        let (mut keys, mut mouse) = (active(), active());
+        assert_eq!(keys.step(&survey), mouse.step(&click_on(SURVEY_BUTTON)));
+        assert_eq!(keys, mouse);
+        for _ in 0..3 {
+            assert_eq!(keys.step(&primary()), mouse.step(&click_on(DIG_BUTTON)));
+            assert_eq!(keys, mouse);
+        }
+        // A surveyed cross refuses the button exactly as it refuses X.
+        let snapshot = mouse.clone();
+        assert_eq!(mouse.step(&click_on(SURVEY_BUTTON)), Cue::None);
+        assert_eq!(mouse, snapshot);
+        // The buttons exist only on the Dig page.
+        mouse.step(&Game::tab(Page::Lab));
+        let snapshot = mouse.clone();
+        assert_eq!(mouse.step(&click_on(DIG_BUTTON)), Cue::None);
+        assert_eq!(mouse, snapshot);
+        // A setback's Recover button spends a grant like Space does.
+        let mut broke = active();
+        broke.kits = 1;
+        broke.coins = 0;
+        assert_eq!(broke.step(&survey), Cue::Bad);
+        assert_eq!(broke.phase, Phase::Setback);
+        assert_eq!(broke.step(&click_on(DIG_BUTTON)), Cue::None);
+        assert_eq!(broke.step(&click_on(RECOVER_BUTTON)), Cue::Action);
+        assert_eq!((broke.retries, broke.coins), (2, 65));
+    }
+    #[test]
+    fn species_atlas_and_museum_clicks_choose_directly() {
+        let mut g = active();
+        g.step(&Game::tab(Page::Lab));
+        let [x, _, w, _] = SPECIES_BAR;
+        let chip = |i: usize| Input {
+            click: true,
+            pointer: Vec2::new(x + (i as f32 + 0.5) * w / 6., 445.),
+            ..Input::default()
+        };
+        assert_eq!(g.step(&chip(3)), Cue::Action);
+        assert_eq!(g.choice, 3);
+        assert_eq!(g.step(&chip(3)), Cue::None);
+        assert_eq!(g.step(&chip(5)), Cue::Action);
+        assert_eq!(g.choice, 5);
+        type Card = fn(usize) -> [f32; 4];
+        for (page, card) in [(Page::Atlas, atlas_card as Card), (Page::Museum, placard)] {
+            g.step(&Game::tab(page));
+            for i in [2, 0, 4] {
+                assert_eq!(g.step(&click_on(card(i))), Cue::Action);
+                assert_eq!(g.choice, i);
+                assert_eq!(g.step(&click_on(card(i))), Cue::None);
+            }
+        }
+        g.step(&Input {
+            right_pressed: true,
+            ..Input::default()
+        });
+        assert_eq!(g.choice, 5, "arrow keys still browse");
+    }
+    #[test]
+    fn feed_reports_only_the_latest_tick() {
+        let mut g = active();
+        let survey = Input {
+            secondary: true,
+            ..Input::default()
+        };
+        let events = |g: &Game| g.feed.iter().collect::<Vec<_>>();
+        g.step(&survey);
+        let revealed = 1 << 0 | 1 << 1 | 1 << 8;
+        assert_eq!(events(&g), [Event::Survey { at: 0, revealed }]);
+        g.step(&survey);
+        let lack = Lack::Nothing;
+        assert_eq!(
+            events(&g),
+            [Event::Refused {
+                spot: Spot::Tile(0),
+                lack
+            }]
+        );
+        g.step(&Input::default());
+        assert!(events(&g).is_empty());
+        // A rough cut reports the layers it removed and the condition it cost.
+        at_find(&mut g, 0);
+        g.tool = 1;
+        g.step(&primary());
+        g.step(&primary());
+        let cut = Event::Cut {
+            at: 18,
+            removed: 1,
+            loss: 32,
+            exposed: true,
+            empty: false,
+        };
+        assert_eq!(events(&g), [cut]);
+        assert_eq!(g.step(&primary()), Cue::Good);
+        assert_eq!(events(&g), [Event::Jacket { at: 18, slot: 0 }]);
+        // Camp refusals name the reason the rules gave.
+        let mut camp = active();
+        camp.step(&Game::tab(Page::Camp));
+        for (row, lack) in [(0, Lack::Morning), (2, Lack::Renown(3)), (4, Lack::Ready)] {
+            camp.row = row;
+            let snapshot = camp.clone();
+            assert_eq!(camp.step(&primary()), Cue::None);
+            assert_eq!(camp, snapshot);
+            let spot = Spot::Camp(row);
+            assert_eq!(events(&camp), [Event::Refused { spot, lack }]);
+        }
+    }
+    #[test]
+    fn previews_match_what_the_rules_then_do() {
+        for tool in 0..3 {
+            let mut g = active();
+            at_find(&mut g, 0);
+            g.tool = tool;
+            assert_eq!(g.initial_depth(g.cursor), 3);
+            while g.cells[g.cursor].depth > 0 {
+                let before = g.cells[g.cursor];
+                let loss = g.cut_loss(g.cursor, tool);
+                let (power, _, _) = g.tool_power(tool, g.cursor);
+                g.step(&primary());
+                let after = g.cells[g.cursor];
+                assert_eq!(after.quality, before.quality.saturating_sub(loss));
+                assert_eq!(after.depth, before.depth.saturating_sub(power));
+            }
+        }
+        let mut g = active();
+        g.step(&Game::tab(Page::Camp));
+        g.daylight -= 1;
+        for coins in [0, 11, 12, 40, 200] {
+            for renown in [0, 3, 6] {
+                for row in 0..6 {
+                    let mut probe = g.clone();
+                    (probe.coins, probe.renown, probe.row) = (coins, renown, row);
+                    let lack = probe.camp_lack(row);
+                    let cue = probe.step(&primary());
+                    assert_eq!(lack.is_none(), cue != Cue::None, "{row} {coins} {renown}");
+                }
+            }
+        }
+        let mut g = active();
+        excavate(&mut g, 0);
+        identify(&mut g, 0);
+        g.step(&Game::tab(Page::Dig));
+        excavate(&mut g, 1);
+        identify(&mut g, 1);
+        let medals = g.permit_medals();
+        let score = g.score + g.permit_score(medals);
+        g.step(&Game::tab(Page::Camp));
+        g.row = 4;
+        assert_eq!(g.step(&primary()), Cue::Good);
+        assert_eq!((g.medals[0], g.score), (medals, score));
     }
 }

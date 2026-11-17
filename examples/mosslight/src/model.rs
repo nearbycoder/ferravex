@@ -14,10 +14,62 @@
 //! ```
 
 use crate::content::{CELLS, COLS, FLOORS, ROWS};
-use ferravex_arcade::{Cue, Input, Outcome};
+use ferravex_arcade::{Cue, Input, Outcome, Rect, Vec2};
 
 pub(crate) const ENEMIES: usize = 8;
 const DIRS: [(i32, i32); 4] = [(0, -1), (-1, 0), (1, 0), (0, 1)];
+/// Most presentation events one tick records; any further ones are dropped.
+pub(crate) const EVENTS: usize = 32;
+/// Board origin and tile size in logical canvas units, shared with the view.
+pub(crate) const BOARD_X: f32 = 26.;
+pub(crate) const BOARD_Y: f32 = 128.;
+pub(crate) const TILE: f32 = 38.;
+/// Sidebar action buttons in logical canvas units, shared by drawing and the
+/// pointer path: guard (descend on the stairs), drink a flask, lantern burst.
+pub(crate) const ACTIONS: [Rect; 3] = [
+    Rect::new(636., 204., 88., 92.),
+    Rect::new(732., 204., 88., 92.),
+    Rect::new(828., 204., 88., 92.),
+];
+
+/// The board cell under `p`, if any.
+pub(crate) fn cell_at(p: Vec2) -> Option<Pos> {
+    let cell = Pos::new(
+        ((p.x - BOARD_X) / TILE).floor() as i32,
+        ((p.y - BOARD_Y) / TILE).floor() as i32,
+    );
+    cell.inside().then_some(cell)
+}
+/// The sidebar action button under `p`: 0 guard, 1 flask, 2 burst.
+pub(crate) fn action_at(p: Vec2) -> Option<usize> {
+    ACTIONS.iter().position(|button| button.contains(p))
+}
+/// The camp relic card under `p`; the view draws the cards in these areas.
+pub(crate) fn relic_at(p: Vec2) -> Option<usize> {
+    if !(278. ..428.).contains(&p.y) {
+        return None;
+    }
+    (0..3).find(|i| {
+        let x = 44. + *i as f32 * 181.;
+        (x..x + 171.).contains(&p.x)
+    })
+}
+/// A click on a sidebar action button presses that action's key, so both
+/// share one rule path.
+fn with_action_click(input: &Input) -> Input {
+    let mut input = *input;
+    if input.click
+        && let Some(action) = action_at(input.pointer)
+    {
+        input.click = false;
+        match action {
+            0 => input.primary = true,
+            1 => input.secondary = true,
+            _ => input.tertiary = true,
+        }
+    }
+    input
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Pos {
@@ -114,8 +166,73 @@ pub(crate) enum Phase {
     Won,
     Lost,
 }
+/// What the latest tick accepted (or refused) and where. Recorded only for
+/// presentation effects; no rule ever reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Event {
+    /// The hero stepped onto this tile.
+    Step(Pos),
+    /// A wall refused the step.
+    Bump(Pos),
+    /// A gold seal or the stairs refused: this floor's key is missing.
+    Locked(Pos),
+    /// The stairs refused: the Root King still lives.
+    Crowned(Pos),
+    /// The hero's blade or lantern hit a creature.
+    Hit {
+        at: Pos,
+        amount: u8,
+        killed: bool,
+        species: Species,
+    },
+    /// Telegraphed attacks resolved on the hero (`amount` may be fully guarded).
+    Hurt {
+        amount: u8,
+        guarded: bool,
+    },
+    /// This creature's attack resolved on the hero.
+    Struck(Pos),
+    /// This creature began telegraphing an attack.
+    Telegraph(Pos),
+    Thorns(Pos),
+    Key(Pos),
+    Amber(Pos),
+    Flask(Pos),
+    /// A flask stayed on the floor because the belt is full.
+    BeltFull(Pos),
+    Well {
+        at: Pos,
+        health: u8,
+        flask: u8,
+        charge: u8,
+    },
+    Drink {
+        health: u8,
+    },
+    /// The flask was refused: none left (`empty`) or health already full.
+    NoDrink {
+        empty: bool,
+    },
+    Burst(Pos),
+    /// The burst was refused: no charge (`empty`) or no creature in reach.
+    NoBurst {
+        empty: bool,
+    },
+    Guard(Pos),
+    /// The floor's stairs were taken; camp follows.
+    Cleared(Pos),
+    /// A relic was chosen and the next floor began, with these gains.
+    Camp {
+        relic: u8,
+        health: u8,
+        flask: u8,
+        charge: u8,
+    },
+    Fallen(Pos),
+    Won(Pos),
+}
 
-/// An expedition with bounded board, enemy and message storage.
+/// An expedition with bounded board, enemy and event storage.
 ///
 /// Construct a fresh run with [`Self::new`], commit fixed inputs with
 /// [`Self::step`], then inspect [`Self::outcome`]. Drawing is a separate adapter.
@@ -139,8 +256,8 @@ pub struct Game {
     pub(crate) treasure: u16,
     pub(crate) choices: [u8; 3],
     pub(crate) choice: usize,
-    pub(crate) messages: [String; 3],
-    pub(crate) ticks: u64,
+    /// Presentation events of the latest executed tick (see [`Event`]).
+    pub(crate) events: [Option<Event>; EVENTS],
     pub(crate) flash: u8,
     pub(crate) inspected: Option<Pos>,
 }
@@ -173,13 +290,12 @@ impl Game {
             treasure: 0,
             choices: [0; 3],
             choice: 0,
-            messages: std::array::from_fn(|_| String::new()),
-            ticks: 0,
+            events: [None; EVENTS],
             flash: 0,
             inspected: None,
         };
         game.load_floor();
-        game.log("Take your time. Only actions advance the dungeon.");
+        game.events = [None; EVENTS];
         game
     }
 
@@ -207,9 +323,15 @@ impl Game {
             _ => Outcome::Playing,
         }
     }
-    pub(crate) fn log(&mut self, message: &str) {
-        self.messages.rotate_left(1);
-        self.messages[2] = message.to_owned();
+    /// Record a presentation event; a full list drops it (bounded storage).
+    fn event(&mut self, event: Event) {
+        if let Some(slot) = self.events.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(event);
+        }
+    }
+    /// Events the latest executed tick recorded, oldest first.
+    pub(crate) fn events(&self) -> impl Iterator<Item = Event> + '_ {
+        self.events.iter().map_while(|event| *event)
     }
     fn load_floor(&mut self) {
         self.enemies.fill(None);
@@ -263,7 +385,6 @@ impl Game {
             }
         }
         self.plan_enemies();
-        self.log(FLOORS[self.depth].name);
     }
     pub(crate) fn tile(&self, pos: Pos) -> Tile {
         if pos.inside() {
@@ -291,58 +412,64 @@ impl Game {
             return false;
         };
         enemy.health = enemy.health.saturating_sub(amount);
-        let name = enemy.species.name();
-        let king = enemy.species == Species::King;
-        if enemy.health == 0 {
+        let (at, species) = (enemy.pos, enemy.species);
+        let killed = enemy.health == 0;
+        if killed {
             self.enemies[index] = None;
-            self.score += if king { 700 } else { 80 };
+            self.score += if species == Species::King { 700 } else { 80 };
             self.kills += 1;
-            self.log(&format!("{name} falls. Its attack is cancelled."));
-            if king {
-                self.log("The crown goes dark. Take the seed to the stairs!");
-            }
-            true
-        } else {
-            self.log(&format!("You strike {name} for {amount}."));
-            false
         }
+        self.event(Event::Hit {
+            at,
+            amount,
+            killed,
+            species,
+        });
+        killed
     }
     fn pickup(&mut self) -> Cue {
         let cell = self.hero.index();
+        let at = self.hero;
         let cue = match self.board[cell] {
             Tile::Seed => {
                 self.seed = true;
                 self.score += 100;
-                self.log("Seed sigil found. Gold seals now open.");
+                self.event(Event::Key(at));
                 Cue::Good
             }
             Tile::Amber => {
                 self.treasure += 1;
                 self.score += 140;
-                self.log("A jar of daylight. +140 amber score.");
+                self.event(Event::Amber(at));
                 Cue::Good
             }
             Tile::Flask => {
                 if self.flasks >= 5 {
-                    self.log("Flask belt full. Leave this one for later.");
+                    self.event(Event::BeltFull(at));
                     return Cue::Action;
                 }
                 self.flasks += 1;
-                self.log("One healing flask found. X drinks it.");
+                self.event(Event::Flask(at));
                 Cue::Good
             }
             Tile::Well => {
+                let before = (self.health, self.flasks, self.charge);
                 self.health = self.health.saturating_add(8).min(self.max_health);
                 self.charge = self.charge.saturating_add(1).min(self.max_charge);
                 self.flasks = self.flasks.saturating_add(1).min(5);
                 self.board[cell] = Tile::EmptyWell;
-                self.log("Moonwell: +8 health, one flask, one lantern charge.");
+                self.event(Event::Well {
+                    at,
+                    health: self.health.saturating_sub(before.0),
+                    flask: self.flasks.saturating_sub(before.1),
+                    charge: self.charge.saturating_sub(before.2),
+                });
                 return Cue::Good;
             }
             Tile::Thorns => {
                 self.health = self.health.saturating_sub(2);
                 self.flash = 18;
-                self.log("Thorns cut for 2. Stone paths are safer.");
+                self.event(Event::Thorns(at));
                 return Cue::Bad;
             }
             _ => return Cue::Action,
@@ -353,10 +480,10 @@ impl Game {
     fn move_or_strike(&mut self, dx: i32, dy: i32) -> Cue {
         let dest = self.hero.offset(dx, dy);
         if !self.walkable(dest) {
-            self.log(if self.tile(dest) == Tile::Seal {
-                "The gold seal needs this floor's seed sigil."
+            self.event(if self.tile(dest) == Tile::Seal {
+                Event::Locked(dest)
             } else {
-                "Stone blocks the way. No turn spent."
+                Event::Bump(dest)
             });
             return Cue::None;
         }
@@ -368,17 +495,18 @@ impl Game {
             }
         } else {
             self.hero = dest;
+            self.event(Event::Step(dest));
             self.pickup()
         };
         self.finish_turn(false, cue)
     }
     fn descend(&mut self) -> Cue {
         if !self.seed {
-            self.log("Find the leaf-shaped seed sigil before descending.");
+            self.event(Event::Locked(self.hero));
             return Cue::None;
         }
         if self.king_alive() {
-            self.log("The Root King's crown still binds the exit.");
+            self.event(Event::Crowned(self.hero));
             return Cue::None;
         }
         self.score += 350;
@@ -386,12 +514,12 @@ impl Game {
             self.score += 2000 + u32::from(self.health) * 20;
             self.score += 600_u32.saturating_sub(self.turns);
             self.phase = Phase::Won;
-            self.log("Dawn returns. The village remembers your lantern.");
+            self.event(Event::Won(self.hero));
             Cue::Win
         } else {
             self.phase = Phase::Camp;
             self.choice = 0;
-            self.log("A safe root hollow. Choose one relic before descending.");
+            self.event(Event::Cleared(self.hero));
             Cue::Good
         }
     }
@@ -402,11 +530,8 @@ impl Game {
         if input.right_pressed || input.down_pressed {
             self.choice = (self.choice + 1) % 3;
         }
-        let clicked = if input.click && (278. ..428.).contains(&input.pointer.y) {
-            (0..3).find(|i| {
-                let x = 44. + *i as f32 * 181.;
-                (x..x + 171.).contains(&input.pointer.x)
-            })
+        let clicked = if input.click {
+            relic_at(input.pointer)
         } else {
             None
         };
@@ -423,6 +548,7 @@ impl Game {
         let Some(choice) = choice else {
             return Cue::None;
         };
+        let before = (self.health, self.flasks, self.charge);
         self.choices[choice] += 1;
         match choice {
             0 => self.attack += 1,
@@ -440,30 +566,42 @@ impl Game {
         self.charge = self.charge.saturating_add(1).min(self.max_charge);
         self.depth += 1;
         self.load_floor();
-        self.log("Camp restored 7 health, one flask and one charge.");
+        self.event(Event::Camp {
+            relic: choice as u8,
+            health: self.health.saturating_sub(before.0),
+            flask: self.flasks.saturating_sub(before.1),
+            charge: self.charge.saturating_sub(before.2),
+        });
         Cue::Good
     }
 
     /// Execute one fixed tick. Accepted directional edges move or melee; Space
-    /// guards/descends, X heals and C bursts. Idle ticks only animate presentation.
+    /// guards/descends, X heals and C bursts; a click on a sidebar action
+    /// button presses that action's key. Idle ticks only animate presentation.
     /// Finished runs reject all further actions. See the [module example](self).
     pub fn step(&mut self, input: &Input) -> Cue {
         if self.outcome() != Outcome::Playing {
             return Cue::None;
         }
-        self.ticks = self.ticks.wrapping_add(1);
+        self.events = [None; EVENTS];
         self.flash = self.flash.saturating_sub(1);
         if self.phase == Phase::Camp {
             return self.camp(input);
         }
+        let input = &with_action_click(input);
         if input.secondary {
             if self.flasks == 0 || self.health == self.max_health {
-                self.log("No flask needed or none remaining. No turn spent.");
+                self.event(Event::NoDrink {
+                    empty: self.flasks == 0,
+                });
                 return Cue::None;
             }
+            let before = self.health;
             self.flasks -= 1;
             self.health = self.health.saturating_add(12).min(self.max_health);
-            self.log("You drink a flask: up to 12 health restored.");
+            self.event(Event::Drink {
+                health: self.health.saturating_sub(before),
+            });
             return self.finish_turn(false, Cue::Good);
         }
         if input.tertiary {
@@ -471,11 +609,13 @@ impl Game {
                 self.enemies[i].is_some_and(|e| self.hero.distance(e.pos) <= 2)
             });
             if self.charge == 0 || !targets.iter().any(|t| *t) {
-                self.log("Burst needs charge and a foe within two tiles.");
+                self.event(Event::NoBurst {
+                    empty: self.charge == 0,
+                });
                 return Cue::None;
             }
             self.charge -= 1;
-            self.log("Lantern burst! Every nearby root burns.");
+            self.event(Event::Burst(self.hero));
             for (index, hit) in targets.iter().enumerate() {
                 if *hit {
                     self.damage_enemy(index, self.attack + 3);
@@ -488,7 +628,7 @@ impl Game {
             if self.tile(self.hero) == Tile::Stairs {
                 return self.descend();
             }
-            self.log("You brace the lantern. Incoming damage reduced by 3.");
+            self.event(Event::Guard(self.hero));
             return self.finish_turn(true, Cue::Action);
         }
         let direction = if input.up_pressed {
@@ -505,15 +645,12 @@ impl Game {
         if let Some((dx, dy)) = direction {
             return self.move_or_strike(dx, dy);
         }
-        if input.click {
-            let x = ((input.pointer.x - 26.) / 38.).floor() as i32;
-            let y = ((input.pointer.y - 128.) / 38.).floor() as i32;
-            let cell = Pos::new(x, y);
-            if cell.inside() {
-                self.inspected = Some(cell);
-                if self.hero.distance(cell) == 1 {
-                    return self.move_or_strike(cell.x - self.hero.x, cell.y - self.hero.y);
-                }
+        if input.click
+            && let Some(cell) = cell_at(input.pointer)
+        {
+            self.inspected = Some(cell);
+            if self.hero.distance(cell) == 1 {
+                return self.move_or_strike(cell.x - self.hero.x, cell.y - self.hero.y);
             }
         }
         Cue::None
@@ -523,10 +660,11 @@ impl Game {
         self.turns = self.turns.saturating_add(1);
         if self.health == 0 {
             self.phase = Phase::Lost;
-            self.log("Your lantern goes out among the roots.");
+            self.event(Event::Fallen(self.hero));
             return Cue::Bad;
         }
         let mut damage = 0;
+        let mut threatened = false;
         for index in 0..ENEMIES {
             let Some(enemy) = self.enemies[index] else {
                 continue;
@@ -537,6 +675,8 @@ impl Game {
                     .damage()
                     .saturating_sub(if guarding { 3 } else { 0 });
                 damage += hit;
+                threatened = true;
+                self.event(Event::Struck(enemy.pos));
             }
             if let Plan::Move(dest) = enemy.plan
                 && dest != self.hero
@@ -549,13 +689,16 @@ impl Game {
         self.health = self.health.saturating_sub(damage);
         if damage > 0 {
             self.flash = 22;
-            self.log(&format!(
-                "Telegraphed attacks hit for {damage}. Watch the red tiles."
-            ));
+        }
+        if threatened {
+            self.event(Event::Hurt {
+                amount: damage,
+                guarded: guarding,
+            });
         }
         if self.health == 0 {
             self.phase = Phase::Lost;
-            self.log("Your lantern goes out among the roots.");
+            self.event(Event::Fallen(self.hero));
             return Cue::Bad;
         }
         self.plan_enemies();
@@ -651,6 +794,9 @@ impl Game {
             let target = self.enemies[index].as_mut().unwrap();
             target.plan = plan;
             target.rounds = round;
+            if plan.is_attack() {
+                self.event(Event::Telegraph(enemy.pos));
+            }
         }
     }
     fn goal(&self) -> Pos {
@@ -791,6 +937,7 @@ impl Game {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ferravex_arcade::vec2;
 
     #[test]
     fn authored_floors_have_reachable_seed_stairs_and_bounded_enemies() {
@@ -845,12 +992,12 @@ mod tests {
         assert_eq!(
             game.outcome(),
             Outcome::Won,
-            "floor={} pos={:?} hp={} turns={} messages={:?} enemies={:?}",
+            "floor={} pos={:?} hp={} turns={} events={:?} enemies={:?}",
             game.floor(),
             game.hero,
             game.health,
             game.turns,
-            game.messages,
+            game.events,
             game.enemies
         );
         assert!(visited.iter().all(|visited| *visited));
@@ -1158,5 +1305,138 @@ mod tests {
             Cue::None
         );
         assert_eq!((game.charge, game.turns), (charge, 0));
+    }
+
+    fn click(at: Vec2) -> Input {
+        Input {
+            click: true,
+            pointer: at,
+            ..Input::default()
+        }
+    }
+
+    /// Everything a command may change, for comparing two rule paths.
+    fn state(game: &Game) -> String {
+        format!(
+            "{:?}",
+            (
+                game.hero,
+                game.health,
+                game.flasks,
+                game.charge,
+                game.turns,
+                game.score,
+                game.kills,
+                game.phase,
+                game.enemies,
+                game.board,
+            )
+        )
+    }
+
+    #[test]
+    fn sidebar_buttons_follow_the_same_rule_path_as_their_keys() {
+        let mut game = Game::new();
+        game.enemies.fill(None);
+        game.enemies[0] = Some(Enemy {
+            pos: Pos::new(2, 1),
+            species: Species::Knight,
+            health: 12,
+            max_health: 12,
+            plan: Plan::Strike(game.hero),
+            rounds: 0,
+        });
+        game.health = 9;
+        let keys = [
+            Input {
+                primary: true,
+                ..Input::default()
+            },
+            Input {
+                secondary: true,
+                ..Input::default()
+            },
+            Input {
+                tertiary: true,
+                ..Input::default()
+            },
+        ];
+        for (button, key) in keys.iter().enumerate() {
+            let mut pressed = game.clone();
+            let mut clicked = game.clone();
+            let key_cue = pressed.step(key);
+            let click_cue = clicked.step(&click(ACTIONS[button].center()));
+            assert_eq!(key_cue, click_cue, "button {button}");
+            assert_eq!(state(&pressed), state(&clicked), "button {button}");
+            assert_eq!(clicked.turns, 1, "button {button} spends one turn");
+        }
+        // Refusals match too: a full-health flask spends nothing either way.
+        game.health = game.max_health;
+        let mut clicked = game.clone();
+        assert_eq!(clicked.step(&click(ACTIONS[1].center())), Cue::None);
+        assert_eq!(state(&clicked), state(&game));
+        assert!(
+            clicked
+                .events()
+                .any(|e| e == Event::NoDrink { empty: false })
+        );
+        // On unlocked stairs the guard button descends, exactly like Space.
+        game.board[game.hero.index()] = Tile::Stairs;
+        game.seed = true;
+        let mut pressed = game.clone();
+        let mut clicked = game.clone();
+        pressed.step(&keys[0]);
+        clicked.step(&click(ACTIONS[0].center()));
+        assert_eq!(clicked.phase, Phase::Camp);
+        assert_eq!(state(&pressed), state(&clicked));
+        // Board clicks keep their meaning: an adjacent tile is a step.
+        let mut walker = Game::new();
+        let (x, y) = (BOARD_X + 2.5 * TILE, BOARD_Y + 1.5 * TILE);
+        walker.step(&click(vec2(x, y)));
+        assert_eq!((walker.hero, walker.turns), (Pos::new(2, 1), 1));
+        assert_eq!(walker.events().next(), Some(Event::Step(Pos::new(2, 1))));
+    }
+
+    #[test]
+    fn camp_cards_accept_clicks_through_the_shared_hit_test() {
+        for relic in 0..3 {
+            let mut game = Game::new();
+            game.phase = Phase::Camp;
+            let at = vec2(44. + relic as f32 * 181. + 85., 350.);
+            assert_eq!(relic_at(at), Some(relic));
+            assert_eq!(game.step(&click(at)), Cue::Good);
+            assert_eq!(game.choices[relic], 1);
+            assert_eq!(game.floor(), 2);
+            assert!(game.events().any(|e| matches!(
+                e,
+                Event::Camp { relic: r, .. } if usize::from(r) == relic
+            )));
+        }
+        assert_eq!(relic_at(vec2(44. + 172., 350.)), None, "gap between cards");
+        assert_eq!(relic_at(vec2(100., 430.)), None, "below the cards");
+    }
+
+    #[test]
+    fn events_describe_only_the_latest_tick() {
+        let mut game = Game::new();
+        assert_eq!(game.events().count(), 0);
+        game.step(&Input {
+            right_pressed: true,
+            ..Input::default()
+        });
+        assert_eq!(game.events().next(), Some(Event::Step(Pos::new(2, 1))));
+        game.step(&Input::default());
+        assert_eq!(game.events().count(), 0, "idle ticks clear the list");
+        game.step(&Input {
+            up_pressed: true,
+            ..Input::default()
+        });
+        assert_eq!(game.events().next(), Some(Event::Bump(Pos::new(2, 0))));
+        assert_eq!(game.turns, 1, "a bump is refused without a turn");
+        // A storm of events stays bounded.
+        for _ in 0..EVENTS + 8 {
+            game.event(Event::Guard(game.hero));
+        }
+        assert_eq!(game.events().count(), EVENTS);
     }
 }

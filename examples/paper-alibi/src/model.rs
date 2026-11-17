@@ -38,6 +38,84 @@ impl View {
     }
 }
 
+/// One command the last executed tick accepted or politely refused, kept for
+/// that tick only so the presentation can answer it where it happened. The
+/// rules never read it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Event {
+    /// The view switched to this tab.
+    Tab(View),
+    /// A row was selected in this view.
+    Select(View, usize),
+    /// A theory field (0 who, 1 how, 2 why) cycled to this answer.
+    Draft(usize, usize),
+    /// A new scene record (0..=2) or interview (3..=5) entered the notebook.
+    Recorded(usize),
+    /// The record was already collected; nothing changed.
+    Repeat(usize),
+    /// A collected record was pinned to the board.
+    Pinned(usize),
+    /// A pinned record was taken off the board.
+    Unpinned(usize),
+    /// Pinning refused: this record is still missing.
+    Missing(usize),
+    /// Both pins were cleared.
+    Cleared,
+    /// The authored contradiction was connected.
+    Linked,
+    /// The pinned records do not contradict each other.
+    NoLink,
+    /// The contradiction was already connected.
+    AlreadyLinked,
+    /// This witness signed a response.
+    Confessed(usize),
+    /// Confronting refused: no contradiction is connected yet.
+    ConfrontLocked(usize),
+    /// Confronting refused: the contradiction names a different witness.
+    WrongWitness(usize),
+    /// This witness has already signed.
+    AlreadySigned(usize),
+    /// Filing refused: records or the confrontation are missing.
+    FileLocked,
+    /// The accusation was right and the case closed.
+    Solved,
+    /// A supported but wrong accusation; the remaining credibility points.
+    Retracted(u8),
+    /// The connect/confront command has no target in this view.
+    NoTarget,
+    /// The next dossier opened.
+    NextCase,
+    /// The final edition was printed.
+    Published,
+}
+
+/// Bounded per-tick presentation events. Cleared at the start of every
+/// executed update and ignored by equality, so identical commands still
+/// compare as identical games.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Events {
+    list: [Option<Event>; 4],
+}
+impl Events {
+    fn clear(&mut self) {
+        self.list = [None; 4];
+    }
+    fn push(&mut self, event: Event) {
+        if let Some(slot) = self.list.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(event);
+        }
+    }
+    /// Events in the order the tick accepted them.
+    pub fn iter(&self) -> impl Iterator<Item = Event> + '_ {
+        self.list.iter().flatten().copied()
+    }
+}
+impl PartialEq for Events {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
 /// A six-case campaign with four credibility points and no real-time deadline.
 /// All commands go through [`Game::step`]; see the module's executable example.
 #[derive(Clone, Debug, PartialEq)]
@@ -56,7 +134,7 @@ pub struct Game {
     pub(crate) score: u32,
     pub(crate) total_notes: u32,
     pub(crate) debrief: bool,
-    pub(crate) notice: &'static str,
+    pub(crate) events: Events,
     result: Outcome,
 }
 impl Default for Game {
@@ -82,7 +160,7 @@ impl Game {
             score: 0,
             total_notes: 0,
             debrief: false,
-            notice: "Select a location, then examine it with Space.",
+            events: Events::default(),
             result: Outcome::Playing,
         }
     }
@@ -135,45 +213,58 @@ impl Game {
     pub(crate) fn connected_pair(&self) -> [usize; 2] {
         [0, 3 + self.case_data().culprit]
     }
+    /// Contradictions connected so far, including the current unsolved case.
+    pub(crate) fn contradictions(&self) -> usize {
+        self.solved + usize::from(self.linked && self.solved <= self.case)
+    }
+    /// The reporter rank earned by the number of retracted accusations.
+    pub(crate) fn rank(&self) -> &'static str {
+        match self.mistakes {
+            0 => "Editor of Record",
+            1 => "Trusted Correspondent",
+            _ => "Persistent Reporter",
+        }
+    }
     fn discover(&mut self, index: usize) -> Cue {
         if self.known[index] {
-            self.notice = "Already recorded. Read it again; no evidence is lost.";
+            self.events.push(Event::Repeat(index));
             return Cue::None;
         }
         self.known[index] = true;
         self.total_notes += 1;
         self.score += 25;
-        self.notice = if index < 3 {
-            "Physical evidence added to Notebook [3]."
-        } else {
-            "Testimony added to Notebook [3]. Compare words with facts."
-        };
+        self.events.push(Event::Recorded(index));
         Cue::Good
     }
     fn pin(&mut self) -> Cue {
         let index = self.selected[View::Notebook.index()];
         if !self.known[index] {
-            self.notice = "That record is still missing. Visit its location or witness.";
+            self.events.push(Event::Missing(index));
             return Cue::None;
         }
-        if self.pins[0] == Some(index) {
+        let event = if self.pins[0] == Some(index) {
             self.pins[0] = self.pins[1];
             self.pins[1] = None;
+            Event::Unpinned(index)
         } else if self.pins[1] == Some(index) {
             self.pins[1] = None;
+            Event::Unpinned(index)
         } else if self.pins[0].is_none() {
             self.pins[0] = Some(index);
+            Event::Pinned(index)
         } else if self.pins[1].is_none() {
             self.pins[1] = Some(index);
+            Event::Pinned(index)
         } else {
             self.pins = [self.pins[1], Some(index)];
-        }
-        self.notice = "Pin two conflicting records, then press C to connect them.";
+            Event::Pinned(index)
+        };
+        self.events.push(event);
         Cue::Action
     }
     fn connect(&mut self) -> Cue {
         if self.linked {
-            self.notice = "The contradiction is established. Confront its witness in People [2].";
+            self.events.push(Event::AlreadyLinked);
             return Cue::None;
         }
         let expected = self.connected_pair();
@@ -182,38 +273,37 @@ impl Game {
         {
             self.linked = true;
             self.score += 100;
-            self.notice =
-                "A statement contradicts physical evidence. Confront that witness with C.";
+            self.events.push(Event::Linked);
             Cue::Good
         } else {
-            self.notice =
-                "No direct contradiction. Compare a verified object with a witness's claim.";
+            self.events.push(Event::NoLink);
             Cue::None
         }
     }
     fn confront(&mut self) -> Cue {
+        let witness = self.selected[View::People.index()];
         if self.confronted {
-            self.notice = "The signed response is in Notebook. Complete your theory.";
+            self.events.push(Event::AlreadySigned(witness));
             return Cue::None;
         }
         if !self.linked {
-            self.notice = "First connect contradictory records in Notebook [3].";
+            self.events.push(Event::ConfrontLocked(witness));
             return Cue::None;
         }
-        if self.selected[View::People.index()] != self.case_data().culprit {
-            self.notice = "Your established contradiction belongs to a different witness.";
+        if witness != self.case_data().culprit {
+            self.events.push(Event::WrongWitness(witness));
             return Cue::None;
         }
         self.confronted = true;
         self.known[6] = true;
         self.total_notes += 1;
         self.score += 75;
-        self.notice = "Signed response recorded. Read it, then assemble Theory [4].";
+        self.events.push(Event::Confessed(witness));
         Cue::Good
     }
     fn file(&mut self) -> Cue {
         if !self.can_file() {
-            self.notice = "Need all three scene records, three interviews, and a confrontation.";
+            self.events.push(Event::FileLocked);
             return Cue::None;
         }
         let case = self.case_data();
@@ -221,12 +311,12 @@ impl Game {
             self.solved += 1;
             self.debrief = true;
             self.score += 500 + u32::from(self.credibility) * 50;
-            self.notice = "Case closed. Read the result, then press Space to continue.";
+            self.events.push(Event::Solved);
             Cue::Win
         } else {
             self.credibility -= 1;
             self.mistakes += 1;
-            self.notice = "The accusation does not fit the record. One credibility point lost.";
+            self.events.push(Event::Retracted(self.credibility));
             if self.credibility == 0 {
                 self.result = Outcome::Lost;
             }
@@ -246,7 +336,7 @@ impl Game {
             View::Notebook => self.connect(),
             View::People => self.confront(),
             _ => {
-                self.notice = "C connects records in Notebook, or confronts a witness in People.";
+                self.events.push(Event::NoTarget);
                 Cue::None
             }
         }
@@ -254,17 +344,26 @@ impl Game {
     fn secondary(&mut self) -> Cue {
         if self.view == View::Notebook {
             self.pins = [None; 2];
-            self.notice = "Pins cleared. Collected records are safe.";
+            self.events.push(Event::Cleared);
         } else {
-            self.view = View::Notebook;
+            self.show(View::Notebook);
         }
         Cue::Action
+    }
+    fn show(&mut self, view: View) {
+        self.view = view;
+        self.events.push(Event::Tab(view));
+    }
+    fn select(&mut self, row: usize) {
+        self.selected[self.view.index()] = row;
+        self.events.push(Event::Select(self.view, row));
     }
     fn next_case(&mut self) -> Cue {
         if self.solved == CASES.len() {
             self.result = Outcome::Won;
             self.debrief = false;
             self.score += 500;
+            self.events.push(Event::Published);
             return Cue::Win;
         }
         self.case += 1;
@@ -276,7 +375,7 @@ impl Game {
         self.confronted = false;
         self.theory = [0; 3];
         self.debrief = false;
-        self.notice = "A new case. Examine its locations and interview all witnesses.";
+        self.events.push(Event::NextCase);
         Cue::Good
     }
     fn pointer(&mut self, input: &Input) -> Cue {
@@ -286,7 +385,7 @@ impl Game {
             return Cue::None;
         }
         if (112. ..146.).contains(&y) && (24. ..936.).contains(&x) {
-            self.view = View::from_index(((x - 24.) / 228.) as usize);
+            self.show(View::from_index(((x - 24.) / 228.) as usize));
             return Cue::Action;
         }
         if self.view == View::Theory {
@@ -295,6 +394,7 @@ impl Game {
                 if row < 3 {
                     self.selected[3] = row;
                     self.theory[row] = (self.theory[row] + 1) % 3;
+                    self.events.push(Event::Draft(row, self.theory[row]));
                     return Cue::Action;
                 }
             }
@@ -305,11 +405,15 @@ impl Game {
                 (188., 86., 3)
             };
             if y >= top && y < top + height * count as f32 {
-                self.selected[self.view.index()] = ((y - top) / height) as usize;
+                self.select(((y - top) / height) as usize);
                 return Cue::Action;
             }
         }
         if (505. ..547.).contains(&y) {
+            // The notebook's clear-pins button sits under its record list.
+            if self.view == View::Notebook && (36. ..312.).contains(&x) {
+                return self.secondary();
+            }
             if (350. ..570.).contains(&x)
                 || (self.view == View::Theory && (350. ..918.).contains(&x))
             {
@@ -328,6 +432,7 @@ impl Game {
     /// Execute one fixed-tick command. Only pressed edges cause game actions.
     /// Invalid interactions may explain themselves but never spend score/resources.
     pub fn step(&mut self, input: &Input) -> Cue {
+        self.events.clear();
         if self.result != Outcome::Playing {
             return Cue::None;
         }
@@ -343,7 +448,7 @@ impl Game {
         }
         if let Some(slot) = input.slot {
             if (1..=4).contains(&slot) {
-                self.view = View::from_index(slot - 1);
+                self.show(View::from_index(slot - 1));
                 return Cue::Action;
             }
             return Cue::None;
@@ -353,13 +458,15 @@ impl Game {
         }
         if input.up_pressed || input.down_pressed {
             let count = if self.view == View::Notebook { 7 } else { 3 };
-            let selected = &mut self.selected[self.view.index()];
-            *selected = (*selected + if input.up_pressed { count - 1 } else { 1 }) % count;
+            let selected = self.selected[self.view.index()];
+            self.select((selected + if input.up_pressed { count - 1 } else { 1 }) % count);
             return Cue::Action;
         }
         if self.view == View::Theory && (input.left_pressed || input.right_pressed) {
-            let selection = &mut self.theory[self.selected[3]];
+            let field = self.selected[3];
+            let selection = &mut self.theory[field];
             *selection = (*selection + if input.left_pressed { 2 } else { 1 }) % 3;
+            self.events.push(Event::Draft(field, *selection));
             return Cue::Action;
         }
         if input.primary {
@@ -782,6 +889,75 @@ mod tests {
             );
         }
         assert_eq!(titles.len(), 6);
+    }
+    #[test]
+    fn events_last_one_tick_and_never_change_equality() {
+        let mut g = Game::new();
+        press(&mut g);
+        assert_eq!(g.events.iter().collect::<Vec<_>>(), [Event::Recorded(0)]);
+        let before = g.clone();
+        g.step(&Input::default());
+        assert_eq!(g.events.iter().count(), 0);
+        assert_eq!(g, before, "presentation events are not game state");
+        press(&mut g);
+        assert_eq!(g.events.iter().collect::<Vec<_>>(), [Event::Repeat(0)]);
+        assert_eq!(g.score, 25);
+        tab(&mut g, 2);
+        down(&mut g);
+        assert_eq!(
+            g.events.iter().collect::<Vec<_>>(),
+            [Event::Select(View::People, 1)]
+        );
+    }
+    #[test]
+    fn clicking_clear_under_the_notebook_list_matches_x() {
+        let mut g = Game::new();
+        press(&mut g);
+        tab(&mut g, 2);
+        press(&mut g);
+        tab(&mut g, 3);
+        press(&mut g);
+        for _ in 0..3 {
+            down(&mut g);
+        }
+        press(&mut g);
+        assert_eq!(g.pins, [Some(0), Some(3)]);
+        let mut keyed = g.clone();
+        action(
+            &mut keyed,
+            Input {
+                secondary: true,
+                ..Input::default()
+            },
+        );
+        let cue = g.step(&Input {
+            click: true,
+            pointer: ferravex_arcade::vec2(174., 523.),
+            ..Input::default()
+        });
+        assert_eq!(cue, Cue::Action);
+        assert_eq!(g.pins, [None; 2]);
+        assert_eq!(g, keyed);
+        assert_eq!(g.events.iter().collect::<Vec<_>>(), [Event::Cleared]);
+        // The same spot does nothing on other tabs.
+        tab(&mut g, 1);
+        let before = g.clone();
+        g.step(&Input {
+            click: true,
+            pointer: ferravex_arcade::vec2(174., 523.),
+            ..Input::default()
+        });
+        assert_eq!(g, before);
+    }
+    #[test]
+    fn the_contradiction_count_follows_the_campaign() {
+        let mut g = prepare_first_case();
+        assert_eq!(g.contradictions(), 1);
+        assert_eq!(g.rank(), "Editor of Record");
+        tab(&mut g, 4);
+        press(&mut g);
+        assert_eq!(g.rank(), "Trusted Correspondent");
+        assert_eq!(g.contradictions(), 1);
     }
     #[test]
     fn won_model_is_immutable_and_final_bonus_is_not_repeatable() {

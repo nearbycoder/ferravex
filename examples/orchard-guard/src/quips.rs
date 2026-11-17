@@ -3,6 +3,8 @@
 //! Every selector is a pure function of accepted simulation counters, so the
 //! same run always reads the same way and no clock, RNG or render cadence is
 //! involved. Consecutive counters never repeat a line from the same table.
+//! Lines shown during play are callouts of at most three words; the pause
+//! and results cards may carry one longer joke.
 
 /// Advance by a stride coprime with the table length so consecutive counters
 /// never pick the same line and every line is eventually visited.
@@ -31,29 +33,24 @@ const ZOOMIE: [&str; 4] = [
     "Skid... Splat!",
 ];
 const LEAK: [&str; 8] = [
-    "A beetle got a snack",
-    "Chomp. That was an apple.",
-    "One snuck past the slings",
-    "The pie fund takes a hit",
-    "Rude. Very rude.",
-    "A faint burp from the orchard",
-    "Who left the gate open?",
-    "It took a selfie with a pear",
+    "Chomp!",
+    "Snack attack!",
+    "Sneaky!",
+    "Rude!",
+    "*Burp*",
+    "Gate crasher!",
+    "Pie thief!",
+    "Got past!",
 ];
 const CLEARED: [&str; 6] = [
-    "The pests have been politely removed",
-    "Bugs 0, orchard 1",
-    "The apples applaud softly",
-    "The scarecrow nods approvingly",
-    "Shake it off, plant some more",
-    "A tidy harvest so far",
+    "Wave cleared!",
+    "Bugs 0, Orchard 1",
+    "Apples applaud!",
+    "Scarecrow approves",
+    "Shoo, beetles!",
+    "Tidy harvest!",
 ];
-const PERFECT: [&str; 4] = [
-    "Not one nibble!",
-    "Flawless. The trees are blushing.",
-    "Zero leaks. Chef's kiss.",
-    "Spotless! The scarecrow is jealous.",
-];
+const PERFECT: [&str; 4] = ["Not one nibble!", "Flawless!", "Chef's kiss!", "Spotless!"];
 const PAUSE: [&str; 5] = [
     "The beetles are also on a tea break",
     "The apples will wait. Probably.",
@@ -88,15 +85,20 @@ pub(super) fn pause(seed: u32) -> &'static str {
     rotate(&PAUSE, seed)
 }
 
-/// Flavor for the incoming-wave card. Wave three teases the secret guest.
+/// The launch callout. Wave three teases the secret guest.
 pub(super) fn incoming(wave: u8) -> &'static str {
     match wave {
-        1 => "A few curious beetles. Mostly harmless.",
-        2 => "They told their friends about the apples.",
-        3 => "Rumour says royalty is joining this one...",
-        4 => "The whole family. And the cousins.",
-        _ => "More beetles. There are always more beetles.",
+        1 => "Here they come!",
+        2 => "They brought friends!",
+        3 => "Royalty rumoured...",
+        4 => "The whole family!",
+        _ => "More beetles!",
     }
+}
+
+/// The wave whose last beetle wears the secret crown.
+pub(super) fn royal_wave(wave: u8) -> bool {
+    wave == 3
 }
 
 /// What a finished run gets called on the results card.
@@ -157,33 +159,49 @@ pub(super) fn rank(run: RunSummary) -> Rank {
     Rank { title, quip }
 }
 
-/// The one-more-try line under the results. `best` is the previous best
+/// The one-more-try target under the results, drawn as pictograms.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Goal {
+    /// Stop `more` pests beyond this run to beat the previous `best`.
+    BeatBest { more: u64, best: u64 },
+    /// No towers were planted: plant one.
+    PlantTower,
+    /// No frost hive was planted: it slows the zoomies.
+    PlantFrost,
+    /// Too few towers to cover every bend.
+    MoreTowers,
+    /// Upgrade before the chunky third wave.
+    UpgradeEarly,
+    /// Win with every one of this many hearts.
+    AllHearts(u8),
+    /// The crowned guest of wave three is still out there.
+    FindRoyal(u8),
+    /// Beat the fastest harvest.
+    Fastest,
+}
+
+/// The next goal for a finished run. `best` is the previous best
 /// pests-stopped score before this run, if one existed.
-pub(super) fn next_goal(run: RunSummary, best: Option<u64>) -> String {
+pub(super) fn next_goal(run: RunSummary, best: Option<u64>) -> Goal {
     let kills = u64::from(run.kills);
     if !run.won {
         return match best {
-            Some(best) if kills <= best => format!(
-                "Stop {} more pests to beat your best of {best}",
-                best - kills + 1
-            ),
-            _ if run.towers == 0 => {
-                "Tip: click a round plot and plant a tower. Beetles love an open door.".into()
-            }
-            _ if !run.frost_planted => "Tip: frost hives slow the zoomies down".into(),
-            _ if run.towers < 4 => "Tip: more plots, more bonks. Cover every bend.".into(),
-            _ => "Tip: upgrade before wave 3. The beetles get chunky.".into(),
+            Some(best) if kills <= best => Goal::BeatBest {
+                more: best - kills + 1,
+                best,
+            },
+            _ if run.towers == 0 => Goal::PlantTower,
+            _ if !run.frost_planted => Goal::PlantFrost,
+            _ if run.towers < 4 => Goal::MoreTowers,
+            _ => Goal::UpgradeEarly,
         };
     }
     if run.lives < run.max_lives {
-        format!(
-            "Next: win with all {} hearts to become Orchard Legend",
-            run.max_lives
-        )
+        Goal::AllHearts(run.max_lives)
     } else if !run.royal {
-        "Secret: someone important waddles through wave 3...".into()
+        Goal::FindRoyal(3)
     } else {
-        "Next: beat your fastest harvest. Try fast-forward for fun.".into()
+        Goal::Fastest
     }
 }
 
@@ -238,18 +256,35 @@ mod tests {
     fn next_goal_is_concrete_and_reachable() {
         assert_eq!(
             next_goal(run(false, 2, 0), Some(45)),
-            "Stop 6 more pests to beat your best of 45"
+            Goal::BeatBest { more: 6, best: 45 }
         );
-        assert!(next_goal(run(false, 2, 0), Some(10)).starts_with("Tip"));
+        // Already past the old best: a play tip instead.
+        assert_eq!(next_goal(run(false, 2, 0), Some(10)), Goal::UpgradeEarly);
         let mut lonely = run(false, 1, 0);
+        lonely.towers = 3;
+        assert_eq!(next_goal(lonely, None), Goal::MoreTowers);
         lonely.frost_planted = false;
-        assert!(next_goal(lonely, None).contains("frost"));
+        assert_eq!(next_goal(lonely, None), Goal::PlantFrost);
         lonely.towers = 0;
-        assert!(next_goal(lonely, None).contains("plant a tower"));
-        assert!(next_goal(run(true, 4, 7), Some(64)).contains("all 12 hearts"));
-        assert!(next_goal(run(true, 4, 12), None).contains("wave 3"));
+        assert_eq!(next_goal(lonely, None), Goal::PlantTower);
+        assert_eq!(next_goal(run(true, 4, 7), Some(64)), Goal::AllHearts(12));
+        assert_eq!(next_goal(run(true, 4, 12), None), Goal::FindRoyal(3));
+        assert!(royal_wave(3) && !royal_wave(2));
         let mut royal = run(true, 4, 12);
         royal.royal = true;
-        assert!(next_goal(royal, None).contains("fastest"));
+        assert_eq!(next_goal(royal, None), Goal::Fastest);
+    }
+
+    #[test]
+    fn play_callouts_stay_within_three_words() {
+        let words = |line: &str| line.split_whitespace().count();
+        for table in [&STOP[..], &ZOOMIE, &LEAK, &CLEARED, &PERFECT] {
+            for line in table {
+                assert!(words(line) <= 4, "{line}");
+            }
+        }
+        for wave in 0..6 {
+            assert!(words(incoming(wave)) <= 3, "{}", incoming(wave));
+        }
     }
 }

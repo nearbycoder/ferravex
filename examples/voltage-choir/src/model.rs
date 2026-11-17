@@ -14,12 +14,80 @@
 //! assert!(concert.score() > 0);
 //! ```
 use crate::content::{MAX_NOTES, TRACK_COUNT, TRACKS};
-use ferravex_arcade::{Cue, Input, Outcome};
+use ferravex_arcade::{Cue, Input, Outcome, Vec2};
 
 pub(crate) const PERFECT: u32 = 2;
 pub(crate) const GOOD: u32 = 4;
 pub(crate) const WINDOW: u32 = 7;
 const START_CROWD: i32 = 80;
+/// A broken combo at least this long is worth a visible shatter.
+const SHOWN_COMBO: u32 = 10;
+/// Upper bound on presentation events in one tick: four lane edges, four
+/// simultaneous misses and a few song-level moments.
+const MAX_EVENTS: usize = 16;
+
+/// Lane under a pointer press: the highway and its key bed (x 180..660,
+/// y 160..554). Shared by the rules and the hover highlight.
+pub(crate) fn pointer_lane(p: Vec2) -> Option<usize> {
+    ((160. ..=554.).contains(&p.y) && (180. ..660.).contains(&p.x))
+        .then(|| ((p.x - 180.) / 120.) as usize)
+}
+/// The song card's primary button (start, next song, retry); a press mirrors Space.
+pub(crate) fn on_action_button(p: Vec2) -> bool {
+    (240. ..=720.).contains(&p.x) && (491. ..=534.).contains(&p.y)
+}
+/// The Encore meter in the right panel; a press mirrors X while playing.
+pub(crate) fn on_encore_button(p: Vec2) -> bool {
+    (684. ..=928.).contains(&p.x) && (398. ..=454.).contains(&p.y)
+}
+/// The failed-song card's end button; a press mirrors X on that card.
+pub(crate) fn on_end_button(p: Vec2) -> bool {
+    (650. ..=830.).contains(&p.x) && (420. ..=462.).contains(&p.y)
+}
+
+/// Something the most recent executed tick accepted, kept only so the
+/// presentation can react where it happened. Rules never read events.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Event {
+    /// A note in `lane` was judged.
+    Hit { lane: usize, judgment: Judgment },
+    /// A note in `lane` passed unplayed; `shielded` when Encore kept the crowd.
+    Miss { lane: usize, shielded: bool },
+    /// An empty tap in `lane`.
+    Stray { lane: usize, shielded: bool },
+    /// A combo of this length broke.
+    ComboBroken(u32),
+    /// The combo reached a new score multiplier.
+    Multiplier(u32),
+    /// Encore charge reached 100.
+    EncoreReady,
+    /// Encore started.
+    Encore,
+    /// Count-in beat 0..=3 sounded.
+    CountBeat(u32),
+    /// The song ended above its target.
+    Cleared,
+    /// A retry ticket was spent.
+    Retry,
+    /// The final bow: the concert is won.
+    Finale,
+}
+/// Bounded [`Event`] list for one tick, cleared when the next tick executes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Events([Option<Event>; MAX_EVENTS]);
+impl Events {
+    fn clear(&mut self) {
+        self.0 = [None; MAX_EVENTS];
+    }
+    fn push(&mut self, event: Event) {
+        if let Some(slot) = self.0.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(event);
+        }
+    }
+    pub fn iter(&self) -> impl Iterator<Item = Event> + '_ {
+        self.0.iter().map_while(|slot| *slot)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Judgment {
@@ -56,14 +124,14 @@ pub(crate) enum Flash {
     Stray,
 }
 impl Flash {
+    /// The one-word judgment shown at the hit line; empty taps show an icon.
     pub fn label(self) -> &'static str {
         match self {
-            Self::None => "",
-            Self::Perfect => "Perfect",
-            Self::Good => "Good",
-            Self::Okay => "Okay",
-            Self::Miss => "Miss",
-            Self::Stray => "Empty tap",
+            Self::None | Self::Stray => "",
+            Self::Perfect => "PERFECT",
+            Self::Good => "GOOD",
+            Self::Okay => "OK",
+            Self::Miss => "MISS",
         }
     }
 }
@@ -118,9 +186,10 @@ pub struct Game {
     pub(crate) flashes: [Flash; 4],
     pub(crate) flash_ticks: [u8; 4],
     pub(crate) last_offset: i32,
-    pub(crate) notice: &'static str,
     pub(crate) notes_on: [Option<u8>; 4],
     pub(crate) stage_ticks: u32,
+    /// Presentation-only record of the latest executed tick.
+    pub(crate) events: Events,
 }
 impl Default for Game {
     fn default() -> Self {
@@ -146,9 +215,9 @@ impl Game {
             flashes: [Flash::None; 4],
             flash_ticks: [0; 4],
             last_offset: 0,
-            notice: "Ready to start.",
             notes_on: [None; 4],
             stage_ticks: 0,
+            events: Events::default(),
         };
         game.load_chart();
         game
@@ -223,22 +292,21 @@ impl Game {
         self.last_offset = 0;
         self.notes_on = [None; 4];
         self.stage_ticks = 0;
-        self.notice = "Four beats. Watch the notes approach the line.";
         self.load_chart();
     }
     fn retry(&mut self) -> Cue {
         if self.retries == 0 {
             self.phase = Phase::Lost;
-            self.notice = "No retry tickets remain. The city waits for another concert.";
             return Cue::Bad;
         }
         self.retries -= 1;
         self.begin();
-        self.notice = "Fresh take. This song's previous points were discarded.";
+        self.events.push(Event::Retry);
         Cue::Action
     }
-    fn fail(&mut self, reason: &'static str) -> Cue {
-        self.notice = reason;
+    /// End the take. Only a crowd that went quiet sits at zero, which is how
+    /// the failed-take card tells the two causes apart.
+    fn fail(&mut self) -> Cue {
         self.phase = if self.retries > 0 {
             Phase::Retry
         } else {
@@ -246,6 +314,12 @@ impl Game {
         };
         self.stage_ticks = 0;
         Cue::Bad
+    }
+    fn break_combo(&mut self) {
+        if self.combo >= SHOWN_COMBO {
+            self.events.push(Event::ComboBroken(self.combo));
+        }
+        self.combo = 0;
     }
     pub(crate) fn encore(&self) -> bool {
         self.phase == Phase::Playing && self.clock < self.encore_until
@@ -260,11 +334,8 @@ impl Game {
         if let Some(slot) = input.slot.filter(|v| (1..=4).contains(v)) {
             lanes[slot - 1] = true;
         }
-        if input.click
-            && (input.pointer.y >= 160. && input.pointer.y <= 554.)
-            && (input.pointer.x >= 180. && input.pointer.x < 660.)
-        {
-            lanes[((input.pointer.x - 180.) / 120.) as usize] = true;
+        if let Some(lane) = pointer_lane(input.pointer).filter(|_| input.click) {
+            lanes[lane] = true;
         }
         lanes
     }
@@ -285,12 +356,13 @@ impl Game {
             .map(|(i, _)| i);
         let Some(index) = candidate else {
             self.attempt.stray += 1;
-            self.combo = 0;
+            self.break_combo();
             self.charge = self.charge.saturating_sub(5);
-            if !self.encore() {
+            let shielded = self.encore();
+            if !shielded {
                 self.crowd -= 2;
             }
-            self.notice = "Empty tap: wait for a note to reach the line.";
+            self.events.push(Event::Stray { lane, shielded });
             self.flash(lane, Flash::Stray);
             return Cue::Bad;
         };
@@ -312,15 +384,18 @@ impl Game {
         self.attempt.max_combo = self.attempt.max_combo.max(self.combo);
         let multiplier = 1 + (self.combo / 20).min(4);
         self.attempt.score += points * multiplier + if self.encore() { 25 } else { 0 };
+        let was_ready = self.charge == 100;
         self.charge = (self.charge + charge).min(100);
         if judgment != Judgment::Okay {
             self.crowd = (self.crowd + 1).min(100);
         }
-        self.notice = if self.charge == 100 {
-            "Encore ready: press X for an eight-beat boost."
-        } else {
-            ""
-        };
+        self.events.push(Event::Hit { lane, judgment });
+        if self.combo.is_multiple_of(20) && self.combo <= 80 {
+            self.events.push(Event::Multiplier(multiplier));
+        }
+        if !was_ready && self.charge == 100 {
+            self.events.push(Event::EncoreReady);
+        }
         self.flash(lane, flash);
         Cue::Good
     }
@@ -330,6 +405,7 @@ impl Game {
         if self.outcome() != Outcome::Playing {
             return Cue::None;
         }
+        self.events.clear();
         self.notes_on = [None; 4];
         self.stage_ticks = self.stage_ticks.saturating_add(1);
         for (flash, remaining) in self.flashes.iter_mut().zip(&mut self.flash_ticks) {
@@ -338,10 +414,7 @@ impl Game {
                 *flash = Flash::None;
             }
         }
-        let accept = input.primary
-            || (input.click
-                && (240. ..=720.).contains(&input.pointer.x)
-                && (491. ..=534.).contains(&input.pointer.y));
+        let accept = input.primary || (input.click && on_action_button(input.pointer));
         match self.phase {
             Phase::Briefing => {
                 if accept {
@@ -354,7 +427,7 @@ impl Game {
                 if accept {
                     if self.track + 1 == TRACK_COUNT {
                         self.phase = Phase::Won;
-                        self.notice = "Every window sings. The city has its voice again.";
+                        self.events.push(Event::Finale);
                         return Cue::Win;
                     }
                     self.track += 1;
@@ -362,7 +435,6 @@ impl Game {
                     self.clock = 0;
                     self.stage_ticks = 0;
                     self.attempt = Stats::default();
-                    self.notice = "A new district is waiting. Read the song card, then count in.";
                     self.load_chart();
                     return Cue::Action;
                 }
@@ -372,7 +444,7 @@ impl Game {
                 if accept || input.tertiary {
                     return self.retry();
                 }
-                if input.secondary {
+                if input.secondary || (input.click && on_end_button(input.pointer)) {
                     self.phase = Phase::Lost;
                     return Cue::Bad;
                 }
@@ -385,13 +457,13 @@ impl Game {
                 let beat = TRACKS[self.track].beat_ticks;
                 if self.clock.is_multiple_of(beat) {
                     self.notes_on[0] = Some(if self.clock == beat * 3 { 79 } else { 67 });
+                    self.events.push(Event::CountBeat(self.clock / beat));
                 }
                 self.clock += 1;
                 if self.clock == beat * 4 {
                     self.clock = 0;
                     self.phase = Phase::Playing;
                     self.stage_ticks = 0;
-                    self.notice = "Play! Tap Left, Down, Up, Right at the bright line.";
                 }
                 Cue::None
             }
@@ -408,10 +480,11 @@ impl Game {
             self.notes_on = track.music(self.clock / (track.beat_ticks / 2));
         }
         let mut cue = Cue::None;
-        if input.secondary && self.charge == 100 && !self.encore() {
+        let encore_press = input.secondary || (input.click && on_encore_button(input.pointer));
+        if encore_press && self.charge == 100 && !self.encore() {
             self.charge = 0;
             self.encore_until = self.clock + track.beat_ticks * 8;
-            self.notice = "Encore: bonus points and protected misses for eight beats.";
+            self.events.push(Event::Encore);
             cue = Cue::Action;
         }
         for (lane, pressed) in Self::lane_edges(input).into_iter().enumerate() {
@@ -428,33 +501,32 @@ impl Game {
             if note.result == Judgment::Pending && self.clock > note.tick + WINDOW {
                 self.notes[index].result = Judgment::Miss;
                 self.attempt.misses += 1;
-                self.combo = 0;
+                self.break_combo();
                 if !shield {
                     self.crowd -= 10;
                 }
                 self.flash(note.lane, Flash::Miss);
-                self.notice = if shield {
-                    "Encore caught the drop, but accuracy still lost a note."
-                } else {
-                    "Miss. Read ahead and return to the beat."
-                };
+                self.events.push(Event::Miss {
+                    lane: note.lane,
+                    shielded: shield,
+                });
                 cue = Cue::Bad;
             }
         }
         if self.crowd <= 0 {
             self.crowd = 0;
-            return self.fail("The crowd went quiet. Spend a retry ticket for another take.");
+            return self.fail();
         }
         self.clock += 1;
         if self.clock > track.length() + track.beat_ticks * 2 {
             if self.attempt.accuracy() < track.target {
-                return self.fail("Song ended below its accuracy target. Try a cleaner take.");
+                return self.fail();
             }
             self.attempt.score += self.attempt.accuracy() * 2;
             self.results[self.track] = Some(self.attempt);
             self.phase = Phase::Results;
             self.stage_ticks = 0;
-            self.notice = "District restored. Review your grade, then continue.";
+            self.events.push(Event::Cleared);
             return Cue::Win;
         }
         cue
@@ -542,6 +614,8 @@ mod tests {
             counts[track] = game.len;
             assert!(game.len >= 40 && game.len <= MAX_NOTES);
             assert!(definition.beat_ticks.is_multiple_of(2));
+            assert!(definition.demo < definition.patterns.len());
+            assert!(definition.story.split_whitespace().count() <= 3);
             assert!(
                 definition
                     .arrangement

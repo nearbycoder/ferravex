@@ -195,6 +195,9 @@ pub(super) struct Juice {
     /// Gus: hop height and alarm (wobble) levels, 0..=1.
     pub hop: f32,
     pub alarm: f32,
+    /// Per-tower lean for the HUD's integrity glyphs while a top block
+    /// wobbles, 0..=1.
+    pub wobble: [f32; 3],
     pub bell_swing: f32,
     pub squash: f32,
     /// Render seconds since a result froze the range (presentation only).
@@ -224,6 +227,7 @@ impl Juice {
             flash: 0.0,
             hop: 0.0,
             alarm: 0.0,
+            wobble: [0.0; 3],
             bell_swing: 0.0,
             squash: 0.0,
             result_age: 0.0,
@@ -254,6 +258,7 @@ impl Juice {
             self.kick = 0.0;
             self.hop = 0.0;
             self.alarm = 0.0;
+            self.wobble = [0.0; 3];
             self.bell_swing = 0.0;
             self.squash = 0.0;
             self.trail_len = 0;
@@ -516,9 +521,12 @@ impl Juice {
                     self.shake(0.12);
                 }
             }
-            RangeEvent::Wobble { at, .. } => {
+            RangeEvent::Wobble { at, column } => {
                 self.pop(at + Vec3::Y * 1.1, PopText::Word("WOBBLE..."), 1.0);
                 self.alarm = self.motion.min(1.0);
+                if let Some(lean) = self.wobble.get_mut(usize::from(column)) {
+                    *lean = self.motion.min(1.0);
+                }
                 self.say(banter, Mood::Wobble);
             }
             RangeEvent::Callout {
@@ -543,7 +551,26 @@ impl Juice {
                         self.say(banter, Mood::Bell);
                     }
                     Callout::Overkill => self.shake(0.25),
-                    _ => {}
+                    Callout::Timber => {
+                        // The whole tower comes down: a rolling dust cloud,
+                        // rubble and a heavier thump than a single block.
+                        self.puffs(at, 10, PuffKind::Dust, 0.7, 0.9);
+                        self.chunks(at, 6, Material::Sand, 1.2);
+                        self.ring(at, 2.4);
+                        self.shake(0.45);
+                    }
+                    Callout::Chain(_) => {
+                        self.ring(at, 1.8);
+                        self.sparks(at, 12, 7.0, Vec3::Y * 3.0);
+                    }
+                    Callout::Spare(_) => {
+                        self.sparks(at, 24, 8.0, Vec3::Y * 5.0);
+                        self.ring(at, 3.0);
+                    }
+                    Callout::Delayed => {
+                        self.puffs(at, 6, PuffKind::Dust, 0.5, 0.7);
+                        self.ring(at, 1.6);
+                    }
                 }
             }
             RangeEvent::Miss { streak } => {
@@ -603,6 +630,9 @@ impl Juice {
         self.flash = (self.flash - dt * 9.0).max(0.0);
         self.hop = (self.hop - dt * 2.2).max(0.0);
         self.alarm = (self.alarm - dt * 0.5).max(0.0);
+        for lean in &mut self.wobble {
+            *lean = (*lean - dt * 0.9).max(0.0);
+        }
         self.bell_swing = (self.bell_swing - dt * 0.35).max(0.0);
         self.squash = (self.squash - dt * 4.0).max(0.0);
         let target = points as f32;

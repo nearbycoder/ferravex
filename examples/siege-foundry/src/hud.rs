@@ -15,10 +15,12 @@
 //! Allocation: formatting goes through a small reusable string pool and card
 //! rows are laid out by calling their builder twice, so steady-state frames do
 //! not allocate.
+use super::glyph::{self, Glyph, Item};
 use super::juice::PopText;
 use super::quips::{self, RunSummary};
 use super::score::{self, Callout};
 use super::*;
+use ferravex_render::icons::Icon;
 use ferravex_render::shapes::{self, Fill, Shadow, Stroke};
 use ferravex_render::text::{self, TextStyle};
 use std::cell::RefCell;
@@ -66,6 +68,7 @@ pub(super) struct Hints {
     pub fire: String,
     pub confirm: String,
     pub pause: String,
+    pub restart: String,
     pub touch: bool,
 }
 
@@ -76,6 +79,7 @@ impl Hints {
             (&mut self.fire, "fire"),
             (&mut self.confirm, "confirm"),
             (&mut self.pause, "pause"),
+            (&mut self.restart, "restart"),
         ] {
             let hint = action_hint(input, action, &mut buffer);
             if slot != hint {
@@ -106,6 +110,9 @@ pub(super) struct HudAnim {
     pub doors: f32,
     hover: [f32; 3],
     press: [f32; 3],
+    /// Contextual prompts, 0..=1: the aim arrows around the cannon and the
+    /// fire button's extra glow. Each fades once the player has done it.
+    pub coach_fade: [f32; 2],
 }
 
 impl Default for HudAnim {
@@ -120,12 +127,20 @@ impl Default for HudAnim {
             doors: 0.0,
             hover: [0.0; 3],
             press: [0.0; 3],
+            coach_fade: [1.0; 2],
         }
     }
 }
 
 impl HudAnim {
-    pub fn update(&mut self, dt: f32, state: SessionState, layout: &HudLayout, enabled: [bool; 3]) {
+    pub fn update(
+        &mut self,
+        dt: f32,
+        state: SessionState,
+        layout: &HudLayout,
+        enabled: [bool; 3],
+        coach: &Coach,
+    ) {
         let policy = preferences::feedback_policy();
         self.motion = if policy.reduced_motion() {
             0.0
@@ -158,6 +173,11 @@ impl HudAnim {
             self.hover[i] += (hover - self.hover[i]) * rate;
             self.press[i] += (press - self.press[i]) * rate;
         }
+        let fade = if self.motion > 0.0 { dt * 3.0 } else { 1.0 };
+        for (level, learned) in self.coach_fade.iter_mut().zip([coach.aimed, coach.fired]) {
+            let target = if learned { 0.0 } else { 1.0 };
+            *level += (target - *level).clamp(-fade, fade);
+        }
     }
 
     /// Start (or restart) the door reveal.
@@ -189,7 +209,9 @@ impl View<'_> {
 pub(super) fn draw(view: &View) {
     let state = view.foundry.session.state();
     if state == SessionState::Playing && view.foundry.range.phase == Phase::Aiming {
+        support_hint(view);
         aim_preview(view);
+        aim_prompt(view);
     }
     pops(view);
     if state == SessionState::Playing {
@@ -275,7 +297,6 @@ pub(super) fn width(text: &str, style: TextStyle) -> f32 {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Align {
-    Left,
     Center,
     Right,
 }
@@ -299,7 +320,6 @@ fn line(text: &str, x: f32, y: f32, max: f32, style: TextStyle, align: Align) {
     };
     let used = width(shown, style) + if ellipsis { width("…", style) } else { 0.0 };
     let left = match align {
-        Align::Left => x,
         Align::Center => x + (max - used) * 0.5,
         Align::Right => x + max - used,
     };
@@ -336,7 +356,7 @@ pub(super) fn wrap(text: &str, max: f32, style: TextStyle) -> (&str, &str) {
         .unwrap_or((text, ""))
 }
 
-fn fade(color: Color, alpha: f32) -> Color {
+pub(super) fn fade(color: Color, alpha: f32) -> Color {
     Color::new(color.r, color.g, color.b, color.a * alpha.clamp(0.0, 1.0))
 }
 
@@ -436,64 +456,30 @@ fn stars_row(center: Vec2, radius: f32, earned: u8, alpha: f32, age: Option<f32>
     }
 }
 
-/// A key cap with its label, returning its width.
-fn keycap(x: f32, baseline: f32, label: &str, alpha: f32) -> f32 {
-    let style = body(16.0, fade(Color::from_rgba(40, 28, 24, 255), alpha))
-        .with_shadow(Color::new(1.0, 1.0, 1.0, 0.0));
-    let w = width(label, style) + 20.0;
-    let rect = Rect::new(x, baseline - 22.0, w, 30.0);
-    shapes::fill_rounded_rect(
-        Rect::new(rect.x, rect.y + 3.0, rect.w, rect.h),
-        6.0,
-        fade(Color::from_rgba(120, 84, 60, 255), alpha),
-    );
-    shapes::fill_rounded_rect(
-        rect,
-        6.0,
-        Fill::vertical(
-            rect,
-            fade(Color::from_rgba(252, 236, 206, 255), alpha),
-            fade(Color::from_rgba(226, 200, 164, 255), alpha),
-        ),
-    );
-    text::draw_text_styled(label, x + 10.0, baseline, style);
-    w
-}
-
-/// "Press [Enter] to start", or a touch fallback, centered on `cx`.
-fn prompt(view: &View, cx: f32, baseline: f32, button: &str, verb: &str, alpha: f32) {
-    let style = body(16.0, fade(PAPER, alpha));
+/// A start/resume/retry prompt: the key cap beside the action's icon. Touch
+/// shows the icon with an arrow down to the visible button instead.
+fn prompt(view: &View, key: &str, cx: f32, cy: f32, icon: Icon, alpha: f32) {
+    let max = view.w - 48.0;
     if view.hints.touch {
-        with_fmt(format_args!("Press {button} below"), |t| {
-            let w = width(t, style);
-            text::draw_text_styled(t, cx - w * 0.5, baseline, style);
-        });
+        glyph::row(
+            &[
+                Item::Glyph(Glyph::Icon(icon), GOLD),
+                Item::Glyph(Glyph::Icon(Icon::ArrowDown), PAPER),
+            ],
+            vec2(cx, cy),
+            26.0,
+            max,
+            alpha,
+        );
         return;
     }
-    let max_cap = (view.w - 64.0) * 0.5;
-    let key = view.hints.confirm.as_str();
-    let cap_w = width(key, body(16.0, PAPER)).min(max_cap) + 20.0;
-    let lead = "Press";
-    let gap = 10.0;
-    let total = width(lead, style) + gap + cap_w + gap + width(verb, style);
-    let mut x = cx - total * 0.5;
-    text::draw_text_styled(lead, x, baseline, style);
-    x += width(lead, style) + gap;
-    if width(key, body(16.0, PAPER)) > max_cap {
-        // Very long remapped bindings fall back to a plain fitted line.
-        line(
-            key,
-            x,
-            baseline,
-            max_cap,
-            body(16.0, fade(GOLD, alpha)),
-            Align::Left,
-        );
-        x += max_cap + 20.0 + gap;
-    } else {
-        x += keycap(x, baseline, key, alpha) + gap;
-    }
-    text::draw_text_styled(verb, x, baseline, style);
+    glyph::row(
+        &[Item::Key(key), Item::Glyph(Glyph::Icon(icon), GOLD)],
+        vec2(cx, cy),
+        22.0,
+        max,
+        alpha,
+    );
 }
 
 // --- In-world HUD (crisp, above the bloom) -----------------------------------
@@ -521,9 +507,9 @@ fn aim_preview(view: &View) {
         return;
     };
     let (color, tag) = match game.block_at(hit) {
-        Some(block) if block.target && !block.down => (GOLD, "Target"),
-        Some(block) if !block.target => (lighten(SAND, 0.35), "Support"),
-        _ => (PAPER, ""),
+        Some(block) if block.target && !block.down => (GOLD, Some(Glyph::Target)),
+        Some(block) if !block.target => (lighten(SAND, 0.35), Some(Glyph::Support)),
+        _ => (PAPER, None),
     };
     let pulse = if view.anim.pulse {
         (view.anim.time * 5.0).sin() * 0.5 + 0.5
@@ -544,14 +530,81 @@ fn aim_preview(view: &View) {
             Stroke::new(2.0, color).cap(shapes::Cap::Round),
         );
     }
-    // The tag teaches what to hit; it fades away once something has fallen.
-    if !view.coach.knocked && !tag.is_empty() {
-        let style = body(16.0, color);
-        let w = width(tag, style);
-        let x = (at.x - w * 0.5).clamp(16.0, view.w - w - 16.0);
-        let pill = Rect::new(x - 10.0, at.y + 22.0, w + 20.0, 28.0);
+    // A swatch of the block under the reticle teaches what to hit; it fades
+    // away once something has fallen.
+    if !view.coach.knocked
+        && let Some(tag) = tag
+    {
+        let x = at.x.clamp(32.0, view.w - 32.0);
+        let pill = Rect::new(x - 16.0, at.y + 21.0, 32.0, 28.0);
         shapes::fill_rounded_rect(pill, 14.0, Color::new(0.08, 0.06, 0.06, 0.85));
-        text::draw_text_styled(tag, x, style.centered_baseline(pill.y + 14.0), style);
+        shapes::stroke_rounded_rect(pill, 14.0, 1.5, fade(color, 0.8));
+        glyph::draw(tag, pill.center(), 24.0, PAPER, 1.0);
+    }
+}
+
+/// After a miss, before anything has fallen, the low sandstone supports
+/// breathe with a ring and an arrow instead of a written tip.
+fn support_hint(view: &View) {
+    let game = &view.foundry.range;
+    if view.coach.knocked || game.tally.misses == 0 {
+        return;
+    }
+    let beat = if view.anim.pulse {
+        0.5 + 0.5 * (view.anim.time * 4.0).sin()
+    } else {
+        0.5
+    };
+    let bob = (view.anim.time * 3.0).sin().abs() * 5.0 * view.anim.motion;
+    let sand = lighten(SAND, 0.45);
+    for column in 0..3 {
+        let block = &game.blocks[column * 4];
+        if block.down {
+            continue;
+        }
+        let Some(at) = view.camera.project(view.w, view.h, block.home) else {
+            continue;
+        };
+        shapes::glow_ring(at, 20.0, 7.0, fade(sand, 0.2 + 0.25 * beat));
+        shapes::stroke_circle(at, 17.0 + 3.0 * beat, 2.0, fade(sand, 0.55 + 0.35 * beat));
+        glyph::draw(
+            Glyph::Icon(Icon::ArrowDown),
+            at - vec2(0.0, 34.0 + bob),
+            22.0,
+            GOLD,
+            0.95,
+        );
+    }
+}
+
+/// Until the player has aimed: arrows around the cannon (a hand for touch)
+/// say "move me". They fade once aiming has been learned.
+fn aim_prompt(view: &View) {
+    let a = view.anim.coach_fade[0];
+    if a <= 0.01 || view.foundry.range.ammo == 0 {
+        return;
+    }
+    let Some(at) = view.camera.project(view.w, view.h, PIVOT) else {
+        return;
+    };
+    let bob = (view.anim.time * 3.0).sin().abs() * 4.0 * view.anim.motion;
+    let r = 46.0 + bob;
+    for (icon, dir) in [
+        (Icon::ArrowLeft, vec2(-1.0, 0.0)),
+        (Icon::ArrowRight, vec2(1.0, 0.0)),
+        (Icon::ArrowUp, vec2(0.0, -1.0)),
+        (Icon::ArrowDown, vec2(0.0, 1.0)),
+    ] {
+        glyph::draw(Glyph::Icon(icon), at + dir * r, 22.0, GOLD, a * 0.9);
+    }
+    if view.hints.touch {
+        glyph::draw(
+            Glyph::Icon(Icon::Hand),
+            at + vec2(r * 0.8, -r * 0.8),
+            26.0,
+            PAPER,
+            a,
+        );
     }
 }
 
@@ -598,12 +651,23 @@ fn count_style() -> TextStyle {
     display(16.0, PAPER)
 }
 
-/// Top-bar geometry. Wide screens use a targets panel on the left and a score
-/// panel inset from the menu corner; compact screens fold both into one panel.
+/// Gap between the cells of a mini tower.
+fn cell_gap(cell: f32) -> f32 {
+    (cell * 0.18).max(1.0)
+}
+
+/// Width of the three mini towers at `cell`.
+fn towers_width(cell: f32) -> f32 {
+    5.2 * cell
+}
+
+/// Top-bar geometry. Wide screens use a structure panel on the left and a
+/// score panel inset from the menu corner; compact screens fold both into
+/// one panel.
 struct TopBar {
     compact: bool,
-    pip: f32,
-    gap: f32,
+    /// Mini-tower cell size.
+    cell: f32,
     left: Rect,
     /// Separate score panel (wide only).
     right: Option<Rect>,
@@ -611,45 +675,38 @@ struct TopBar {
 }
 
 impl TopBar {
-    fn new(w: f32, count: &str, value: &str) -> Self {
+    fn new(w: f32, value: &str) -> Self {
         let compact = w < 560.0;
-        let (pip, gap) = if compact { (11.0, 4.0) } else { (14.0, 5.0) };
-        let caption = body(16.0, MUTED);
-        let heading_w = if compact {
-            0.0
-        } else {
-            width("Targets", caption) + 12.0
-        };
-        let pips = 6.0 * pip + 5.0 * gap;
-        let targets_w = 14.0 + heading_w + pips + 10.0 + width(count, count_style()) + 14.0;
+        let cell = if compact { 8.0 } else { 9.0 };
+        let height = 4.0 * cell + 3.0 * cell_gap(cell) + 10.0;
+        let icon_w = if compact { 0.0 } else { 28.0 };
+        let targets_w = 14.0 + icon_w + towers_width(cell) + 14.0;
         let value_w = width(value, count_style()).max(48.0);
         if compact {
             let wide = targets_w + 8.0 + value_w + 14.0;
             return Self {
                 compact,
-                pip,
-                gap,
+                cell,
                 left: Rect::new(
                     16.0,
-                    12.0,
+                    4.0,
                     wide.min(w - 16.0 - MENU_CORNER.x).max(1.0),
-                    32.0,
+                    height,
                 ),
                 right: None,
                 pace_w: 0.0,
             };
         }
-        let pace_w = 3.0 * 17.0 + 10.0;
-        let right_w = 14.0 + pace_w + width("Score", caption) + 10.0 + value_w + 14.0;
+        let pace_w = 3.0 * 17.0 + 12.0;
+        let right_w = 14.0 + pace_w + value_w + 14.0;
         let right_x = w - MENU_CORNER.x - right_w;
-        let left = Rect::new(16.0, 12.0, targets_w, 32.0);
+        let left = Rect::new(16.0, 4.0, targets_w, height);
         Self {
             compact,
-            pip,
-            gap,
+            cell,
             left,
             right: (right_x >= left.x + left.w + 8.0)
-                .then(|| Rect::new(right_x, 12.0, right_w, 32.0)),
+                .then(|| Rect::new(right_x, 4.0, right_w, height)),
             pace_w,
         }
     }
@@ -673,56 +730,60 @@ fn top_bar(view: &View, state: SessionState) {
         u64::from(game.tally.points)
     };
     let rolling = points < u64::from(game.tally.points);
-    with_fmt(format_args!("{}/{GOAL}", game.score()), |count| {
-        with_fmt(format_args!("{}", Grouped(points)), |value| {
-            let bar = TopBar::new(view.w, count, value);
-            draw_top_bar(view, state, &bar, count, value, rolling);
-        })
+    with_fmt(format_args!("{}", Grouped(points)), |value| {
+        let bar = TopBar::new(view.w, value);
+        draw_top_bar(view, state, &bar, value, rolling);
     });
 }
 
-fn draw_top_bar(
-    view: &View,
-    state: SessionState,
-    bar: &TopBar,
-    count: &str,
-    value: &str,
-    rolling: bool,
-) {
+/// The three towers as mini stacks of supports and targets: the structure's
+/// integrity at a glance. Fallen blocks hollow out (targets with a tick) and
+/// a wobbling tower leans.
+fn structure(view: &View, left: f32, mid: f32, cell: f32, alpha: f32) {
     let game = &view.foundry.range;
-    let (pip, gap) = (bar.pip, bar.gap);
-    let caption = body(16.0, MUTED);
+    let height = 4.0 * cell + 3.0 * cell_gap(cell);
+    for column in 0..3 {
+        let down = std::array::from_fn(|layer| game.blocks[column * 4 + layer].down);
+        let lean = view.foundry.juice.wobble[column] * (view.anim.time * 14.0).sin();
+        let x = left + cell * 0.5 + column as f32 * cell * 2.1;
+        glyph::mini_tower(vec2(x, mid + height * 0.5), cell, down, lean, alpha);
+    }
+}
+
+/// Stars still on offer for this run.
+fn pace(view: &View, state: SessionState) -> u8 {
+    let game = &view.foundry.range;
+    match state {
+        SessionState::Won | SessionState::Lost => view.foundry.summary().stars,
+        _ if game.ammo == 0 => 1,
+        _ => score::stars(true, game.tally.shots + 1),
+    }
+}
+
+fn draw_top_bar(view: &View, state: SessionState, bar: &TopBar, value: &str, rolling: bool) {
     panel(bar.left, RADIUS, None, 1.0);
+    // Knockdowns light up the structure panel while they land.
+    let destruction = (view.foundry.feedback.destruction / 2.0).clamp(0.0, 1.0);
+    if destruction > 0.0 {
+        shapes::stroke_rounded_rect(bar.left, RADIUS, 2.0, fade(GOLD, 0.85 * destruction));
+    }
     let mid = bar.left.y + bar.left.h * 0.5;
     let mut x = bar.left.x + 14.0;
     if !bar.compact {
-        text::draw_text_styled("Targets", x, caption.centered_baseline(mid), caption);
-        x += width("Targets", caption) + 12.0;
+        glyph::draw(
+            Glyph::Icon(Icon::Target),
+            vec2(x + 10.0, mid),
+            22.0,
+            GOLD,
+            1.0,
+        );
+        x += 28.0;
     }
-    for block in game.blocks.iter().filter(|block| block.target) {
-        let rect = Rect::new(x, mid - pip * 0.5, pip, pip);
-        if block.down {
-            shapes::fill_rounded_rect(rect, 3.0, GREEN);
-            let s = pip / 14.0;
-            shapes::polyline(
-                &[
-                    vec2(x + 3.0 * s, mid),
-                    vec2(x + 6.0 * s, mid + 3.0 * s),
-                    vec2(x + 11.0 * s, mid - 4.0 * s),
-                ],
-                Stroke::new(2.0, INK).cap(shapes::Cap::Round),
-            );
-        } else {
-            shapes::fill_rounded_rect(rect, 3.0, Fill::vertical(rect, lighten(RUST, 0.15), RUST));
-            shapes::fill_circle(vec2(x + pip * 0.5, mid), 2.0, PAPER);
-        }
-        x += pip + gap;
-    }
-    let numbers = count_style();
-    text::draw_text_styled(count, x + 5.0, numbers.centered_baseline(mid), numbers);
+    structure(view, x, mid, bar.cell, 1.0);
+    x += towers_width(bar.cell);
     let score = display(16.0, if rolling { GOLD } else { PAPER });
     if bar.compact {
-        let start = x + 5.0 + width(count, numbers) + 8.0;
+        let start = x + 8.0;
         let right = bar.left.x + bar.left.w - 14.0;
         line(
             value,
@@ -737,13 +798,9 @@ fn draw_top_bar(
     let Some(right) = bar.right else {
         return;
     };
-    // Stars still on offer for this run, shown while playing.
-    let pace = match state {
-        SessionState::Won | SessionState::Lost => view.foundry.summary().stars,
-        _ if game.ammo == 0 => 1,
-        _ => score::stars(true, game.tally.shots + 1),
-    };
+    let pace = pace(view, state);
     panel(right, RADIUS, None, 1.0);
+    let mid = right.y + right.h * 0.5;
     for i in 0..3 {
         star(
             vec2(right.x + 22.0 + i as f32 * 17.0, mid),
@@ -752,9 +809,7 @@ fn draw_top_bar(
             if i < pace { GOLD } else { fade(MUTED, 0.6) },
         );
     }
-    let x = right.x + 14.0 + bar.pace_w;
-    text::draw_text_styled("Score", x, caption.centered_baseline(mid), caption);
-    let start = x + width("Score", caption) + 10.0;
+    let start = right.x + 14.0 + bar.pace_w;
     line(
         value,
         start,
@@ -765,74 +820,16 @@ fn draw_top_bar(
     );
 }
 
-/// The onboarding line for a first-time player, or `None` once learned.
-fn coach_hint(view: &View, out: &mut dyn FnMut(&str)) -> bool {
-    let coach = view.coach;
-    let tally = &view.foundry.range.tally;
-    if !coach.aimed {
-        if view.hints.touch {
-            out("Drag to aim · press Fire to shoot");
-        } else {
-            with_fmt(
-                format_args!("Aim with the move keys or drag · Fire: {}", view.hints.fire),
-                |t| out(t),
-            );
-        }
-        true
-    } else if !coach.fired {
-        out("Follow the dotted arc, then fire");
-        true
-    } else if !coach.knocked && tally.misses > 0 {
-        out("Tip: knock out a low sandstone support");
-        true
-    } else {
-        false
-    }
+/// What a control button shows: an icon, an optional short label (a
+/// countdown) and the key cap that triggers it.
+#[derive(Clone, Copy)]
+struct Face<'a> {
+    icon: Icon,
+    label: Option<&'a str>,
+    key: Option<&'a str>,
 }
 
-/// The status line under the shells: events first, then coaching.
-fn status(view: &View, state: SessionState, out: &mut dyn FnMut(&str, Color)) {
-    let game = &view.foundry.range;
-    let feedback = &view.foundry.feedback;
-    match state {
-        SessionState::Ready if view.compact() => out("Gus looks nervous.", MUTED),
-        SessionState::Ready => out("Foreman Gus is watching. Nervously.", MUTED),
-        SessionState::Won => out("Foundry cleared!", GOLD),
-        SessionState::Lost => out("Out of shells", PAPER),
-        SessionState::Paused => out("Range paused", MUTED),
-        SessionState::Playing => {
-            if feedback.destruction > 0.0 {
-                let n = feedback.knocked_down;
-                with_fmt(
-                    format_args!("+{n} target{} down", if n == 1 { "" } else { "s" }),
-                    |t| out(t, GOLD),
-                );
-            } else if feedback.shot > 0.0 {
-                with_fmt(format_args!("Shot {} away", AMMO - game.ammo), |t| {
-                    out(t, PAPER)
-                });
-            } else if feedback.rebuilt > 0.0 {
-                out("Rebuilt: 8 shells ready", GREEN);
-            } else if game.ammo == 0 {
-                with_fmt(
-                    format_args!(
-                        "Last shell settling… {:.1}s",
-                        (SETTLE - game.since_shot).max(0.0)
-                    ),
-                    |t| out(t, GOLD),
-                );
-            } else if game.cooldown > 0.0 {
-                with_fmt(format_args!("Reloading {:.1}s", game.cooldown), |t| {
-                    out(t, PAPER)
-                });
-            } else {
-                coach_hint(view, &mut |t| out(t, MUTED));
-            }
-        }
-    }
-}
-
-fn button(view: &View, index: usize, rect: Rect, title: &str, enabled: bool, primary: bool) {
+fn button(view: &View, index: usize, rect: Rect, face: Face, enabled: bool, primary: bool) {
     let anim = view.anim;
     let hover = anim.hover[index];
     let press = anim.press[index];
@@ -859,16 +856,21 @@ fn button(view: &View, index: usize, rect: Rect, title: &str, enabled: bool, pri
         ),
     };
     if enabled && primary {
-        // Ready-to-fire glow, steady under reduced flash.
+        // Ready-to-fire glow, steady under reduced flash; brighter until the
+        // first shot has been fired.
         let pulse = if anim.pulse {
             0.5 + 0.5 * (anim.time * 3.0).sin()
         } else {
             0.5
         };
+        let invite = if index == 0 { anim.coach_fade[1] } else { 0.0 };
         shapes::glow_disc(
             vec2(rect.x + rect.w * 0.5, rect.y + rect.h * 0.5),
-            rect.w * 0.45,
-            fade(EMBER, 0.12 + 0.06 * pulse + 0.1 * hover),
+            rect.w * (0.45 + 0.1 * invite),
+            fade(
+                EMBER,
+                0.12 + 0.06 * pulse + 0.1 * hover + 0.12 * invite * pulse,
+            ),
         );
     }
     shapes::drop_shadow(
@@ -893,20 +895,89 @@ fn button(view: &View, index: usize, rect: Rect, title: &str, enabled: bool, pri
         EDGE
     };
     shapes::stroke_rounded_rect(rect, RADIUS, 1.0, edge);
-    let style = body(16.0, if enabled { PAPER } else { fade(MUTED, 0.6) });
-    let size = if width(title, style) > rect.w - 16.0 {
-        body(8.0, style.color)
+    let ink = if enabled { PAPER } else { fade(MUTED, 0.6) };
+    let key = face.key.filter(|_| !view.hints.touch && enabled);
+    let mut items = [Item::Gap(0.0); 4];
+    let mut n = 0;
+    items[n] = Item::Glyph(Glyph::Icon(face.icon), ink);
+    n += 1;
+    if let Some(label) = face.label {
+        items[n] = Item::Text(label, ink);
+        n += 1;
+    }
+    let bare = n;
+    if let Some(key) = key {
+        items[n] = Item::Gap(0.35);
+        items[n + 1] = Item::Key(key);
+        n += 2;
+    }
+    // Drop the key cap before shrinking the icon on narrow buttons.
+    let size = 24.0;
+    let n = if glyph::row_width(&items[..n], size) > rect.w - 16.0 {
+        bare
     } else {
-        style
+        n
     };
-    line(
-        title,
-        rect.x + 8.0,
-        size.centered_baseline(rect.y + rect.h * 0.5),
-        rect.w - 16.0,
+    glyph::row(
+        &items[..n],
+        vec2(rect.x + rect.w * 0.5, rect.y + rect.h * 0.5),
         size,
-        Align::Center,
+        rect.w - 16.0,
+        if enabled { 1.0 } else { 0.8 },
     );
+}
+
+/// The aim as two gauges: a side-view fan for elevation and a top-down fan
+/// for heading, each with the barrel as its needle and the angle beside it.
+/// Draws nothing when there is no room right of the shells.
+fn aim_gauges(view: &View, right: f32, top: f32, room: f32) {
+    use std::f32::consts::FRAC_PI_2;
+    let game = &view.foundry.range;
+    let with_numbers = room >= 230.0;
+    if room < 128.0 {
+        return;
+    }
+    let numbers = body(16.0, PAPER);
+    let fan = fade(MUTED, 0.22);
+    let rim = fade(MUTED, 0.5);
+    let barrel = Color::from_rgba(214, 200, 184, 255);
+    let hub = Color::from_rgba(70, 60, 56, 255);
+    // Heading: up is straight down the range, needle turned by yaw.
+    let yaw_w = if with_numbers { 112.0 } else { 62.0 };
+    let pivot = vec2(right - yaw_w + 31.0, top + 46.0);
+    shapes::fill_sector(pivot, 30.0, -FRAC_PI_2 - 0.55, 1.1, fan);
+    shapes::stroke_arc(pivot, 30.0, -FRAC_PI_2 - 0.55, 1.1, Stroke::new(2.0, rim));
+    let a = -FRAC_PI_2 + game.yaw;
+    shapes::fill_capsule(pivot, pivot + vec2(a.cos(), a.sin()) * 28.0, 3.4, barrel);
+    shapes::fill_circle(pivot, 6.5, hub);
+    if with_numbers {
+        with_fmt(format_args!("{:+.0}°", game.yaw.to_degrees()), |t| {
+            text::draw_text_styled(
+                t,
+                pivot.x + 34.0,
+                numbers.centered_baseline(pivot.y - 16.0),
+                numbers,
+            )
+        });
+    }
+    // Elevation: a side view, needle raised by the barrel angle.
+    let elev_w = if with_numbers { 104.0 } else { 56.0 };
+    let pivot = vec2(right - yaw_w - elev_w + 6.0, top + 48.0);
+    shapes::fill_sector(pivot, 34.0, -0.68, 0.68, fan);
+    shapes::stroke_arc(pivot, 34.0, -0.68, 0.68, Stroke::new(2.0, rim));
+    let tip = pivot + vec2(game.elevation.cos(), -game.elevation.sin()) * 31.0;
+    shapes::fill_capsule(pivot, tip, 3.4, barrel);
+    shapes::fill_circle(pivot + vec2(1.0, 2.0), 7.0, hub);
+    if with_numbers {
+        with_fmt(format_args!("{:.0}°", game.elevation.to_degrees()), |t| {
+            text::draw_text_styled(
+                t,
+                pivot.x + 40.0,
+                numbers.centered_baseline(pivot.y - 10.0),
+                numbers,
+            )
+        });
+    }
 }
 
 fn bottom_panel(view: &View, state: SessionState) {
@@ -914,79 +985,130 @@ fn bottom_panel(view: &View, state: SessionState) {
     let game = &view.foundry.range;
     let p = layout.panel;
     panel(p, RADIUS, Some(fade(EMBER, 0.8)), 1.0);
-    // Shells: iron balls; the next one in the breech glows when loaded.
+    // Shells: iron balls; the next one in the breech glows when loaded and
+    // fills a gold ring while it reloads.
+    let compact = view.compact();
+    let (r, step) = if compact { (7.0, 18.0) } else { (8.5, 22.0) };
+    let row = p.y + 24.0;
     for i in 0..AMMO {
-        let at = vec2(p.x + 24.0 + f32::from(i) * 19.0, p.y + 22.0);
+        let at = vec2(p.x + 16.0 + r + f32::from(i) * step, row);
         if i < game.ammo {
-            if i + 1 == game.ammo && game.can_fire() && state == SessionState::Playing {
-                shapes::glow_disc(at, 14.0, fade(EMBER, 0.45));
+            let next = i + 1 == game.ammo && state == SessionState::Playing;
+            if next && game.can_fire() {
+                shapes::glow_disc(at, r * 1.9, fade(EMBER, 0.5));
             }
-            shapes::fill_circle(at + vec2(0.5, 1.5), 7.0, SHADOW);
-            shapes::fill_circle(
-                at,
-                7.0,
-                Fill::radial(
-                    at - vec2(2.0, 2.5),
-                    9.0,
-                    Color::from_rgba(196, 180, 164, 255),
-                    Color::from_rgba(70, 60, 56, 255),
-                ),
-            );
+            glyph::shell(at, r, 1.0);
+            if next && game.cooldown > 0.0 {
+                shapes::stroke_arc(
+                    at,
+                    r + 3.5,
+                    -std::f32::consts::FRAC_PI_2,
+                    std::f32::consts::TAU * (1.0 - game.cooldown / RELOAD).clamp(0.0, 1.0),
+                    Stroke::new(2.5, GOLD).cap(shapes::Cap::Round),
+                );
+            }
         } else {
-            shapes::stroke_circle(at, 6.0, 1.5, fade(MUTED, 0.45));
+            shapes::stroke_circle(at, r - 1.0, 1.5, fade(MUTED, 0.45));
         }
     }
-    let caption = body(16.0, MUTED);
-    let shells_right = p.x + 24.0 + f32::from(AMMO) * 19.0;
-    let row = caption.centered_baseline(p.y + 22.0);
-    let left_w = with_fmt(format_args!("{} left", game.ammo), |t| {
-        text::draw_text_styled(t, shells_right, row, caption);
-        width(t, caption)
-    });
+    // Accepted-shot and rebuild confirmations: the slot just fired rings out
+    // and a fresh rack shimmers (both static under reduced motion).
+    let feedback = &view.foundry.feedback;
+    if feedback.shot > 0.0 && game.ammo < AMMO {
+        let at = vec2(p.x + 16.0 + r + f32::from(game.ammo) * step, row);
+        let t = feedback.shot.clamp(0.0, 1.0);
+        shapes::stroke_circle(
+            at,
+            r + 2.0 + (1.0 - t) * 9.0 * view.anim.motion,
+            2.0,
+            fade(GOLD, t),
+        );
+    }
+    if feedback.rebuilt > 0.0 {
+        let t = (feedback.rebuilt / 1.8).clamp(0.0, 1.0);
+        for i in 0..game.ammo {
+            let at = vec2(p.x + 16.0 + r + f32::from(i) * step, row);
+            shapes::glow_disc(at, r * 1.7, fade(GOLD, 0.3 * t));
+        }
+    }
+    let shells_right = p.x + 16.0 + f32::from(AMMO) * step;
     if state != SessionState::Ready {
+        aim_gauges(
+            view,
+            p.x + p.w - 12.0,
+            p.y + 4.0,
+            p.x + p.w - 12.0 - shells_right - 16.0,
+        );
+    }
+    // The last shell's settling window as an hourglass countdown.
+    if state == SessionState::Playing && game.ammo == 0 {
         with_fmt(
-            format_args!(
-                "Yaw {:+.0}°   Elev {:.0}°",
-                game.yaw.to_degrees(),
-                game.elevation.to_degrees()
-            ),
+            format_args!("{:.1}s", (SETTLE - game.since_shot).max(0.0)),
             |t| {
-                let w = width(t, caption);
-                if p.x + p.w - 16.0 - w >= shells_right + left_w + 24.0 {
-                    text::draw_text_styled(t, p.x + p.w - 16.0 - w, row, caption);
-                }
+                glyph::row_at(
+                    &[
+                        Item::Glyph(Glyph::Icon(Icon::Hourglass), GOLD),
+                        Item::Text(t, GOLD),
+                    ],
+                    p.x + 16.0,
+                    p.y + 48.0,
+                    16.0,
+                    1.0,
+                );
             },
         );
     }
-    status(view, state, &mut |t, color| {
-        line(
-            t,
-            p.x + 16.0,
-            p.y + 52.0,
-            p.w - 32.0,
-            body(16.0, color),
-            Align::Left,
-        )
-    });
 
     let paused = view.foundry.session.is_paused();
-    let fire_title = match state {
-        SessionState::Ready => "Start",
-        SessionState::Won => "Again",
-        SessionState::Lost => "Retry",
-        SessionState::Paused => "Paused",
-        SessionState::Playing if game.ammo == 0 => "Empty",
-        SessionState::Playing if game.cooldown > 0.0 => "Loading",
-        SessionState::Playing => "Fire",
-    };
+    let hints = view.hints;
+    let settle = (SETTLE - game.since_shot).max(0.0);
     let [fire_enabled, rebuild_enabled, pause_enabled] = button_enabled(view, state);
-    button(view, 0, layout.fire, fire_title, fire_enabled, true);
-    button(view, 1, layout.rebuild, "Rebuild", rebuild_enabled, false);
+    with_fmt(format_args!("{settle:.1}"), |countdown| {
+        let fire = match state {
+            SessionState::Ready => Face {
+                icon: Icon::Play,
+                label: None,
+                key: Some(hints.confirm.as_str()),
+            },
+            SessionState::Won | SessionState::Lost => Face {
+                icon: Icon::Restart,
+                label: None,
+                key: Some(hints.confirm.as_str()),
+            },
+            SessionState::Playing if game.ammo == 0 => Face {
+                icon: Icon::Hourglass,
+                label: Some(countdown),
+                key: None,
+            },
+            _ => Face {
+                icon: Icon::Bomb,
+                label: None,
+                key: Some(hints.fire.as_str()),
+            },
+        };
+        button(view, 0, layout.fire, fire, fire_enabled, true);
+    });
+    button(
+        view,
+        1,
+        layout.rebuild,
+        Face {
+            icon: Icon::Hammer,
+            label: None,
+            key: Some(hints.restart.as_str()),
+        },
+        rebuild_enabled,
+        false,
+    );
     button(
         view,
         2,
         layout.pause,
-        if paused { "Resume" } else { "Pause" },
+        Face {
+            icon: if paused { Icon::Play } else { Icon::Pause },
+            label: None,
+            key: Some(hints.pause.as_str()),
+        },
         pause_enabled,
         paused,
     );
@@ -1026,34 +1148,75 @@ pub(super) fn enabled_buttons(
     ]
 }
 
-/// Banner title (Classic caps), subtitle (Modern) and accent color.
-fn callout_text(callout: Callout, points: u32, out: &mut dyn FnMut(&str, &str, Color)) {
+/// A callout's face: an optional pictogram, its Classic title and accent.
+/// The points it paid follow on the same line.
+fn callout_face(callout: Callout, out: &mut dyn FnMut(Option<Glyph>, &str, Color)) {
     match callout {
-        Callout::Chain(n) => with_fmt(format_args!("CHAIN ×{n}!"), |t| {
-            with_fmt(format_args!("+{points}"), |s| out(t, s, PAPER))
-        }),
-        Callout::Timber => with_fmt(format_args!("Tower down · +{points}"), |s| {
-            out("TIMBER!", s, Color::from_rgba(255, 150, 70, 255))
-        }),
-        Callout::Domino => with_fmt(format_args!("Two towers, one shot · +{points}"), |s| {
-            out("DOMINO EFFECT!", s, GOLD)
-        }),
-        Callout::Overkill => with_fmt(format_args!("Kicking rubble · +{points}"), |s| {
-            out("OVERKILL!", s, GOLD)
-        }),
-        Callout::OneShotWonder => with_fmt(format_args!("Four down · +{points}"), |s| {
-            out("ONE-SHOT WONDER!", s, GOLD)
-        }),
-        Callout::Delayed => out("WAIT... IT COUNTS!", "Slow-motion demolition", GREEN),
-        Callout::Bell => with_fmt(format_args!("Secret lunch bell · +{points}"), |s| {
-            out("DING!", s, GOLD)
-        }),
-        Callout::Spare(n) => with_fmt(format_args!("SPARE SHELLS ×{n}"), |t| {
-            with_fmt(format_args!("Unused shells pay +{points}"), |s| {
-                out(t, s, GOLD)
-            })
+        Callout::Chain(n) => with_fmt(format_args!("CHAIN ×{n}!"), |t| out(None, t, PAPER)),
+        Callout::Timber => out(
+            Some(Glyph::Icon(Icon::Tree)),
+            "TIMBER!",
+            Color::from_rgba(255, 150, 70, 255),
+        ),
+        Callout::Domino => out(None, "DOMINO EFFECT!", GOLD),
+        Callout::Overkill => out(Some(Glyph::Icon(Icon::Skull)), "OVERKILL!", GOLD),
+        Callout::OneShotWonder => out(Some(Glyph::Icon(Icon::Star)), "ONE-SHOT WONDER!", GOLD),
+        Callout::Delayed => out(
+            Some(Glyph::Icon(Icon::Hourglass)),
+            "WAIT... IT COUNTS!",
+            GREEN,
+        ),
+        Callout::Bell => out(Some(Glyph::Icon(Icon::Bell)), "DING!", GOLD),
+        Callout::Spare(n) => with_fmt(format_args!("SPARE ×{n}"), |t| {
+            out(Some(Glyph::Shell), t, GOLD)
         }),
     }
+}
+
+/// One banner line: pictogram, title and the points it paid.
+fn callout_items<'a>(
+    icon: Option<Glyph>,
+    title: &'a str,
+    color: Color,
+    points: Option<&'a str>,
+    out: &mut [Item<'a>; 4],
+) -> usize {
+    let mut n = 0;
+    if let Some(icon) = icon {
+        out[n] = Item::Glyph(icon, color);
+        n += 1;
+    }
+    out[n] = Item::Display(title, color);
+    n += 1;
+    if let Some(points) = points {
+        out[n] = Item::Gap(0.35);
+        out[n + 1] = Item::Display(points, GOLD);
+        n += 2;
+    }
+    n
+}
+
+/// The largest banner size whose line fits `max`; the decorative pictogram
+/// goes first when even the smallest size would not fit.
+fn fit_callout<'a>(
+    icon: Option<Glyph>,
+    title: &'a str,
+    color: Color,
+    points: Option<&'a str>,
+    sizes: &[f32],
+    max: f32,
+    out: &mut [Item<'a>; 4],
+) -> (usize, f32) {
+    let n = callout_items(icon, title, color, points, out);
+    if let Some(size) = sizes
+        .iter()
+        .copied()
+        .find(|size| glyph::row_width(&out[..n], *size) <= max)
+    {
+        return (n, size);
+    }
+    let smallest = sizes.last().copied().unwrap_or(16.0);
+    (callout_items(None, title, color, points, out), smallest)
 }
 
 fn banner(view: &View) {
@@ -1063,47 +1226,35 @@ fn banner(view: &View) {
     };
     let alpha = banner.alpha();
     let compact = view.compact();
-    callout_text(banner.callout, banner.points, &mut |title, sub, color| {
-        let max = view.w - 64.0;
-        let sizes: &[f32] = if compact {
-            &[24.0, 16.0]
-        } else {
-            &[32.0, 24.0, 16.0]
-        };
-        let base = sizes
-            .iter()
-            .copied()
-            .find(|size| width(title, display(*size, color)) <= max)
-            .unwrap_or(16.0);
-        let scale = banner.scale(juice.motion().min(1.0));
-        let title_style = display(base * scale, fade(color, alpha));
-        let sub_style = body(16.0, fade(PAPER, alpha));
-        let band_w = (width(title, display(base, color)).max(width(sub, sub_style)) + 56.0)
-            .min(view.w - 32.0);
-        let top = view.layout.scene.y + 6.0;
-        let band = Rect::new((view.w - band_w) * 0.5, top, band_w, base + 44.0);
-        shapes::glow_disc(
-            vec2(view.w * 0.5, top + base * 0.6),
-            band_w * 0.45,
-            fade(color, 0.22 * alpha),
-        );
-        panel(band, RADIUS, Some(fade(color, alpha)), alpha * 0.92);
-        let cy = top + 10.0 + base * 0.5;
-        let w = width(title, title_style);
-        text::draw_text_styled(
-            title,
-            view.w * 0.5 - w * 0.5,
-            title_style.centered_baseline(cy),
-            title_style,
-        );
-        line(
-            sub,
-            24.0,
-            top + base + 34.0,
-            view.w - 48.0,
-            sub_style,
-            Align::Center,
-        );
+    callout_face(banner.callout, &mut |icon, title, color| {
+        with_fmt(format_args!("+{}", banner.points), |points| {
+            let points = (banner.points > 0).then_some(points);
+            let max = view.w - 64.0;
+            let sizes: &[f32] = if compact {
+                &[24.0, 16.0]
+            } else {
+                &[32.0, 24.0, 16.0]
+            };
+            let mut items = [Item::Gap(0.0); 4];
+            let (n, base) = fit_callout(icon, title, color, points, sizes, max, &mut items);
+            let scale = banner.scale(juice.motion().min(1.0));
+            let band_w = (glyph::row_width(&items[..n], base) + 56.0).min(view.w - 32.0);
+            let top = view.layout.scene.y + 6.0;
+            let band = Rect::new((view.w - band_w) * 0.5, top, band_w, base + 26.0);
+            shapes::glow_disc(
+                vec2(view.w * 0.5, top + base * 0.6),
+                band_w * 0.45,
+                fade(color, 0.22 * alpha),
+            );
+            panel(band, RADIUS, Some(fade(color, alpha)), alpha * 0.92);
+            glyph::row(
+                &items[..n],
+                vec2(view.w * 0.5, band.y + band.h * 0.5),
+                base * scale,
+                view.w - 48.0,
+                alpha,
+            );
+        })
     });
 }
 
@@ -1211,7 +1362,12 @@ enum Row<'a> {
     Text(&'a str, f32, Color),
     Display(&'a str, f32, Color),
     Stars(u8, f32),
-    Prompt(&'a str, &'a str),
+    /// A centered row of pictograms, numbers and key caps at a size.
+    Items(&'a [Item<'a>], f32),
+    /// The three towers' integrity glyphs at a cell size.
+    Structure(f32),
+    /// A key cap and the icon of the action it triggers.
+    Prompt(&'a str, Icon),
     Gap(f32),
 }
 
@@ -1247,6 +1403,8 @@ impl Row<'_> {
             Row::Text(_, size, _) => size + 14.0,
             Row::Title(..) | Row::Display(..) => self.style(inner).size + 16.0,
             Row::Stars(_, radius) => radius * 2.0 + 16.0,
+            Row::Items(_, size) => size * 1.3 + 12.0,
+            Row::Structure(cell) => 4.0 * cell + 3.0 * cell_gap(cell) + 14.0,
             Row::Prompt(..) => 40.0,
             Row::Gap(gap) => gap,
         }
@@ -1339,8 +1497,20 @@ fn card(
                     motion,
                 );
             }
-            Row::Prompt(button, verb) => {
-                prompt(view, cx, cursor + dy + 26.0, button, verb, a);
+            Row::Items(items, size) => {
+                glyph::row(items, vec2(cx, cursor + dy + h * 0.5), size, inner, a);
+            }
+            Row::Structure(cell) => {
+                structure(
+                    view,
+                    cx - towers_width(cell) * 0.5,
+                    cursor + dy + h * 0.5,
+                    cell,
+                    a,
+                );
+            }
+            Row::Prompt(key, icon) => {
+                prompt(view, key, cx, cursor + dy + 20.0, icon, a);
             }
             Row::Gap(_) => {}
         }
@@ -1397,54 +1567,68 @@ fn title_screen(view: &View) {
             x += width(glyph, glyph_style) + logo / 8.0;
         }
     }
-    let mut y = top + slide + logo * 2.0 + 40.0;
+    let mut y = top + slide + logo * 2.0 + 34.0;
+    // The job as pictograms: six rust targets, eight shells.
     let (a1, d1) = entrance(age, 2, anim.motion);
-    let tagline = body(16.0, fade(PAPER, a1));
-    line(
-        "Topple all six rust-red targets with eight shells.",
-        24.0,
-        y + d1,
+    glyph::row(
+        &[
+            Item::Glyph(Glyph::Target, PAPER),
+            Item::Display("×6", PAPER),
+            Item::Gap(0.9),
+            Item::Glyph(Glyph::Shell, PAPER),
+            Item::Display("×8", PAPER),
+        ],
+        vec2(w * 0.5, y + d1),
+        if compact { 22.0 } else { 30.0 },
         w - 48.0,
-        tagline,
-        Align::Center,
+        a1,
     );
-    y += 28.0;
+    y += 40.0;
+    // Fewer shells, more stars: three stars within three shells, two within five.
     let (a2, d2) = entrance(age, 3, anim.motion);
-    line(
-        "Fewer shots, more stars. Gus is watching.",
-        24.0,
-        y + d2,
+    glyph::row(
+        &[
+            Item::Glyph(Glyph::Star(true), GOLD),
+            Item::Glyph(Glyph::Star(true), GOLD),
+            Item::Glyph(Glyph::Star(true), GOLD),
+            Item::Gap(0.25),
+            Item::Glyph(Glyph::Shell, PAPER),
+            Item::Text("3", MUTED),
+            Item::Gap(1.1),
+            Item::Glyph(Glyph::Star(true), GOLD),
+            Item::Glyph(Glyph::Star(true), GOLD),
+            Item::Glyph(Glyph::Star(false), MUTED),
+            Item::Gap(0.25),
+            Item::Glyph(Glyph::Shell, PAPER),
+            Item::Text("5", MUTED),
+        ],
+        vec2(w * 0.5, y + d2),
+        if compact { 18.0 } else { 22.0 },
         w - 48.0,
-        body(16.0, fade(MUTED, a2)),
-        Align::Center,
+        a2,
     );
-    y += 34.0;
+    y += 38.0;
     let (a3, d3) = entrance(age, 4, anim.motion);
-    if y + 60.0 < view.layout.panel.y {
-        stars_row(
-            vec2(w * 0.5, y + d3 + 10.0),
-            11.0,
-            view.best.stars,
-            a3,
-            None,
-            anim.motion,
-        );
-        y += 34.0;
-        let best = body(16.0, fade(MUTED, a3));
-        match view.best.points {
-            Some(points) => with_fmt(format_args!("Best {}", Grouped(points)), |t| {
-                line(t, 24.0, y + d3, w - 48.0, best, Align::Center)
-            }),
-            None => line(
-                "No record yet. Make history.",
-                24.0,
-                y + d3,
+    if y + 60.0 < view.layout.panel.y
+        && let Some(points) = view.best.points
+    {
+        with_fmt(format_args!("{}", Grouped(points)), |t| {
+            glyph::row(
+                &[
+                    Item::Glyph(Glyph::Icon(Icon::Trophy), GOLD),
+                    Item::Text(t, MUTED),
+                    Item::Gap(0.5),
+                    Item::Glyph(Glyph::Star(view.best.stars >= 1), GOLD),
+                    Item::Glyph(Glyph::Star(view.best.stars >= 2), GOLD),
+                    Item::Glyph(Glyph::Star(view.best.stars >= 3), GOLD),
+                ],
+                vec2(w * 0.5, y + d3),
+                18.0,
                 w - 48.0,
-                best,
-                Align::Center,
-            ),
-        }
-        y += 40.0;
+                a3,
+            );
+        });
+        y += 36.0;
     }
     let (a4, d4) = entrance(age, 5, anim.motion);
     // A slow breathing prompt; steady under reduced flash.
@@ -1454,13 +1638,21 @@ fn title_screen(view: &View) {
         1.0
     };
     if y + 30.0 < view.layout.panel.y {
-        prompt(view, w * 0.5, y + d4, "Start", "to start", a4 * breathe);
+        prompt(
+            view,
+            view.hints.confirm.as_str(),
+            w * 0.5,
+            y + 8.0 + d4,
+            Icon::Play,
+            a4 * breathe,
+        );
     }
 }
 
 fn paused_card(view: &View) {
     let game = &view.foundry.range;
     let pause = view.foundry.banter.pause_line();
+    let pace = pace(view, SessionState::Paused);
     card(
         view,
         lighten(STEEL, 0.4),
@@ -1469,57 +1661,117 @@ fn paused_card(view: &View) {
         &|emit| {
             emit(Row::Title("PAUSED", GOLD), 0);
             emit(Row::Text(pause, 16.0, MUTED), 2);
+            emit(Row::Structure(13.0), 3);
             with_fmt(
-                format_args!(
-                    "Targets {}/{GOAL} · Score {}",
-                    game.score(),
-                    Grouped(u64::from(game.tally.points))
-                ),
-                |t| emit(Row::Text(t, 16.0, PAPER), 3),
+                format_args!("{}", Grouped(u64::from(game.tally.points))),
+                |t| {
+                    emit(
+                        Row::Items(
+                            &[
+                                Item::Glyph(Glyph::Star(pace >= 1), GOLD),
+                                Item::Glyph(Glyph::Star(pace >= 2), GOLD),
+                                Item::Glyph(Glyph::Star(pace >= 3), GOLD),
+                                Item::Gap(0.4),
+                                Item::Display(t, PAPER),
+                            ],
+                            22.0,
+                        ),
+                        3,
+                    )
+                },
             );
-            if view.hints.touch {
-                emit(Row::Text("Press Resume below", 16.0, GOLD), 1);
-            } else {
-                with_fmt(
-                    format_args!("Press {} or Resume to continue", view.hints.pause),
-                    |t| emit(Row::Text(t, 16.0, GOLD), 1),
-                );
-            }
+            emit(Row::Prompt(view.hints.pause.as_str(), Icon::Play), 1);
         },
     );
 }
 
 /// The hook that makes "one more try" irresistible.
-pub(super) fn next_goal(run: RunSummary, previous: Best, points: u64, out: &mut dyn FnMut(&str)) {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Goal {
+    /// Win again within this many shots for the next star.
+    NextStar { shots: u8 },
+    /// The secret bell is still unrung.
+    Secret,
+    /// Topple two towers with one shot.
+    Domino,
+    /// Score at least this many points.
+    BeatBest(u64),
+    /// Only this many targets were left standing.
+    SoClose(u32),
+    /// Aim at the low sandstone supports.
+    Supports,
+}
+
+pub(super) fn next_goal(run: RunSummary, previous: Best, points: u64) -> Goal {
     if run.won {
         if let Some(shots) = score::next_star_shots(run.stars) {
-            with_fmt(format_args!("Next star: clear it in {shots} shots"), |t| {
-                out(t)
-            });
+            Goal::NextStar { shots }
         } else if !run.bell {
-            out("Secret: something up high goes ding");
+            Goal::Secret
         } else if !run.domino {
-            out("Next: topple two towers with one shot");
+            Goal::Domino
         } else {
-            let best = previous.points.unwrap_or(0).max(points);
-            with_fmt(
-                format_args!("Beat {} for a new best", Grouped(best + 1)),
-                |t| out(t),
-            );
+            Goal::BeatBest(previous.points.unwrap_or(0).max(points) + 1)
         }
     } else {
         let left = GOAL as u32 - run.targets.min(GOAL as u32);
         if left <= 2 {
-            with_fmt(
-                format_args!(
-                    "So close! {left} target{} left",
-                    if left == 1 { "" } else { "s" }
-                ),
-                |t| out(t),
-            );
+            Goal::SoClose(left)
         } else {
-            out("Tip: hit the low sandy supports");
+            Goal::Supports
         }
+    }
+}
+
+/// The goal as one pictogram row after a flag.
+fn goal_items(goal: Goal, out: &mut dyn FnMut(&[Item])) {
+    let flag = Item::Glyph(Glyph::Icon(Icon::Flag), GREEN);
+    match goal {
+        Goal::NextStar { shots } => with_fmt(format_args!("{shots}"), |t| {
+            out(&[
+                flag,
+                Item::Glyph(Glyph::Star(true), GOLD),
+                Item::Gap(0.3),
+                Item::Glyph(Glyph::Shell, PAPER),
+                Item::Text(t, GREEN),
+            ])
+        }),
+        Goal::Secret => out(&[
+            flag,
+            Item::Glyph(Glyph::Icon(Icon::Bell), GOLD),
+            Item::Text("?", GREEN),
+        ]),
+        Goal::Domino => out(&[
+            flag,
+            Item::Glyph(Glyph::Shell, PAPER),
+            Item::Text("1", GREEN),
+            Item::Glyph(Glyph::Icon(Icon::ArrowRight), MUTED),
+            Item::Glyph(Glyph::Target, PAPER),
+            Item::Gap(0.3),
+            Item::Glyph(Glyph::Target, PAPER),
+        ]),
+        Goal::BeatBest(points) => with_fmt(format_args!("{}", Grouped(points)), |t| {
+            out(&[
+                flag,
+                Item::Glyph(Glyph::Icon(Icon::Trophy), GOLD),
+                Item::Text(t, GREEN),
+            ])
+        }),
+        Goal::SoClose(left) => {
+            let target = Item::Glyph(Glyph::Target, PAPER);
+            let items = [flag, target, target, Item::Text("So close!", GREEN)];
+            if left >= 2 {
+                out(&items);
+            } else {
+                out(&[flag, target, Item::Text("So close!", GREEN)]);
+            }
+        }
+        Goal::Supports => out(&[
+            flag,
+            Item::Glyph(Glyph::Icon(Icon::ArrowDown), GOLD),
+            Item::Glyph(Glyph::Support, PAPER),
+            Item::Glyph(Glyph::Support, PAPER),
+        ]),
     }
 }
 
@@ -1559,45 +1811,89 @@ fn results_card(view: &View) {
             )
         });
         if results.new_best {
-            emit(Row::Text("New personal best!", 16.0, GOLD), 3);
-        } else if results.new_stars {
-            emit(Row::Text("New star record!", 16.0, GOLD), 3);
-        } else {
-            match results.previous.points {
-                Some(best) => with_fmt(format_args!("Best {}", Grouped(best)), |t| {
-                    emit(Row::Text(t, 16.0, MUTED), 3)
-                }),
-                None => emit(Row::Text("No record yet. Make history.", 16.0, MUTED), 3),
-            }
-        }
-        if run.won {
-            with_fmt(
-                format_args!(
-                    "{} shots · best chain ×{} · {} misses",
-                    tally.shots,
-                    tally.best_chain.max(1),
-                    tally.misses
+            emit(
+                Row::Items(
+                    &[
+                        Item::Glyph(Glyph::Icon(Icon::Trophy), GOLD),
+                        Item::Text("New best!", GOLD),
+                    ],
+                    20.0,
                 ),
-                |t| emit(Row::Text(t, 16.0, MUTED), 4),
+                3,
             );
-        } else {
-            with_fmt(
-                format_args!("{}/{GOAL} targets · {} misses", run.targets, tally.misses),
-                |t| emit(Row::Text(t, 16.0, MUTED), 4),
+        } else if results.new_stars {
+            emit(
+                Row::Items(
+                    &[
+                        Item::Glyph(Glyph::Star(true), GOLD),
+                        Item::Text("New stars!", GOLD),
+                    ],
+                    20.0,
+                ),
+                3,
             );
+        } else if let Some(best) = results.previous.points {
+            with_fmt(format_args!("{}", Grouped(best)), |t| {
+                emit(
+                    Row::Items(
+                        &[
+                            Item::Glyph(Glyph::Icon(Icon::Trophy), MUTED),
+                            Item::Text(t, MUTED),
+                        ],
+                        20.0,
+                    ),
+                    3,
+                )
+            });
         }
+        with_fmt(format_args!("{}", tally.misses), |misses| {
+            if run.won {
+                with_fmt(format_args!("{}", tally.shots), |shots| {
+                    with_fmt(format_args!("×{}", tally.best_chain.max(1)), |chain| {
+                        emit(
+                            Row::Items(
+                                &[
+                                    Item::Glyph(Glyph::Shell, PAPER),
+                                    Item::Text(shots, MUTED),
+                                    Item::Gap(0.7),
+                                    Item::Glyph(Glyph::Target, PAPER),
+                                    Item::Text(chain, MUTED),
+                                    Item::Gap(0.7),
+                                    Item::Glyph(Glyph::Icon(Icon::Cloud), MUTED),
+                                    Item::Text(misses, MUTED),
+                                ],
+                                22.0,
+                            ),
+                            4,
+                        )
+                    })
+                });
+            } else {
+                with_fmt(format_args!("{}/{GOAL}", run.targets), |targets| {
+                    emit(
+                        Row::Items(
+                            &[
+                                Item::Glyph(Glyph::Target, PAPER),
+                                Item::Text(targets, MUTED),
+                                Item::Gap(0.7),
+                                Item::Glyph(Glyph::Icon(Icon::Cloud), MUTED),
+                                Item::Text(misses, MUTED),
+                            ],
+                            22.0,
+                        ),
+                        4,
+                    )
+                });
+            }
+        });
         emit(Row::Gap(4.0), 5);
         emit(Row::Display(rank.title, 24.0, GOLD), 1);
         emit(Row::Text(rank.quip, 16.0, PAPER), 3);
-        next_goal(run, results.previous, points, &mut |t| {
-            emit(Row::Text(t, 16.0, GREEN), 2)
+        goal_items(next_goal(run, results.previous, points), &mut |items| {
+            emit(Row::Items(items, 22.0), 2)
         });
         emit(Row::Gap(4.0), 5);
-        if run.won {
-            emit(Row::Prompt("Again", "to go again"), 0);
-        } else {
-            emit(Row::Prompt("Retry", "to retry"), 0);
-        }
+        emit(Row::Prompt(view.hints.confirm.as_str(), Icon::Restart), 0);
     });
 }
 
@@ -1668,12 +1964,6 @@ fn doors(view: &View) {
 mod tests {
     use super::*;
 
-    fn goal(run: RunSummary, best: Best, points: u64) -> String {
-        let mut out = String::new();
-        next_goal(run, best, points, &mut |t| out.push_str(t));
-        out
-    }
-
     #[test]
     fn grouping_and_next_goals_read_naturally() {
         for (n, text) in [
@@ -1691,27 +1981,35 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            goal(won, Best::default(), 900),
-            "Next star: clear it in 3 shots"
+            next_goal(won, Best::default(), 900),
+            Goal::NextStar { shots: 3 }
         );
         let three = RunSummary { stars: 3, ..won };
-        assert!(goal(three, Best::default(), 900).contains("ding"));
-        let all = RunSummary {
+        assert_eq!(next_goal(three, Best::default(), 900), Goal::Secret);
+        let rung = RunSummary {
             bell: true,
-            domino: true,
             ..three
+        };
+        assert_eq!(next_goal(rung, Best::default(), 900), Goal::Domino);
+        let all = RunSummary {
+            domino: true,
+            ..rung
         };
         let best = Best {
             points: Some(2000),
             stars: 3,
         };
-        assert_eq!(goal(all, best, 1500), "Beat 2,001 for a new best");
+        assert_eq!(next_goal(all, best, 1500), Goal::BeatBest(2001));
+        assert_eq!(next_goal(all, best, 2500), Goal::BeatBest(2501));
         let lost = RunSummary {
             targets: 5,
             ..Default::default()
         };
-        assert_eq!(goal(lost, Best::default(), 0), "So close! 1 target left");
-        assert!(goal(RunSummary::default(), Best::default(), 0).starts_with("Tip"));
+        assert_eq!(next_goal(lost, Best::default(), 0), Goal::SoClose(1));
+        assert_eq!(
+            next_goal(RunSummary::default(), Best::default(), 0),
+            Goal::Supports
+        );
     }
 
     #[test]
@@ -1744,7 +2042,7 @@ mod tests {
 
     #[test]
     fn hud_copy_fits_its_boxes_at_narrow_and_desktop_widths() {
-        let mut lines: Vec<(String, String)> = Vec::new();
+        let mut lines: Vec<(Option<Glyph>, String, Color, bool)> = Vec::new();
         for callout in [
             Callout::Chain(5),
             Callout::Timber,
@@ -1755,24 +2053,32 @@ mod tests {
             Callout::Bell,
             Callout::Spare(7),
         ] {
-            callout_text(callout, 1400, &mut |t, s, _| {
-                lines.push((t.into(), s.into()))
+            // A delayed topple pays nothing new, so it shows no points chip.
+            let paid = callout != Callout::Delayed;
+            callout_face(callout, &mut |icon, title, color| {
+                lines.push((icon, title.into(), color, paid))
             });
         }
         for w in [320.0_f32, 390.0, 844.0, 1280.0, 1600.0] {
             let max = w - 64.0;
-            for (title, sub) in &lines {
-                assert!(width(title, display(16.0, PAPER)) <= max, "{title} at {w}");
-                assert!(width(sub, body(16.0, PAPER)) <= w - 48.0, "{sub} at {w}");
+            for (icon, title, color, paid) in &lines {
+                // One line with a four-digit payout, at the size the banner picks.
+                let mut items = [Item::Gap(0.0); 4];
+                let (n, size) = fit_callout(
+                    *icon,
+                    title,
+                    *color,
+                    paid.then_some("+1400"),
+                    &[24.0, 16.0],
+                    max,
+                    &mut items,
+                );
+                assert!(size >= 16.0);
+                assert!(glyph::row_width(&items[..n], size) <= max, "{title} at {w}");
             }
             // Card text fits at some size, or wraps onto two lines that fit.
             let inner = (w - 32.0).min(500.0) - 40.0;
-            let mut copy: Vec<&str> = vec![
-                "Next star: clear it in 3 shots",
-                "Secret: something up high goes ding",
-                "Next: topple two towers with one shot",
-                "3 shots · best chain ×2 · 0 misses",
-            ];
+            let mut copy: Vec<&str> = vec![];
             for run in [
                 RunSummary::default(),
                 RunSummary {
@@ -1836,16 +2142,16 @@ mod tests {
                     && r.y + r.h > corner.y;
                 assert!(!overlaps, "{what} {r:?} enters the menu corner at {w}x{h}");
             };
-            // Worst-case copy: every target down and a four-digit score (every
-            // bonus at once stays well under 10,000 points).
-            let bar = TopBar::new(w, "6/6", "9,999");
+            // Worst-case copy: a four-digit score (every bonus at once stays
+            // well under 10,000 points).
+            let bar = TopBar::new(w, "9,999");
             assert!(bar.compact || bar.right.is_some(), "score shown at {w}x{h}");
             for rect in bar.rects() {
                 clear(rect, "top bar");
+                assert!(rect.y + rect.h <= 56.0, "top bar stays above the scene");
             }
             if bar.compact {
-                let used =
-                    14.0 + 6.0 * bar.pip + 5.0 * bar.gap + 5.0 + width("6/6", count_style()) + 8.0;
+                let used = 14.0 + towers_width(bar.cell) + 8.0;
                 assert!(bar.left.w - 14.0 - used >= width("9,999", count_style()));
             }
             // Cards, banners and Gus's bubble all start at or below the scene.

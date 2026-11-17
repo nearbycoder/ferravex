@@ -440,6 +440,8 @@ fn label(text: &str, x: f32, y: f32, size: f32, color: Color) {
     draw_text(text, x, y, size, color);
 }
 
+/// The reference stopwatch format the HUD's stack formatter must match.
+#[cfg(test)]
 fn time_label(time: f32) -> String {
     let centiseconds = (time.max(0.) * 100.).round() as u64;
     format!(

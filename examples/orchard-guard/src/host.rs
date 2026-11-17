@@ -16,6 +16,16 @@ pub(super) enum Action {
     Speed,
 }
 
+/// A command the orchard turned down. Presentation shakes the control,
+/// flashes it red and shows the missing resource; nothing was spent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Refusal {
+    /// The command was checked against the rules and rejected.
+    Rejected(Action, ActionError),
+    /// A different command is already waiting for the next tick.
+    Busy(Action),
+}
+
 #[derive(Default, Debug)]
 pub(super) struct FrameEvents {
     pub restarted: bool,
@@ -33,6 +43,10 @@ pub(super) struct Campaign {
     pub fast: bool,
     notice: String,
     notice_time: f32,
+    /// The latest refusal and a running count, so presentation can react to
+    /// each new one exactly once. Never read by the rules.
+    pub refusal: Option<Refusal>,
+    pub refusals: u32,
     /// One coalesced HUD purchase with its original plot, waiting for a real tick.
     pending: Option<(Action, usize)>,
 }
@@ -46,8 +60,15 @@ impl Campaign {
             fast: false,
             notice: String::new(),
             notice_time: 0.,
+            refusal: None,
+            refusals: 0,
             pending: None,
         }
+    }
+
+    fn refuse(&mut self, refusal: Refusal) {
+        self.refusal = Some(refusal);
+        self.refusals = self.refusals.wrapping_add(1);
     }
 
     /// Overlay/focus suspension must never undo an intentional pause.
@@ -55,6 +76,9 @@ impl Campaign {
         self.session.set_paused(self.manual_pause || blocked);
     }
 
+    /// The last command's outcome as text. The HUD answers with pictograms
+    /// (see [`Refusal`]); this record keeps the exact wording for checks.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn notice(&self) -> Option<&str> {
         (self.notice_time > 0.).then_some(self.notice.as_str())
     }
@@ -117,6 +141,7 @@ impl Campaign {
                 self.manual_pause = false;
                 self.notice.clear();
                 self.notice_time = 0.;
+                self.refusal = None;
                 self.pending = None;
                 tick_action();
                 events.restarted = true;
@@ -138,6 +163,7 @@ impl Campaign {
                     if self.pending.is_some_and(|pending| pending != queued) {
                         self.notice = "A command is waiting for the next orchard tick. Try again after it runs.".into();
                         self.notice_time = 4.;
+                        self.refuse(Refusal::Busy(action));
                     } else {
                         self.pending = Some(queued);
                     }
@@ -182,6 +208,7 @@ impl Campaign {
     fn command(&mut self, action: Action, plot: usize) {
         if let Err(error) = self.apply(action, plot) {
             self.notice = error.to_string();
+            self.refuse(Refusal::Rejected(action, error));
         }
         self.notice_time = 4.;
     }
@@ -422,6 +449,38 @@ mod tests {
         assert!(c.game.pests.is_empty() && c.game.shots.is_empty());
         assert_eq!((c.game.fired, c.game.kills, c.game.escaped), (0, 0, 0));
         assert!(c.notice().is_none());
+    }
+
+    #[test]
+    fn refusals_are_counted_once_each_and_cleared_by_restart() {
+        let mut c = Campaign::new(Game::new(), false);
+        frame(&mut c, Action::Upgrade);
+        assert_eq!(
+            c.refusal,
+            Some(Refusal::Rejected(Action::Upgrade, ActionError::Empty))
+        );
+        assert_eq!(c.refusals, 1);
+        frame(&mut c, Action::Build(Kind::Seed));
+        assert_eq!(c.refusals, 1, "accepted commands are not refusals");
+        c.game.money = 10;
+        frame(&mut c, Action::Upgrade);
+        assert_eq!(
+            c.refusal,
+            Some(Refusal::Rejected(
+                Action::Upgrade,
+                ActionError::Funds { missing: 55 }
+            ))
+        );
+        assert_eq!((c.refusals, c.game.money), (2, 10));
+        frame(&mut c, Action::Wave);
+        frame(&mut c, Action::Select(Some(1)));
+        frame(&mut c, Action::Build(Kind::Frost));
+        frame(&mut c, Action::Select(Some(2)));
+        frame(&mut c, Action::Build(Kind::Seed));
+        assert_eq!(c.refusal, Some(Refusal::Busy(Action::Build(Kind::Seed))));
+        frame(&mut c, Action::Restart);
+        assert_eq!(c.refusal, None);
+        assert_eq!(c.refusals, 3, "the count stays monotonic across restarts");
     }
 
     #[test]

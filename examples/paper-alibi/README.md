@@ -27,34 +27,54 @@ council registrar's grey seal, while retaining their own suspects and solutions.
 
 ## How to investigate
 
-- **1 / Locations:** Up/Down chooses one of three places. Space examines it and
-  adds its verified record to the notebook.
-- **2 / People:** Up/Down chooses a witness. Space records their statement.
-- **3 / Notebook:** Up/Down chooses a record. Space pins or unpins it. Pin two
-  directly contradictory records and press **C** to connect them. **X** clears
-  the pins; it never deletes collected evidence.
-- Return to **People**, select the witness whose statement you contradicted,
-  and press **C** to confront them. Read the signed response there or as **C1**
-  in the notebook; it explains the method and motive.
-- **4 / Theory:** Up/Down selects WHO, HOW or WHY. Left/Right changes that answer.
-  Space files the complete accusation. All three scene records, all three
-  interviews and the signed confrontation are required before filing.
-- A solved case opens an explanatory edition. Space continues to the next case.
+The screen explains itself with icons rather than instructions. Four icon tabs
+(map, people, notebook, target) show their progress as dots and checks, and the
+tab that holds your next useful step pings softly.
+
+- **1 / Places (map):** Up/Down chooses one of three places. Space examines it;
+  the blacked-out lines on the dossier become its verified record and a green
+  **VERIFIED** stamp lands. The case premise sits on a clipping beside the list.
+- **2 / People:** Up/Down chooses a witness. Space records their statement,
+  stamped **CLAIM**: a witness may lie.
+- **3 / Notebook (book):** Up/Down chooses a record. A magnifier marks verified
+  scene evidence, a speech bubble a witness claim and a key the signed response;
+  missing records stay as dim silhouettes. Space pins or unpins a record onto
+  the pinboard. Pin a claim beside the fact it breaks and red string joins the
+  two cards; the Connect button breathes until you press **C**. A real
+  contradiction bursts into a bolt; anything else shakes. **X** (or the Clear
+  button under the list) removes the pins, never the evidence.
+- The contradicted witness now carries a red bolt in **People**. Select them and
+  press **C** to confront: their denial is struck through and the signed
+  response explains the method and motive.
+- **4 / Accuse (target):** a rail of icons shows whether every scene, interview,
+  the contradiction and the signature are in. Up/Down selects WHO, HOW or WHY;
+  Left/Right changes that answer. Space files the accusation once every record
+  and the confrontation are collected.
+- A solved case opens its newspaper edition: the who, how and why, and the
+  verified fact beside the struck-out denial. Space continues to the next case.
   Finish the sixth edition to print the final newspaper.
 
-Mouse clicks select tabs and rows. Clicking a theory answer cycles it. The large
-bottom buttons perform their displayed actions. Away from Notebook, X opens it.
-Held movement or held Space does not repeat deductions: actions use press edges.
+The header tracks the case: six progress pips, the case name, three WHO / HOW /
+WHY slots that light as you earn them (the liar's face appears once the
+contradiction is connected) and four hearts of credibility. Pointing at a ready
+Accuse button makes the heart at risk flash.
+
+Mouse clicks select tabs and rows; hovering a tab names it. Clicking a theory
+answer cycles it. The large bottom buttons perform their displayed actions.
+Away from Notebook, X opens it. Held movement or held Space does not repeat
+deductions: actions use press edges.
 
 The shared host provides **Enter** to begin, **Esc/P** to pause, **H** for the
-paginated field guide, **R** for a new six-case campaign, **M** for sound and
+four-bullet field guide, **R** for a new six-case campaign, **M** for sound and
 **F2** for control remapping. Space/Enter, X/E and C/Q share their respective
-primary, secondary and third-action bindings. On-screen hints show the defaults.
+primary, secondary and third-action bindings. Key caps on each button show the
+defaults.
 
 ## Credibility, scoring and replay
 
-You begin with four credibility points. A formal accusation with the wrong
-suspect, method or motive spends one point. Four false reports end the campaign.
+You begin with four credibility points, shown as hearts. A formal accusation
+with the wrong suspect, method or motive breaks one heart. Four false reports
+end the campaign.
 An unsupported accusation cannot be filed and does not spend credibility.
 Exploring an unproductive clue connection is safe; keep investigating.
 
@@ -86,23 +106,36 @@ same input path as a human. It wins at tick 4,248 with four credibility points
 and 6,650 score. It is a reproducible solution, not an independent human test of
 mystery difficulty.
 
-For parent-owned native graphical checks, useful frames are around 120 (scene
-record), 400 (notebook), 600 (theory), and 4,200 (final case). The standard runner
-accepts `--autoplay --smoke-frames N --screenshot PATH`. Demonstration runs use
-transient personal records.
+For parent-owned native graphical checks, useful autoplay frames in the first
+case are around 100 (places), 250 (people), 445 (two pins on the board), 470
+(contradiction), 515 (signed response), 710 (accusation) and 732 (edition). The
+standard runner accepts `--autoplay --smoke-frames N --screenshot PATH`;
+`FERRAVEX_ARCADE_FAST=40` with about 220 frames reaches the victory card.
+Demonstration runs use transient personal records.
 
 ## Implementation and limits
 
 `model.rs` contains renderer-independent rules with fixed arrays: seven current
-records, two pins, three theory answers and four view selections. `content.rs`
-contains the original case writing. `view.rs` paints the paper dossiers, original
-procedural portraits, location emblems and red-string notebook. The shared
-`ferravex-arcade` runner owns timing, input sampling, menus, storage and audio.
-No external packages, assets, requests or services are needed.
+records, two pins, three theory answers and four view selections. Each executed
+tick also keeps a bounded list of the commands it accepted or refused (a new
+record, a pin, a contradiction, a wrong witness, a retracted accusation). The
+list is cleared at the start of every update, ignored by equality and never read
+by the rules. `content.rs` contains the original case writing. `view.rs` paints
+the paper dossiers, procedural portraits, engine pictograms for every location,
+the red-string pinboard, the header's WHO / HOW / WHY slots and hearts, and the
+icon results card. It turns the tick's events into effects where they happened:
+bursts on collected records, a stamp slam, a "Contradiction!" callout over the
+pinboard, a heart breaking in the header, and small shakes with one-word popups
+for refusals. The shared `ferravex-arcade` runner owns timing, input sampling,
+menus, storage, audio and the effect pool. No external packages, assets,
+requests or services are needed.
 
-Thirteen behavioral tests and one executed documentation example pass, including
-a legal full-campaign win, credibility failure, immutable endings, one-shot
-rewards, invalid actions, clue pinning, every verdict field and mouse button
-semantics. Strict scoped Clippy and formatting pass. Browser/Wasm integration,
-actual graphical layout, device audio, gamepad/touch play and platform portability
-are parent-owned validation; these simulation checks do not establish them.
+Twenty-three behavioral tests and one executed documentation example pass. They
+cover a legal full-campaign win, credibility failure, immutable endings, one-shot
+rewards, invalid actions, clue pinning, every verdict field, mouse button
+semantics including the Clear button, campaign progress pips, per-tick events,
+effect requests for a contradiction, a retraction and a refusal, layout fits for
+every authored line, and the help word budget. Strict scoped Clippy and
+formatting pass. Browser/Wasm integration, actual graphical layout, device
+audio, gamepad/touch play and platform portability are parent-owned validation;
+these simulation checks do not establish them.

@@ -3,47 +3,51 @@
 //! Every selector is a pure function of accepted simulation counters, so a
 //! run always reads the same way and no clock, RNG or render cadence is
 //! involved. Consecutive counters never select the same line twice in a row.
+//!
+//! Dot-matrix callouts are headlines of at most three words; the numbers and
+//! lamps on the display's second row carry the detail. The ready, pause and
+//! results cards may add one short joke.
 
 const DRAIN: [&str; 8] = [
-    "DRAIN! THE FOREMAN SIGHS",
-    "THAT BALL WAS SCRAP ANYWAY",
-    "DOWN THE MIDDLE. A CLASSIC.",
-    "THE DRAIN SAYS THANKS",
-    "GRAVITY CLOCKED IN EARLY",
-    "LOST TO THE COMPACTOR",
-    "WE'LL CALL THAT RECYCLING",
-    "SHAKE IT OFF, ROOKIE",
+    "DRAINED!",
+    "SCRAP ANYWAY",
+    "DOWN THE MIDDLE",
+    "DRAIN SAYS THANKS",
+    "GRAVITY WINS",
+    "COMPACTOR FOOD",
+    "CALL IT RECYCLING",
+    "SHAKE IT OFF",
 ];
 
 const LAST_BALL: [&str; 4] = [
-    "LAST BALL. NO PRESSURE.",
-    "FINAL BALL. MAKE IT CLANK.",
-    "ONE LEFT. THE YARD WATCHES.",
-    "LAST BALL. BRING IT HOME.",
+    "LAST BALL!",
+    "NO PRESSURE",
+    "MAKE IT CLANK",
+    "BRING IT HOME",
 ];
 
 const SAVE: [&str; 5] = [
-    "ON THE HOUSE. THIS TIME.",
-    "SAFETY NET! TRY AGAIN",
-    "RETURNED TO SENDER",
-    "FREEBIE. DON'T TELL ACCOUNTING",
-    "HARD HATS ON. GO AGAIN",
+    "BALL SAVED!",
+    "SAFETY NET!",
+    "RETURN TO SENDER",
+    "ON THE HOUSE!",
+    "FREEBIE!",
 ];
 
 const JACKPOT: [&str; 5] = [
+    "JACKPOT!",
     "GOT ONE!",
-    "SCRAP OF THE DAY!",
-    "THE MAGNET LOVES YOU",
+    "PRIME SCRAP!",
     "HEAVY LIFTING!",
-    "CRANE OPERATOR OF THE MONTH",
+    "MAGNET MASTER!",
 ];
 
 const MASH: [&str; 5] = [
-    "THE FLIPPERS ARE UNION",
-    "THOSE ARE NOT DRUMS",
-    "I SAW THAT. WE ALL SAW THAT.",
-    "GENTLE. THEY'RE VINTAGE.",
-    "FLIPPER ABUSE NOTED IN FILE",
+    "EASY THERE!",
+    "NOT DRUMS!",
+    "I SAW THAT",
+    "THEY'RE VINTAGE!",
+    "ABUSE NOTED",
 ];
 
 const PAUSE: [&str; 5] = [
@@ -55,10 +59,10 @@ const PAUSE: [&str; 5] = [
 ];
 
 const READY: [&str; 4] = [
-    "SHIFT STARTS. BREAK SOMETHING.",
-    "HARD HATS ON, BALL LOADED",
-    "3 BALLS. 1 CRANE. NO REFUNDS.",
-    "THE YARD IS OPEN FOR BUSINESS",
+    "BREAK SOMETHING",
+    "HARD HATS ON",
+    "NO REFUNDS",
+    "THE YARD'S OPEN",
 ];
 
 /// Advance by a stride coprime with the table length, so consecutive
@@ -68,19 +72,22 @@ pub(super) fn rotate<'a>(table: &[&'a str], counter: u32) -> &'a str {
     table[(counter as usize).wrapping_mul(stride) % table.len()]
 }
 
-/// `drains` counts unsaved drains this game, including this one.
+/// The drain headline. `drains` counts unsaved drains this game, including
+/// this one; the last ball gets its own lines.
 pub(super) fn drain(drains: u32, lives_left: u8) -> &'static str {
     if lives_left == 1 {
-        rotate(&LAST_BALL, drains)
+        rotate(&LAST_BALL, drains.saturating_sub(2))
     } else {
-        rotate(&DRAIN, drains)
+        rotate(&DRAIN, drains.saturating_sub(1))
     }
 }
 
+/// The save headline; the first save says so plainly. `saves` includes this one.
 pub(super) fn save(saves: u32) -> &'static str {
-    rotate(&SAVE, saves)
+    rotate(&SAVE, saves.saturating_sub(1))
 }
 
+/// The first jackpot is always called a jackpot; later ones vary.
 pub(super) fn jackpot(jackpots: u32) -> &'static str {
     rotate(&JACKPOT, jackpots.saturating_sub(1))
 }
@@ -120,7 +127,7 @@ pub(super) fn chain(chain: u32) -> Option<&'static str> {
         4 => "SCRAP STORM!",
         5 => "HEAVY METAL!",
         6 => "MELTDOWN!",
-        7 => "THE YARD IS SHAKING!",
+        7 => "YARD SHAKING!",
         _ => "ABSOLUTE CARNAGE!",
     })
 }
@@ -222,6 +229,27 @@ mod tests {
             previous = line;
         }
         assert!(LAST_BALL.contains(&drain(7, 1)));
+        assert_eq!(jackpot(1), "JACKPOT!");
+        assert_eq!(save(1), "BALL SAVED!");
+        assert_eq!((drain(1, 2), drain(2, 1)), ("DRAINED!", "LAST BALL!"));
+    }
+
+    #[test]
+    fn dot_matrix_headlines_stay_within_three_words() {
+        let words = |line: &str| line.split_whitespace().count();
+        for line in DRAIN
+            .iter()
+            .chain(&LAST_BALL)
+            .chain(&SAVE)
+            .chain(&JACKPOT)
+            .chain(&MASH)
+            .chain(&READY)
+        {
+            assert!(words(line) <= 3, "{line}");
+        }
+        for chain in 3..12 {
+            assert!(words(super::chain(chain).unwrap()) <= 3);
+        }
     }
 
     #[test]

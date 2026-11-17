@@ -12,14 +12,114 @@
 //! assert_eq!(game.outcome(), Outcome::Playing);
 //! ```
 use crate::content::{CELLS, COLS, MAX_ENEMIES, MISSIONS, Mission, Objective, ROWS};
+use crate::fx::{Event, Glide, Refusal, Show};
 use ferravex_arcade::{Cue, Input, Outcome};
-use ferravex_math::Vec2;
+use ferravex_math::{Rect, Vec2};
 use ferravex_play::navigation::{Cell, Connectivity, Grid};
 
 pub(crate) const BOARD_X: f32 = 28.;
-pub(crate) const BOARD_Y: f32 = 154.;
+pub(crate) const BOARD_Y: f32 = 140.;
 pub(crate) const TILE_SIZE: f32 = 50.;
-pub(crate) const CARD_Y: f32 = 160.;
+/// Command sidebar column, shared by drawing and pointer hit-testing.
+pub(crate) const SIDE_X: f32 = 600.;
+pub(crate) const SIDE_W: f32 = 332.;
+pub(crate) const CARD_Y: f32 = 132.;
+pub(crate) const CARD_H: f32 = 82.;
+pub(crate) const CARD_STEP: f32 = 90.;
+pub(crate) const ORDER_Y: f32 = 404.;
+pub(crate) const ORDER_H: f32 = 44.;
+pub(crate) const ORDER_STEP: f32 = 50.;
+/// Engineer's patient buttons inside the skill row, one per machine.
+pub(crate) const PATCH_X: f32 = SIDE_X + 206.;
+pub(crate) const PATCH_STEP: f32 = 40.;
+pub(crate) const PATCH_W: f32 = 36.;
+/// Debrief upgrade cards.
+pub(crate) const UPGRADE_X: f32 = 52.;
+pub(crate) const UPGRADE_STEP: f32 = 172.;
+pub(crate) const UPGRADE_W: f32 = 158.;
+pub(crate) const UPGRADE_Y: f32 = 344.;
+pub(crate) const UPGRADE_H: f32 = 172.;
+/// Setback buttons, in the sidebar where orders usually are.
+pub(crate) const RETRY: Rect = Rect::new(SIDE_X, 430., SIDE_W, 60.);
+pub(crate) const CONCEDE: Rect = Rect::new(SIDE_X, 500., SIDE_W, 48.);
+/// Guarded enemy phases a capture needs, and a hold needs.
+pub(crate) const CAPTURE_PHASES: u8 = 2;
+pub(crate) const HOLD_PHASES: u8 = 4;
+/// A hold also lasts until this friendly turn.
+pub(crate) const HOLD_UNTIL: u16 = 7;
+
+pub(crate) fn card_area(i: usize) -> Rect {
+    Rect::new(SIDE_X, CARD_Y + i as f32 * CARD_STEP, SIDE_W, CARD_H)
+}
+pub(crate) fn order_area(i: usize) -> Rect {
+    Rect::new(SIDE_X, ORDER_Y + i as f32 * ORDER_STEP, SIDE_W, ORDER_H)
+}
+pub(crate) fn patch_area(i: usize) -> Rect {
+    let row = order_area(1);
+    Rect::new(
+        PATCH_X + i as f32 * PATCH_STEP,
+        row.y + (row.h - PATCH_W) * 0.5,
+        PATCH_W,
+        PATCH_W,
+    )
+}
+pub(crate) fn upgrade_area(i: usize) -> Rect {
+    Rect::new(
+        UPGRADE_X + i as f32 * UPGRADE_STEP,
+        UPGRADE_Y,
+        UPGRADE_W,
+        UPGRADE_H,
+    )
+}
+
+/// Every clickable surface. Input and hover drawing share this hit-test.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Hit {
+    Cell(Pos),
+    Card(usize),
+    Order,
+    Skill,
+    Patch(usize),
+    EndTurn,
+    Upgrade(usize),
+    Retry,
+    Concede,
+}
+/// What the contextual order would do at a cell, without doing it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Preview {
+    Fire {
+        enemy: usize,
+        damage: u8,
+        lethal: bool,
+        refusal: Option<Refusal>,
+    },
+    Select(usize),
+    Interact {
+        index: usize,
+        refusal: Option<Refusal>,
+    },
+    Move {
+        path: Vec<Pos>,
+        refusal: Option<Refusal>,
+    },
+    Stay,
+    Blocked,
+}
+/// What the selected machine's skill would do, without doing it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SkillPreview {
+    pub patient: usize,
+    pub amount: u8,
+    pub refusal: Option<Refusal>,
+}
+/// Why an operation was lost.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Failure {
+    SquadDown,
+    OperatorLost,
+    OutOfTime,
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Pos {
@@ -71,13 +171,6 @@ impl Role {
             Self::Vanguard => "BRASS",
             Self::Scout => "KESTREL",
             Self::Engineer => "MICA",
-        }
-    }
-    pub fn class(self) -> &'static str {
-        match self {
-            Self::Vanguard => "Vanguard",
-            Self::Scout => "Scout",
-            Self::Engineer => "Engineer",
         }
     }
     pub fn hull(self) -> u8 {
@@ -139,7 +232,7 @@ impl Kind {
             Self::Warden => 18,
         }
     }
-    fn range(self) -> u16 {
+    pub(crate) fn range(self) -> u16 {
         match self {
             Self::Gunner => 5,
             Self::Bruiser => 1,
@@ -201,11 +294,11 @@ pub struct Game {
     pub(crate) kits: u8,
     pub(crate) retries: u8,
     pub(crate) score: u32,
-    checkpoint: u32,
+    pub(crate) checkpoint: u32,
     pub(crate) medals: [u8; 6],
     pub(crate) notes: [String; 2],
-    pub(crate) shot: Option<(Pos, Pos, bool)>,
-    pub(crate) flash: u8,
+    /// Presentation feedback only; rules never read it.
+    pub(crate) show: Show,
 }
 impl Default for Game {
     fn default() -> Self {
@@ -244,8 +337,7 @@ impl Game {
             checkpoint: 0,
             medals: [0; 6],
             notes: std::array::from_fn(|_| String::new()),
-            shot: None,
-            flash: 0,
+            show: Show::default(),
         };
         game.load();
         game
@@ -290,8 +382,7 @@ impl Game {
         self.kits = 2;
         self.selected = 0;
         self.phase = Phase::Briefing;
-        self.shot = None;
-        self.flash = 0;
+        self.show.reset();
         let mut count = 0;
         for (y, row) in self.content().map.iter().enumerate() {
             assert_eq!(row.len(), COLS, "authored tactical row width");
@@ -387,11 +478,242 @@ impl Game {
                     .collect()
             })
     }
-    pub(crate) fn cursor_path(&self) -> Option<Vec<Pos>> {
-        if self.occupied(self.cursor) && self.cursor != self.units[self.selected].pos {
+    /// Route lengths from the selected machine within its remaining AP, by
+    /// cell (`u8::MAX` when out of reach). Mirrors [`Self::path`]'s blocking.
+    pub(crate) fn reach(&self) -> [u8; CELLS] {
+        let mut cost = [u8::MAX; CELLS];
+        let u = self.units[self.selected];
+        if u.hp == 0 || !self.walkable(u.pos) {
+            return cost;
+        }
+        let mut queue = [Pos::default(); CELLS];
+        let (mut head, mut tail) = (0, 1);
+        queue[0] = u.pos;
+        cost[u.pos.index()] = 0;
+        while head < tail {
+            let p = queue[head];
+            head += 1;
+            let next = cost[p.index()] + 1;
+            if next > u.ap {
+                continue;
+            }
+            for (dx, dy) in [(0, -1), (1, 0), (0, 1), (-1, 0)] {
+                let q = Pos::new(p.x + dx, p.y + dy);
+                if self.walkable(q) && !self.occupied(q) && cost[q.index()] == u8::MAX {
+                    cost[q.index()] = next;
+                    queue[tail] = q;
+                    tail += 1;
+                }
+            }
+        }
+        cost
+    }
+    /// Why the selected machine cannot shoot `enemy`, if it cannot.
+    fn shot_refusal(&self, enemy: usize) -> Option<Refusal> {
+        let u = self.units[self.selected];
+        let e = self.enemies[enemy]?;
+        if u.pos.distance(e.pos) > u.role.range() {
+            Some(Refusal::Range)
+        } else if !self.visible(u.pos, e.pos) {
+            Some(Refusal::Sight)
+        } else if !self.can_shoot(self.selected, enemy) {
+            Some(Refusal::Ap)
+        } else {
+            None
+        }
+    }
+    /// Why moving the selected machine along `path` would be refused.
+    fn move_refusal(&self, path: &[Pos]) -> Option<Refusal> {
+        let steps = path.len().saturating_sub(1);
+        (steps == 0 || steps > usize::from(self.units[self.selected].ap)).then_some(Refusal::Ap)
+    }
+    /// What the contextual order (Space, or a click) would do at `at`. This
+    /// mirrors `context` exactly and changes nothing.
+    pub(crate) fn preview(&self, at: Pos) -> Preview {
+        let u = self.units[self.selected];
+        if let Some(enemy) = self.hostile(at) {
+            let damage = self.shot_damage(self.selected, enemy);
+            return Preview::Fire {
+                enemy,
+                damage,
+                lethal: damage >= self.enemies[enemy].map_or(0, |e| e.hp),
+                refusal: self.shot_refusal(enemy),
+            };
+        }
+        if let Some(friend) = self.friendly(at)
+            && friend != self.selected
+        {
+            return Preview::Select(friend);
+        }
+        let objective = self.objectives.iter().position(|p| *p == Some(at));
+        let to = match objective {
+            Some(index) if !self.completed[index] => {
+                if u.pos.distance(at) <= 1 {
+                    return Preview::Interact {
+                        index,
+                        refusal: (u.ap < 2).then_some(Refusal::Ap),
+                    };
+                }
+                at
+            }
+            _ => at,
+        };
+        if to == u.pos {
+            return Preview::Stay;
+        }
+        match self.path(u.pos, to, false) {
+            Some(path) => Preview::Move {
+                refusal: self.move_refusal(&path),
+                path,
+            },
+            None => Preview::Blocked,
+        }
+    }
+    /// What the selected machine's skill would do; for the engineer, on
+    /// `patient` (the cursor's ally when `None`, as the X key does).
+    pub(crate) fn skill_preview(&self, patient: Option<usize>) -> SkillPreview {
+        let i = self.selected;
+        let u = self.units[i];
+        let ready = |active: bool| {
+            if active {
+                Some(Refusal::Ready)
+            } else if u.ap == 0 {
+                Some(Refusal::Ap)
+            } else {
+                None
+            }
+        };
+        match u.role {
+            Role::Vanguard => SkillPreview {
+                patient: i,
+                amount: 2,
+                refusal: ready(u.braced),
+            },
+            Role::Scout => SkillPreview {
+                patient: i,
+                amount: 2,
+                refusal: ready(u.focused),
+            },
+            Role::Engineer => {
+                let target = patient
+                    .filter(|&p| self.units[p].hp > 0)
+                    .or_else(|| self.friendly(self.cursor))
+                    .unwrap_or(i);
+                let friend = self.units[target];
+                let max = self.max_hull(friend.role);
+                let refusal = if u.ap < 2 {
+                    Some(Refusal::Ap)
+                } else if self.kits == 0 {
+                    Some(Refusal::Kit)
+                } else if u.pos.distance(friend.pos) > 2 {
+                    Some(Refusal::Range)
+                } else if friend.hp == max {
+                    Some(Refusal::Full)
+                } else {
+                    None
+                };
+                SkillPreview {
+                    patient: target,
+                    amount: max.saturating_sub(friend.hp).min(6),
+                    refusal,
+                }
+            }
+        }
+    }
+    /// Hull each machine would lose to the announced enemy fire, capped at
+    /// its remaining hull (a disabled machine absorbs no further shots).
+    pub(crate) fn incoming(&self) -> [u8; 3] {
+        let mut damage = [0u8; 3];
+        for e in self.enemies.iter().flatten() {
+            if e.hp == 0 || !e.active {
+                continue;
+            }
+            let Intent::Fire(to) = e.intent else {
+                continue;
+            };
+            if let Some(i) = self.friendly(to)
+                && self.visible(e.pos, to)
+            {
+                let mitigation = u8::from(self.tiles[to.index()] == Tile::Cover)
+                    + if self.units[i].braced { 2 } else { 0 };
+                let hit = e.kind.damage().saturating_sub(mitigation).max(1);
+                damage[i] = damage[i].saturating_add(hit).min(self.units[i].hp);
+            }
+        }
+        damage
+    }
+    /// Guarded enemy phases the objective still needs, as `(held, needed)`.
+    pub(crate) fn guard(&self) -> Option<(u8, u8)> {
+        match self.content().objective {
+            Objective::Capture => Some((self.held, CAPTURE_PHASES)),
+            Objective::Hold => Some((self.held, HOLD_PHASES)),
+            _ => None,
+        }
+    }
+    /// Whether an ally guards the activated objective and no enemy contests it.
+    pub(crate) fn guard_state(&self) -> (bool, bool) {
+        let Some(objective) = self.objectives[0] else {
+            return (false, false);
+        };
+        let guarded = self
+            .units
+            .iter()
+            .any(|u| u.hp > 0 && u.pos.distance(objective) <= 1);
+        let contested = self
+            .enemies
+            .iter()
+            .flatten()
+            .any(|e| e.active && e.hp > 0 && e.pos.distance(objective) <= 1);
+        (guarded, contested)
+    }
+    /// Why the operation was lost (meaningful during a setback or loss).
+    pub(crate) fn failure(&self) -> Failure {
+        if self.units.iter().all(|u| u.hp == 0) {
+            Failure::SquadDown
+        } else if self.carrier.is_some_and(|i| self.units[i].hp == 0) {
+            Failure::OperatorLost
+        } else {
+            Failure::OutOfTime
+        }
+    }
+    /// The clickable surface under `p` in the current phase.
+    pub(crate) fn hit(&self, p: Vec2) -> Option<Hit> {
+        if !p.is_finite() {
             return None;
         }
-        self.path(self.units[self.selected].pos, self.cursor, false)
+        match self.phase {
+            Phase::Battle => {
+                if let Some(cell) = Self::cell_at(p) {
+                    return Some(Hit::Cell(cell));
+                }
+                if let Some(i) = (0..3).find(|&i| card_area(i).contains(p)) {
+                    return Some(Hit::Card(i));
+                }
+                if order_area(0).contains(p) {
+                    return Some(Hit::Order);
+                }
+                if order_area(1).contains(p) {
+                    if self.units[self.selected].role == Role::Engineer
+                        && let Some(i) = (0..3).find(|&i| patch_area(i).contains(p))
+                    {
+                        return Some(Hit::Patch(i));
+                    }
+                    return Some(Hit::Skill);
+                }
+                order_area(2).contains(p).then_some(Hit::EndTurn)
+            }
+            Phase::Debrief => (0..3)
+                .find(|&i| upgrade_area(i).contains(p))
+                .map(Hit::Upgrade),
+            Phase::Setback => {
+                if RETRY.contains(p) {
+                    Some(Hit::Retry)
+                } else {
+                    CONCEDE.contains(p).then_some(Hit::Concede)
+                }
+            }
+            Phase::Briefing | Phase::Won | Phase::Lost => None,
+        }
     }
     /// Conservative grid visibility: solid walls and closed diagonal corners block.
     pub(crate) fn visible(&self, a: Pos, b: Pos) -> bool {
@@ -447,6 +769,9 @@ impl Game {
     fn shot(&mut self, enemy: usize) -> Cue {
         let i = self.selected;
         if !self.can_shoot(i, enemy) {
+            if let (Some(why), Some(e)) = (self.shot_refusal(enemy), self.enemies[enemy]) {
+                self.show.push(Event::Refused { at: e.pos, why });
+            }
             self.note("Need 2 AP, weapon range and clear sight.".into());
             return Cue::None;
         }
@@ -459,8 +784,15 @@ impl Game {
         if dead {
             self.score += 100;
         }
-        self.shot = Some((self.units[i].pos, pos, false));
-        self.flash = 12;
+        let from = self.units[i].pos;
+        self.show.tracer(from, pos);
+        self.show.enemy_hurt[enemy] = crate::fx::HURT_TICKS;
+        self.show.push(Event::Fired {
+            from,
+            to: pos,
+            damage,
+            disabled: dead,
+        });
         self.note(format!(
             "{} hits {} for {}{}. ",
             self.units[i].role.name(),
@@ -481,17 +813,29 @@ impl Game {
         let i = self.selected;
         let u = self.units[i];
         let Some(path) = self.path(u.pos, to, false) else {
+            self.show.push(Event::Refused {
+                at: to,
+                why: Refusal::Route,
+            });
             self.note("That route is blocked.".into());
             return Cue::None;
         };
         let steps = path.len() - 1;
         if steps == 0 || steps > usize::from(u.ap) {
+            if steps > 0 {
+                self.show.push(Event::Refused {
+                    at: to,
+                    why: Refusal::Ap,
+                });
+            }
             self.note("Choose a clear destination within remaining AP.".into());
             return Cue::None;
         }
         self.units[i].pos = to;
         self.units[i].ap -= steps as u8;
         self.units[i].braced = false;
+        self.show.glides[i] = Glide::along(&path);
+        self.show.push(Event::Moved { unit: i as u8, to });
         self.note(format!(
             "{} moves {} tile{}.",
             u.role.name(),
@@ -513,11 +857,19 @@ impl Game {
             return Cue::None;
         }
         if u.ap < 2 {
+            self.show.push(Event::Refused {
+                at: target,
+                why: Refusal::Ap,
+            });
             self.note("Interacting needs 2 AP. End the turn to replenish.".into());
             return Cue::None;
         }
         self.units[i].ap -= 2;
         self.completed[index] = true;
+        self.show.push(Event::Interacted {
+            index: index as u8,
+            at: target,
+        });
         if self.content().objective == Objective::Rescue {
             self.carrier = Some(i);
             self.note(format!("Operator rescued. Escort {} to E.", u.role.name()));
@@ -535,6 +887,7 @@ impl Game {
             && friend != self.selected
         {
             self.selected = friend;
+            self.show.push(Event::Selected(friend as u8));
             self.note(format!("{} selected.", self.units[friend].role.name()));
             return Cue::Action;
         }
@@ -548,21 +901,30 @@ impl Game {
     fn special(&mut self) -> Cue {
         let i = self.selected;
         let u = self.units[i];
+        let refuse = |game: &mut Self, at: Pos, why: Option<Refusal>| {
+            if let Some(why) = why {
+                game.show.push(Event::Refused { at, why });
+            }
+        };
         match u.role {
             Role::Vanguard => {
                 if u.ap == 0 || u.braced {
+                    refuse(self, u.pos, self.skill_preview(None).refusal);
                     return Cue::None;
                 }
                 self.units[i].ap -= 1;
                 self.units[i].braced = true;
+                self.show.push(Event::Braced(i as u8));
                 self.note("Braced: reduce incoming damage by 2 until next turn.".into());
             }
             Role::Scout => {
                 if u.ap == 0 || u.focused {
+                    refuse(self, u.pos, self.skill_preview(None).refusal);
                     return Cue::None;
                 }
                 self.units[i].ap -= 1;
                 self.units[i].focused = true;
+                self.show.push(Event::Focused(i as u8));
                 self.note("Focused: next cannon shot deals +2 damage.".into());
             }
             Role::Engineer => {
@@ -573,6 +935,7 @@ impl Game {
                     || u.pos.distance(friend.pos) > 2
                     || friend.hp == self.max_hull(friend.role)
                 {
+                    refuse(self, friend.pos, self.skill_preview(None).refusal);
                     self.note(
                         "Patch needs 2 AP, one kit and a wounded ally within 2 tiles.".into(),
                     );
@@ -581,6 +944,10 @@ impl Game {
                 self.units[i].ap -= 2;
                 self.kits -= 1;
                 self.units[target].hp = (friend.hp + 6).min(self.max_hull(friend.role));
+                self.show.push(Event::Repaired {
+                    patient: target as u8,
+                    amount: self.units[target].hp - friend.hp,
+                });
                 self.note(format!(
                     "MICA patches {}. {} kits remain.",
                     friend.role.name(),
@@ -623,7 +990,8 @@ impl Game {
     }
     fn enemy_turn(&mut self) -> Cue {
         let mut hits = 0;
-        for index in 0..MAX_ENEMIES {
+        let mut volley = [None; MAX_ENEMIES];
+        for (index, tracer) in volley.iter_mut().enumerate() {
             let Some(e) = self.enemies[index] else {
                 continue;
             };
@@ -635,6 +1003,8 @@ impl Game {
                 Intent::Move(to) => {
                     if self.walkable(to) && !self.occupied(to) {
                         self.enemies[index].as_mut().unwrap().pos = to;
+                        self.show.enemy_glides[index] = Glide::along(&[e.pos, to]);
+                        self.show.push(Event::EnemyMoved { to });
                     }
                 }
                 Intent::Fire(to) => {
@@ -646,15 +1016,28 @@ impl Game {
                         let damage = e.kind.damage().saturating_sub(mitigation).max(1);
                         self.units[i].hp = self.units[i].hp.saturating_sub(damage);
                         hits += 1;
-                        self.shot = Some((e.pos, to, true));
-                        self.flash = 18;
+                        *tracer = Some((e.pos, to, true));
+                        self.show.hurt[i] = crate::fx::HURT_TICKS;
+                        self.show.push(Event::Hit {
+                            at: to,
+                            damage,
+                            braced: self.units[i].braced,
+                            disabled: self.units[i].hp == 0,
+                        });
                         if self.units[i].hp == 0 {
                             self.note(format!("{} is disabled.", self.units[i].role.name()));
+                        }
+                    } else {
+                        // The machine moved off the marked tile: a dodged shot.
+                        *tracer = Some((e.pos, to, true));
+                        if !self.units.iter().any(|u| u.pos == to) {
+                            self.show.push(Event::Missed { at: to });
                         }
                     }
                 }
             }
         }
+        self.show.volley(volley);
         if self.units.iter().all(|u| u.hp == 0)
             || self.carrier.is_some_and(|i| self.units[i].hp == 0)
         {
@@ -667,20 +1050,23 @@ impl Game {
         ) && self.completed[0]
         {
             let objective = self.objectives[0].unwrap();
-            let guarded = self
-                .units
-                .iter()
-                .any(|u| u.hp > 0 && u.pos.distance(objective) <= 1);
-            let contested = self
-                .enemies
-                .iter()
-                .flatten()
-                .any(|e| e.active && e.hp > 0 && e.pos.distance(objective) <= 1);
+            let (guarded, contested) = self.guard_state();
+            let before = self.held;
             self.held = if guarded && !contested {
                 self.held + 1
             } else {
                 0
             };
+            if self.held > 0 {
+                let needed = self.guard().map_or(0, |(_, needed)| needed);
+                self.show.push(Event::Guarded {
+                    at: objective,
+                    held: self.held.min(needed),
+                    needed,
+                });
+            } else if before > 0 {
+                self.show.push(Event::Contested { at: objective });
+            }
         }
         self.round += 1;
         self.check_success();
@@ -715,6 +1101,7 @@ impl Game {
                     let enemy = self.enemies[i].as_mut().unwrap();
                     enemy.pos = pos;
                     enemy.active = true;
+                    self.show.push(Event::Reinforced { at: pos });
                     self.note("Reserve patrol has arrived near a marked entry.".into());
                 }
             }
@@ -724,6 +1111,7 @@ impl Game {
             self.cursor = self.units[self.selected].pos;
         }
         self.plan_enemies();
+        self.show.push(Event::Turn(self.round));
         self.note(format!(
             "Turn {}. {} enemy hit{}. Fresh AP ready.",
             self.round,
@@ -750,8 +1138,10 @@ impl Game {
             Objective::Rescue => self
                 .carrier
                 .is_some_and(|i| self.units[i].hp > 0 && self.units[i].pos == self.extraction),
-            Objective::Capture => self.completed[0] && self.held >= 2,
-            Objective::Hold => self.completed[0] && self.held >= 4 && self.round >= 7,
+            Objective::Capture => self.completed[0] && self.held >= CAPTURE_PHASES,
+            Objective::Hold => {
+                self.completed[0] && self.held >= HOLD_PHASES && self.round >= HOLD_UNTIL
+            }
             Objective::Sabotage => clear && self.completed.iter().all(|c| *c),
             Objective::Liberate => clear && self.completed[0],
         };
@@ -773,6 +1163,7 @@ impl Game {
             } else {
                 Phase::Debrief
             };
+            self.show.push(Event::Secured);
             self.note(format!(
                 "{} secured. {} machines return to the hangar.",
                 self.content().name,
@@ -787,6 +1178,7 @@ impl Game {
         self.upgrades[upgrade] += 1;
         self.mission_index += 1;
         self.checkpoint = self.score;
+        self.show.push(Event::Upgraded(upgrade as u8));
         self.load();
         Cue::Good
     }
@@ -796,6 +1188,7 @@ impl Game {
         }
         self.retries -= 1;
         self.score = self.checkpoint;
+        self.show.push(Event::Retried);
         self.load();
         self.note(format!(
             "Operation reset. {} campaign retries remain.",
@@ -813,16 +1206,42 @@ impl Game {
         );
         p.inside().then_some(p)
     }
+    /// Select a living machine and put the cursor on it.
+    fn select(&mut self, unit: usize) -> Cue {
+        self.selected = unit;
+        self.cursor = self.units[unit].pos;
+        self.show.push(Event::Selected(unit as u8));
+        Cue::Action
+    }
     /// Apply one tick's input. AP and turns change only after accepted commands.
     pub fn step(&mut self, input: &Input) -> Cue {
         if self.outcome() != Outcome::Playing {
             return Cue::None;
         }
-        self.flash = self.flash.saturating_sub(1);
+        self.show.tick();
+        if matches!(self.phase, Phase::Debrief | Phase::Setback)
+            && self.show.phase_age == crate::fx::REVEAL_TICKS
+        {
+            self.show.push(Event::Revealed);
+        }
+        let phase = self.phase;
+        let cue = self.command(input);
+        if self.phase != phase {
+            self.show.phase_age = 0;
+        }
+        cue
+    }
+    fn command(&mut self, input: &Input) -> Cue {
+        let hit = if input.click {
+            self.hit(input.pointer)
+        } else {
+            None
+        };
         match self.phase {
             Phase::Briefing => {
                 if input.primary || input.click {
                     self.phase = Phase::Battle;
+                    self.show.push(Event::Deployed);
                     self.note(self.content().tip.to_owned());
                     return Cue::Action;
                 }
@@ -832,22 +1251,17 @@ impl Game {
                 if let Some(slot) = input.slot {
                     return self.choose_upgrade(slot.saturating_sub(1));
                 }
-                if input.click && input.pointer.y >= 355. && input.pointer.y <= 478. {
-                    for i in 0..3 {
-                        if input.pointer.x >= 46. + i as f32 * 174.
-                            && input.pointer.x < 206. + i as f32 * 174.
-                        {
-                            return self.choose_upgrade(i);
-                        }
-                    }
+                if let Some(Hit::Upgrade(i)) = hit {
+                    return self.choose_upgrade(i);
                 }
                 return Cue::None;
             }
             Phase::Setback => {
-                if input.secondary || input.primary {
+                // The on-screen buttons mirror Space/X (retry) and C (concede).
+                if input.secondary || input.primary || hit == Some(Hit::Retry) {
                     return self.retry();
                 }
-                if input.tertiary {
+                if input.tertiary || hit == Some(Hit::Concede) {
                     self.phase = Phase::Lost;
                     return Cue::Bad;
                 }
@@ -858,9 +1272,7 @@ impl Game {
         }
         if let Some(slot) = input.slot {
             if (1..=3).contains(&slot) && self.units[slot - 1].hp > 0 {
-                self.selected = slot - 1;
-                self.cursor = self.units[self.selected].pos;
-                return Cue::Action;
+                return self.select(slot - 1);
             }
             if slot == 4 {
                 return self.enemy_turn();
@@ -872,32 +1284,21 @@ impl Game {
         if input.secondary {
             return self.special();
         }
-        if input.click {
-            if let Some(p) = Self::cell_at(input.pointer) {
+        match hit {
+            Some(Hit::Cell(p)) => {
                 self.cursor = p;
                 return self.context();
             }
-            if input.pointer.x >= 600. && input.pointer.x <= 932. {
-                for i in 0..3 {
-                    if input.pointer.y >= CARD_Y + i as f32 * 55.
-                        && input.pointer.y < CARD_Y + i as f32 * 55. + 50.
-                        && self.units[i].hp > 0
-                    {
-                        self.selected = i;
-                        self.cursor = self.units[i].pos;
-                        return Cue::Action;
-                    }
-                }
-                if (401. ..=435.).contains(&input.pointer.y) {
-                    return self.context();
-                }
-                if (442. ..=476.).contains(&input.pointer.y) {
-                    return self.special();
-                }
-                if (483. ..=517.).contains(&input.pointer.y) {
-                    return self.enemy_turn();
-                }
+            Some(Hit::Card(i)) if self.units[i].hp > 0 => return self.select(i),
+            Some(Hit::Order) => return self.context(),
+            Some(Hit::Skill) => return self.special(),
+            // Aiming the cursor at a patient and pressing X, in one click.
+            Some(Hit::Patch(i)) if self.units[i].hp > 0 => {
+                self.cursor = self.units[i].pos;
+                return self.special();
             }
+            Some(Hit::EndTurn) => return self.enemy_turn(),
+            _ => {}
         }
         if input.primary {
             return self.context();
@@ -1547,5 +1948,184 @@ mod tests {
             });
         }
         assert_eq!(game, frozen);
+    }
+    fn click(game: &mut Game, at: Vec2) -> Cue {
+        game.step(&Input {
+            click: true,
+            pointer: at,
+            ..Input::default()
+        })
+    }
+    #[test]
+    fn sidebar_clicks_mirror_selection_order_skill_and_end_turn_keys() {
+        let mut game = arena();
+        // A squad card selects like its number key.
+        assert_eq!(click(&mut game, card_area(1).center()), Cue::Action);
+        assert_eq!(game.selected, 1);
+        assert_eq!(game.cursor, game.units[1].pos);
+        // The skill row is X: Kestrel focuses for 1 AP.
+        assert_eq!(click(&mut game, order_area(1).center()), Cue::Good);
+        assert!(game.units[1].focused);
+        assert_eq!(game.units[1].ap, 4);
+        // The order row is Space at the cursor: here, a one-tile move.
+        game.step(&Input {
+            down_pressed: true,
+            ..Input::default()
+        });
+        assert_eq!(click(&mut game, order_area(0).center()), Cue::Action);
+        assert_eq!(game.units[1].pos, Pos::new(1, 6));
+        assert_eq!(game.units[1].ap, 3);
+        // The end-turn row is C.
+        click(&mut game, order_area(2).center());
+        assert_eq!(game.round(), 2);
+        // A disabled machine's card selects nothing.
+        game.units[0].hp = 0;
+        let selected = game.selected;
+        assert_eq!(click(&mut game, card_area(0).center()), Cue::None);
+        assert_eq!(game.selected, selected);
+    }
+    #[test]
+    fn engineer_patient_buttons_aim_and_repair_like_cursor_and_x() {
+        let wounded = || {
+            let mut game = arena();
+            game.units[0].pos = Pos::new(2, 4);
+            game.units[0].hp = 9;
+            game.selected = 2;
+            game.cursor = game.units[2].pos;
+            game
+        };
+        // Keyboard: aim the cursor at Brass, then X.
+        let mut keys = wounded();
+        keys.step(&Input {
+            up_pressed: true,
+            ..Input::default()
+        });
+        assert_eq!(
+            keys.step(&Input {
+                secondary: true,
+                ..Input::default()
+            }),
+            Cue::Good
+        );
+        // Pointer: one click on Brass's patient button does the same.
+        let mut game = wounded();
+        let preview = game.skill_preview(Some(0));
+        assert_eq!(
+            (preview.patient, preview.amount, preview.refusal),
+            (0, 6, None)
+        );
+        assert_eq!(game.hit(patch_area(0).center()), Some(Hit::Patch(0)));
+        assert_eq!(click(&mut game, patch_area(0).center()), Cue::Good);
+        assert_eq!(game.units, keys.units);
+        assert_eq!((game.kits, game.selected, game.cursor), (1, 2, keys.cursor));
+        // A refused patient spends nothing: Kestrel is out of reach.
+        game.units[1].hp = 5;
+        game.units[1].pos = Pos::new(8, 5);
+        game.units[2].ap = 2;
+        assert_eq!(game.skill_preview(Some(1)).refusal, Some(Refusal::Range));
+        let before = (game.units, game.kits);
+        assert_eq!(click(&mut game, patch_area(1).center()), Cue::None);
+        assert_eq!((game.units, game.kits), before);
+        // The buttons exist only while the engineer is selected.
+        game.selected = 0;
+        assert_eq!(game.hit(patch_area(0).center()), Some(Hit::Skill));
+    }
+    #[test]
+    fn setback_buttons_mirror_retry_and_concede_keys() {
+        let mut game = arena();
+        game.phase = Phase::Setback;
+        assert_eq!(click(&mut game, SIDE_X_POINT), Cue::None);
+        assert_eq!(game.phase, Phase::Setback);
+        assert_eq!(click(&mut game, RETRY.center()), Cue::Action);
+        assert_eq!((game.phase, game.retries), (Phase::Briefing, 2));
+        game.phase = Phase::Setback;
+        assert_eq!(click(&mut game, CONCEDE.center()), Cue::Bad);
+        assert_eq!(game.outcome(), Outcome::Lost);
+    }
+    const SIDE_X_POINT: Vec2 = Vec2::new(SIDE_X + 10., CARD_Y + 10.);
+    #[test]
+    fn previews_predict_exactly_what_the_order_then_does() {
+        let mut game = arena();
+        foe(&mut game, Pos::new(4, 2), 4, Intent::Wait);
+        let Preview::Fire {
+            damage,
+            lethal,
+            refusal,
+            ..
+        } = game.preview(Pos::new(4, 2))
+        else {
+            panic!("an enemy in range previews a shot");
+        };
+        assert_eq!((damage, lethal, refusal), (4, true, None));
+        game.step(&Game::click_command(Pos::new(4, 2)));
+        assert_eq!(game.enemies[0].unwrap().hp, 0);
+        // An affordable route costs exactly its previewed length.
+        let Preview::Move {
+            path,
+            refusal: None,
+        } = game.preview(Pos::new(2, 3))
+        else {
+            panic!("a neighbouring tile previews a move");
+        };
+        let reach = game.reach();
+        assert_eq!(usize::from(reach[Pos::new(2, 3).index()]), path.len() - 1);
+        let ap = game.units[0].ap;
+        game.step(&Game::click_command(Pos::new(2, 3)));
+        assert_eq!(usize::from(ap - game.units[0].ap), path.len() - 1);
+        // An unaffordable route is refused in the preview and by the rules.
+        assert!(matches!(
+            game.preview(Pos::new(9, 6)),
+            Preview::Move {
+                refusal: Some(Refusal::Ap),
+                ..
+            }
+        ));
+        assert_eq!(game.reach()[Pos::new(9, 6).index()], u8::MAX);
+        let before = game.units;
+        game.step(&Game::click_command(Pos::new(9, 6)));
+        assert_eq!(game.units, before);
+        assert_eq!(game.preview(game.units[1].pos), Preview::Select(1));
+        // Announced fire costs exactly the previewed hull.
+        let aim = game.units[0].pos;
+        foe(&mut game, Pos::new(6, 3), 6, Intent::Fire(aim));
+        let incoming = game.incoming();
+        let hp = game.units[0].hp;
+        end(&mut game);
+        assert_eq!(hp - game.units[0].hp, incoming[0]);
+        assert_eq!(incoming[0], 3);
+    }
+    #[test]
+    fn presentation_events_record_accepted_and_refused_orders_for_one_tick() {
+        let mut game = arena();
+        foe(&mut game, Pos::new(4, 2), 6, Intent::Wait);
+        game.step(&Game::click_command(Pos::new(4, 2)));
+        assert!(game.show.events.iter().any(|e| matches!(
+            e,
+            Event::Fired {
+                damage: 4,
+                disabled: false,
+                ..
+            }
+        )));
+        // The next tick starts clean.
+        game.step(&Input::default());
+        assert_eq!(game.show.events.iter().count(), 0);
+        // A refusal is recorded where it happened and spends nothing.
+        game.step(&Game::click_command(Pos::new(10, 7)));
+        assert!(game.show.events.iter().any(|e| e
+            == Event::Refused {
+                at: Pos::new(10, 7),
+                why: Refusal::Ap,
+            }));
+        // The enemy phase reports hits and the new turn.
+        game.enemies[0].as_mut().unwrap().intent = Intent::Fire(game.units[0].pos);
+        end(&mut game);
+        let events: Vec<_> = game.show.events.iter().collect();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::Hit { damage: 3, .. }))
+        );
+        assert!(events.contains(&Event::Turn(2)));
     }
 }

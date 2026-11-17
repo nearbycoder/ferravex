@@ -10,15 +10,17 @@
 use crate::{
     CREAM, GOLD, INK, TEAL,
     courses::Course,
+    look::glyph,
     quips::{self, Fall},
     sim::Run,
+    timing::Split,
 };
 use ferravex_engine::camera::ShakeImpulse;
 use ferravex_engine::feedback::FeedbackPolicy;
 use ferravex_engine::play::particles::{
     ParticleDesc, ParticleMotion, ParticlePool, Trail, TrailConfig, TrailSample,
 };
-use ferravex_render::prelude::*;
+use ferravex_render::{icons::Icon, prelude::*};
 
 pub(crate) const VIOLET: Color = Color::new(0.72, 0.56, 0.98, 1.);
 pub(crate) const CORAL: Color = Color::new(0.93, 0.45, 0.32, 1.);
@@ -39,23 +41,36 @@ pub(crate) fn medal_color(medal: &str) -> Color {
     }
 }
 
-/// A short world-anchored callout, drawn in screen space after projection.
+/// A short world-anchored callout, drawn in screen space after projection,
+/// optionally led by a pictogram (the crystal count carries a gem).
 #[derive(Clone, Debug)]
 pub(crate) struct Pop {
     pub at: Vec3,
     pub text: String,
+    pub icon: Option<Icon>,
     pub color: Color,
     pub age: f32,
     pub life: f32,
     pub size: f32,
 }
 
-/// An informational banner shown when no countdown/checkpoint/fall notice is.
+/// HUD counters that bounce when an accepted event changes them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Counter {
+    Crystals,
+    Checkpoints,
+    Falls,
+}
+
+/// A one-line headline with its pictogram, shown when no countdown,
+/// checkpoint or fall notice owns the centre. `deadline` adds a medal chip
+/// (the silver cut-off after gold slips away).
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Banner {
-    pub head: String,
-    pub sub: String,
+    pub head: &'static str,
+    pub icon: Icon,
     pub color: Color,
+    pub deadline: Option<f32>,
     pub age: f32,
     pub life: f32,
 }
@@ -98,7 +113,7 @@ pub(crate) struct Juice {
     /// Lines chosen at accepted events and shown by the sim-owned notice.
     pub fall_line: &'static str,
     pub checkpoint_line: &'static str,
-    pub split: Option<String>,
+    pub split: Option<Split>,
     /// Falls since the latest checkpoint, for the stubborn-section quips.
     pub falls_here: u32,
     pub airs: u32,
@@ -110,6 +125,8 @@ pub(crate) struct Juice {
     pop_in: f32,
     sparkle: f32,
     glow: f32,
+    /// HUD bounce per [`Counter`], 1 at the accepted event and decaying.
+    bounce: [f32; 3],
     seed: u32,
     shake: Option<ShakeImpulse>,
     motion: f32,
@@ -147,6 +164,7 @@ impl Juice {
             pop_in: 0.,
             sparkle: 0.,
             glow: 0.,
+            bounce: [0.; 3],
             seed: 0x4d52_4a55,
             shake: None,
             motion: 1.,
@@ -182,6 +200,7 @@ impl Juice {
             self.squash = 0.;
             self.pop_in = 0.;
             self.shake = None;
+            self.bounce = [0.; 3];
         }
         if self.flash == 0. {
             self.glow = 0.;
@@ -195,6 +214,19 @@ impl Juice {
     /// Edge glow strength, 0..=1; always zero under reduced flash.
     pub fn glow(&self) -> f32 {
         self.glow * self.flash
+    }
+
+    /// Draw scale for a HUD counter: a quick overshoot after its event, 1
+    /// otherwise and always 1 under reduced motion.
+    pub fn counter_scale(&self, counter: Counter) -> f32 {
+        let b = self.bounce[counter as usize] * self.motion.min(1.);
+        1. + 0.55 * b * (b * std::f32::consts::PI * 2.).cos().abs()
+    }
+
+    fn bump(&mut self, counter: Counter) {
+        if self.motion > 0. {
+            self.bounce[counter as usize] = 1.;
+        }
     }
 
     /// A camera kick queued by the latest accepted event, if motion allows.
@@ -319,6 +351,17 @@ impl Juice {
     }
 
     pub fn pop(&mut self, at: Vec3, text: String, color: Color, size: f32) {
+        self.pop_icon(at, None, text, color, size);
+    }
+
+    pub fn pop_icon(
+        &mut self,
+        at: Vec3,
+        icon: Option<Icon>,
+        text: String,
+        color: Color,
+        size: f32,
+    ) {
         // Retire older nearby callouts and stack over fresh ones, so two
         // never print on top of each other.
         for slot in &mut self.pops {
@@ -352,6 +395,7 @@ impl Juice {
         self.pops[slot] = Some(Pop {
             at,
             text,
+            icon,
             color,
             age: 0.,
             life: 1.0,
@@ -359,11 +403,12 @@ impl Juice {
         });
     }
 
-    pub fn banner(&mut self, head: impl Into<String>, sub: impl Into<String>, color: Color) {
+    pub fn banner(&mut self, head: &'static str, icon: Icon, color: Color, deadline: Option<f32>) {
         self.banner = Some(Banner {
-            head: head.into(),
-            sub: sub.into(),
+            head,
+            icon,
             color,
+            deadline,
             age: 0.,
             life: 2.4,
         });
@@ -376,7 +421,7 @@ impl Juice {
         run: &Run,
         course: &Course,
         before: Before,
-        split: Option<String>,
+        split: Option<Split>,
         dt: f32,
     ) {
         let events = run.events;
@@ -386,11 +431,30 @@ impl Juice {
             let at = run.level.gems[index];
             self.burst(true, at, 24, 3.4, 1.8, -7., 0.65, 0.28, &[GOLD, CREAM]);
             let (gems, total) = (run.gems(), run.level.gems.len());
+            self.bump(Counter::Crystals);
             if gems == total {
                 self.pop(at, "ALL CRYSTALS!".into(), GOLD, 26.);
-                self.banner("All crystals!", "The finish arch is open. Go go go!", GOLD);
+                self.banner("ARCH OPEN!", glyph::CHECKPOINT, GOLD, None);
+                // The arch lights up where it stands, so the way on is felt there.
+                let arch = run.level.finish + Vec3::Y * 2.6;
+                self.burst(true, arch, 28, 2.6, 1.4, -3., 0.9, 0.2, &[GOLD, CREAM]);
+                self.ring(
+                    true,
+                    run.level.finish + Vec3::Y * 0.1,
+                    24,
+                    2.,
+                    2.8,
+                    0.8,
+                    GOLD,
+                );
             } else {
-                self.pop(at, format!("{gems}/{total}"), GOLD, 26.);
+                self.pop_icon(
+                    at,
+                    Some(glyph::CRYSTAL),
+                    format!("{gems}/{total}"),
+                    GOLD,
+                    26.,
+                );
             }
         }
         if run.checkpoint > before.checkpoint {
@@ -400,6 +464,7 @@ impl Juice {
             self.checkpoint_line = quips::checkpoint(run.checkpoint);
             self.split = split;
             self.falls_here = 0;
+            self.bump(Counter::Checkpoints);
         }
         if run.falls > before.falls {
             self.falls_here += 1;
@@ -416,6 +481,7 @@ impl Juice {
                 Fall::Void
             };
             self.fall_line = quips::fall(kind, run.falls, self.falls_here);
+            self.bump(Counter::Falls);
             self.trail.clear();
             self.squash = 0.;
             self.pop_in = if self.motion > 0. { 0.3 } else { 0. };
@@ -476,12 +542,8 @@ impl Juice {
                 0.22,
                 &[VIOLET, CREAM, GOLD],
             );
-            self.pop(at, "MOONSTONE!".into(), VIOLET, 24.);
-            self.banner(
-                "Secret moonstone!",
-                "Shiny! It'll be on your results card",
-                VIOLET,
-            );
+            self.pop_icon(at, Some(glyph::CRYSTAL), "MOONSTONE!".into(), VIOLET, 24.);
+            self.banner("SECRET!", glyph::CRYSTAL, VIOLET, None);
             self.glow = 0.7;
         }
         let pace = course.pace(run.elapsed, run.falls);
@@ -539,12 +601,10 @@ impl Juice {
 
     fn pace_banner(&mut self, pace: (&'static str, Option<f32>)) {
         match pace {
-            ("SILVER", Some(deadline)) => self.banner(
-                "Gold slipped away",
-                format!("Silver still on: finish under {deadline:.1}s"),
-                SILVER,
-            ),
-            _ => self.banner("Bronze it is", "No pressure now. Enjoy the view!", BRONZE),
+            ("SILVER", Some(deadline)) => {
+                self.banner("GOLD LOST", glyph::MEDAL, SILVER, Some(deadline))
+            }
+            _ => self.banner("BRONZE IT IS", glyph::MEDAL, BRONZE, None),
         }
     }
 
@@ -559,6 +619,9 @@ impl Juice {
         let _ = self.sparks.update(dt);
         self.squash = (self.squash - dt * 5.).max(0.);
         self.pop_in = (self.pop_in - dt).max(0.);
+        for bounce in &mut self.bounce {
+            *bounce = (*bounce - dt * 2.4).max(0.);
+        }
         self.glow = (self.glow - dt * 1.2).max(0.);
         for slot in &mut self.pops {
             if let Some(pop) = slot {
@@ -657,7 +720,16 @@ impl Juice {
             let alpha = ((1. - t) / 0.35).clamp(0., 1.);
             let size = (pop.size * scale).round().max(10.);
             let width = measure_text(&pop.text, None, size as u16, 1.).width;
-            let (x, y) = (at.x - width * 0.5, at.y - 24. - rise);
+            let lead = pop.icon.map_or(0., |_| size * 0.9 + 5.);
+            let (x, y) = (at.x - (width + lead) * 0.5 + lead, at.y - 24. - rise);
+            if let Some(icon) = pop.icon {
+                crate::look::icon(
+                    icon,
+                    vec2(x - lead + size * 0.45, y - size * 0.36),
+                    size * 0.9,
+                    Color::new(pop.color.r, pop.color.g, pop.color.b, alpha),
+                );
+            }
             // A soft drop shadow keeps gold and coral readable over warm stone.
             let shadow = Color::new(INK.r, INK.g, INK.b, 0.75 * alpha);
             let px = (size / 8.).max(1.);
@@ -708,13 +780,25 @@ mod tests {
         tick(&mut juice, &mut run, Controls::default());
         assert_eq!(run.gems(), 1);
         assert!(!juice.sparks.is_empty(), "accepted pickup bursts");
-        assert!(juice.pops.iter().flatten().any(|p| p.text == "1/6"));
+        assert!(
+            juice
+                .pops
+                .iter()
+                .flatten()
+                .any(|p| p.text == "1/6" && p.icon == Some(glyph::CRYSTAL))
+        );
+        assert!(
+            juice.counter_scale(Counter::Crystals) > 1.,
+            "the HUD pip pops"
+        );
+        assert_eq!(juice.counter_scale(Counter::Falls), 1.);
         juice.kick(1., 0.2);
         juice.squash = 1.;
         juice.apply_policy(FeedbackPolicy::new(true, false, 1.).unwrap());
         assert!(juice.particles.is_empty() && juice.sparks.is_empty());
         assert!(juice.take_shake().is_none());
         assert_eq!(juice.marble_scale(), Vec3::ONE);
+        assert_eq!(juice.counter_scale(Counter::Crystals), 1.);
         assert!(
             juice.pops.iter().flatten().count() == 1,
             "information stays"
@@ -787,7 +871,9 @@ mod tests {
         let course = &COURSES[0];
         run.elapsed = course.gold_seconds - 0.001;
         tick(&mut juice, &mut run, Controls::default());
-        assert_eq!(juice.banner.as_ref().unwrap().head, "Gold slipped away");
+        let banner = juice.banner.as_ref().unwrap();
+        assert_eq!(banner.head, "GOLD LOST");
+        assert_eq!(banner.deadline, Some(course.gold_seconds * 1.5));
         let mut fresh = Run::new();
         let mut juice = Juice::new();
         fresh.physics.bodies[fresh.marble]

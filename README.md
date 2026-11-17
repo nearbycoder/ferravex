@@ -15,7 +15,9 @@ latest source by a revision or two.
 ## The games
 
 Thirty-nine games and labs run in the browser with nothing to install. Each one is
-built on the same engine, and its source is a click away.
+built on the same engine, and its source is a click away. They share one
+[visual language](docs/VISUAL_LANGUAGE.md): icons, meters and effects explain the
+game instead of paragraphs.
 
 [The Twenty](docs/GAMES_20.md) adds twenty complete campaigns: dungeon exploration,
 rail dispatch, sailing trade, farming, detective cases, rhythm concerts, squad

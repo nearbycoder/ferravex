@@ -26,23 +26,59 @@ or miss the chart.
 
 ## Controls
 
-- **Enter** starts the host campaign. **Space/Enter** or the visible button begins
+- **Enter** starts the host campaign. **Space/Enter** or the card's button starts
   each song's four-beat count-in and advances song results.
 - The lanes, from left to right, are **Left, Down, Up, Right**. Use those arrow
   keys or **A, S, W, D**. Tap when a note's center reaches the bright line.
 - Linked notes are a chord: press both direction keys together. Held keys do not
-  trigger later notes. Keys **1–4** or clicking a lane can play single notes;
-  direction keys are the recommended controls because they accept simultaneous
-  chords. The shared numeric-slot input represents one slot per tick.
-- **X/E** activates Encore when its meter is full. On the failed-song screen,
-  **X/E** ends the concert.
+  trigger later notes. Keys **1–4** or clicking a lane (or its key) can play
+  single notes; direction keys are the recommended controls because they accept
+  simultaneous chords. The shared numeric-slot input represents one slot per tick.
+- **X/E**, or clicking the full Encore meter, activates Encore. On the
+  failed-song card, **X/E** or the **End** button ends the concert.
 - **C/Q** spends one retry ticket to restart the current song. On the failed-song
-  screen, **Space/Enter**, **C/Q**, or the retry button starts another take.
-- **Esc/P** pauses, **H** opens the paginated field guide, **F2** opens control
+  card, **Space/Enter**, **C/Q**, or the **Retry** button starts another take.
+- **Esc/P** pauses, **H** opens the four-line field guide, **F2** opens control
   remapping, **M** toggles sound, and **R** starts a fresh six-song concert.
 
 The chart stops during the shared pause, help and controls screens. The game is
-intended for desktop keyboard play; pointer input is supplementary.
+intended for desktop keyboard play; pointer input is supplementary. Pointer clicks
+use the same rule paths as their keys, and hovering a lane, the full Encore meter
+or a card button highlights it.
+
+## Reading the stage
+
+The play screen speaks in icons, meters and motion rather than sentences.
+
+- **Header:** six pips track the concert's songs beside the current song's name.
+  The objective row shows the gold accuracy goal and a map of the whole chart in
+  four lane rows: upcoming notes glow faintly, hits light up, misses turn red,
+  Encore leaves a gold band and a playhead marks the song position.
+- **Left panel:** the crowd (people icon and energy) with a vertical meter, its
+  red danger line and twelve fans who light up, bounce on the beat, raise their
+  arms when roaring and slump red when fading. Below it, a flame and the combo
+  count, which pops on each hit, the score multiplier chip and its progress to
+  the next step, then six district bulbs that light as songs are cleared.
+- **Right panel:** the song and district names, a progress bar, four beat lamps,
+  tempo and time left; an accuracy ring with a gold goal tick, judgment tallies
+  (gem Perfect, check Good, dash Okay, cross Miss, hand empty tap) and an
+  early/late gauge; the Encore bolt meter with its X key cap (or a shield while
+  active); and the three retry tickets beside the C key cap.
+- **Highway:** each lane key shows its arrow and letter, sinks when struck and
+  lifts under the pointer. Judgments pop as one word (PERFECT, GOOD, OK, MISS)
+  with a beam, ring and burst in the lane color. A miss flashes its lane red, an
+  empty tap crosses its socket, and the crowd's loss rises from the crowd panel.
+  Combo steps, a full meter, Encore, retries and restored districts each get
+  their own burst, ring or callout.
+- **Song cards** show the tempo, length and goal as chips, a short lesson
+  headline and a live demo of one bar of the song's own chart at its real tempo,
+  with lesson hints that light in time with it: the arrow keys, a chord's two
+  keys, no taps in the rests, the Encore meter and X, or the city's six bulbs.
+  The results card shows the grade, accuracy, best combo, song score, judgment
+  tallies and the newly lit bulb; the failed-take card turns the reason red
+  (crowd or accuracy) and previews the ticket and points a retry costs. The
+  concert's ending card shows the overall grade, districts lit, average
+  accuracy, best combo and tickets left.
 
 ## Judgments, scoring and retries
 
@@ -104,12 +140,16 @@ First Spark, frame 2600 for Copper Steps, and frame 13200 for the finale:
 cargo run -p voltage-choir --offline --locked -j 2 -- --autoplay --smoke-frames 900 --screenshot target/voltage-choir.png
 ```
 
-The bounded model uses at most 768 note slots, six result slots and four musical
-note-ons per tick. Tests cover complete legal concert victory, exact timing
-boundaries, chords, nearest-note selection, input aliases/holds, missed-note
-failure, finite retries, Encore costs/expiry, accuracy failure, result accounting,
-pointer bounds, note-on lifetime, terminal invariance and repeatability. The
-rustdoc example executes the pure model without a window. Compilation and
+The bounded model uses at most 768 note slots, six result slots, four musical
+note-ons and sixteen presentation events per tick. The events record what each
+tick accepted (hits, misses, empty taps, combo steps, Encore, retries, clears)
+so effects appear where they happened; rules never read them. Tests cover
+complete legal concert victory, exact timing boundaries, chords, nearest-note
+selection, input aliases/holds, missed-note failure, finite retries, Encore
+costs/expiry, accuracy failure, result accounting, pointer bounds, the Encore
+meter and End button clicks, header progress, effect emission, note-on lifetime,
+terminal invariance and repeatability. The rustdoc example executes the pure
+model without a window. Compilation and
 headless solutions are not graphical playtests or evidence of physical keyboard,
 audio-device, mobile, gamepad or cross-platform behavior; parent records those
 integration checks separately.

@@ -366,9 +366,10 @@ impl Fx {
                     sound.at(Sfx::Splash, at, 0.8, if big { 0.8 } else { 1.1 });
                 }
                 Event::Shiny { at, count } => {
+                    // The HUD pops a bottle cap and the new count over the
+                    // raccoon; no toast needed.
                     Self::burst(&mut self.sparkle, &mut self.glow, at, 10);
                     sound.play(Sfx::Ding, 0.45, 1. + count as f32 * 0.06);
-                    self.toast(Toast::Shiny(count), 6, NoticePriority::Low, 1.8);
                 }
                 Event::Spotted { folk, at } => {
                     sound.at(Sfx::Alert, at, 0.8, folk_pitch(game, folk));
@@ -422,10 +423,10 @@ impl Fx {
                     sound.at(if basket { Sfx::Plop } else { Sfx::Rustle }, at, 0.5, 1.);
                 }
                 Event::Unhid { at } => sound.at(Sfx::Rustle, at, 0.3, 1.2),
-                Event::Fetching { folk, .. } => self.say(folk, "Now how did THAT get there?"),
+                Event::Fetching { folk, .. } => self.say(folk, "How did THAT...?"),
                 Event::Returned { folk, at, .. } => {
                     sound.at(Sfx::Plop, at, 0.4, 0.9);
-                    self.say(folk, "There. Back where it belongs.");
+                    self.say(folk, "Back it goes.");
                 }
                 Event::Sat { folk, .. } => {
                     if game.folk[folk].kind == Kind::Nana {
@@ -440,7 +441,7 @@ impl Fx {
                 }
                 Event::Pfft { folk, at } => {
                     sound.at(Sfx::Pfft, at, 1., 1.);
-                    self.say(folk, "...I beg your pardon!");
+                    self.say(folk, "Pardon ME!");
                     Self::burst(&mut self.puff, &mut self.soft, at, 14);
                 }
                 Event::Launch { at } => {
@@ -448,10 +449,10 @@ impl Fx {
                     self.accept(FeedbackEvent::explosion(at, 0.6));
                 }
                 Event::Sled { at } => sound.at(Sfx::Whee, at, 0.9, 1.),
-                Event::OffKey { .. } => self.say(2, "Hmm? Where is my... ah, nevermind."),
+                Event::OffKey { .. } => self.say(2, "My music?!"),
                 Event::Prize { at } => {
                     sound.at(Sfx::Fanfare, at, 0.6, 1.1);
-                    self.say(1, "A magnificent specimen! First prize!");
+                    self.say(1, "First prize!");
                     Self::burst(&mut self.confetti, &mut self.soft, at, 30);
                 }
                 Event::Yank { at } => {
@@ -613,26 +614,26 @@ fn folk_pitch(game: &Game, folk: usize) -> f32 {
 
 fn spot_line(kind: Kind) -> &'static str {
     match kind {
-        Kind::Nana => "Good heavens, a RACCOON!",
+        Kind::Nana => "A RACCOON?!",
         Kind::Pumble => "Oi! You there!",
         Kind::Trumble => "Fortissimo! Seize it!",
-        Kind::Pip => "RACCOON!!! Can I keep it?",
+        Kind::Pip => "A KITTY!!",
         Kind::Biscuit => "WOOF! (friend?)",
     }
 }
 
 fn caught_line(kind: Kind) -> &'static str {
     match kind {
-        Kind::Nana => "Back to your hedge, young man.",
-        Kind::Pumble => "Not on my watch, bandit.",
-        Kind::Trumble => "And... exeunt raccoon!",
+        Kind::Nana => "Back you go!",
+        Kind::Pumble => "Gotcha, bandit.",
+        Kind::Trumble => "Exeunt raccoon!",
         _ => "Gotcha!",
     }
 }
 
 fn shoo_line(kind: Kind) -> &'static str {
     match kind {
-        Kind::Nana => "Shoo! And stay shooed.",
+        Kind::Nana => "Shoo! Shoo!",
         Kind::Pumble => "Go on. Scram.",
         Kind::Trumble => "Encore? NO encore.",
         _ => "Bye bye!",
@@ -641,9 +642,9 @@ fn shoo_line(kind: Kind) -> &'static str {
 
 fn giveup_line(kind: Kind) -> &'static str {
     match kind {
-        Kind::Nana => "My knees aren't what they were.",
+        Kind::Nana => "Oh, my knees...",
         Kind::Pumble => "Hmph. Slippery little...",
-        Kind::Trumble => "I need a sit-down. And a scone.",
+        Kind::Trumble => "Scone break.",
         Kind::Pip => "Aww, come back!",
         Kind::Biscuit => "*pant pant*",
     }
@@ -652,9 +653,9 @@ fn giveup_line(kind: Kind) -> &'static str {
 fn yank_line(kind: Kind) -> &'static str {
     match kind {
         Kind::Nana => "MY TABLECLOTH!",
-        Kind::Pumble => "Was that... a magic trick?",
-        Kind::Trumble => "BRAVO! I mean: STOP!",
-        Kind::Pip => "AGAIN! DO IT AGAIN!",
+        Kind::Pumble => "Magic?!",
+        Kind::Trumble => "BRAVO! ...STOP!",
+        Kind::Pip => "AGAIN! AGAIN!",
         Kind::Biscuit => "WOOF WOOF WOOF!",
     }
 }
@@ -662,6 +663,27 @@ fn yank_line(kind: Kind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn barks_stay_punchy() {
+        for kind in [
+            Kind::Nana,
+            Kind::Pumble,
+            Kind::Trumble,
+            Kind::Pip,
+            Kind::Biscuit,
+        ] {
+            for line in [
+                spot_line(kind),
+                caught_line(kind),
+                shoo_line(kind),
+                giveup_line(kind),
+                yank_line(kind),
+            ] {
+                assert!(line.split(' ').count() <= 3, "{kind:?}: {line}");
+            }
+        }
+    }
 
     #[test]
     fn showcase_eases_in_and_out() {

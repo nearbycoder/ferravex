@@ -151,11 +151,74 @@ pub fn chip(label: &str, x: f32, y: f32, size: f32, color: Color) -> f32 {
     draw_text_styled(label, x + pad, s.centered_baseline(y + h * 0.5), s);
     r.w
 }
+/// Width [`chip`] would draw for `label` at `size`, for right-aligning chips.
+///
+/// ```
+/// let w = ferravex_arcade::chip_width("Day 3", 14.);
+/// assert!(w > 14.);
+/// ```
+pub fn chip_width(label: &str, size: f32) -> f32 {
+    text_width(label, style(size, PAPER)) + size * 1.3
+}
+/// Width [`icon_chip`] would draw for `label` at `size`.
+///
+/// ```
+/// use ferravex_arcade::{Icon, icon_chip_width};
+/// assert!(icon_chip_width("Best 7,385", 15.) > icon_chip_width("", 15.));
+/// ```
+pub fn icon_chip_width(label: &str, size: f32) -> f32 {
+    let text_w = if label.is_empty() {
+        0.
+    } else {
+        text_width(label, style(size, PAPER)) + size * 0.35
+    };
+    (size * 1.2 + size * 0.95 + text_w).max(size * 1.45)
+}
+/// A [`chip`] with an icon before its label (`"trophy Best 7,385"`); returns
+/// its width. An empty label draws a round icon-only chip.
+///
+/// ```no_run
+/// use ferravex_arcade::{Color, Icon, icon_chip};
+/// let w = icon_chip(Icon::Trophy, "Best 7,385", 40., 300., 15., Color::from_hex(0xf7b553));
+/// assert!(w > 0.);
+/// ```
+pub fn icon_chip(icon: Icon, label: &str, x: f32, y: f32, size: f32, color: Color) -> f32 {
+    let s = style(size, color);
+    let h = size * 1.45;
+    let pad = size * 0.6;
+    let icon_size = size * 0.95;
+    let text_w = if label.is_empty() {
+        0.
+    } else {
+        text_width(label, s) + size * 0.35
+    };
+    let w = (pad * 2. + icon_size + text_w).max(h);
+    let r = Rect::new(x, y, w, h);
+    shapes::fill_rounded_rect(r, h * 0.5, with_alpha(color, 0.14 * color.a));
+    shapes::stroke_rounded_rect(r, h * 0.5, 1., with_alpha(color, 0.38 * color.a));
+    let cy = y + h * 0.5;
+    let icon_x = if label.is_empty() {
+        x + w * 0.5
+    } else {
+        x + pad + icon_size * 0.5
+    };
+    crate::icons::draw(icon, vec2(icon_x, cy), icon_size, color);
+    if !label.is_empty() {
+        draw_text_styled(
+            label,
+            x + pad + icon_size + size * 0.35,
+            s.centered_baseline(cy),
+            s,
+        );
+    }
+    w
+}
 /// Keyboard key cap with an action label after it; returns the total width.
 pub fn keycap(key: &str, action: &str, x: f32, y: f32, ink: Color) -> f32 {
     keycap_faded(key, action, x, y, ink, 1.)
 }
-pub(crate) fn keycap_faded(key: &str, action: &str, x: f32, y: f32, ink: Color, a: f32) -> f32 {
+/// [`keycap`] at opacity `a`, for key caps that fade in with a card.
+pub fn keycap_faded(key: &str, action: &str, x: f32, y: f32, ink: Color, a: f32) -> f32 {
     let s = TextStyle::modern(13., with_alpha(PAPER, a));
     let h = 20.;
     let w = (text_width(key, s) + 12.).max(h);
@@ -214,6 +277,8 @@ pub fn meter(x: f32, y: f32, w: f32, h: f32, fraction: f32, color: Color) {
     let radius = (h * 0.5).min(4.);
     let track = Rect::new(x, y, w, h);
     shapes::fill_rounded_rect(track, radius, Color::new(0.02, 0.03, 0.05, 0.55));
+    // A faint rim keeps an empty track visible on dark surfaces too.
+    shapes::stroke_rounded_rect(track, radius, 1., Color::new(1., 1., 1., 0.07));
     if f > 0. {
         let fill = Rect::new(x, y, (w * f).max(h.min(w * f * 4.)), h);
         shapes::fill_rounded_rect(
@@ -225,6 +290,114 @@ pub fn meter(x: f32, y: f32, w: f32, h: f32, fraction: f32, color: Color) {
             let shine = Rect::new(fill.x + radius, y + 1., (fill.w - radius * 2.).max(0.), 1.);
             shapes::fill_rounded_rect(shine, 0., Color::new(1., 1., 1., 0.22));
         }
+    }
+}
+/// Draw `icon` centered on (`cx`, `cy`) inside a `size` box.
+///
+/// ```no_run
+/// use ferravex_arcade::{Color, Icon, icon};
+/// icon(Icon::Heart, 40., 140., 20., Color::from_hex(0xe5484d));
+/// ```
+pub fn icon(icon: Icon, cx: f32, cy: f32, size: f32, color: Color) {
+    crate::icons::draw(icon, vec2(cx, cy), size, color);
+}
+/// A filled circular badge of `diameter` with `icon` on it.
+pub fn icon_badge(
+    icon: Icon,
+    cx: f32,
+    cy: f32,
+    diameter: f32,
+    background: Color,
+    foreground: Color,
+) {
+    crate::icons::badge(icon, vec2(cx, cy), diameter, background, foreground);
+}
+/// The standard HUD stat: an icon followed by its value ("heart 12"), both
+/// vertically centered on `cy` and starting at `x`. `size` is the icon size;
+/// the value is drawn at the same size. Returns the total width.
+///
+/// ```no_run
+/// use ferravex_arcade::{Color, Icon, icon_value};
+/// let w = icon_value(Icon::Coin, "158", 620., 140., 20., Color::from_hex(0xf7b553));
+/// assert!(w > 20.);
+/// ```
+pub fn icon_value(icon: Icon, value: &str, x: f32, cy: f32, size: f32, color: Color) -> f32 {
+    crate::icons::draw_styled(
+        icon,
+        vec2(x + size * 0.5, cy),
+        size,
+        crate::icons::IconStyle::new(color).shadow(Color::new(0., 0., 0., 0.35 * color.a)),
+    );
+    if value.is_empty() {
+        return size;
+    }
+    let s = style(size, color);
+    let w = draw_text_styled(value, x + size * 1.25, s.centered_baseline(cy), s).width;
+    size * 1.25 + w
+}
+/// Campaign or step progress as a row of pips centered on `cy`: pips before
+/// `current` (one-based) are complete, `current` glows and later ones are
+/// hollow. Totals above 16 draw a compact bar instead. Returns the width.
+///
+/// ```no_run
+/// use ferravex_arcade::{Color, pips};
+/// let w = pips(40., 60., 3, 6, Color::from_hex(0x8fd16a));
+/// assert!(w > 0.);
+/// ```
+pub fn pips(x: f32, cy: f32, current: u32, total: u32, color: Color) -> f32 {
+    if total == 0 {
+        return 0.;
+    }
+    if total > 16 {
+        let w = 96.;
+        meter(
+            x,
+            cy - 3.,
+            w,
+            6.,
+            current.min(total) as f32 / total as f32,
+            color,
+        );
+        return w;
+    }
+    let gap = 13.;
+    for i in 0..total {
+        let at = vec2(x + 5. + i as f32 * gap, cy);
+        let index = i + 1;
+        if index < current {
+            shapes::fill_circle(at, 4., color);
+        } else if index == current {
+            shapes::glow_disc(at, 11., with_alpha(color, 0.35 * color.a));
+            shapes::fill_circle(at, 5., lighten(color, 0.25));
+        } else {
+            shapes::stroke_circle(at, 3.5, 1.5, with_alpha(color, 0.45 * color.a));
+        }
+    }
+    10. + (total - 1) as f32 * gap
+}
+/// Circular progress around (`cx`, `cy`): a faint track and a bright arc
+/// clockwise from 12 o'clock covering `fraction` (timers, cooldowns, growth).
+///
+/// ```no_run
+/// use ferravex_arcade::{Color, ring_meter};
+/// ring_meter(80., 140., 14., 4., 0.65, Color::from_hex(0x5bd5d8));
+/// ```
+pub fn ring_meter(cx: f32, cy: f32, radius: f32, width: f32, fraction: f32, color: Color) {
+    let f = if fraction.is_finite() {
+        fraction.clamp(0., 1.)
+    } else {
+        0.
+    };
+    let at = vec2(cx, cy);
+    shapes::stroke_circle(at, radius, width, Color::new(0.02, 0.03, 0.05, 0.45));
+    if f > 0. {
+        shapes::stroke_arc(
+            at,
+            radius,
+            -std::f32::consts::FRAC_PI_2,
+            f * std::f32::consts::TAU,
+            shapes::Stroke::new(width, color).cap(shapes::Cap::Round),
+        );
     }
 }
 /// Wrap a paragraph at measured word boundaries; return the next baseline.

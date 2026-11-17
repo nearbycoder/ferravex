@@ -21,6 +21,7 @@
 //! ```
 #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
 mod capture;
+mod chips;
 mod fx;
 mod gfx;
 mod hud;
@@ -268,7 +269,8 @@ async fn game() {
     let mut was_over = false;
     let mut pauses = 0_usize;
     let mut was_paused = false;
-    let mut notice: Option<(&'static str, f32)> = None;
+    // Missing Glimmer for a locked character, and how long to show it.
+    let mut notice: Option<(u64, f32)> = None;
     let mut bought: Option<(usize, f32)> = None;
     let mut attempts = 0_u64;
     let mut visual_time = 0_f32;
@@ -695,10 +697,10 @@ async fn game() {
                         offer_age = 0.;
                     }
                     offer_age += pdt;
-                    let hint = match input.current_device() {
-                        HintDevice::Gamepad => "D-pad + A to pick · Y reroll · X banish",
-                        HintDevice::Touch => "Tap a card to choose it",
-                        _ => "1–4 or click to pick · E reroll · Q banish",
+                    let keys = match input.current_device() {
+                        HintDevice::Gamepad => Some(["Y", "X"]),
+                        HintDevice::Touch => None,
+                        _ => Some(["E", "Q"]),
                     };
                     menus::level_up(
                         &mut menu,
@@ -708,7 +710,7 @@ async fn game() {
                             banish_mode,
                             age: offer_age,
                         },
-                        hint,
+                        keys,
                     );
                 } else if game.phase == Phase::Chest {
                     if game.chest.serial != chest_serial {
@@ -745,7 +747,7 @@ async fn game() {
                 }
             }
             Screen::Select => {
-                for i in 0..CHARACTERS.len() {
+                for (i, character) in CHARACTERS.iter().enumerate() {
                     if hit(id::CHARACTER + i as u64) {
                         if host.meta.is_unlocked(i) {
                             selected = i;
@@ -755,7 +757,8 @@ async fn game() {
                             host.save();
                             sound.play(sfx::Sfx::Chest, 0.6, 1.);
                         } else {
-                            notice = Some(("NOT ENOUGH GLIMMER. DIVE TO EARN MORE!", 2.5));
+                            let missing = character.cost.saturating_sub(host.meta.glimmer);
+                            notice = Some((missing, 2.5));
                             sound.play(sfx::Sfx::Hurt, 0.4, 1.4);
                         }
                     }

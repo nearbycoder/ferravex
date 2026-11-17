@@ -24,7 +24,7 @@ impl<G: ArcadeGame> Driver<G> {
         &mut self,
         elapsed: f64,
         mut input: impl FnMut(&G, u64) -> Input,
-        mut cue: impl FnMut(Cue, [Option<u8>; 4]),
+        mut cue: impl FnMut(&G, Cue, [Option<u8>; 4]),
     ) {
         let batch = self.session.advance(elapsed);
         for _ in 0..batch.steps {
@@ -33,7 +33,7 @@ impl<G: ArcadeGame> Driver<G> {
             }
             let command = input(&self.game, self.ticks);
             let feedback = self.game.update(&command);
-            cue(feedback, self.game.music_notes());
+            cue(&self.game, feedback, self.game.music_notes());
             self.ticks += 1;
             match self.game.outcome() {
                 Outcome::Playing => {}
@@ -108,7 +108,7 @@ mod tests {
                 pending = false;
                 Input::default()
             },
-            |_, _| {},
+            |_, _, _| {},
         );
         assert!(pending);
         driver.advance(
@@ -120,7 +120,7 @@ mod tests {
                     ..Input::default()
                 }
             },
-            |_, _| {},
+            |_, _, _| {},
         );
         assert_eq!((driver.game.ticks, driver.game.actions), (3, 1));
     }
@@ -128,10 +128,10 @@ mod tests {
     fn pause_discards_suspension_and_does_not_consume_commands() {
         let mut driver = Driver::<Probe>::new(true);
         driver.session.set_paused(true);
-        driver.advance(30., |_, _| panic!("paused input consumed"), |_, _| {});
+        driver.advance(30., |_, _| panic!("paused input consumed"), |_, _, _| {});
         assert_eq!(driver.ticks, 0);
         driver.session.set_paused(false);
-        driver.advance(1. / 60., |_, _| Input::default(), |_, _| {});
+        driver.advance(1. / 60., |_, _| Input::default(), |_, _, _| {});
         assert_eq!(driver.ticks, 1);
     }
     #[test]
@@ -144,13 +144,13 @@ mod tests {
                 secondary: true,
                 ..Input::default()
             },
-            |_, _| cues += 1,
+            |_, _, _| cues += 1,
         );
         assert_eq!((driver.ticks, cues), (1, 1));
         driver.advance(
             1.,
             |_, _| panic!("terminal input consumed"),
-            |_, _| panic!(),
+            |_, _, _| panic!(),
         );
         assert_eq!(driver.game.outcome(), Outcome::Won);
     }
@@ -163,10 +163,10 @@ mod tests {
                 primary: true,
                 ..Input::default()
             },
-            |_, _| {},
+            |_, _, _| {},
         );
         driver.restart();
-        driver.advance(0., |_, _| panic!(), |_, _| {});
+        driver.advance(0., |_, _| panic!(), |_, _, _| {});
         assert_eq!(
             (driver.game.ticks, driver.game.actions, driver.ticks),
             (0, 0, 0)
@@ -177,7 +177,7 @@ mod tests {
         for rate in [30, 60, 144] {
             let mut driver = Driver::<Probe>::new(true);
             for _ in 0..rate {
-                driver.advance(1. / f64::from(rate), |_, _| Input::default(), |_, _| {});
+                driver.advance(1. / f64::from(rate), |_, _| Input::default(), |_, _, _| {});
             }
             assert_eq!(driver.ticks, 60);
         }
@@ -186,9 +186,13 @@ mod tests {
     fn musical_events_are_read_once_per_executed_tick_after_update() {
         let mut driver = Driver::<Probe>::new(true);
         let mut notes = Vec::new();
-        driver.advance(0., |_, _| Input::default(), |_, n| notes.push(n[0]));
+        driver.advance(0., |_, _| Input::default(), |_, _, n| notes.push(n[0]));
         assert!(notes.is_empty());
-        driver.advance(3. / 60., |_, _| Input::default(), |_, n| notes.push(n[0]));
+        driver.advance(
+            3. / 60.,
+            |_, _| Input::default(),
+            |_, _, n| notes.push(n[0]),
+        );
         assert_eq!(notes, vec![Some(61), Some(62), Some(63)]);
     }
 }

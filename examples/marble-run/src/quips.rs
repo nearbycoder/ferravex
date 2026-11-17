@@ -19,58 +19,59 @@ pub(crate) enum Fall {
     Manual,
 }
 
+// In-play callouts are three words at most; the joke lands in a glance.
 const VOID: [&str; 8] = [
-    "Marble overboard!",
-    "The void says hi",
-    "Gravity: still undefeated",
-    "You lost your marble",
-    "That was not the shortcut",
-    "A bold line. A wrong line.",
-    "Rolled right off the map",
-    "Physics: confirmed working",
+    "MARBLE OVERBOARD!",
+    "VOID SAYS HI",
+    "GRAVITY WINS",
+    "LOST YOUR MARBLE",
+    "NOT A SHORTCUT",
+    "BOLD. WRONG.",
+    "OFF THE MAP",
+    "PHYSICS WORKS!",
 ];
 
 const ICE: [&str; 6] = [
-    "Ice to meet you",
-    "Slip. Slide. Sayonara.",
-    "Friction has left the chat",
-    "That ice was very icy",
-    "Wheee… oh no",
-    "A graceful, frosty exit",
+    "COLD SHOULDER",
+    "SLIP. SLIDE. BYE.",
+    "NO FRICTION",
+    "VERY ICY",
+    "WHEEE... OH NO",
+    "FROSTY EXIT",
 ];
 
 const SWEPT: [&str; 6] = [
-    "Swept clean off the course",
-    "The sweeper says no",
-    "Bonked into orbit",
-    "Clockwork 1, marble 0",
-    "Timing is everything",
-    "Swatted like a fly",
+    "SWEPT AWAY",
+    "SWEEPER SAYS NO",
+    "INTO ORBIT",
+    "CLOCKWORK WINS",
+    "TIMING!",
+    "SWATTED!",
 ];
 
 const MANUAL: [&str; 5] = [
-    "Tactical reset",
-    "Strategic retreat",
-    "Let's pretend that never happened",
-    "Rewind. Reroll.",
-    "Nothing to see here",
+    "TACTICAL RESET",
+    "STRATEGIC RETREAT",
+    "NEVER HAPPENED",
+    "REWIND. REROLL.",
+    "NOTHING TO SEE",
 ];
 
 /// Three or more falls since the latest checkpoint.
 const STUBBORN: [&str; 6] = [
-    "Practice makes platforms",
-    "This is the one. Probably.",
-    "Same spot? Bold strategy",
-    "The marble believes in you",
-    "Determination: maximum",
-    "Braking is allowed, you know",
+    "PRACTICE MAKES PLATFORMS",
+    "THIS ONE. PROBABLY.",
+    "SAME SPOT? BOLD.",
+    "MARBLE BELIEVES",
+    "MAXIMUM DETERMINATION",
+    "BRAKES EXIST",
 ];
 
 const CHECKPOINT: [&str; 4] = [
-    "Checkpoint! Fall with confidence",
-    "Progress banked",
-    "Safe and sound. For now.",
-    "Checkpoint get!",
+    "CHECKPOINT!",
+    "PROGRESS BANKED",
+    "SAFE. FOR NOW.",
+    "CHECKPOINT GET!",
 ];
 
 const BONK: [&str; 5] = ["BONK!", "BOING!", "THWACK!", "CLONK!", "BONK!!"];
@@ -189,20 +190,39 @@ pub(crate) fn rank(run: Summary) -> Rank {
     Rank { title, quip }
 }
 
-/// The "one more try" line: the next medal, then the moonstone rumour, then the
-/// stored personal best. `best` is the fastest time after recording this run.
-pub(crate) fn next_goal(course: &Course, medal: &str, best: Option<f32>, secret: bool) -> String {
+/// The "one more try" hook, drawn as icons on the results card.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum NextGoal {
+    /// The next medal up: its name, the time to beat and the falls allowed.
+    Medal {
+        medal: &'static str,
+        seconds: f32,
+        falls: u32,
+    },
+    /// Gold is done; a moonstone hides somewhere on this course.
+    Moonstone,
+    /// Everything found: beat the stored best time.
+    Best(f32),
+    /// No stored best to show (storage unavailable): just go faster.
+    Faster,
+}
+
+/// The next medal, then the moonstone rumour, then the stored personal best.
+/// `best` is the fastest time after recording this run.
+pub(crate) fn next_goal(course: &Course, medal: &str, best: Option<f32>, secret: bool) -> NextGoal {
     match medal {
-        "BRONZE" => format!(
-            "Next: silver under {:.1}s with 2 falls or fewer",
-            course.gold_seconds * 1.5
-        ),
-        "SILVER" => format!("Next: gold under {:.0}s with no falls", course.gold_seconds),
-        _ if !secret => "Rumour: a moonstone hides off the beaten path".into(),
-        _ => best.map_or_else(
-            || "Next: go faster. The arch is waiting.".into(),
-            |best| format!("Next: beat your best of {}", crate::hud::stopwatch(best)),
-        ),
+        "BRONZE" => NextGoal::Medal {
+            medal: "SILVER",
+            seconds: course.gold_seconds * 1.5,
+            falls: 2,
+        },
+        "SILVER" => NextGoal::Medal {
+            medal: "GOLD",
+            seconds: course.gold_seconds,
+            falls: 0,
+        },
+        _ if !secret => NextGoal::Moonstone,
+        _ => best.map_or(NextGoal::Faster, NextGoal::Best),
     }
 }
 
@@ -324,12 +344,45 @@ mod tests {
     #[test]
     fn next_goal_climbs_medals_then_hints_the_secret_then_chases_the_best() {
         let c = &COURSES[0];
-        assert!(next_goal(c, "BRONZE", None, false).contains("silver under 52.5s"));
-        assert!(next_goal(c, "SILVER", None, true).contains("gold under 35s"));
-        assert!(next_goal(c, "GOLD", Some(30.), false).contains("moonstone"));
+        assert_eq!(
+            next_goal(c, "BRONZE", None, false),
+            NextGoal::Medal {
+                medal: "SILVER",
+                seconds: 52.5,
+                falls: 2
+            }
+        );
+        assert_eq!(
+            next_goal(c, "SILVER", None, true),
+            NextGoal::Medal {
+                medal: "GOLD",
+                seconds: 35.,
+                falls: 0
+            }
+        );
+        assert_eq!(next_goal(c, "GOLD", Some(30.), false), NextGoal::Moonstone);
         assert_eq!(
             next_goal(c, "GOLD", Some(30.256), true),
-            "Next: beat your best of 0:30.26"
+            NextGoal::Best(30.256)
         );
+        assert_eq!(next_goal(c, "GOLD", None, true), NextGoal::Faster);
+    }
+
+    #[test]
+    fn in_play_callouts_stay_within_three_words() {
+        for line in VOID
+            .iter()
+            .chain(&ICE)
+            .chain(&SWEPT)
+            .chain(&MANUAL)
+            .chain(&STUBBORN)
+            .chain(&CHECKPOINT)
+            .chain(&BONK)
+            .chain(&CLUTCH)
+            .chain(&AIR)
+        {
+            assert!(line.split_whitespace().count() <= 3, "{line}");
+            assert!(line.is_ascii(), "{line} must render in the classic face");
+        }
     }
 }

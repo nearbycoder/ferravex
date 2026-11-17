@@ -6,6 +6,9 @@
 //! buffer with separable running-sum box passes and screen-blends it back
 //! (bloom), then draws the HUD and cards crisp on top. Steady-state frames do
 //! not allocate.
+mod icons;
+pub(crate) use icons::Icon;
+
 use crate::font::{self, Case};
 use crate::game::{
     BALL_RADIUS, Feedback, Game, HEIGHT, LEFT, PADDLE_Y, Phase, Pickup, RIGHT, TOP, WIDTH,
@@ -30,6 +33,8 @@ const CYAN: [u8; 4] = [99, 215, 196, 255];
 const GOLD: [u8; 4] = [216, 173, 109, 255];
 const CORAL: [u8; 4] = [236, 132, 112, 255];
 const FIELD_BOTTOM: i32 = 654;
+/// The ready and sector-secured cards: `[x, y, w, h]` over the open field.
+const READY_CARD: [i32; 4] = [148, 380, 344, 162];
 
 /// Quarter-resolution emissive buffer for bloom.
 const GW: usize = WIDTH as usize / 4;
@@ -210,10 +215,20 @@ impl Canvas {
             let rise = 26. * Ease::QuadOut.apply(t) * if juice.motion() > 0. { 1. } else { 0. };
             let fade = ((1. - t) / 0.35).clamp(0., 1.);
             let text = pop.text.as_str();
-            let x = pop.at[0] as i32 - text_width(text, pop.scale) / 2;
+            let icon_w = if pop.icon.is_some() {
+                11 * pop.scale
+            } else {
+                0
+            };
+            let x = pop.at[0] as i32 - (text_width(text, pop.scale) + icon_w) / 2;
             let y = (pop.at[1] - 10. - rise) as i32;
-            self.text(text, x + 1, y + 1, pop.scale, alpha(INK, fade));
-            self.text(text, x, y, pop.scale, alpha(pop.color, fade));
+            if let Some(icon) = pop.icon {
+                let size = 9. * pop.scale as f32;
+                let (cx, cy) = (x as f32 + size / 2., y as f32 + 3.5 * pop.scale as f32);
+                self.icon_shadowed(icon, cx, cy, size, alpha(pop.color, fade));
+            }
+            self.text(text, x + icon_w + 1, y + 1, pop.scale, alpha(INK, fade));
+            self.text(text, x + icon_w, y, pop.scale, alpha(pop.color, fade));
             self.glow(pop.at[0], y as f32 + 4., 10., pop.color, 0.3 * fade);
         }
         if g.phase == Phase::Playing {
@@ -250,6 +265,7 @@ impl Canvas {
         self.graded = false;
         self.look = Default::default();
         self.draw_hud(g, presentation);
+        self.draw_play_prompts(g, presentation, paused);
         match g.phase {
             Phase::Ready => self.ready_card(g, presentation, paused),
             Phase::Transition => self.transition_card(g, presentation, paused),
@@ -257,7 +273,7 @@ impl Canvas {
             Phase::Playing => {}
         }
         if paused {
-            self.pause_card(g, presentation);
+            self.pause_card(presentation);
         }
     }
 
@@ -696,6 +712,8 @@ impl Canvas {
         self.draw_ball(g.ball, Self::ball_color(g), PAPER);
     }
 
+    /// One short headline beside its pictogram, plus an optional wordless
+    /// icon + number tally, springing in above the paddle.
     fn callout(&mut self, g: &Game, presentation: &Presentation) {
         if let Some(callout) = &presentation.juice.callout {
             let a = callout.alpha();
@@ -707,30 +725,40 @@ impl Canvas {
                 1.
             };
             let head = callout.head.as_str();
-            let scale = if text_width(head, 2) <= 540 { 2 } else { 1 };
-            let x = (WIDTH as i32 - text_width(head, scale)) / 2;
+            let scale = if text_width(head, 2) <= 500 { 2 } else { 1 };
+            let icon_w = if callout.icon.is_some() { 28 } else { 0 };
+            let w = text_width(head, scale) + icon_w;
+            let x = (WIDTH as i32 - w) / 2;
             let y = 540 + ((1. - pop) * 10.) as i32;
             self.glow(
                 320.,
                 y as f32 + 6.,
-                text_width(head, scale) as f32 * 0.35,
+                w as f32 * 0.35,
                 callout.color,
                 0.55 * a,
             );
-            self.text(head, x + 2, y + 2, scale, alpha(INK, a));
-            self.text(head, x, y, scale, alpha(callout.color, a));
-            let sub = callout.sub.as_str();
-            self.mtext_center(
-                sub,
-                320,
-                574,
-                1,
-                alpha(PAPER, a * 0.9),
-                Case::Sentence,
-                true,
-            );
+            if let Some(icon) = callout.icon {
+                let size = 22. * (0.6 + 0.4 * pop);
+                self.icon_shadowed(
+                    icon,
+                    x as f32 + 11.,
+                    y as f32 + 7.,
+                    size,
+                    alpha(callout.color, a),
+                );
+            }
+            self.text(head, x + icon_w + 2, y + 2, scale, alpha(INK, a));
+            self.text(head, x + icon_w, y, scale, alpha(callout.color, a));
+            if let Some((icon, count)) = callout.tally {
+                let label = line(format_args!("{count}"));
+                let tw = font::width(label.as_str(), 1, Case::AsIs) + 18;
+                let tx = 320 - tw / 2;
+                let color = alpha(PAPER, a * 0.9);
+                self.icon_shadowed(icon, tx as f32 + 7., 570., 14., color);
+                self.mtext(label.as_str(), tx + 18, 574, 1, color, Case::AsIs, true);
+            }
         } else if g.feedback() == Some(Feedback::BallSaved) {
-            self.mtext_center("Ball saved", 320, 560, 1, CYAN, Case::AsIs, true);
+            self.icon_shadowed(Icon::Shield, 320., 556., 22., CYAN);
         }
     }
 
@@ -923,12 +951,47 @@ impl Canvas {
 
     // -------------------------------------------------------------------- HUD
 
-    fn chip(&mut self, x: i32, label: &str, color: [u8; 4]) -> i32 {
-        let w = font::width(label, 1, Case::AsIs) + 18;
+    /// A rounded state chip in the header strip: an icon, then optional
+    /// detail drawn by `extra` inside `extra_w` pixels. Returns the next x.
+    fn chip(&mut self, x: i32, icon: Icon, color: [u8; 4], extra_w: i32) -> i32 {
+        let w = 26 + extra_w;
         self.round_rect(x, 82, w, 17, 8, alpha(color, 0.22), alpha(color, 0.12));
-        self.circle(x as f32 + 7.5, 90.5, 2.4, color);
-        self.mtext(label, x + 13, 94, 1, color, Case::AsIs, false);
+        self.icon(icon, x as f32 + 13., 90.5, 18., color);
         x + w + 6
+    }
+
+    /// `count` small pips, the first `lit` filled; returns the width used.
+    fn pips(&mut self, x: i32, cy: f32, count: u32, lit: u32, color: [u8; 4]) -> i32 {
+        for i in 0..count {
+            let px = x as f32 + 3. + i as f32 * 8.;
+            if i < lit {
+                self.circle(px, cy, 2.6, color);
+            } else {
+                self.ring(px, cy, 2.2, 1.1, alpha(color, 0.45));
+            }
+        }
+        count as i32 * 8
+    }
+
+    /// Icon + number, right-aligned at `right`; returns the left edge.
+    fn icon_value_right(
+        &mut self,
+        icon: Icon,
+        value: &str,
+        right: i32,
+        baseline: i32,
+        color: [u8; 4],
+    ) -> i32 {
+        let w = font::width(value, 1, Case::AsIs);
+        self.mtext(value, right - w, baseline, 1, color, Case::AsIs, true);
+        self.icon_shadowed(
+            icon,
+            (right - w - 10) as f32,
+            baseline as f32 - 4.,
+            13.,
+            color,
+        );
+        right - w - 18
     }
 
     fn draw_hud(&mut self, g: &Game, presentation: &Presentation) {
@@ -950,11 +1013,10 @@ impl Canvas {
             x += 18;
         }
         self.round_rect(38, 60, 54, 3, 1, CYAN, scale_rgb(CYAN, 0.6));
+        // Sector progress as pips, then the sector's name.
         let (name, _) = quips::sector(g.sector);
-        let sector = line(format_args!("Sector {} \u{b7} ", g.sector));
-        let w = font::width(sector.as_str(), 1, Case::AsIs);
-        self.mtext(sector.as_str(), 98, 66, 1, MUTED, Case::AsIs, false);
-        self.mtext(name, 98 + w, 66, 1, MUTED, Case::Sentence, false);
+        let w = self.pips(100, 62.5, 2, g.sector, CYAN);
+        self.mtext(name, 106 + w, 66, 1, MUTED, Case::Sentence, false);
 
         let shown = screen.score.shown().max(0) as u32;
         let score = line(format_args!("{shown:05}"));
@@ -962,7 +1024,7 @@ impl Canvas {
         self.text_right(score.as_str(), 600, 32, 3, GOLD);
         let multiplier = g.chain.multiplier();
         if multiplier > 1 {
-            let label = line(format_args!("\u{d7}{multiplier} chain"));
+            let label = line(format_args!("\u{d7}{multiplier}"));
             let right = 600 - text_width(score.as_str(), 3) - 12;
             let w = font::width(label.as_str(), 1, Case::AsIs) + 16;
             self.round_rect(right - w, 35, w, 18, 9, alpha(HOT, 0.30), alpha(HOT, 0.14));
@@ -970,38 +1032,47 @@ impl Canvas {
         }
         match presentation.best {
             Some(best) if g.score > best => {
-                self.mtext_right("New best pace!", 600, 70, 1, HOT, Case::AsIs);
+                let pulse = if screen.motion == ferravex_engine::play::tween::Motion::Full {
+                    0.8 + 0.2 * (screen.clock * 5.).sin()
+                } else {
+                    1.
+                };
+                self.icon_value_right(Icon::Trophy, "New best!", 600, 72, alpha(HOT, pulse));
             }
             Some(best) => {
-                let label = line(format_args!("Best {best}"));
-                self.mtext_right(label.as_str(), 600, 70, 1, MUTED, Case::AsIs);
+                let label = line(format_args!("{best}"));
+                self.icon_value_right(Icon::Trophy, label.as_str(), 600, 72, MUTED);
             }
-            None => self.mtext_right("Score", 600, 70, 1, MUTED, Case::AsIs),
+            None => {}
         }
         if g.phase == Phase::Playing {
             let mut x = 38;
             if g.armor_piercing() {
-                x = self.chip(x, "Armor piercing", GOLD);
+                x = self.chip(x, Icon::Bolt, GOLD, 0);
             }
             if g.wide_time > 0. {
-                let label = line(format_args!("Wide {:.1}s", g.wide_time));
-                x = self.chip(x, label.as_str(), CYAN);
+                let next = self.chip(x, Icon::Wide, CYAN, 34);
+                self.round_rect(x + 26, 89, 30, 3, 1, alpha(CYAN, 0.3), alpha(CYAN, 0.3));
+                let fill = (30. * (g.wide_time / 9.).clamp(0., 1.)).ceil() as i32;
+                self.round_rect(x + 26, 89, fill.max(2), 3, 1, CYAN, CYAN);
+                x = next;
             }
             if !g.extra_balls.is_empty() {
-                let label = line(format_args!("Multi-ball \u{d7}{}", g.extra_balls.len() + 1));
-                x = self.chip(x, label.as_str(), VIOLET);
+                let label = line(format_args!("\u{d7}{}", g.extra_balls.len() + 1));
+                let w = font::width(label.as_str(), 1, Case::AsIs);
+                self.chip(x, Icon::Multi, VIOLET, w + 6);
+                self.mtext(label.as_str(), x + 27, 94, 1, VIOLET, Case::AsIs, false);
+                x += 26 + w + 6 + 6;
             }
-            if g.held.is_some() {
-                let label = line(format_args!("{} to fire", presentation.hints.launch));
-                self.chip(x, label.as_str(), LIME);
-            } else if g.sticky > 0 {
-                let label = line(format_args!("Sticky \u{d7}{}", g.sticky));
-                self.chip(x, label.as_str(), LIME);
+            if g.sticky > 0 || g.held.is_some() {
+                self.chip(x, Icon::Sticky, LIME, 24);
+                let lit = g.sticky.min(crate::game::STICKY_CATCHES);
+                self.pips(x + 25, 90.5, crate::game::STICKY_CATCHES, lit, LIME);
             }
             if g.volley >= 2 {
                 let color = if g.volley >= 5 { HOT } else { GOLD };
-                let label = line(format_args!("Volley {}", g.volley));
-                self.mtext_right(label.as_str(), 600, 94, 1, color, Case::AsIs);
+                let label = line(format_args!("{}", g.volley));
+                self.icon_value_right(Icon::Flame, label.as_str(), 600, 94, color);
             }
         }
         // Footer: lives as glowing orbs, panels left, ball save, streak/keys.
@@ -1016,35 +1087,137 @@ impl Canvas {
             }
         }
         let remaining = g.remaining();
-        let panels = if remaining == 1 {
-            line(format_args!("1 panel left!"))
+        let panels = line(format_args!("{remaining}"));
+        let (color, size) = if remaining == 1 {
+            let beat = if screen.motion == ferravex_engine::play::tween::Motion::Full {
+                (screen.clock * 6.).sin() * 0.5 + 0.5
+            } else {
+                0.5
+            };
+            (mix(GOLD, HOT, beat), 18. + 3. * beat)
         } else {
-            line(format_args!("{remaining} panels left"))
+            (MUTED, 18.)
         };
-        let color = if remaining == 1 { GOLD } else { MUTED };
-        self.mtext(panels.as_str(), 104, 688, 1, color, Case::AsIs, false);
+        self.icon_shadowed(Icon::Panel, 115., 684., size, color);
+        self.mtext(panels.as_str(), 130, 688, 1, color, Case::AsIs, true);
         if g.ball_save > 0. && g.phase == Phase::Playing {
-            self.mtext_center("Ball save", 320, 682, 1, CYAN, Case::AsIs, false);
-            self.round_rect(286, 688, 68, 4, 2, LINE, LINE);
-            let fill = (68. * g.ball_save / 2.5) as i32;
-            self.round_rect(286, 688, fill.max(4), 4, 2, CYAN, scale_rgb(CYAN, 0.7));
+            self.icon_shadowed(Icon::Shield, 283., 684., 13., CYAN);
+            self.round_rect(294, 682, 62, 4, 2, LINE, LINE);
+            let fill = (62. * g.ball_save / 2.5) as i32;
+            self.round_rect(294, 682, fill.max(4), 4, 2, CYAN, scale_rgb(CYAN, 0.7));
         }
         if g.precision.streak() > 0 {
-            let label = line(format_args!("Precise \u{d7}{}", g.precision.streak()));
-            self.mtext_right(label.as_str(), 600, 688, 1, CYAN, Case::AsIs);
+            let label = line(format_args!("\u{d7}{}", g.precision.streak()));
+            self.icon_value_right(Icon::Target, label.as_str(), 600, 688, CYAN);
         } else {
             let pause = presentation.hints.pause.as_str();
             let restart = presentation.hints.restart.as_str();
-            let width = self.keycap_width(pause) + self.keycap_width(restart) + 100;
+            let width = self.keys_width(pause) + self.keys_width(restart) + 2 * (8 + 13) + 12;
             if width <= 240 {
-                let mut x = 600 - width;
-                x = self.keycap(x, 688, pause, alpha(PAPER, 0.7));
-                self.mtext(" pause", x, 688, 1, DIM, Case::AsIs, false);
-                x += font::width(" pause", 1, Case::AsIs) + 10;
-                x = self.keycap(x, 688, restart, alpha(PAPER, 0.7));
-                self.mtext(" restart", x, 688, 1, DIM, Case::AsIs, false);
+                let cap = alpha(PAPER, 0.7);
+                let x = self.key_action(600 - width, 688, pause, Icon::Pause, 13., cap, DIM);
+                self.key_action(x + 12, 688, restart, Icon::Restart, 13., cap, DIM);
             }
         }
+    }
+
+    /// Steering keys beside the paddle and launch chevrons above a waiting
+    /// ball, or the launch key beside a caught ball. Contextual prompts that
+    /// replace written instructions; drawn crisp on the HUD layer.
+    fn draw_play_prompts(&mut self, g: &Game, presentation: &Presentation, paused: bool) {
+        if paused {
+            return;
+        }
+        let screen = &presentation.screen;
+        let moving = screen.motion == ferravex_engine::play::tween::Motion::Full;
+        let hints = &presentation.hints;
+        match g.phase {
+            Phase::Ready => {
+                for i in 0..2 {
+                    let t = if moving {
+                        (screen.clock * 1.6 + i as f32 * 0.5).fract()
+                    } else {
+                        0.5
+                    };
+                    let fade = (1. - (t - 0.5).abs() * 2.).clamp(0., 1.);
+                    let y = g.ball[1] - 17. - i as f32 * 9. - t * 6.;
+                    self.icon(Icon::ChevronUp, g.ball[0], y, 11., alpha(CYAN, fade));
+                }
+                let juice = &presentation.juice;
+                if !juice.steering_learned() {
+                    let fade = (1. - juice.steer_learned / 0.75).clamp(0., 1.);
+                    let nudge = if moving {
+                        ((screen.clock * 3.).sin() * 0.5 + 0.5) * 3.
+                    } else {
+                        0.
+                    };
+                    let a = 0.45 + 0.55 * fade;
+                    self.steer_side(g, hints.left.as_str(), -1., nudge, a);
+                    self.steer_side(g, hints.right.as_str(), 1., nudge, a);
+                }
+            }
+            Phase::Playing if g.held.is_some() => {
+                let key = hints.launch.split(" / ").next().unwrap_or("");
+                let x = g.ball[0] as i32 + 14;
+                let baseline = g.ball[1] as i32 - 6;
+                if !key.is_empty() && self.keycap_width(key) <= 80 {
+                    let next = self.keycap(x, baseline, key, PAPER);
+                    self.icon_shadowed(
+                        Icon::ArrowUp,
+                        next as f32 + 9.,
+                        baseline as f32 - 4.,
+                        13.,
+                        LIME,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// One side of the steering hint: a chevron pointing away from the paddle
+    /// and that direction's key caps (a hand for touch). Skipped when it would
+    /// not fit inside the arena.
+    fn steer_side(&mut self, g: &Game, keys: &str, side: f32, nudge: f32, a: f32) {
+        let touch = keys == "DRAG";
+        // Touch shows one hand, on the left; both sides keep their chevron.
+        let hand = touch && side < 0.;
+        let caps = if touch || keys == "UNBOUND" || keys == "SEE CONTROLS" {
+            0
+        } else {
+            self.keys_width(keys)
+        };
+        let caps = if caps > 110 { 0 } else { caps };
+        let group = caps + if hand { 22 } else { 0 } + 20;
+        let edge = g.paddle_x + side * (g.paddle_half + 10.);
+        let (start, end) = if side < 0. {
+            (edge - group as f32, edge)
+        } else {
+            (edge, edge + group as f32)
+        };
+        if start < LEFT + 4. || end > RIGHT - 4. {
+            return;
+        }
+        let baseline = PADDLE_Y as i32 + 5;
+        let cy = PADDLE_Y + 1.;
+        // Keys hug the paddle; the chevron sits outside them and nudges outward.
+        let (keys_x, chevron_x) = if side < 0. {
+            (end as i32 - caps, start + 7. - nudge)
+        } else {
+            (start as i32, end - 7. + nudge)
+        };
+        if caps > 0 {
+            self.keys(keys_x, baseline, keys, alpha(PAPER, a));
+        }
+        if hand {
+            self.icon_shadowed(Icon::Hand, end - 10., cy, 16., alpha(PAPER, a));
+        }
+        let chevron = if side < 0. {
+            Icon::ChevronLeft
+        } else {
+            Icon::ChevronRight
+        };
+        self.icon_shadowed(chevron, chevron_x, cy, 13., alpha(CYAN, a));
     }
 
     // ------------------------------------------------------------------ cards
@@ -1096,51 +1269,69 @@ impl Canvas {
         );
     }
 
+    /// Three ball slots: lit for lives left, a cracked coral ball for the one
+    /// that just drained, dim rings for the rest.
+    fn life_orbs(&mut self, cx: i32, cy: i32, lives: u32, lost: bool, a: f32) {
+        for i in 0..3_u32 {
+            let x = (cx - 18 + i as i32 * 18) as f32;
+            let y = cy as f32;
+            if i < lives {
+                self.circle(x, y, 7., alpha(CYAN, 0.18 * a));
+                self.circle(x, y, 5., alpha(PAPER, a));
+                self.circle(x - 1.5, y - 1.5, 1.8, alpha([255, 255, 255, 255], a));
+            } else if lost && i == lives {
+                self.icon(Icon::BallLost, x, y, 15., alpha(CORAL, a));
+            } else {
+                self.ring(x, y, 4.5, 1.4, alpha(LINE, a));
+            }
+        }
+    }
+
     fn ready_card(&mut self, g: &Game, presentation: &Presentation, paused: bool) {
         if paused {
             return;
         }
         let screen = &presentation.screen;
-        let (name, tagline) = quips::sector(g.sector);
+        let (name, _) = quips::sector(g.sector);
         let lost = g.feedback() == Some(Feedback::LifeLost);
         let restarted = g.feedback() == Some(Feedback::Restarted);
         let title = if lost {
-            line(format_args!(
-                "BALL LOST / {} {} LEFT",
-                g.lives,
-                if g.lives == 1 { "LIFE" } else { "LIVES" }
-            ))
+            "BALL LOST"
         } else if restarted {
-            line(format_args!("FRESH RUN / 3 LIVES"))
+            "FRESH RUN"
         } else if g.lives_lost == 0 || g.clears == 0 || g.sector == 2 && g.remaining() == 35 {
-            line(format_args!("SECTOR 0{} / {name}", g.sector))
+            name
         } else {
-            line(format_args!("READY FOR LAUNCH"))
+            "READY"
         };
-        let (subtitle, sub_color) = if lost {
+        let (quip, quip_color) = if lost {
             (quips::drain(g.lives_lost), CORAL)
         } else if restarted {
             (quips::retry(presentation.restarts.max(1)), MUTED)
         } else {
-            (tagline, MUTED)
+            (quips::tagline(g.sector), MUTED)
         };
-        self.card([96, 356, 448, 214], CYAN, screen.appear(0));
+        let [x, top, w, _] = READY_CARD;
+        self.card(READY_CARD, CYAN, screen.appear(0));
         let (a, dy) = screen.appear(1);
-        self.text_fit_center(title.as_str(), 380 + dy, 2, 416, alpha(PAPER, a));
+        self.text_fit_center(title, top + 28 + dy, 2, w - 32, alpha(PAPER, a));
         let (a, dy) = screen.appear(2);
+        self.life_orbs(320, top + 60 + dy, g.lives, lost, a);
         self.mtext_center(
-            subtitle,
+            quip,
             320,
-            418 + dy,
+            top + 86 + dy,
             1,
-            alpha(sub_color, a),
+            alpha(quip_color, a),
             Case::Sentence,
             false,
         );
+        // The serve charges by itself; a lit bolt means armor piercing.
         let power = g.serve_charge.power();
         let full = power >= 0.95;
+        let moving = screen.motion == ferravex_engine::play::tween::Motion::Full;
         let (a, dy) = screen.appear(3);
-        let bar = [176, 432 + dy, 288, 8];
+        let bar = [x + 52, top + 100 + dy, w - 124, 8];
         self.round_rect(
             bar[0],
             bar[1],
@@ -1157,90 +1348,100 @@ impl Canvas {
             (CYAN, scale_rgb(CYAN, 0.7))
         };
         self.round_rect(bar[0], bar[1], fill, bar[3], 4, alpha(c0, a), alpha(c1, a));
-        if full {
-            let glint = (screen.clock * 2.).fract();
-            let gx = bar[0] + (glint * bar[2] as f32) as i32;
-            if screen.motion == ferravex_engine::play::tween::Motion::Full {
-                self.round_rect(
-                    gx,
-                    bar[1] + 1,
-                    10,
-                    3,
-                    1,
-                    alpha(PAPER, 0.6 * a),
-                    alpha(PAPER, 0.2 * a),
-                );
-            }
+        if full && moving {
+            let gx = bar[0] + ((screen.clock * 2.).fract() * bar[2] as f32) as i32;
+            self.round_rect(
+                gx,
+                bar[1] + 1,
+                10,
+                3,
+                1,
+                alpha(PAPER, 0.6 * a),
+                alpha(PAPER, 0.2 * a),
+            );
         }
-        let charge = if full {
-            line(format_args!("Full charge \u{b7} armor piercing ready"))
+        let bolt = [(bar[0] + bar[2] + 16) as f32, bar[1] as f32 + 4.];
+        if full {
+            let beat = if moving {
+                (screen.clock * 6.).sin() * 0.5 + 0.5
+            } else {
+                1.
+            };
+            self.halo(
+                bolt[0] as i32,
+                bolt[1] as i32 + 1,
+                4,
+                HOT,
+                a * (0.5 + 0.5 * beat),
+            );
+            self.icon_shadowed(Icon::Bolt, bolt[0], bolt[1], 18. + 2. * beat, alpha(HOT, a));
         } else {
-            line(format_args!("Charging serve {:.0}%", power * 100.))
-        };
-        self.mtext_center(
-            charge.as_str(),
-            320,
-            458 + dy,
-            1,
-            alpha(if full { GOLD } else { MUTED }, a),
-            Case::AsIs,
-            false,
-        );
+            self.icon(Icon::Bolt, bolt[0], bolt[1], 16., alpha(DIM, a));
+        }
         let (a, dy) = screen.appear(4);
-        let pulse = if screen.motion == ferravex_engine::play::tween::Motion::Full {
+        let pulse = if moving {
             0.75 + 0.25 * (screen.clock * 4.).sin()
         } else {
             1.
         };
         self.prompt(
             320,
-            494 + dy,
+            top + 140 + dy,
             &presentation.hints.launch,
-            "to launch",
+            Icon::ArrowUp,
             a,
             pulse,
         );
-        let (a, dy) = screen.appear(5);
-        let juice = &presentation.juice;
-        if !juice.steering_learned() {
-            let fade = 1. - juice.steer_learned / 0.75;
-            let hint = line(format_args!("Steer: {}", presentation.hints.movement));
-            self.mtext_fit_center(
-                hint.as_str(),
-                528 + dy,
-                416,
-                alpha(PAPER, a * (0.45 + 0.55 * fade)),
-            );
-        } else if !juice.charge_learned {
-            self.mtext_fit_center(
-                "Tip: wait for a full charge to pierce armor",
-                528 + dy,
-                416,
-                alpha(MUTED, a),
-            );
-        } else {
-            self.mtext_fit_center(
-                "Catch capsules \u{b7} chain panels \u{b7} find the secret",
-                528 + dy,
-                416,
-                alpha(MUTED, a),
-            );
-        }
-        let footer = line(format_args!(
-            "{} {} \u{b7} {} panels",
-            g.lives,
-            if g.lives == 1 { "life" } else { "lives" },
-            g.remaining()
-        ));
-        self.mtext_center(
-            footer.as_str(),
-            320,
-            552 + dy,
-            1,
-            alpha(DIM, a),
-            Case::AsIs,
-            false,
+    }
+
+    /// A small panel for the sector preview: plain, riveted or cracked.
+    fn mini_panel(&mut self, x: i32, y: i32, color: [u8; 4], band: bool, cracked: bool, a: f32) {
+        let (w, h) = (44, 16);
+        self.round_rect(
+            x + 1,
+            y + 3,
+            w,
+            h,
+            4,
+            alpha([2, 8, 12, 150], a),
+            alpha([2, 8, 12, 90], a),
         );
+        self.round_rect(
+            x,
+            y,
+            w,
+            h,
+            4,
+            alpha(scale_rgb(color, 1.12), a),
+            alpha(scale_rgb(color, 0.82), a),
+        );
+        if band {
+            self.round_rect(
+                x + 2,
+                y + h / 2 - 2,
+                w - 4,
+                4,
+                1,
+                alpha([70, 92, 98, 220], a),
+                alpha([36, 52, 58, 220], a),
+            );
+            for bolt in [x + 7, x + w / 2, x + w - 7] {
+                self.circle(
+                    bolt as f32,
+                    (y + h / 2) as f32,
+                    1.,
+                    alpha([222, 232, 220, 255], a),
+                );
+            }
+        }
+        if cracked {
+            let (cx, top) = ((x + w / 2) as f32, y as f32);
+            let ink = alpha(INK, a);
+            self.line(cx, top + 1., cx - 3., top + 8., ink);
+            self.line(cx - 3., top + 8., cx + 2., top + h as f32 - 1., ink);
+            self.line(cx - 3., top + 8., cx - 10., top + 10., ink);
+            self.line(cx + 1., top + 4., cx + 8., top + 5., ink);
+        }
     }
 
     fn transition_card(&mut self, g: &Game, presentation: &Presentation, paused: bool) {
@@ -1248,96 +1449,92 @@ impl Canvas {
             return;
         }
         let screen = &presentation.screen;
-        self.card([96, 356, 448, 214], GOLD, screen.appear(0));
+        let [_, top, w, _] = READY_CARD;
+        self.card(READY_CARD, GOLD, screen.appear(0));
         let (a, dy) = screen.appear(1);
         let title = line(format_args!("SECTOR 0{} SECURED", g.sector));
-        self.text_fit_center(title.as_str(), 380 + dy, 2, 416, alpha(PAPER, a));
+        self.text_fit_center(title.as_str(), top + 28 + dy, 2, w - 32, alpha(PAPER, a));
         let (a, dy) = screen.appear(2);
         if g.sector_lives_lost == 0 {
             let bonus = line(format_args!("FLAWLESS! +{}", crate::game::FLAWLESS_POINTS));
-            self.halo(320, 416 + dy, text_width(bonus.as_str(), 2), HOT, a);
-            self.text_fit_center(bonus.as_str(), 410 + dy, 2, 416, alpha(HOT, a));
+            self.halo(320, top + 60 + dy, text_width(bonus.as_str(), 2), HOT, a);
+            self.text_fit_center(bonus.as_str(), top + 54 + dy, 2, w - 32, alpha(HOT, a));
         } else {
             self.mtext_center(
-                "Not bad for a space janitor",
+                quips::NOT_FLAWLESS,
                 320,
-                422 + dy,
+                top + 66 + dy,
                 1,
                 alpha(MUTED, a),
-                Case::AsIs,
+                Case::Sentence,
                 false,
             );
         }
-        let (next, tagline) = quips::sector(g.sector + 1);
+        // Next sector: its name, then a three-frame storyboard of what is new
+        // there: a riveted panel takes a hit, cracks, and the next hit breaks it.
+        let (next, _) = quips::sector(g.sector + 1);
         let (a, dy) = screen.appear(3);
-        let label = line(format_args!("Next: "));
-        let w = font::width(label.as_str(), 1, Case::AsIs) + font::width(next, 1, Case::Sentence);
-        self.mtext(
-            label.as_str(),
-            320 - w / 2,
-            452 + dy,
-            1,
-            alpha(MUTED, a),
-            Case::AsIs,
-            false,
+        let name_w = font::width(next, 1, Case::Sentence);
+        let x = 320 - (name_w + 18) / 2;
+        self.icon(
+            Icon::ArrowRight,
+            x as f32 + 5.,
+            (top + 87 + dy) as f32,
+            11.,
+            alpha(GOLD, a),
         );
         self.mtext(
             next,
-            320 - w / 2 + font::width(label.as_str(), 1, Case::AsIs),
-            452 + dy,
+            x + 18,
+            top + 91 + dy,
             1,
             alpha(GOLD, a),
             Case::Sentence,
             false,
         );
         let (a, dy) = screen.appear(4);
-        self.mtext_center(
-            "Reinforced panels need two hits",
-            320,
-            474 + dy,
-            1,
-            alpha(PAPER, a),
-            Case::AsIs,
-            false,
-        );
-        self.mtext_center(
-            tagline,
-            320,
-            492 + dy,
-            1,
-            alpha(MUTED, a),
-            Case::Sentence,
-            false,
-        );
+        let shade = crate::game::panel_color(0).map(|c| (c * 255.) as u8);
+        let panel = [shade[0], shade[1], shade[2], 255];
+        let y = top + 104 + dy;
+        let x = 320 - 80;
+        self.mini_panel(x, y, panel, true, false, a);
+        for (i, hit_x) in [x + 57, x + 125].into_iter().enumerate() {
+            self.icon(Icon::Ball, hit_x as f32, y as f32 + 1., 8., alpha(PAPER, a));
+            self.icon(
+                Icon::ChevronRight,
+                hit_x as f32,
+                y as f32 + 11.,
+                10.,
+                alpha(MUTED, a),
+            );
+            if i == 0 {
+                self.mini_panel(x + 69, y, panel, true, true, a);
+            }
+        }
+        let burst = [(x + 150) as f32, y as f32 + 8.];
+        self.icon_shadowed(Icon::Star, burst[0], burst[1], 18., alpha(HOT, a));
+        for (dx, dy2) in [(-12., -7.), (12., -6.), (-11., 8.), (12., 8.)] {
+            let shard = [burst[0] + dx, burst[1] + dy2];
+            self.rect(shard[0] as i32, shard[1] as i32, 2, 2, alpha(panel, a));
+        }
+        // The countdown to the next sector, as a filling bar.
         let (a, dy) = screen.appear(5);
-        let countdown = line(format_args!(
-            "Sector {} in {:.1}s",
-            g.sector + 1,
-            g.transition_remaining()
-        ));
-        self.mtext_center(
-            countdown.as_str(),
-            320,
-            524 + dy,
-            1,
-            alpha(CYAN, a),
-            Case::AsIs,
-            false,
-        );
         let progress = (1. - g.transition_remaining() / 1.4).clamp(0., 1.);
+        let bar_y = top + 136 + dy;
+        self.icon(Icon::Clock, 196., bar_y as f32 + 3., 12., alpha(CYAN, a));
         self.round_rect(
-            176,
-            536 + dy,
-            288,
+            208,
+            bar_y,
+            236,
             6,
             3,
             alpha([28, 44, 52, 255], a),
             alpha([20, 34, 40, 255], a),
         );
         self.round_rect(
-            176,
-            536 + dy,
-            ((288. * progress) as i32).max(6),
+            208,
+            bar_y,
+            ((236. * progress) as i32).max(6),
             6,
             3,
             alpha(CYAN, a),
@@ -1345,7 +1542,7 @@ impl Canvas {
         );
     }
 
-    fn pause_card(&mut self, g: &Game, presentation: &Presentation) {
+    fn pause_card(&mut self, presentation: &Presentation) {
         let screen = &presentation.screen;
         // Dim the arena so the card owns attention.
         let (a0, _) = screen.appear(0);
@@ -1356,46 +1553,44 @@ impl Canvas {
             547,
             [4, 10, 14, (120. * a0) as u8],
         );
-        self.card([96, 356, 448, 214], CYAN, screen.appear(0));
+        let card = [176, 392, 288, 136];
+        let top = card[1];
+        self.card(card, CYAN, screen.appear(0));
         let (a, dy) = screen.appear(1);
-        self.text_center("PAUSED", 382 + dy, 3, alpha(PAPER, a));
+        self.text_center("PAUSED", top + 28 + dy, 3, alpha(PAPER, a));
         let (a, dy) = screen.appear(2);
-        let status = line(format_args!(
-            "Sector {} \u{b7} {} points \u{b7} {} {}",
-            g.sector,
-            g.score,
-            g.lives,
-            if g.lives == 1 { "life" } else { "lives" }
-        ));
-        self.mtext_center(
-            status.as_str(),
-            320,
-            428 + dy,
-            1,
-            alpha(MUTED, a),
-            Case::AsIs,
-            false,
-        );
-        let (a, dy) = screen.appear(3);
         self.mtext_center(
             quips::pause(presentation.pauses),
             320,
-            450 + dy,
+            top + 72 + dy,
             1,
             alpha(GOLD, a),
             Case::Sentence,
             false,
         );
-        let (a, dy) = screen.appear(4);
-        self.prompt(320, 494 + dy, &presentation.hints.pause, "to resume", a, 1.);
-        let (a, dy) = screen.appear(5);
-        self.prompt(
-            320,
-            536 + dy,
-            &presentation.hints.restart,
-            "to restart",
-            a * 0.8,
-            1.,
+        // Resume and restart: each key cap beside its pictogram.
+        let (a, dy) = screen.appear(3);
+        let hints = &presentation.hints;
+        let width = self.keys_width(&hints.pause) + self.keys_width(&hints.restart) + 2 * 26 + 28;
+        let baseline = top + 110 + dy;
+        let cap = alpha(PAPER, a);
+        let x = self.key_action(
+            320 - width / 2,
+            baseline,
+            &hints.pause,
+            Icon::Play,
+            18.,
+            cap,
+            alpha(CYAN, a),
+        );
+        self.key_action(
+            x + 28,
+            baseline,
+            &hints.restart,
+            Icon::Restart,
+            18.,
+            cap,
+            alpha(CYAN, a * 0.8),
         );
     }
 
@@ -1427,6 +1622,7 @@ impl Canvas {
     fn results_card(&mut self, g: &Game, presentation: &Presentation, paused: bool) {
         let juice = &presentation.juice;
         let screen = &presentation.screen;
+        let moving = screen.motion == ferravex_engine::play::tween::Motion::Full;
         let (a0, _) = screen.appear(0);
         self.rect(
             LEFT as i32 + 1,
@@ -1442,207 +1638,293 @@ impl Canvas {
             self.confetti(juice.celebrate);
         }
         let won = g.phase == Phase::Won;
+        let top = 160;
         self.card(
-            [64, 150, 512, 474],
+            [64, top, 512, 380],
             if won { GOLD } else { CORAL },
             screen.appear(0),
         );
         let (a, dy) = screen.appear(1);
         self.text_center(
             if won { "FIELD CLEARED" } else { "SIGNAL LOST" },
-            176 + dy,
+            top + 26 + dy,
             2,
             alpha(if won { CYAN } else { CORAL }, a),
         );
+        let pulse = if moving {
+            0.75 + 0.25 * (screen.clock * 4.).sin()
+        } else {
+            1.
+        };
         let Some(results) = &presentation.results else {
-            let summary = line(format_args!(
-                "{} points \u{b7} {} panels cleared",
-                g.score, g.clears
-            ));
-            self.mtext_center(summary.as_str(), 320, 230, 1, MUTED, Case::AsIs, false);
-            self.prompt(320, 566, &presentation.hints.launch, "to retry", 1., 1.);
+            let score = line(format_args!("{}", g.score));
+            self.text_center(score.as_str(), top + 110, 4, PAPER);
+            self.prompt(
+                320,
+                top + 354,
+                &presentation.hints.launch,
+                Icon::Restart,
+                1.,
+                pulse,
+            );
             return;
         };
+        // The title earned, with its one-line joke.
         let (a, dy) = screen.appear(2);
-        self.mtext_center(
-            "Your title",
-            320,
-            216 + dy,
-            1,
-            alpha(MUTED, a),
-            Case::AsIs,
-            false,
-        );
-        let (a, dy) = screen.appear(3);
         self.halo(
             320,
-            236 + dy,
+            top + 67 + dy,
             text_width(results.rank.title, 3).min(464),
             GOLD,
             a * 0.8,
         );
-        self.text_fit_center(results.rank.title, 224 + dy, 3, 464, alpha(GOLD, a));
+        self.text_fit_center(results.rank.title, top + 56 + dy, 3, 464, alpha(GOLD, a));
         self.mtext_center(
             results.rank.quip,
             320,
-            268 + dy,
+            top + 99 + dy,
             1,
             alpha(PAPER, a),
             Case::Sentence,
             false,
         );
         // The score rolls up as the card lands.
-        let (a, dy) = screen.appear(4);
-        let roll = if screen.motion == ferravex_engine::play::tween::Motion::Full {
+        let (a, dy) = screen.appear(3);
+        let roll = if moving {
             Ease::CubicOut.apply(((screen.age - 0.2) / 0.9).clamp(0., 1.))
         } else {
             1.
         };
         let shown = line(format_args!("{}", (g.score as f32 * roll).round() as u32));
-        self.text_center(shown.as_str(), 284 + dy, 4, alpha(PAPER, a));
-        self.mtext_center(
-            "points",
-            320,
-            328 + dy,
-            1,
-            alpha(MUTED, a),
-            Case::AsIs,
-            false,
-        );
-        let (a, dy) = screen.appear(5);
+        self.text_center(shown.as_str(), top + 113 + dy, 4, alpha(PAPER, a));
+        // Personal best: a trophy and the record, or a meter toward it.
+        let (a, dy) = screen.appear(4);
+        let y = top + 163 + dy;
         match (results.new_best, results.previous_best) {
-            (true, previous) => {
-                let pulse = if juice.motion() > 0. {
+            (true, _) => {
+                let beat = if juice.motion() > 0. {
                     (screen.clock * 5.).sin() * 0.2 + 0.8
                 } else {
                     1.
                 };
-                self.halo(
-                    320,
-                    350 + dy,
-                    text_width("NEW PERSONAL BEST!", 2),
-                    HOT,
-                    a * pulse,
+                let w = text_width("NEW BEST!", 2) + 28;
+                self.halo(320, y, w, HOT, a * beat);
+                self.icon_shadowed(
+                    Icon::Trophy,
+                    (320 - w / 2 + 9) as f32,
+                    y as f32,
+                    20.,
+                    alpha(HOT, a),
                 );
-                self.text_center("NEW PERSONAL BEST!", 343 + dy, 2, alpha(HOT, a * pulse));
-                if let Some(previous) = previous {
-                    let old = line(format_args!("Old best {previous}"));
-                    self.mtext_center(
-                        old.as_str(),
-                        320,
-                        374 + dy,
-                        1,
-                        alpha(MUTED, a),
-                        Case::AsIs,
-                        false,
-                    );
-                }
+                self.text(
+                    "NEW BEST!",
+                    320 - w / 2 + 28,
+                    y - 7,
+                    2,
+                    alpha(HOT, a * beat),
+                );
             }
             (false, Some(best)) => {
-                let label = line(format_args!("Personal best {best}"));
-                self.mtext_center(
+                let label = line(format_args!("{best}"));
+                let w = font::width(label.as_str(), 1, Case::AsIs);
+                let x = 320 - (w + 24 + 112) / 2;
+                self.icon_shadowed(Icon::Trophy, x as f32 + 8., y as f32, 16., alpha(GOLD, a));
+                self.mtext(
                     label.as_str(),
-                    320,
-                    352 + dy,
+                    x + 20,
+                    y + 4,
                     1,
                     alpha(GOLD, a),
                     Case::AsIs,
-                    false,
+                    true,
                 );
-                let gap = line(format_args!(
-                    "{} more points to beat it",
-                    best.saturating_sub(g.score).saturating_add(1)
-                ));
-                self.mtext_center(
-                    gap.as_str(),
-                    320,
-                    370 + dy,
-                    1,
-                    alpha(MUTED, a),
-                    Case::AsIs,
-                    false,
+                let bar_x = x + 24 + w;
+                self.round_rect(bar_x, y - 2, 112, 5, 2, alpha(LINE, a), alpha(LINE, a));
+                let fill = (112. * (g.score as f32 / best.max(1) as f32).min(1.) * roll) as i32;
+                self.round_rect(
+                    bar_x,
+                    y - 2,
+                    fill.max(4),
+                    5,
+                    2,
+                    alpha(CYAN, a),
+                    alpha(CYAN, a),
                 );
             }
             (false, None) => {}
         }
-        let stats: [(&str, Line); 8] = [
-            ("Time", line(format_args!("{:.0}s", g.time))),
-            ("Panels", line(format_args!("{}", g.clears))),
-            ("Best volley", line(format_args!("{}", g.best_volley))),
-            ("Best precise", line(format_args!("{}", g.precision.best()))),
-            ("Ball saves", line(format_args!("{}", g.saves))),
-            ("Satellites", line(format_args!("{}", g.satellites))),
-            ("Flawless", line(format_args!("{}", g.flawless_sectors))),
-            ("Balls lost", line(format_args!("{}", g.lives_lost))),
+        // Run stats as icon tiles: zero values dim, an unfound secret teases.
+        let (a, dy) = screen.appear(5);
+        self.rect(104, top + 184 + dy, 432, 1, alpha(LINE, a));
+        let secret = g.satellites == 0;
+        let stats: [(Icon, [u8; 4], Line, bool); 8] = [
+            (
+                Icon::Clock,
+                PAPER,
+                line(format_args!("{:.0}s", g.time)),
+                false,
+            ),
+            (
+                Icon::Panel,
+                GOLD,
+                line(format_args!("{}", g.clears)),
+                g.clears == 0,
+            ),
+            (
+                Icon::Flame,
+                HOT,
+                line(format_args!("{}", g.best_volley)),
+                g.best_volley == 0,
+            ),
+            (
+                Icon::Target,
+                CYAN,
+                line(format_args!("{}", g.precision.best())),
+                g.precision.best() == 0,
+            ),
+            (
+                Icon::Shield,
+                CYAN,
+                line(format_args!("{}", g.saves)),
+                g.saves == 0,
+            ),
+            (
+                Icon::Satellite,
+                VIOLET,
+                line(format_args!("{}", g.satellites)),
+                false,
+            ),
+            (
+                Icon::Gem,
+                LIME,
+                line(format_args!("{}", g.flawless_sectors)),
+                g.flawless_sectors == 0,
+            ),
+            (
+                Icon::BallLost,
+                CORAL,
+                line(format_args!("{}", g.lives_lost)),
+                g.lives_lost == 0,
+            ),
         ];
-        let (a, dy) = screen.appear(6);
-        self.rect(104, 386 + dy, 432, 1, alpha(LINE, a));
-        for (i, (label, value)) in stats.iter().enumerate() {
-            let (a, dy) = screen.appear(6 + i / 2);
-            let column = (i % 2) as i32;
-            let row = (i / 2) as i32;
-            let x = 108 + column * 224;
-            let y = 408 + row * 21 + dy;
-            if column == 0 {
-                self.round_rect(
-                    104,
-                    y - 13,
-                    432,
-                    19,
-                    6,
-                    alpha([255, 255, 255, 8 + 6 * (row as u8 % 2)], a),
-                    alpha([255, 255, 255, 8 + 6 * (row as u8 % 2)], a),
+        for (i, (icon, color, value, dim)) in stats.iter().enumerate() {
+            let (a, dy) = screen.appear(5 + i / 4);
+            let x = 104 + (i % 4) as i32 * 110;
+            let y = top + 196 + (i / 4) as i32 * 46 + dy;
+            self.round_rect(
+                x,
+                y,
+                102,
+                38,
+                9,
+                alpha([255, 255, 255, 14], a),
+                alpha([255, 255, 255, 7], a),
+            );
+            let tease = *icon == Icon::Satellite && secret && moving;
+            let k = if *dim {
+                0.4
+            } else if tease {
+                0.7 + 0.3 * (screen.clock * 3.).sin()
+            } else {
+                1.
+            };
+            self.icon_shadowed(
+                *icon,
+                x as f32 + 22.,
+                y as f32 + 19.,
+                20.,
+                alpha(*color, a * k),
+            );
+            if *icon == Icon::Satellite && secret {
+                self.icon_shadowed(
+                    Icon::Question,
+                    x as f32 + 50.,
+                    y as f32 + 19.,
+                    18.,
+                    alpha(VIOLET, a * k),
+                );
+            } else {
+                self.mtext(
+                    value.as_str(),
+                    x + 42,
+                    y + 27,
+                    2,
+                    alpha(PAPER, a * k),
+                    Case::AsIs,
+                    true,
                 );
             }
-            self.mtext(label, x + 4, y, 1, alpha(MUTED, a), Case::AsIs, false);
-            self.mtext_right(value.as_str(), x + 196, y, 1, alpha(PAPER, a), Case::AsIs);
         }
-        let (a, dy) = screen.appear(10);
-        self.rect(104, 488 + dy, 432, 1, alpha(LINE, a));
+        // The next title to chase, or the crown when there is none.
+        let (a, dy) = screen.appear(7);
+        self.rect(104, top + 292 + dy, 432, 1, alpha(LINE, a));
+        let baseline = top + 318 + dy;
         if let Some((amount, unit, title)) = quips::next_goal(results.summary) {
-            let next = line(format_args!(
-                "Next title: {title} in {amount} {}",
-                if unit == "POINTS" { "points" } else { "panels" }
-            ));
-            self.mtext_fit_center(next.as_str(), 508 + dy, 464, alpha(CYAN, a));
-        } else {
-            self.mtext_fit_center(
-                "Top title earned. The orbit is yours.",
-                508 + dy,
-                464,
+            let more = line(format_args!("+{amount}"));
+            let (title_w, more_w) = (
+                font::width(title, 1, Case::AsIs),
+                font::width(more.as_str(), 1, Case::AsIs),
+            );
+            let mut x = 320 - (20 + title_w + 18 + 18 + more_w) / 2;
+            self.icon_shadowed(
+                Icon::Flag,
+                x as f32 + 7.,
+                baseline as f32 - 4.,
+                15.,
                 alpha(CYAN, a),
             );
-        }
-        if g.satellites == 0 {
-            self.mtext_fit_center(
-                "Psst\u{2026} something orbits above the panels",
-                526 + dy,
-                464,
-                alpha(VIOLET, a),
+            x += 20;
+            self.mtext(title, x, baseline, 1, alpha(CYAN, a), Case::AsIs, true);
+            x += title_w + 18;
+            let icon = if unit == "POINTS" {
+                Icon::Star
+            } else {
+                Icon::Panel
+            };
+            self.icon_shadowed(
+                icon,
+                x as f32 + 7.,
+                baseline as f32 - 4.,
+                15.,
+                alpha(GOLD, a),
+            );
+            self.mtext(
+                more.as_str(),
+                x + 18,
+                baseline,
+                1,
+                alpha(PAPER, a),
+                Case::AsIs,
+                true,
+            );
+        } else {
+            let w = font::width("Top title", 1, Case::AsIs) + 20;
+            let x = 320 - w / 2;
+            self.icon_shadowed(
+                Icon::Crown,
+                x as f32 + 7.,
+                baseline as f32 - 4.,
+                15.,
+                alpha(GOLD, a),
+            );
+            self.mtext(
+                "Top title",
+                x + 20,
+                baseline,
+                1,
+                alpha(GOLD, a),
+                Case::AsIs,
+                true,
             );
         }
-        let (a, dy) = screen.appear(11);
-        let pulse = if screen.motion == ferravex_engine::play::tween::Motion::Full {
-            0.75 + 0.25 * (screen.clock * 4.).sin()
-        } else {
-            1.
-        };
+        let (a, dy) = screen.appear(8);
         self.prompt(
             320,
-            568 + dy,
+            top + 354 + dy,
             &presentation.hints.launch,
-            "to retry",
+            Icon::Restart,
             a,
             pulse,
-        );
-        self.mtext_center(
-            "One more orbit?",
-            320,
-            604 + dy,
-            1,
-            alpha(DIM, a),
-            Case::AsIs,
-            false,
         );
     }
 
@@ -1664,11 +1946,26 @@ impl Canvas {
 
     // ---------------------------------------------------------- key prompts
 
-    fn keycap_width(&self, key: &str) -> i32 {
-        font::width(key, 1, Case::AsIs) + 12
+    /// Arrow keys and taps read better as pictograms inside the cap.
+    fn key_icon(key: &str) -> Option<Icon> {
+        match key {
+            "LEFT" => Some(Icon::ArrowLeft),
+            "RIGHT" => Some(Icon::ArrowRight),
+            "UP" => Some(Icon::ArrowUp),
+            "TAP" => Some(Icon::Hand),
+            _ => None,
+        }
     }
 
-    /// A rounded key cap with the binding name; returns the next x.
+    fn keycap_width(&self, key: &str) -> i32 {
+        if Self::key_icon(key).is_some() {
+            22
+        } else {
+            font::width(key, 1, Case::AsIs) + 12
+        }
+    }
+
+    /// A rounded key cap with the binding name or pictogram; returns the next x.
     fn keycap(&mut self, x: i32, baseline: i32, key: &str, color: [u8; 4]) -> i32 {
         let w = self.keycap_width(key);
         let a = f32::from(color[3]) / 255.;
@@ -1690,38 +1987,77 @@ impl Canvas {
             alpha([30, 50, 58, 255], a),
             alpha([20, 34, 42, 255], a),
         );
-        self.mtext(key, x + 6, baseline, 1, color, Case::AsIs, false);
+        if let Some(icon) = Self::key_icon(key) {
+            self.icon(icon, (x + w / 2) as f32, baseline as f32 - 4.5, 11., color);
+        } else {
+            self.mtext(key, x + 6, baseline, 1, color, Case::AsIs, false);
+        }
         x + w
     }
 
-    /// `[SPACE] [ENTER] [TAP] to launch`, centered; long remaps fall back to text.
-    fn prompt(&mut self, cx: i32, baseline: i32, keys: &str, action: &str, a: f32, pulse: f32) {
-        let scale = 2;
-        let action_w = font::width(action, scale, Case::AsIs);
-        let mut caps = 0;
-        let mut width = action_w + 10;
-        for key in keys.split(" / ") {
-            width += self.keycap_width(key) + 6;
-            caps += 1;
+    /// Total width of every cap in an `A / B` binding list, 4 px apart.
+    fn keys_width(&self, keys: &str) -> i32 {
+        keys.split(" / ")
+            .map(|key| self.keycap_width(key) + 4)
+            .sum::<i32>()
+            - 4
+    }
+
+    /// Draw every cap of a binding list; returns the next x.
+    fn keys(&mut self, mut x: i32, baseline: i32, keys: &str, color: [u8; 4]) -> i32 {
+        for (i, key) in keys.split(" / ").enumerate() {
+            x = self.keycap(x + if i > 0 { 4 } else { 0 }, baseline, key, color);
         }
-        if caps > 4 || width > 440 || keys.is_empty() {
-            let text = line(format_args!("{keys} {action}"));
-            self.mtext_fit_center(text.as_str(), baseline, 440, alpha(CYAN, a * pulse));
+        x
+    }
+
+    /// Key caps, then the pictogram of what they do; returns the next x.
+    #[allow(clippy::too_many_arguments)]
+    fn key_action(
+        &mut self,
+        x: i32,
+        baseline: i32,
+        keys: &str,
+        icon: Icon,
+        size: f32,
+        cap: [u8; 4],
+        color: [u8; 4],
+    ) -> i32 {
+        let x = self.keys(x, baseline, keys, cap);
+        self.icon_shadowed(
+            icon,
+            x as f32 + 4. + size / 2.,
+            baseline as f32 - 4.,
+            size,
+            color,
+        );
+        x + 8 + size as i32
+    }
+
+    /// `[SPACE] [ENTER] [TAP] ↑`: key caps then the action's pictogram,
+    /// centered; long remaps fall back to the binding text.
+    fn prompt(&mut self, cx: i32, baseline: i32, keys: &str, icon: Icon, a: f32, pulse: f32) {
+        let color = alpha(CYAN, a * pulse);
+        let caps = keys.split(" / ").count();
+        let width = self.keys_width(keys) + 28;
+        if caps > 4 || width > 300 || keys.is_empty() {
+            let fitted = fit_text(keys, 260);
+            let w = font::width(fitted.as_str(), 1, Case::AsIs);
+            let x = cx - (w + 28) / 2;
+            self.mtext(
+                fitted.as_str(),
+                x,
+                baseline,
+                1,
+                alpha(PAPER, a),
+                Case::AsIs,
+                true,
+            );
+            self.icon_shadowed(icon, (x + w + 16) as f32, baseline as f32 - 4., 20., color);
             return;
         }
-        let mut x = cx - width / 2;
-        for key in keys.split(" / ") {
-            x = self.keycap(x, baseline - 2, key, alpha(PAPER, a)) + 6;
-        }
-        self.mtext(
-            action,
-            x + 4,
-            baseline + 4,
-            scale,
-            alpha(CYAN, a * pulse),
-            Case::AsIs,
-            true,
-        );
+        let x = self.keys(cx - width / 2, baseline, keys, alpha(PAPER, a));
+        self.icon_shadowed(icon, (x + 16) as f32, baseline as f32 - 4., 20., color);
     }
 
     // ------------------------------------------------------------ typography
@@ -1807,37 +2143,6 @@ impl Canvas {
     ) {
         let w = font::width(text, scale, case);
         self.mtext(text, cx - w / 2, baseline, scale, color, case, shadow);
-    }
-
-    fn mtext_right(
-        &mut self,
-        text: &str,
-        right: i32,
-        baseline: i32,
-        scale: i32,
-        color: [u8; 4],
-        case: Case,
-    ) {
-        let w = font::width(text, scale, case);
-        self.mtext(text, right - w, baseline, scale, color, case, false);
-    }
-
-    /// Centered Modern copy; drops trailing characters with an ellipsis when
-    /// it would exceed `width`.
-    fn mtext_fit_center(&mut self, text: &str, baseline: i32, width: i32, color: [u8; 4]) {
-        if font::width(text, 1, Case::AsIs) <= width {
-            self.mtext_center(text, 320, baseline, 1, color, Case::AsIs, false);
-            return;
-        }
-        let mut end = text.len();
-        while end > 0 {
-            end = text[..end].char_indices().last().map_or(0, |(i, _)| i);
-            let fitted = line(format_args!("{}\u{2026}", &text[..end]));
-            if font::width(fitted.as_str(), 1, Case::AsIs) <= width {
-                self.mtext_center(fitted.as_str(), 320, baseline, 1, color, Case::AsIs, false);
-                return;
-            }
-        }
     }
 
     fn text_fit_center(&mut self, text: &str, y: i32, scale: i32, width: i32, color: [u8; 4]) {
@@ -2082,6 +2387,21 @@ impl Canvas {
             );
         }
     }
+}
+/// Modern copy that fits `width` at scale 1, ending in an ellipsis when cut.
+fn fit_text(text: &str, width: i32) -> Line {
+    if font::width(text, 1, Case::AsIs) <= width {
+        return line(format_args!("{text}"));
+    }
+    let mut end = text.len();
+    while end > 0 {
+        end = text[..end].char_indices().last().map_or(0, |(i, _)| i);
+        let fitted = line(format_args!("{}\u{2026}", &text[..end]));
+        if font::width(fitted.as_str(), 1, Case::AsIs) <= width {
+            return fitted;
+        }
+    }
+    line(format_args!("\u{2026}"))
 }
 fn text_width(text: &str, scale: i32) -> i32 {
     let metrics = ferravex_engine::render::get_default_font()

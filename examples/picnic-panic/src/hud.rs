@@ -1,7 +1,8 @@
-//! The in-play HUD: a hand-written to-do notepad with satisfying pencil
-//! strike-throughs, context key prompts, speech bubbles over picnickers,
-//! toasts, a rotating park minimap and touch buttons. Drawn after the
-//! post-processing boundary, so it stays crisp and un-bloomed.
+//! The in-play HUD: a hand-written to-do notepad with a pictogram on every
+//! line and satisfying pencil strike-throughs, key-cap prompts with a bobbing
+//! marker over their target, speech bubbles over picnickers, icon toasts,
+//! screen-space popups, a rotating park minimap and touch buttons. Drawn
+//! after the post-processing boundary, so it stays crisp and un-bloomed.
 #![allow(clippy::too_many_arguments)]
 use crate::fx::{Fx, Toast};
 use crate::layout::Layout;
@@ -14,17 +15,32 @@ use crate::sim::{Game, flat};
 use crate::text::{Align, BODY, Face, LARGE, SMALL, Text};
 use ferravex_play::tween::{Appearance, Entrance, Motion, RollCounter, Spring};
 use ferravex_play::ui::minimap::{MapConfig, Minimap, OffMapPolicy, WorldYAxis};
+use ferravex_render::icons::{self, Icon, IconStyle};
+use ferravex_render::juice::Juice;
 use ferravex_render::prelude::*;
 use ferravex_render::shapes::{self, Cap, Fill, Join, Shadow, Stroke};
-use ferravex_render::ui::kit::{self, KitTheme, Tone};
+use ferravex_render::ui::kit::{self, KitTheme};
 
 pub const PAPER: u32 = 0xfdf6e3;
 pub const INK: u32 = 0x3b3445;
 pub const PENCIL: u32 = 0x4a4a58;
 pub const RED: u32 = 0xe85d4f;
+/// Blue pencil: ticks, crossed-off pips and placing things down.
+pub const TICK: u32 = 0x3f7fc1;
+/// Bottle caps, bonus stars and the finale.
+pub const GOLD: u32 = 0xf2b632;
+/// Leafy green: hiding, sneaking and fresh burrows.
+pub const LEAF: u32 = 0x58a84c;
+
+/// Distance between the collapsed tab's progress pips.
+const PIP_STEP: f32 = 11.;
 
 pub fn c(hex: u32, a: f32) -> Color {
     let k = rgb(hex);
+    Color::new(k.r, k.g, k.b, a)
+}
+
+fn with_alpha(k: Color, a: f32) -> Color {
     Color::new(k.r, k.g, k.b, a)
 }
 
@@ -50,6 +66,37 @@ pub fn theme() -> KitTheme {
     }
 }
 
+/// The pictogram for each to-do line, used everywhere that prank appears
+/// (notepad, minimap pins and toasts).
+pub fn prank_icon(prank: Prank) -> Icon {
+    match prank {
+        Prank::Pie => Icon::Bag,
+        Prank::Marrow => Icon::Trophy,
+        Prank::Music => Icon::Music,
+        Prank::Sled => Icon::Mountain,
+        Prank::Bell => Icon::Bell,
+        Prank::Cushion => Icon::Wind,
+        Prank::Melon => Icon::Rocket,
+        Prank::Finale => Icon::Bolt,
+        Prank::Escape => Icon::Home,
+    }
+}
+
+/// Coloured-pencil tint for each to-do pictogram.
+fn prank_tint(prank: Prank) -> u32 {
+    match prank {
+        Prank::Pie => 0xc9823a,
+        Prank::Marrow => 0xd99a1e,
+        Prank::Music => 0x7a5cc4,
+        Prank::Sled => 0x4f9a5a,
+        Prank::Bell => 0xc98f1b,
+        Prank::Cushion => 0xe0607e,
+        Prank::Melon => 0x4c9a44,
+        Prank::Finale => GOLD,
+        Prank::Escape => 0x8a5a3a,
+    }
+}
+
 pub struct HudState {
     pub notes_open: bool,
     notes: Spring,
@@ -58,12 +105,27 @@ pub struct HudState {
     hold: f32,
     pub minimap: Option<Minimap>,
     pub age: f32,
+    /// Screen-space popups and sparkles (bounded; presentation only).
+    pub juice: Juice,
+    /// Crossed-off lines and bottle caps already celebrated by the HUD.
+    seen: Option<(u16, u32)>,
+    /// Fresh changes waiting for a camera to place their effects.
+    fresh_lines: u16,
+    fresh_caps: u32,
 }
 
 impl Default for HudState {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Bit `i` set when `Prank::ALL[i]` is crossed off.
+fn done_mask(game: &Game) -> u16 {
+    Prank::ALL.iter().enumerate().fold(
+        0,
+        |m, (i, p)| if game.todo.done(*p) { m | 1 << i } else { m },
+    )
 }
 
 impl HudState {
@@ -76,6 +138,10 @@ impl HudState {
             hold: 0.,
             minimap: None,
             age: 0.,
+            juice: Juice::with_capacity(160, 8, 12),
+            seen: None,
+            fresh_lines: 0,
+            fresh_caps: 0,
         }
     }
 
@@ -84,6 +150,10 @@ impl HudState {
         self.notes.snap(if self.notes_open { 1. } else { 0. });
         self.caps.snap(0);
         self.age = 0.;
+        self.juice.clear();
+        self.seen = None;
+        self.fresh_lines = 0;
+        self.fresh_caps = 0;
     }
 
     pub fn update(&mut self, game: &Game, dt: f32, motion: Motion) {
@@ -99,6 +169,17 @@ impl HudState {
         };
         self.prompt_fade += (want - self.prompt_fade) * (1. - (-dt * 12.).exp());
         self.hold = game.coon.using.progress();
+        self.juice.set_motion(motion);
+        self.juice.update(dt);
+        // Celebrate accepted progress only; a continued day starts as seen.
+        let now = (done_mask(game), game.shinies_found());
+        if let Some((lines, caps)) = self.seen {
+            self.fresh_lines |= now.0 & !lines;
+            if now.1 > caps {
+                self.fresh_caps = now.1;
+            }
+        }
+        self.seen = Some(now);
     }
 }
 
@@ -138,56 +219,133 @@ fn time_of_day(seconds: f32) -> (u32, u32, &'static str) {
 
 fn line_for(game: &Game, prank: Prank) -> &'static str {
     match prank {
-        Prank::Finale if !game.todo.finale_open() && !game.todo.done(Prank::Finale) => {
-            "??? (something grand)"
-        }
+        Prank::Finale if !game.todo.finale_open() && !game.todo.done(Prank::Finale) => "???",
         _ => prank.line(),
     }
 }
 
-/// The to-do list notepad (expanded) or its little tab (collapsed).
-pub fn notepad(
+/// Width of a kit key cap for `key` (mirrors `kit::keycap`'s measure).
+fn cap_width(key: &str, th: &KitTheme) -> f32 {
+    (crate::text::width_in(Face::Ink, key, th.body) + kit::SPACE[2] * 2.).max(th.body * 1.5 - 1.)
+}
+
+/// A pictogram followed by a short pencilled value; returns the right edge.
+fn icon_value(
     tx: &mut Text,
-    hud: &HudState,
-    l: &Layout,
-    game: &Game,
-    fx: &Fx,
-    t: f32,
-    open_key: &str,
-) {
-    let open = hud.notes.value.clamp(0., 1.);
+    x: f32,
+    cy: f32,
+    icon: Icon,
+    tint: Color,
+    value: &str,
+    size: f32,
+    ink: Color,
+) -> f32 {
+    let s = size + 3.;
+    icons::draw_styled(icon, vec2(x + s * 0.5, cy), s, IconStyle::new(tint));
+    let at = x + s + 4.;
+    tx.ink(vec2(at, cy - size * 0.5), 0., value, size, ink, Align::Left);
+    at + crate::text::width_in(Face::Ink, value, size)
+}
+
+/// One progress pip: a blue-pencil dot once crossed off, a pencil ring before.
+fn pip(at: Vec2, done: bool, a: f32) {
+    if done {
+        shapes::fill_circle(at, 4.6, c(TICK, a));
+    } else {
+        shapes::stroke_circle(at, 4., 1.5, c(PENCIL, 0.5 * a));
+    }
+}
+
+/// The collapsed to-do card: progress pips, the afternoon clock and the key
+/// (or a tap chevron) that opens the full list.
+fn tab(tx: &mut Text, l: &Layout, game: &Game, fx: &Fx, key: Option<&str>, open: f32) {
     let tab = l.notes_tab();
-    let done = game.todo.count();
     let pop = 1. + fx.pop * 0.12;
-    // Collapsed tab, always visible.
-    if open < 0.98 {
-        let r = rect(tab.min[0], tab.min[1], tab.size[0], tab.size[1]);
-        let r = Rect::new(r.x, r.y + (1. - pop) * 8., r.w * pop.min(1.06), r.h);
-        shapes::drop_shadow(
-            r,
-            10.,
-            Shadow::soft(c(0x2a1a0a, 0.3)).offset(vec2(0., 3.)).blur(8.),
+    let r = rect(
+        tab.min[0],
+        tab.min[1] + (1. - pop) * 8.,
+        tab.size[0] * pop.min(1.06),
+        tab.size[1],
+    );
+    shapes::drop_shadow(
+        r,
+        10.,
+        Shadow::soft(c(0x2a1a0a, 0.3)).offset(vec2(0., 3.)).blur(8.),
+    );
+    shapes::fill_rounded_rect(r, 10., Fill::vertical(r, rgb(0xfffaf0), rgb(PAPER)));
+    shapes::stroke_rounded_rect(r, 10., 1., c(INK, 0.15));
+    shapes::fill_rounded_rect(rect(r.x + 8., r.y + 8., 6., r.h - 16.), 3., rgb(RED));
+    let x0 = r.x + 25.;
+    let y = r.y + 14.;
+    for (k, prank) in Prank::ALL.iter().take(PRANKS).enumerate() {
+        pip(
+            vec2(x0 + k as f32 * PIP_STEP, y),
+            game.todo.done(*prank),
+            1.,
         );
-        shapes::fill_rounded_rect(r, 10., Fill::vertical(r, rgb(0xfffaf0), rgb(PAPER)));
-        shapes::stroke_rounded_rect(r, 10., 1., c(INK, 0.15));
-        shapes::fill_rounded_rect(rect(r.x + 8., r.y + 8., 6., r.h - 16.), 3., rgb(RED));
-        tx.ink_fmt(
-            vec2(r.x + 22., r.y + 6.),
-            r.w - 26.,
-            BODY,
-            rgb(INK),
-            Align::Left,
-            format_args!("To do  {done}/{PRANKS}"),
+    }
+    if game.todo.finale_open() || game.todo.done(Prank::Finale) {
+        icons::draw_styled(
+            prank_icon(Prank::Finale),
+            vec2(x0 + PRANKS as f32 * PIP_STEP + 2., y),
+            14.,
+            IconStyle::new(rgb(GOLD)).shadow(c(0x2a1a0a, 0.25)),
         );
-        let (h, m, ap) = time_of_day(game.time);
-        tx.ink_fmt(
-            vec2(r.x + 22., r.y + 25.),
-            r.w - 26.,
-            SMALL,
-            c(PENCIL, 0.8),
-            Align::Left,
-            format_args!("{h}:{m:02} {ap} · {} to open", key_label(open_key)),
-        );
+    }
+    let (h, m, _) = time_of_day(game.time);
+    let mut buf = [0_u8; 8];
+    icon_value(
+        tx,
+        r.x + 21.,
+        r.y + 32.,
+        Icon::Clock,
+        c(PENCIL, 0.85),
+        fmt(&mut buf, format_args!("{h}:{m:02}")),
+        SMALL * 1.5,
+        c(PENCIL, 0.9),
+    );
+    match key {
+        Some(key) => {
+            let th = theme();
+            let w = cap_width(key, &th);
+            kit::keycap(r.x + r.w - 8. - w, r.y + 9., key, &th);
+        }
+        None => icons::draw(
+            if open > 0.5 {
+                Icon::ArrowUp
+            } else {
+                Icon::ArrowDown
+            },
+            vec2(r.x + r.w - 18., r.y + r.h * 0.5),
+            16.,
+            c(PENCIL, 0.7),
+        ),
+    }
+}
+
+/// Where a to-do line's checkbox sits right now: on the open notepad, or on
+/// the collapsed card's pips.
+fn line_anchor(hud: &HudState, l: &Layout, game: &Game, slot: usize) -> Vec2 {
+    if hud.notes.value > 0.5 {
+        let rows = if game.todo.done(Prank::Finale) { 9 } else { 8 };
+        let p = l.notes_page_for(rows);
+        let row = if l.short { 26. } else { 30. };
+        let top = p.y + if l.short { 46. } else { 54. };
+        vec2(p.x + 17.5, top + row * slot as f32 + row * 0.5 - 5.5)
+    } else {
+        let tab = l.notes_tab();
+        let k = slot.min(PRANKS) as f32;
+        vec2(tab.min[0] + 25. + k * PIP_STEP, tab.min[1] + 14.)
+    }
+}
+
+/// The to-do list notepad (expanded) and its card (collapsed, and always on
+/// compact screens where it sits above the page). `key` is the binding that
+/// toggles it; `None` on touch, where the card itself is tapped.
+pub fn notepad(tx: &mut Text, hud: &HudState, l: &Layout, game: &Game, fx: &Fx, key: Option<&str>) {
+    let open = hud.notes.value.clamp(0., 1.);
+    if open < 0.98 || l.compact {
+        tab(tx, l, game, fx, key, open);
     }
     if open < 0.02 {
         return;
@@ -228,30 +386,34 @@ pub fn notepad(
         shapes::fill_circle(vec2(x, p.y + 1.), 5., c(0x7c7f8a, alpha));
         shapes::fill_circle(vec2(x, p.y + 1.), 2.4, c(0x3a3540, alpha));
     }
-    let (h, m, ap) = time_of_day(game.time);
+    // Header: the list's title and the afternoon clock.
     tx.ink(
         vec2(p.x + 38., p.y + if l.short { 12. } else { 16. }),
-        p.w - 110.,
-        "Things to do today",
+        p.w - 140.,
+        "To do",
         if l.short { BODY } else { LARGE },
         c(INK, alpha),
         Align::Left,
     );
-    tx.ink_fmt(
-        vec2(p.x + p.w - 78., p.y + 18.),
-        68.,
-        SMALL,
-        c(PENCIL, 0.8 * alpha),
-        Align::Right,
-        format_args!("{h}:{m:02} {ap}"),
+    let (h, m, ap) = time_of_day(game.time);
+    let mut buf = [0_u8; 16];
+    let clock = fmt(&mut buf, format_args!("{h}:{m:02} {ap}"));
+    let size = SMALL * 1.5;
+    let cy = p.y + if l.short { 20. } else { 28. };
+    let w = crate::text::width_in(Face::Ink, clock, size) + size + 7.;
+    icon_value(
+        tx,
+        p.x + p.w - 12. - w,
+        cy,
+        Icon::Clock,
+        c(PENCIL, 0.85 * alpha),
+        clock,
+        size,
+        c(PENCIL, 0.85 * alpha),
     );
     // Lines: seven pranks, then the finale and escape when they matter.
     let mut y = top;
-    let show = if game.todo.finale_open() || game.todo.done(Prank::Finale) {
-        if game.todo.done(Prank::Finale) { 9 } else { 8 }
-    } else {
-        8
-    };
+    let show = if game.todo.done(Prank::Finale) { 9 } else { 8 };
     let bottom = p.y + p.h - if l.short { 34. } else { 44. };
     for (i, prank) in Prank::ALL.iter().take(show).enumerate() {
         if y + row > bottom {
@@ -267,8 +429,6 @@ pub fn notepad(
         } else {
             0.
         };
-        let x = p.x + 40.;
-        let tw = p.w - 52.;
         let secret = *prank == Prank::Finale && !game.todo.finale_open() && !done;
         let ink = if secret {
             c(0x9a8f9e, alpha)
@@ -277,8 +437,9 @@ pub fn notepad(
         } else {
             c(INK, alpha)
         };
+        let mid = y + row * 0.5 - 5.5;
         // Checkbox with a hand-drawn tick.
-        let bx = rect(p.x + 10., y + row * 0.5 - 13., 15., 15.);
+        let bx = rect(p.x + 10., mid - 7.5, 15., 15.);
         shapes::stroke_rounded_rect(bx, 3., 1.5, c(PENCIL, 0.75 * alpha));
         if done {
             let k = (strike * 1.6 - 0.4).clamp(0., 1.);
@@ -293,13 +454,26 @@ pub fn notepad(
                 ];
                 shapes::polyline(
                     &pts,
-                    Stroke::new(2.6, c(0x3f7fc1, alpha))
+                    Stroke::new(2.6, c(TICK, alpha))
                         .join(Join::Round)
                         .cap(Cap::Round),
                 );
             }
         }
-        let size = if l.short || tw < 250. {
+        // A coloured-pencil pictogram per line (greyed once done, a padlock
+        // while the finale is still a secret).
+        let (icon, tint) = if secret {
+            (Icon::Lock, c(0x9a8f9e, alpha))
+        } else if done {
+            (prank_icon(*prank), c(0xa49cad, alpha))
+        } else {
+            (prank_icon(*prank), c(prank_tint(*prank), alpha))
+        };
+        let icon_size = if l.short { 16. } else { 19. };
+        icons::draw(icon, vec2(p.x + 46., mid), icon_size, tint);
+        let x = p.x + 60.;
+        let tw = p.w - 68.;
+        let size = if l.short || tw < 200. {
             SMALL * 1.5
         } else {
             BODY
@@ -327,40 +501,41 @@ pub fn notepad(
         }
         y += row;
     }
-    // Footer: shiny caps, bonuses, and the day so far.
-    let fy = p.y + p.h - if l.short { 26. } else { 34. };
-    let bonuses = game.todo.bonus.count_ones();
-    tx.ink_fmt(
-        vec2(p.x + 14., fy),
-        p.w - 28.,
-        if l.short { SMALL * 1.5 } else { BODY },
-        c(PENCIL, alpha),
-        Align::Left,
-        format_args!(
-            "Shinies {}/{}   Bonus {}/{}",
-            hud.caps.shown(),
-            game.shinies.len(),
-            bonuses,
-            Bonus::ALL.len()
-        ),
+    // Footer: bottle caps, bonus stars and the day's running time.
+    let size = if l.short { SMALL * 1.5 } else { BODY };
+    let cy = p.y + p.h - if l.short { 26. } else { 34. } + size * 0.5;
+    let ink = c(PENCIL, alpha);
+    let gold = c(GOLD, alpha);
+    let mut buf = [0_u8; 16];
+    let caps = fmt(
+        &mut buf,
+        format_args!("{}/{}", hud.caps.shown(), game.shinies.len()),
     );
+    let x = icon_value(tx, p.x + 38., cy, Icon::Coin, gold, caps, size, ink);
+    let mut buf = [0_u8; 16];
+    let bonus = fmt(
+        &mut buf,
+        format_args!("{}/{}", game.todo.bonus.count_ones(), Bonus::ALL.len()),
+    );
+    icon_value(tx, x + 16., cy, Icon::Star, gold, bonus, size, ink);
     let secs = game.time as u32;
-    tx.ink_fmt(
-        vec2(p.x + 14., fy),
-        p.w - 28.,
-        if l.short { SMALL * 1.5 } else { BODY },
-        c(PENCIL, alpha),
-        Align::Right,
-        format_args!("{:02}:{:02}", secs / 60, secs % 60),
+    let mut buf = [0_u8; 16];
+    let elapsed = fmt(&mut buf, format_args!("{:02}:{:02}", secs / 60, secs % 60));
+    let w = crate::text::width_in(Face::Ink, elapsed, size) + size + 7.;
+    icon_value(
+        tx,
+        p.x + p.w - 14. - w,
+        cy,
+        Icon::Hourglass,
+        c(PENCIL, 0.85 * alpha),
+        elapsed,
+        size,
+        ink,
     );
-    let _ = t;
 }
 
-fn key_label(binding: &str) -> &str {
-    binding
-}
-
-/// Context prompt at the bottom centre, e.g. `[E] Grab the pie`.
+/// Context prompt at the bottom centre: a key cap, a pictogram and a word
+/// or two, e.g. `[E] ✋ Grab Nana's pie`. Hold actions show the ring they fill.
 pub fn prompt(
     tx: &mut Text,
     hud: &HudState,
@@ -376,34 +551,40 @@ pub fn prompt(
     }
     let th = theme().faded(a);
     let name = |i: usize| prop_name(game.props[i].kind);
-    let mut buf = [0_u8; 64];
-    let action: &str = match game.coon.prompt {
+    let mut buf = [0_u8; 48];
+    let (icon, tint, action): (Icon, u32, &str) = match game.coon.prompt {
         Prompt::None => return,
-        Prompt::Grab(i) => fmt(&mut buf, format_args!("Grab {}", name(i))),
-        Prompt::Drop(i) => fmt(&mut buf, format_args!("Drop {}", name(i))),
-        Prompt::Place(i) => fmt(&mut buf, format_args!("Place {}", name(i))),
-        Prompt::Load => "Load the blanket onto the tray",
-        Prompt::Basket => "Hop into the picnic basket",
-        Prompt::LeaveBasket => "Hop out",
-        Prompt::Ring => "Hold to ring the bell",
-        Prompt::Yank => "Hold to pull the tablecloth",
-        Prompt::Wriggle => "Wriggle free!",
+        Prompt::Grab(i) => (
+            Icon::Hand,
+            0xc9823a,
+            fmt(&mut buf, format_args!("Grab {}", name(i))),
+        ),
+        Prompt::Drop(i) => (
+            Icon::ArrowDown,
+            TICK,
+            fmt(&mut buf, format_args!("Drop {}", name(i))),
+        ),
+        Prompt::Place(i) => (
+            Icon::ArrowDown,
+            TICK,
+            fmt(&mut buf, format_args!("Place {}", name(i))),
+        ),
+        Prompt::Load => (prank_icon(Prank::Sled), 0x4f9a5a, "Load the tray"),
+        Prompt::Basket => (Icon::EyeOff, LEAF, "Hide"),
+        Prompt::LeaveBasket => (Icon::ArrowUp, TICK, "Hop out"),
+        Prompt::Ring => (prank_icon(Prank::Bell), 0xc98f1b, "Hold to ring"),
+        Prompt::Yank => (prank_icon(Prank::Finale), GOLD, "Hold to yank"),
+        Prompt::Wriggle => (Icon::ArrowUp, RED, "Wriggle!"),
     };
     let key = if matches!(game.coon.prompt, Prompt::Wriggle) {
         jump_key
     } else {
         grab_key
     };
-    let key = key_label(key);
-    // Mirror the kit keycap's measure so long labels ("Space") fit the pill.
-    let cap = (crate::text::width_in(Face::Ink, key, th.body) + kit::SPACE[2] * 2.)
-        .max(th.body * 1.5 - 1.);
-    let width = crate::text::width_in(Face::Modern, action, BODY)
-        + if touch {
-            24.
-        } else {
-            cap + kit::SPACE[0] * 2. + 6.
-        };
+    let cap = cap_width(key, &th);
+    let icon_w = 22.;
+    let text_w = crate::text::width_in(Face::Ink, action, BODY);
+    let width = icon_w + 6. + text_w + if touch { 0. } else { cap + kit::SPACE[1] };
     let y = if touch {
         touch_prompt_y(l)
     } else {
@@ -428,35 +609,40 @@ pub fn prompt(
         22.,
         Fill::vertical(r, c(0xfffaf0, 0.94 * a), c(0xfbefd2, 0.94 * a)),
     );
-    if touch {
-        tx.label(
-            vec2(r.x, r.y + 12.),
-            r.w,
-            action,
-            BODY,
-            c(INK, a),
-            Align::Center,
-        );
-    } else {
-        let w = kit::key_prompt(x, y, &[key], "", &th);
-        tx.label(
-            vec2(x + w + 6., y + 4.),
-            width,
-            action,
-            BODY,
-            c(INK, a),
-            Align::Left,
-        );
+    let mut cx = x;
+    if !touch {
+        kit::keycap(cx, y, key, &th);
+        cx += cap + kit::SPACE[1];
     }
-    // Hold progress ring for the bell and the tablecloth.
-    if matches!(game.coon.prompt, Prompt::Ring | Prompt::Yank) && hud.hold > 0. {
-        shapes::stroke_arc(
-            vec2(r.x + r.w + 14., r.y + r.h * 0.5),
-            12.,
-            -std::f32::consts::FRAC_PI_2,
-            hud.hold * std::f32::consts::TAU,
-            Stroke::new(4., c(RED, a)).cap(Cap::Round),
-        );
+    icons::draw_styled(
+        icon,
+        vec2(cx + icon_w * 0.5, y + 11.5),
+        icon_w,
+        IconStyle::new(c(tint, a)),
+    );
+    cx += icon_w + 6.;
+    tx.ink(
+        vec2(cx, y + 4.),
+        text_w + 4.,
+        action,
+        BODY,
+        c(INK, a),
+        Align::Left,
+    );
+    // Hold actions: an empty ring that fills while the key is held.
+    if matches!(game.coon.prompt, Prompt::Ring | Prompt::Yank) {
+        let at = vec2(r.x + r.w + 16., r.y + r.h * 0.5);
+        shapes::fill_circle(at, 15., c(0xfffaf0, 0.9 * a));
+        shapes::stroke_circle(at, 11., 4., c(INK, 0.15 * a));
+        if hud.hold > 0. {
+            shapes::stroke_arc(
+                at,
+                11.,
+                -std::f32::consts::FRAC_PI_2,
+                hud.hold * std::f32::consts::TAU,
+                Stroke::new(4., c(RED, a)).cap(Cap::Round),
+            );
+        }
     }
     if matches!(game.coon.prompt, Prompt::Wriggle) {
         let n = game.coon.wriggle as usize;
@@ -469,6 +655,90 @@ pub fn prompt(
             );
         }
     }
+}
+
+/// A bobbing chevron and a soft glow over whatever the context prompt acts
+/// on (the prop to grab, the tray to load, the bell rope, the tablecloth or
+/// the basket), so the prompt points at the world instead of describing it.
+pub fn target(
+    hud: &HudState,
+    l: &Layout,
+    game: &Game,
+    camera: &Camera3D,
+    alpha: f32,
+    t: f32,
+    motion: f32,
+) {
+    let a = hud.prompt_fade;
+    if a < 0.02 {
+        return;
+    }
+    let at = match game.coon.prompt {
+        Prompt::Grab(i) => game.prop_pose(i, alpha).0 + Vec3::Y * (game.props[i].radius() + 0.2),
+        Prompt::Load => {
+            let tray = crate::sim::props::find(game, PropKind::Tray);
+            game.prop_pose(tray, alpha).0 + Vec3::Y * 0.55
+        }
+        Prompt::Ring => game.park.zone(Role::Rope).at + Vec3::Y * 1.4,
+        Prompt::Yank => game.park.zone(Role::Cloth).at + Vec3::Y * 1.2,
+        Prompt::Basket => game.park.zone(Role::Basket).at + Vec3::Y * 0.9,
+        _ => return,
+    };
+    let Some(p) = project(camera, l.screen, at) else {
+        return;
+    };
+    if p.x < 0. || p.y < 0. || p.x > l.screen.x || p.y > l.screen.y {
+        return;
+    }
+    let bob = ((t * 5.).sin() * 0.5 + 0.5) * 7. * motion;
+    let tip = p + vec2(0., -8. - bob);
+    shapes::glow_disc(p, 22., c(0xfff2b8, 0.5 * a));
+    shapes::fill_triangle(
+        tip + vec2(0., 3.),
+        tip + vec2(-14., -16.),
+        tip + vec2(14., -16.),
+        c(0x2a1a0a, 0.28 * a),
+    );
+    shapes::fill_triangle(
+        tip,
+        tip + vec2(-13., -18.),
+        tip + vec2(13., -18.),
+        c(0xfffaf0, a),
+    );
+    shapes::polyline(
+        &[tip + vec2(-13., -18.), tip, tip + vec2(13., -18.)],
+        Stroke::new(3., c(RED, a)).join(Join::Round).cap(Cap::Round),
+    );
+}
+
+/// Place this frame's fresh HUD effects, then draw the screen-space juice: a
+/// bottle cap and its count rising from the raccoon, sparkles and a ring on
+/// a freshly ticked line.
+pub fn effects(hud: &mut HudState, l: &Layout, game: &Game, camera: &Camera3D, alpha: f32) {
+    if hud.fresh_caps > 0 {
+        let (p, _) = game.coon_pose(alpha);
+        if let Some(at) = project(camera, l.screen, p + Vec3::Y * 0.9) {
+            let mut buf = [0_u8; 16];
+            let text = fmt(
+                &mut buf,
+                format_args!("{}/{}", hud.fresh_caps, game.shinies.len()),
+            );
+            hud.juice.popup_icon(at, Icon::Coin, text, rgb(GOLD));
+            hud.juice.sparkle(at, rgb(0xfff2b8));
+        }
+        hud.fresh_caps = 0;
+    }
+    if hud.fresh_lines != 0 {
+        for slot in 0..Prank::ALL.len() {
+            if hud.fresh_lines & 1 << slot != 0 {
+                let at = line_anchor(hud, l, game, slot);
+                hud.juice.sparkle(at, rgb(GOLD));
+                hud.juice.ring(at, rgb(TICK), 26.);
+            }
+        }
+        hud.fresh_lines = 0;
+    }
+    hud.juice.draw();
 }
 
 struct Buf<'a> {
@@ -496,22 +766,23 @@ pub fn fmt<'a>(buf: &'a mut [u8], args: std::fmt::Arguments) -> &'a str {
     std::str::from_utf8(&buf[..len]).unwrap_or("")
 }
 
+/// Short names for prompts ("Grab Nana's pie", "Drop melon").
 pub fn prop_name(kind: PropKind) -> &'static str {
     match kind {
         PropKind::Pie => "Nana's pie",
-        PropKind::Marrow => "the prize marrow",
-        PropKind::Pinecone => "a pinecone",
-        PropKind::Sheet => "the sheet music",
-        PropKind::Tray => "the tea tray",
-        PropKind::Blanket => "the picnic blanket",
-        PropKind::Melon => "the watermelon",
-        PropKind::Cushion => "the whoopee cushion",
-        PropKind::Crate => "a crate",
-        PropKind::Cake => "the cake",
-        PropKind::Dish => "a dish",
-        PropKind::Teapot => "the teapot",
-        PropKind::Jelly => "the jelly",
-        PropKind::Apple => "an apple",
+        PropKind::Marrow => "marrow",
+        PropKind::Pinecone => "pinecone",
+        PropKind::Sheet => "sheet music",
+        PropKind::Tray => "tea tray",
+        PropKind::Blanket => "blanket",
+        PropKind::Melon => "melon",
+        PropKind::Cushion => "cushion",
+        PropKind::Crate => "crate",
+        PropKind::Cake => "cake",
+        PropKind::Dish => "dish",
+        PropKind::Teapot => "teapot",
+        PropKind::Jelly => "jelly",
+        PropKind::Apple => "apple",
     }
 }
 
@@ -529,7 +800,14 @@ pub fn project(camera: &Camera3D, screen: Vec2, p: Vec3) -> Option<Vec2> {
     ))
 }
 
-/// "?" / "!" / "♥" bubbles and speech lines over heads; edge arrows for chasers.
+/// What a bubble over a picnicker shows.
+#[derive(Clone, Copy)]
+enum Mark {
+    Text(&'static str),
+    Icon(Icon),
+}
+
+/// "?" / "!" / heart bubbles and speech lines over heads; edge arrows for chasers.
 pub fn bubbles(
     tx: &mut Text,
     l: &Layout,
@@ -552,25 +830,28 @@ pub fn bubbles(
                 };
         let projected = project(camera, l.screen, head);
         let mark = match (f.bubble, f.state()) {
-            (_, ALARMED) => Some(("!", rgb(0xff5a3c))),
-            (_, CURIOUS) => Some(("?", rgb(0xf2b632))),
-            (Bubble::Heart, _) => Some(("♥", rgb(0xe8607a))),
-            (Bubble::Star, _) => Some(("★", rgb(0xf2b632))),
-            (Bubble::Shock, _) => Some(("!?", rgb(0xff5a3c))),
-            (Bubble::Sweat, _) => Some(("~", rgb(0x6fb1c9))),
-            (Bubble::Huff, _) if f.bubble_age < 1.6 => Some(("hmph", rgb(0x8a7360))),
-            (Bubble::Question, _) if f.mode == Mode::Search => Some(("?", rgb(0xf2b632))),
+            (_, ALARMED) => Some((Mark::Text("!"), rgb(0xff5a3c))),
+            (_, CURIOUS) => Some((Mark::Text("?"), rgb(0xf2b632))),
+            (Bubble::Heart, _) => Some((Mark::Icon(Icon::Heart), rgb(0xe8607a))),
+            (Bubble::Star, _) => Some((Mark::Icon(Icon::Star), rgb(0xf2b632))),
+            (Bubble::Shock, _) => Some((Mark::Text("!?"), rgb(0xff5a3c))),
+            (Bubble::Sweat, _) => Some((Mark::Icon(Icon::Drop), rgb(0x6fb1c9))),
+            (Bubble::Huff, _) if f.bubble_age < 1.6 => Some((Mark::Text("hmph"), rgb(0x8a7360))),
+            (Bubble::Question, _) if f.mode == Mode::Search => {
+                Some((Mark::Text("?"), rgb(0xf2b632)))
+            }
             _ => None,
         };
         let Some(sp) = projected else { continue };
         let distance = flat(pos - game.coon.pos()).length();
         let on_screen =
             sp.x > -20. && sp.x < l.screen.x + 20. && sp.y > -20. && sp.y < l.screen.y + 20.;
-        if on_screen && let Some((text, color)) = mark {
+        if on_screen && let Some((mark, color)) = mark {
+            let wide = matches!(mark, Mark::Text(s) if s.len() > 2);
             let pop = (f.bubble_age / 0.18).min(1.);
             let bob = (t * 4. + i as f32).sin() * 2. * motion;
             let s = 0.7 + 0.3 * pop;
-            let r = (17. + if text.len() > 2 { 12. } else { 0. }) * s;
+            let r = (17. + if wide { 12. } else { 0. }) * s;
             let center = vec2(sp.x, sp.y - 14. + bob);
             shapes::drop_shadow(
                 Rect::new(center.x - r, center.y - r * 0.8, r * 2., r * 1.6),
@@ -594,24 +875,24 @@ pub fn bubbles(
                 2.,
                 color,
             );
-            if text.len() > 2 {
-                tx.ink(
+            match mark {
+                Mark::Icon(icon) => icons::draw(icon, center, r * 1.15, color),
+                Mark::Text(text) if wide => tx.ink(
                     vec2(center.x - r, center.y - BODY * 0.62),
                     r * 2.,
                     text,
                     BODY,
                     color,
                     Align::Center,
-                );
-            } else {
-                tx.big(
+                ),
+                Mark::Text(text) => tx.big(
                     vec2(center.x - r, center.y - LARGE * 0.62),
                     r * 2.,
                     text,
                     LARGE,
                     color,
                     Align::Center,
-                );
+                ),
             }
         }
         if let Some(s) = fx.speech[i]
@@ -639,7 +920,15 @@ pub fn bubbles(
             let dir = (sp - center).normalize_or_zero();
             let edge = center + dir * (l.screen.min_element() * 0.45);
             let pulse = 0.7 + 0.3 * (t * 8.).sin() * motion;
-            shapes::fill_circle(edge, 14. * pulse.max(0.85), c(0xff5a3c, 0.9));
+            let r = 14. * pulse.max(0.85);
+            let side = vec2(-dir.y, dir.x);
+            shapes::fill_triangle(
+                edge + dir * (r + 10.),
+                edge + dir * (r - 3.) + side * 9.,
+                edge + dir * (r - 3.) - side * 9.,
+                c(0xff5a3c, 0.9),
+            );
+            shapes::fill_circle(edge, r, c(0xff5a3c, 0.9));
             tx.big(
                 edge - vec2(14., 9.),
                 28.,
@@ -652,10 +941,58 @@ pub fn bubbles(
     }
 }
 
-/// Transient toasts (crossed-off pranks, bonuses, bottle caps, burrows).
+/// A cream pill with a coloured icon badge and a few words.
+fn icon_toast(
+    tx: &mut Text,
+    cx: f32,
+    top: f32,
+    icon: Icon,
+    tint: Color,
+    text: &str,
+    look: Appearance,
+    max_w: f32,
+) -> Rect {
+    let a = look.alpha;
+    let text_w = crate::text::width_in(Face::Ink, text, BODY).min(max_w - 58.);
+    let h = 38.;
+    let w = 6. + 28. + 10. + text_w + 16.;
+    let r = kit::appear(Rect::new(cx - w * 0.5, top, w, h), look);
+    shapes::drop_shadow(
+        r,
+        r.h * 0.5,
+        Shadow::soft(c(0x2a1a0a, 0.3 * a))
+            .offset(vec2(0., 5.))
+            .blur(16.),
+    );
+    shapes::fill_rounded_rect(
+        r,
+        r.h * 0.5,
+        Fill::vertical(r, c(0xfffbf0, 0.97 * a), c(0xfff4dc, 0.97 * a)),
+    );
+    shapes::stroke_rounded_rect(r, r.h * 0.5, 1.5, with_alpha(tint, 0.45 * a));
+    let s = r.h / h;
+    icons::badge(
+        icon,
+        vec2(r.x + 20. * s, r.y + r.h * 0.5),
+        28. * s,
+        with_alpha(tint, a),
+        c(0xffffff, a),
+    );
+    tx.ink(
+        vec2(r.x + 44. * s, r.y + r.h * 0.5 - BODY * 0.5),
+        text_w + 2.,
+        text,
+        BODY,
+        c(INK, a),
+        Align::Left,
+    );
+    r
+}
+
+/// Transient icon toasts (crossed-off pranks, bonuses, burrows, hats).
 pub fn toasts(tx: &mut Text, l: &Layout, fx: &Fx, motion: Motion) {
-    let th = theme();
     let mut y = if l.compact { 64. } else { 18. };
+    let max_w = l.screen.x - 2. * if l.compact { 12. } else { 90. };
     for (k, view) in fx.toasts.iter().enumerate() {
         if k >= 2 {
             break;
@@ -669,47 +1006,22 @@ pub fn toasts(tx: &mut Text, l: &Layout, fx: &Fx, motion: Motion) {
             alpha: look.alpha * out,
             ..look
         };
-        let mut buf = [0_u8; 96];
-        let (icon, text, tone): (char, &str, Tone) = match view.notice.message {
-            Toast::Prank(p) => ('✓', p.toast(), Tone::Success),
-            Toast::Bonus(b) => (
-                '★',
-                fmt(&mut buf, format_args!("Bonus! {}", b.title())),
-                Tone::Warning,
-            ),
-            Toast::Den => (
-                '●',
-                "Found a cosy burrow. You'll be shooed here now.",
-                Tone::Info,
-            ),
-            Toast::Shiny(n) => (
-                '◆',
-                fmt(&mut buf, format_args!("Shiny! {n} bottle caps")),
-                Tone::Info,
-            ),
+        let mut buf = [0_u8; 64];
+        let (icon, tint, text): (Icon, u32, &str) = match view.notice.message {
+            Toast::Prank(p) => (prank_icon(p), LEAF, p.toast()),
+            Toast::Bonus(b) => (Icon::Star, GOLD, b.title()),
+            Toast::Den => (Icon::Home, 0x8a5a3a, "New burrow!"),
+            Toast::Shiny(n) => (Icon::Coin, GOLD, fmt(&mut buf, format_args!("{n}"))),
             Toast::Hat(h) => (
-                '♣',
+                Icon::Crown,
+                TICK,
                 fmt(&mut buf, format_args!("New hat: {}", h.name())),
-                Tone::Success,
             ),
-            Toast::Unlocked => ('!', "A new line appeared on your list...", Tone::Warning),
-            Toast::Line(s) => ('·', s, Tone::Info),
+            Toast::Unlocked => (prank_icon(Prank::Finale), GOLD, "Something grand!"),
+            Toast::Line(s) => (Icon::Chat, TICK, s),
         };
-        let max = l.screen.x - 2. * if l.compact { 12. } else { 90. };
-        let text = if crate::text::width_in(Face::Modern, text, BODY) > max - 50. {
-            // Narrow screens: shorter copy keeps the card on screen.
-            match view.notice.message {
-                Toast::Den => "Found a burrow!",
-                Toast::Unlocked => "New line on your list!",
-                _ => text,
-            }
-        } else {
-            text
-        };
-        let cx = l.screen.x * 0.5;
-        let r = kit::toast(cx, y, Some(icon), text, tone, look, &th);
+        let r = icon_toast(tx, l.screen.x * 0.5, y, icon, rgb(tint), text, look, max_w);
         y = r.y + r.h + 8.;
-        let _ = tx;
     }
 }
 
@@ -763,7 +1075,22 @@ pub fn minimap(hud: &mut HudState, l: &Layout, game: &Game, cam_yaw: f32, alpha:
     if let Some(q) = at(vec3(1., 0., -24.)) {
         shapes::fill_circle(q, 9., c(0x6c9f4b, 0.9));
     }
-    // Unfinished pranks: little red pins.
+    // Burrows found so far (home first), as little house badges.
+    for (i, den) in game.park.dens.iter().enumerate() {
+        if game.dens_found & (1 << i) == 0 {
+            continue;
+        }
+        if let Some(q) = at(*den) {
+            icons::badge(
+                Icon::Home,
+                q,
+                if i == 0 { 15. } else { 12. },
+                c(0x5a3f2a, 0.95),
+                rgb(0xfff4dc),
+            );
+        }
+    }
+    // Unfinished pranks: their notepad pictograms on little red pins.
     let targets = [
         (Prank::Pie, game.park.tables[0].center),
         (Prank::Marrow, game.park.zone(Role::Plinth).at),
@@ -782,12 +1109,8 @@ pub fn minimap(hud: &mut HudState, l: &Layout, game: &Game, cam_yaw: f32, alpha:
             continue;
         }
         if let Some(q) = at(p) {
-            shapes::fill_circle(q, 4.5, c(RED, 0.95));
-            shapes::fill_circle(q, 2., rgb(0xfff4dc));
+            icons::badge(prank_icon(prank), q, 14., c(RED, 0.95), rgb(0xfff4dc));
         }
-    }
-    if let Some(q) = at(game.park.dens[0]) {
-        shapes::fill_circle(q, 5., c(0x5a3f2a, 0.95));
     }
     for f in &game.folk {
         if let Some(q) = at(f.prev.lerp(f.pos, alpha)) {
@@ -813,10 +1136,8 @@ pub fn minimap(hud: &mut HudState, l: &Layout, game: &Game, cam_yaw: f32, alpha:
             Stroke::new(2.5, rgb(0xfdf6e3)),
         );
     }
-    let _ = PRANKS;
 }
 
-/// Hiding / carrying status chips above the prompt.
 /// Where touch prompts sit: in landscape along the free bottom-centre strip
 /// between the move area and the buttons; in tall portrait between the
 /// raccoon and the buttons; on short portrait screens above the raccoon.
@@ -830,41 +1151,42 @@ fn touch_prompt_y(l: &Layout) -> f32 {
     }
 }
 
+/// Hiding / sneaking chips (icon and a word) above the prompt.
 pub fn status(tx: &mut Text, l: &Layout, game: &Game, touch: bool) {
-    let mut chips: [Option<&str>; 2] = [None; 2];
-    match game.coon.hide {
-        Hide::Bush(_) => chips[0] = Some("Hidden in a bush"),
-        Hide::Table(_) => chips[0] = Some("Hidden under a table"),
-        Hide::Basket => chips[0] = Some("Hidden in the basket"),
-        Hide::None => {}
+    let mut chips: [Option<(Icon, &str)>; 2] = [None; 2];
+    if game.coon.hide != Hide::None {
+        chips[0] = Some((Icon::EyeOff, "Hidden"));
     }
     if game.coon.sneaking {
-        chips[1] = Some("Sneaking");
+        chips[1] = Some((Icon::Paw, "Sneak"));
+    }
+    let n = chips.iter().flatten().count();
+    if n == 0 {
+        return;
     }
     let y = if touch {
         touch_prompt_y(l) - 44.
     } else {
         l.screen.y - 116.
     };
-    let mut x = l.screen.x * 0.5;
-    let n = chips.iter().flatten().count();
-    if n == 0 {
-        return;
-    }
-    let widths: [f32; 2] =
-        chips.map(|s| s.map_or(0., |s| crate::text::width_in(Face::Modern, s, BODY) + 26.));
-    x -= (widths[0] + widths[1] + if n > 1 { 8. } else { 0. }) * 0.5;
+    let widths: [f32; 2] = chips.map(|s| {
+        s.map_or(0., |(_, s)| {
+            crate::text::width_in(Face::Modern, s, BODY) + 52.
+        })
+    });
+    let mut x = l.screen.x * 0.5 - (widths[0] + widths[1] + if n > 1 { 8. } else { 0. }) * 0.5;
     for (k, chip) in chips.iter().enumerate() {
-        let Some(chip) = chip else { continue };
+        let Some((icon, label)) = chip else { continue };
         let r = rect(x, y, widths[k], 30.);
         shapes::fill_rounded_rect(r, 15., c(0x2f4a2a, 0.82));
+        icons::draw(*icon, vec2(x + 20., y + 15.), 18., rgb(0xc9eba8));
         tx.label(
-            vec2(x, y + 7.),
-            widths[k],
-            chip,
+            vec2(x + 36., y + 7.),
+            widths[k] - 44.,
+            label,
             BODY,
             rgb(0xe9f7d6),
-            Align::Center,
+            Align::Left,
         );
         x += widths[k] + 8.;
     }
@@ -946,6 +1268,7 @@ pub fn flash(l: &Layout, amount: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sim::RunConfig;
 
     #[test]
     fn afternoon_clock_and_stack_formatting() {
@@ -962,5 +1285,43 @@ mod tests {
         let p = project(&cam, vec2(800., 600.), Vec3::ZERO).unwrap();
         assert!((p.x - 400.).abs() < 0.5 && (p.y - 300.).abs() < 0.5);
         assert!(project(&cam, vec2(800., 600.), vec3(0., 5., 30.)).is_none());
+    }
+
+    #[test]
+    fn every_line_has_its_own_pictogram_and_short_copy() {
+        let mut seen = Vec::new();
+        for prank in Prank::ALL {
+            let icon = prank_icon(prank);
+            assert!(!seen.contains(&icon), "{prank:?} shares {icon:?}");
+            seen.push(icon);
+            assert!(prank.line().split(' ').count() <= 3, "{}", prank.line());
+            assert!(prank.toast().split(' ').count() <= 3, "{}", prank.toast());
+        }
+        for kind in [
+            PropKind::Pie,
+            PropKind::Sheet,
+            PropKind::Tray,
+            PropKind::Apple,
+        ] {
+            assert!(prop_name(kind).split(' ').count() <= 2);
+        }
+    }
+
+    #[test]
+    fn hud_celebrates_only_fresh_progress() {
+        let mut game = Game::new(RunConfig {
+            seed: 7,
+            completed: 0b101,
+        });
+        let mut hud = HudState::new();
+        hud.update(&game, 1. / 60., Motion::Full);
+        assert_eq!(hud.fresh_lines, 0, "a continued day starts as already seen");
+        let at = game.coon.pos();
+        crate::sim::pranks::complete(&mut game, Prank::Bell, at);
+        hud.update(&game, 1. / 60., Motion::Full);
+        assert_eq!(hud.fresh_lines, 1 << Prank::Bell.slot());
+        hud.reset(false);
+        hud.update(&game, 1. / 60., Motion::Full);
+        assert_eq!(hud.fresh_lines, 0, "restarts never replay old celebrations");
     }
 }

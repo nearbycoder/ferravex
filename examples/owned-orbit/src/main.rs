@@ -101,6 +101,9 @@ fn main() {}
 /// - `ORBIT_REDUCED=1` enables reduced motion and reduced flash.
 /// - `ORBIT_UNTIL=multi|held|last|satellite|volley|transition|lost` stops the
 ///   run `ORBIT_AFTER` frames (default 12) after that state first appears.
+/// - `ORBIT_HOLD=1` withholds autoplay launches once that state appears, so a
+///   ready card or a caught ball stays on screen.
+/// - `ORBIT_RESTART_AT=N` restarts on frame `N` (and then withholds launches).
 #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
 mod capture {
     use owned_orbit::{Orbit, game::Input};
@@ -115,6 +118,8 @@ mod capture {
         until: Option<String>,
         after: u32,
         seen: std::cell::Cell<Option<u32>>,
+        hold: bool,
+        restart_at: Option<u64>,
     }
 
     impl Capture {
@@ -134,6 +139,8 @@ mod capture {
                 until: std::env::var("ORBIT_UNTIL").ok(),
                 after: number("ORBIT_AFTER").unwrap_or(12),
                 seen: std::cell::Cell::new(None),
+                hold: number::<u8>("ORBIT_HOLD") == Some(1),
+                restart_at: number("ORBIT_RESTART_AT"),
             }
         }
 
@@ -159,9 +166,17 @@ mod capture {
             seen >= self.after
         }
 
-        pub fn input(&self, app: &mut Orbit, frame: u64, input: Input) -> Input {
+        pub fn input(&self, app: &mut Orbit, frame: u64, mut input: Input) -> Input {
             if self.pause_at == Some(frame) {
                 app.set_paused(true);
+            }
+            if self.restart_at == Some(frame) {
+                input.restart = true;
+            }
+            if self.restart_at.is_some_and(|at| frame > at)
+                || self.hold && self.seen.get().is_some()
+            {
+                input.launch = false;
             }
             if self.sabotage_at.is_some_and(|at| frame >= at) {
                 return Input {

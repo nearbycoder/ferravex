@@ -818,6 +818,32 @@ mod tests {
     }
 
     #[test]
+    fn steering_key_caps_flank_the_paddle_until_the_player_has_steered() {
+        let _restore = RestorePolicy::new();
+        // Bright key-cap ink in the strip left of the paddle.
+        let lit = |app: &Orbit| {
+            let left = (app.game.paddle_x - app.game.paddle_half) as usize;
+            let mut count = 0;
+            for y in 626..648 {
+                for x in left - 70..left - 8 {
+                    let p = app.canvas.frame.pixels()[y * WIDTH as usize + x];
+                    count += usize::from(p[0] > 150 && p[1] > 150);
+                }
+            }
+            count
+        };
+        let mut app = Orbit::new();
+        app.render();
+        assert!(
+            lit(&app) > 20,
+            "steering keys shown on the first ready card"
+        );
+        app.presentation.juice.steered(1., 1.);
+        app.render();
+        assert_eq!(lit(&app), 0, "and retired once learned");
+    }
+
+    #[test]
     fn every_screen_renders_opaque_and_reduced_motion_ignores_camera_kick() {
         let _restore = RestorePolicy::new();
         let mut app = Orbit::new();

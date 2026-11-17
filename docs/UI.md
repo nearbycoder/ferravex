@@ -155,7 +155,11 @@ fades without movement and turns wipes/irises into fades.
 **Kit** — `ferravex_render::ui::kit`, visual only: `panel`, `card` (header
 band), `button` with `ButtonMotion` eased hover/press/focus, `meter` with a
 trailing "ghost" value, `toast`, `keycap`/`key_prompt` and
-`draw_screen_transition`. Keep input in `Ui`: submit buttons with
+`draw_screen_transition`, plus icon HUD pieces: `icon_value` (icon + number),
+`pips` (progress dots), `ring_meter` (circular timer), `keycap_width` and
+`row`/`row_width`, which lay out a line of `RowItem` icons, text, key caps and pips.
+`button_icon` and `toast_icon` put a pictogram in a button or toast.
+Keep input in `Ui`: submit buttons with
 `kit::INVISIBLE_BUTTON`, then paint with `kit::ui_button_state(&ui, id, enabled)`
 and `kit::ui_rect(ui.viewport(), rect)`. `KitTheme::from_ui_theme` adopts a
 contrast-checked `UiTheme` palette (including high contrast).
@@ -172,6 +176,40 @@ let inner = kit::card(kit::appear(card_rect, look), Some("Paused"), &theme.faded
 resume_motion.update(kit::ui_button_state(&ui, RESUME, true), dt, motion);
 kit::button(kit::ui_rect(ui.viewport(), resume_rect), "Resume", ButtonKind::Primary, &resume_motion, &theme);
 ```
+
+**Icons** — `ferravex_render::icons`. Ninety-two two-tone vector pictograms
+(play, pause, restart, check, cross, arrows, heart, star, coin, gem, clock,
+hourglass, bolt, shield, sword, flame, drop, sun, rain, wind, sprout, crate,
+ship, train, rocket, person, people, key, lock, eye, gear, trophy, crown, …)
+drawn from the anti-aliased shapes, so they stay crisp from 12 px HUD glyphs to
+large menu art and batch with ordinary drawing. `icons::draw(icon, center,
+size, color)` derives a darker detail tone; `draw_styled` takes an
+`IconStyle` with explicit detail and drop-shadow colors; `badge` puts an icon
+on a filled circle. Prefer an icon plus a number over a labeled stat. See the
+whole set with `cargo run -p ferravex-render --example icon_sheet`.
+
+```rust
+// Excerpt: `health`, `coins`, `time_left` and `fx` come from the game.
+use ferravex_render::{Color, vec2, icons::{self, Icon}};
+icons::draw(Icon::Heart, vec2(28., 28.), 20., Color::from_hex(0xe5484d));
+icons::draw(Icon::Coin, vec2(28., 56.), 20., Color::from_hex(0xf7b553));
+icons::badge(Icon::Pause, vec2(600., 28.), 32., Color::from_hex(0x1f2a3d), Color::from_hex(0xeef2f5));
+```
+
+**Juice** — `ferravex_render::juice::Juice`, a bounded pool of presentation
+effects advanced by frame time: `burst` (radial sparks), `puff` (rising steam,
+smoke or dust), `sparkle` (twinkles),
+`confetti`, `ring`/`ring_width` (shockwave), `popup`/`popup_icon` (rising "+25" with a coin),
+`callout` (big headline), `toast`, `shake` (trauma that decays), `flash` and
+`vignette`. Request effects only from accepted game events, call `update(dt)`
+once per frame, draw with `draw()` in the game camera, then `draw_flash(area)`
+and `draw_toast(anchor)`. Full pools recycle their oldest effects; reduced
+motion removes shake and drift. `juice::pulse` and `juice::bob` give idle
+"look at me" motion. `shapes::fill_polygon`, `fill_triangle` and `fill_sector`
+complete the anti-aliased primitives for custom pictograms and pie timers.
+
+The [visual language](VISUAL_LANGUAGE.md) explains how the catalog uses these
+pieces to replace words with readable, felt feedback.
 
 Recommended style: spacing `kit::SPACE` = 4, 8, 12, 16, 24, 32; radii 6 (chips,
 key caps), 10 (buttons, toasts), 16 (cards); modern type 8 caption, 16 body,

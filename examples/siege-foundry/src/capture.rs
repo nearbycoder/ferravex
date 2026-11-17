@@ -6,6 +6,8 @@
 //! - `SIEGE_PLAN=bell,miss,miss` makes autoplay's first shots aim at the
 //!   lunch bell or wide of the towers before its normal targeting resumes.
 //! - `SIEGE_FAKE_BEST=POINTS` pretends a stored best existed at the result.
+//! - `SIEGE_START_AT=N` enters the range on render frame `N` without
+//!   autoplay, to review the first-time aim and fire prompts.
 use super::Conf;
 
 fn number<T: std::str::FromStr>(name: &str) -> Option<T> {
@@ -34,6 +36,7 @@ pub(super) struct Capture {
     held: bool,
     plan: Vec<Aim>,
     fake_best: Option<u64>,
+    start_at: Option<u32>,
 }
 
 impl Capture {
@@ -53,6 +56,7 @@ impl Capture {
             held: false,
             plan,
             fake_best: number("SIEGE_FAKE_BEST"),
+            start_at: number("SIEGE_START_AT"),
         }
     }
 
@@ -65,6 +69,11 @@ impl Capture {
     /// The scripted aim for autoplay's `shot`-th shot (0-based), if any.
     pub fn aim(&self, shot: u8) -> Option<Aim> {
         self.plan.get(usize::from(shot)).copied()
+    }
+
+    /// True on the scripted start frame.
+    pub fn start(&self) -> bool {
+        self.start_at == Some(self.frame)
     }
 
     pub fn fake_best(&self) -> Option<u64> {

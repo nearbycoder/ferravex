@@ -29,12 +29,22 @@ pub(crate) enum Marker {
     Elimination,
 }
 
-/// A rising score callout near the crosshair.
+/// A rising score callout near the crosshair, drawn as icons and numbers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Pop {
-    Points { points: u32, multiplier: u32 },
-    Headshot { points: u32, multiplier: u32 },
-    Eliminated,
+    Points {
+        points: u32,
+        multiplier: u32,
+    },
+    Headshot {
+        points: u32,
+        multiplier: u32,
+    },
+    /// An operator went down; `bonus` is the qualifier points it paid (0
+    /// outside a run).
+    Eliminated {
+        bonus: u32,
+    },
     Bell,
     HeadshotStreak(u32),
 }
@@ -310,7 +320,7 @@ mod tests {
             Vec3::ZERO,
             FeedbackPolicy::default(),
         );
-        juice.pop(Pop::Eliminated);
+        juice.pop(Pop::Eliminated { bonus: 0 });
         juice.radio("hello");
         juice.advance(0.05, FeedbackPolicy::default());
         assert!(juice.recoil(1.) > 0.);

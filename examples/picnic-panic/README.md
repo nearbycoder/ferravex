@@ -78,7 +78,9 @@ Debug builds add review hooks (`PICNIC_WINDOW`, `PICNIC_SKIP`, `PICNIC_CAM`,
   animation graph, cross-fades and additive layers.
 - `fx.rs`, `sfx.rs`, `hud.rs` and `menus.rs` consume accepted events only:
   particles, trails, set-piece framing, positional sound, an adaptive score with
-  a spatial (eventually off-key) brass band, the notepad, toasts and the menus.
+  a spatial (eventually off-key) brass band, the notepad (one pictogram per
+  line, matching its minimap pin), key-cap prompts with a marker over their
+  target, icon toasts and popups, and icon-stat menus.
 - `meta.rs` stores lifetime progress, hats, the in-progress to-do list (the
   engine's objective snapshot) and the best-run ghost in versioned save slots.
 

@@ -12,8 +12,14 @@
 //! assert_eq!(game.rescued(), 0);
 //! ```
 use crate::content::{BASE, CELLS, COLS, MISSIONS, ROWS};
-use ferravex_arcade::{Cue, Input, Outcome, vec2};
+use crate::layout::{self, ACT, CUT, DEPLOY, DROP, END, FORECAST, RETRY};
+use ferravex_arcade::{Cue, Input, Outcome};
 use ferravex_play::navigation::{Cell as NavCell, Connectivity, Grid};
+
+/// Credits charged for one air drop.
+pub(crate) const DROP_COST: u32 = 12;
+/// Most presentation events one step can record.
+const FEED: usize = 12;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Terrain {
@@ -54,10 +60,10 @@ impl Tile {
             ruined: false,
         }
     }
-    fn walkable(self) -> bool {
+    pub(crate) fn walkable(self) -> bool {
         self.fire == 0 && !matches!(self.terrain, Terrain::Water | Terrain::Rock)
     }
-    fn cost(self) -> u8 {
+    pub(crate) fn cost(self) -> u8 {
         if self.terrain == Terrain::Forest && self.fuel > 0 {
             2
         } else {
@@ -87,14 +93,135 @@ pub(crate) enum Phase {
     Setback,
     Ended,
 }
+/// The context action a crew would take at a tile.
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum Action {
+pub(crate) enum Action {
+    /// Walk the path (crew tile first) for the given action points.
     Move(Vec<usize>, u8),
     Hose,
     Load,
     Unload,
     Refill,
 }
+/// Why an incident attempt failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Setback {
+    /// The occupied village on this tile caught fire.
+    Village(usize),
+    /// This crew was caught by new fire with residents aboard.
+    Trapped(usize),
+    /// The turn deadline passed.
+    Nightfall,
+}
+/// What a refused command lacked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Lack {
+    /// Action points; the value is the cost that could not be paid.
+    Ap(u8),
+    Water,
+    Seats,
+    /// The target is beyond the crew's reach for this command.
+    Range,
+    /// Credits; the value is the price that could not be paid.
+    Credits(u32),
+    Sorties,
+    /// An air drop footprint holds no fire.
+    NoFire,
+    /// Base, villages, burning and fuelless tiles cannot become breaks.
+    Uncuttable,
+    /// The upgrade is already at its highest level.
+    Maxed,
+}
+/// Where a presentation event happened.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Spot {
+    Tile(usize),
+    Upgrade(usize),
+}
+/// One accepted (or refused) command or spread consequence, for effects.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Event {
+    Deployed,
+    Retried,
+    Advanced,
+    Selected(usize),
+    Forecast(bool),
+    Moved {
+        crew: usize,
+        from: usize,
+        to: usize,
+    },
+    Sprayed {
+        crew: usize,
+        at: usize,
+        removed: u8,
+        out: bool,
+    },
+    Loaded {
+        crew: usize,
+        at: usize,
+        people: u8,
+    },
+    Delivered {
+        crew: usize,
+        people: u8,
+    },
+    Refilled {
+        crew: usize,
+        at: usize,
+        water: u8,
+    },
+    Cut {
+        crew: usize,
+        at: usize,
+    },
+    Dropped(usize),
+    /// Bitmasks of tiles that ignited and burned out in one spread.
+    Spread {
+        lit: u128,
+        out: u128,
+    },
+    Retreated(usize),
+    Ruined(usize),
+    Cleared {
+        stars: u8,
+        credits: u32,
+    },
+    Failed(Setback),
+    Bought {
+        id: usize,
+        cost: u32,
+    },
+    Refused {
+        spot: Spot,
+        lack: Lack,
+    },
+}
+/// Presentation-only record of what the latest [`Game::step`] accepted or
+/// refused, and where. Every step clears it first and the rules never read
+/// it, so equality ignores it: two games with the same rule state are equal
+/// whatever effects they last requested.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Feed([Option<Event>; FEED]);
+impl Feed {
+    fn clear(&mut self) {
+        self.0 = [None; FEED];
+    }
+    fn push(&mut self, event: Event) {
+        if let Some(slot) = self.0.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(event);
+        }
+    }
+    pub(crate) fn iter(&self) -> impl Iterator<Item = Event> + '_ {
+        self.0.iter().map_while(|event| *event)
+    }
+}
+impl PartialEq for Feed {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+impl Eq for Feed {}
 
 /// A complete six-incident career. Every gameplay mutation uses [`Game::step`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -117,7 +244,9 @@ pub struct Game {
     pub(crate) points: u32,
     pub(crate) show_forecast: bool,
     pub(crate) retreats: u8,
-    pub(crate) note: String,
+    /// Why the latest attempt failed, until the incident reloads.
+    pub(crate) setback: Option<Setback>,
+    pub(crate) feed: Feed,
     start_cash: u32,
     won: bool,
 }
@@ -153,7 +282,8 @@ impl Game {
             points: 0,
             show_forecast: true,
             retreats: 0,
-            note: String::new(),
+            setback: None,
+            feed: Feed::default(),
             start_cash: 50,
             won: false,
         };
@@ -202,7 +332,7 @@ impl Game {
         self.used_drops = 0;
         self.retreats = 0;
         self.start_cash = self.cash;
-        self.note = "Deploy the crews when you are ready.".into();
+        self.setback = None;
     }
     /// Current incident number, one through six.
     pub fn mission(&self) -> usize {
@@ -237,6 +367,33 @@ impl Game {
     }
     pub(crate) fn range(id: usize) -> usize {
         if id == 0 { 2 } else { 1 }
+    }
+    /// Heat one hose action removes.
+    pub(crate) fn power(id: usize) -> u8 {
+        if id == 0 { 3 } else { 2 }
+    }
+    /// Action points one firebreak costs.
+    pub(crate) fn cut_cost(id: usize) -> u8 {
+        if id == 1 { 1 } else { 2 }
+    }
+    /// The air-drop cross: the center and its orthogonal neighbors.
+    pub(crate) fn footprint(at: usize) -> impl Iterator<Item = usize> {
+        std::iter::once(at).chain(Self::adjacent(at))
+    }
+    /// Residents a load at `at` would board now.
+    pub(crate) fn boarding(&self, id: usize, at: usize) -> u8 {
+        (Self::capacity(id) - self.crews[id].cargo).min(self.tiles[at].people)
+    }
+    /// Medal the incident would earn if it were cleared now.
+    pub(crate) fn stars(&self) -> u8 {
+        let ruined = self.tiles.iter().any(|t| t.ruined);
+        if !ruined && self.retreats == 0 && self.used_drops <= 1 {
+            3
+        } else if self.retreats <= 1 && !ruined {
+            2
+        } else {
+            1
+        }
     }
     pub(crate) fn wind(&self, next: bool) -> (i8, i8) {
         MISSIONS[self.index].wind[(usize::from(self.turn - 1) + usize::from(next)) % 4]
@@ -310,7 +467,7 @@ impl Game {
                     .collect()
             })
     }
-    fn action(&self, id: usize, target: usize) -> Option<Action> {
+    pub(crate) fn action(&self, id: usize, target: usize) -> Option<Action> {
         let crew = self.crews[id];
         let tile = self.tiles[target];
         let distance = Self::distance(crew.tile, target);
@@ -336,67 +493,166 @@ impl Game {
         let cost: u8 = path.iter().skip(1).map(|&at| self.tiles[at].cost()).sum();
         (cost <= crew.ap).then_some(Action::Move(path, cost))
     }
-    pub(crate) fn action_name(&self) -> &'static str {
-        match self.action(self.selected, self.cursor) {
-            Some(Action::Move(..)) => "MOVE CREW",
-            Some(Action::Hose) => "SPRAY FIRE",
-            Some(Action::Load) => "LOAD RESIDENTS",
-            Some(Action::Unload) => "DELIVER PEOPLE",
-            Some(Action::Refill) => "REFILL WATER",
-            None => "SELECT A TARGET",
+    /// Why [`Self::action`] refuses a target that offers a context action the
+    /// crew cannot afford or reach this turn. `None` when the action is
+    /// accepted or the tile offers nothing (rock, the crew's own tile, an
+    /// unreachable pocket).
+    pub(crate) fn lack(&self, id: usize, target: usize) -> Option<Lack> {
+        let crew = self.crews[id];
+        let tile = self.tiles[target];
+        let distance = Self::distance(crew.tile, target);
+        if tile.fire > 0 {
+            return if distance > Self::range(id) {
+                Some(Lack::Range)
+            } else if crew.water == 0 {
+                Some(Lack::Water)
+            } else {
+                (crew.ap < 2).then_some(Lack::Ap(2))
+            };
+        }
+        if tile.people > 0 && distance <= 1 {
+            return if crew.cargo >= Self::capacity(id) {
+                Some(Lack::Seats)
+            } else {
+                (crew.ap < 2).then_some(Lack::Ap(2))
+            };
+        }
+        let deliver = target == BASE && distance <= 1 && crew.cargo > 0;
+        let refill = matches!(tile.terrain, Terrain::Base | Terrain::Water)
+            && distance <= 1
+            && crew.water < self.water_max(id);
+        if deliver || refill {
+            return (crew.ap == 0).then_some(Lack::Ap(1));
+        }
+        if crew.tile == target || !tile.walkable() {
+            return None;
+        }
+        let path = self.route(crew.tile, target)?;
+        let cost: u8 = path.iter().skip(1).map(|&at| self.tiles[at].cost()).sum();
+        (cost > crew.ap).then_some(Lack::Ap(cost))
+    }
+    /// Least action points crew `id` needs to stand on each tile, using the
+    /// same terrain costs and blockers as movement; `u8::MAX` is unreachable.
+    pub(crate) fn reach(&self, id: usize) -> [u8; CELLS] {
+        let mut cost = [u8::MAX; CELLS];
+        let mut done = [false; CELLS];
+        cost[self.crews[id].tile] = 0;
+        while let Some(at) = (0..CELLS)
+            .filter(|&at| !done[at] && cost[at] != u8::MAX)
+            .min_by_key(|&at| cost[at])
+        {
+            done[at] = true;
+            for next in Self::adjacent(at) {
+                let tile = self.tiles[next];
+                if tile.walkable() {
+                    let through = cost[at].saturating_add(tile.cost());
+                    if through < cost[next] {
+                        cost[next] = through;
+                    }
+                }
+            }
+        }
+        cost
+    }
+    /// Why a firebreak at `at` is refused, if it is.
+    pub(crate) fn cut_lack(&self, id: usize, at: usize) -> Option<Lack> {
+        let tile = self.tiles[at];
+        let cost = Self::cut_cost(id);
+        if tile.fuel == 0 || tile.fire > 0 || matches!(tile.terrain, Terrain::Town | Terrain::Base)
+        {
+            Some(Lack::Uncuttable)
+        } else if Self::distance(self.crews[id].tile, at) > 1 {
+            Some(Lack::Range)
+        } else {
+            (self.crews[id].ap < cost).then_some(Lack::Ap(cost))
+        }
+    }
+    /// Why an air drop centered on `at` is refused, if it is.
+    pub(crate) fn drop_lack(&self, at: usize) -> Option<Lack> {
+        if self.drops == 0 {
+            Some(Lack::Sorties)
+        } else if self.cash < DROP_COST {
+            Some(Lack::Credits(DROP_COST))
+        } else if !Self::footprint(at).any(|p| self.tiles[p].fire > 0) {
+            Some(Lack::NoFire)
+        } else {
+            None
         }
     }
     fn act(&mut self) -> Cue {
+        self.order(true)
+    }
+    /// The context action at the cursor. A map click also aims (air drops,
+    /// inspection), so only an explicit order reports a target out of reach.
+    fn order(&mut self, explicit: bool) -> Cue {
         let id = self.selected;
         let at = self.cursor;
         let Some(action) = self.action(id, at) else {
+            if let Some(lack) = self
+                .lack(id, at)
+                .filter(|&lack| explicit || lack != Lack::Range)
+            {
+                self.feed.push(Event::Refused {
+                    spot: Spot::Tile(at),
+                    lack,
+                });
+            }
             return Cue::None;
         };
         match action {
             Action::Move(path, cost) => {
-                self.crews[id].tile = *path.last().unwrap();
+                let from = self.crews[id].tile;
+                let to = *path.last().unwrap();
+                self.crews[id].tile = to;
                 self.crews[id].ap -= cost;
-                self.note = format!("Crew {} moves: {} AP spent.", id + 1, cost);
+                self.feed.push(Event::Moved { crew: id, from, to });
             }
             Action::Hose => {
                 self.crews[id].ap -= 2;
                 self.crews[id].water -= 1;
-                self.tiles[at].fire =
-                    self.tiles[at]
-                        .fire
-                        .saturating_sub(if id == 0 { 3 } else { 2 });
-                if self.tiles[at].fire == 0 {
+                let before = self.tiles[at].fire;
+                self.tiles[at].fire = before.saturating_sub(Self::power(id));
+                let out = self.tiles[at].fire == 0;
+                if out {
                     self.tiles[at].wet = 3;
                 }
-                self.note = "Hose applied. Wet ground resists the next three spreads.".into();
+                self.feed.push(Event::Sprayed {
+                    crew: id,
+                    at,
+                    removed: before - self.tiles[at].fire,
+                    out,
+                });
             }
             Action::Load => {
-                let n = (Self::capacity(id) - self.crews[id].cargo).min(self.tiles[at].people);
+                let n = self.boarding(id, at);
                 self.crews[id].cargo += n;
                 self.tiles[at].people -= n;
                 self.crews[id].ap -= 2;
-                self.note = format!(
-                    "{} people aboard crew {}. Return to base to save them.",
-                    n,
-                    id + 1
-                );
+                self.feed.push(Event::Loaded {
+                    crew: id,
+                    at,
+                    people: n,
+                });
             }
             Action::Unload => {
                 let n = self.crews[id].cargo;
                 self.landed += n;
                 self.crews[id].cargo = 0;
                 self.crews[id].ap -= 1;
-                self.note = format!(
-                    "{} people safely home. {} / {} delivered.",
-                    n,
-                    self.landed,
-                    self.quota()
-                );
+                self.feed.push(Event::Delivered {
+                    crew: id,
+                    people: n,
+                });
             }
             Action::Refill => {
+                let water = self.water_max(id) - self.crews[id].water;
                 self.crews[id].water = self.water_max(id);
                 self.crews[id].ap -= 1;
-                self.note = "Water tanks full. One action point spent.".into();
+                self.feed.push(Event::Refilled {
+                    crew: id,
+                    at,
+                    water,
+                });
             }
         }
         if self.check_clear() {
@@ -408,60 +664,59 @@ impl Game {
     fn cut(&mut self) -> Cue {
         let at = self.cursor;
         let id = self.selected;
-        let cost = if id == 1 { 1 } else { 2 };
-        if Self::distance(self.crews[id].tile, at) > 1
-            || self.crews[id].ap < cost
-            || self.tiles[at].fuel == 0
-            || self.tiles[at].fire > 0
-            || matches!(self.tiles[at].terrain, Terrain::Town | Terrain::Base)
-        {
+        if let Some(lack) = self.cut_lack(id, at) {
+            self.feed.push(Event::Refused {
+                spot: Spot::Tile(at),
+                lack,
+            });
             return Cue::None;
         }
-        self.crews[id].ap -= cost;
+        self.crews[id].ap -= Self::cut_cost(id);
         self.tiles[at].fuel = 0;
-        self.note = "Firebreak cut. Fire cannot cross this cleared tile.".into();
+        self.feed.push(Event::Cut { crew: id, at });
         Cue::Good
     }
     fn drop_water(&mut self) -> Cue {
-        if self.drops == 0 || self.cash < 12 {
+        if let Some(lack) = self.drop_lack(self.cursor) {
+            self.feed.push(Event::Refused {
+                spot: Spot::Tile(self.cursor),
+                lack,
+            });
             return Cue::None;
         }
-        let area: Vec<_> = std::iter::once(self.cursor)
-            .chain(Self::adjacent(self.cursor))
-            .collect();
-        if !area.iter().any(|&at| self.tiles[at].fire > 0) {
-            return Cue::None;
-        }
-        for at in area {
+        for at in Self::footprint(self.cursor) {
             self.tiles[at].fire = self.tiles[at].fire.saturating_sub(3);
             self.tiles[at].wet = 3;
         }
-        self.cash -= 12;
+        self.cash -= DROP_COST;
         self.drops -= 1;
         self.used_drops += 1;
-        self.note = "Air drop: five tiles soaked. Twelve credits spent.".into();
+        self.feed.push(Event::Dropped(self.cursor));
         if self.check_clear() {
             Cue::Win
         } else {
             Cue::Good
         }
     }
-    fn fail(&mut self, note: &str) -> Cue {
+    fn fail(&mut self, reason: Setback) -> Cue {
         self.phase = if self.retries == 0 {
             Phase::Ended
         } else {
             Phase::Setback
         };
-        self.note = note.into();
+        self.setback = Some(reason);
+        self.feed.push(Event::Failed(reason));
         Cue::Bad
     }
     fn weather(&mut self) -> Cue {
         let ignition = self.forecast();
+        let (mut lit, mut out) = (0u128, 0u128);
         for (at, ignite) in ignition.into_iter().enumerate() {
             let tile = &mut self.tiles[at];
             if tile.fire > 0 {
                 tile.fuel = tile.fuel.saturating_sub(1);
                 tile.fire = if tile.fuel == 0 {
+                    out |= 1 << at;
                     0
                 } else {
                     (tile.fire + 1).min(3)
@@ -469,33 +724,40 @@ impl Game {
             }
             if ignite {
                 tile.fire = 1;
+                lit |= 1 << at;
             }
             tile.wet = tile.wet.saturating_sub(1);
             if tile.fire > 0 && tile.terrain == Terrain::Town {
+                let fresh = !tile.ruined;
                 tile.ruined = true;
                 if tile.people > 0 {
-                    return self.fail("An occupied village burned. The operation must be retried.");
+                    self.feed.push(Event::Spread { lit, out });
+                    return self.fail(Setback::Village(at));
+                }
+                if fresh {
+                    self.feed.push(Event::Ruined(at));
                 }
             }
         }
+        self.feed.push(Event::Spread { lit, out });
         for id in 0..3 {
             if self.tiles[self.crews[id].tile].fire > 0 {
                 if self.crews[id].cargo > 0 {
-                    return self.fail("An evacuation crew was trapped with passengers aboard.");
+                    return self.fail(Setback::Trapped(id));
                 }
                 self.crews[id].tile = BASE;
                 self.crews[id].water = 0;
                 self.retreats += 1;
+                self.feed.push(Event::Retreated(id));
             }
             self.crews[id].ap = self.max_ap();
         }
         self.turn += 1;
-        self.note = "Wind has shifted. Crews are ready; inspect the new forecast.".into();
         if self.check_clear() {
             return Cue::Win;
         }
         if self.turn > MISSIONS[self.index].limit {
-            return self.fail("Nightfall closed the evacuation window. The objective was not met.");
+            return self.fail(Setback::Nightfall);
         }
         Cue::Action
     }
@@ -503,14 +765,7 @@ impl Game {
         if self.phase != Phase::Active || self.landed != self.quota() || self.fire_count() != 0 {
             return false;
         }
-        let ruined = self.tiles.iter().any(|t| t.ruined);
-        let stars = if !ruined && self.retreats == 0 && self.used_drops <= 1 {
-            3
-        } else if self.retreats <= 1 && !ruined {
-            2
-        } else {
-            1
-        };
+        let stars = self.stars();
         self.medals[self.index] = stars;
         let saved = self
             .tiles
@@ -522,7 +777,8 @@ impl Game {
             + saved * 5
             + u32::from(MISSIONS[self.index].limit.saturating_sub(self.turn)) * 20
             + u32::from(stars) * 200;
-        self.cash += 25 + u32::from(self.quota()) * 3;
+        let credits = 25 + u32::from(self.quota()) * 3;
+        self.cash += credits;
         self.total_rescued += u32::from(self.landed);
         self.landed = 0;
         self.phase = if self.index == 5 {
@@ -531,7 +787,7 @@ impl Game {
         } else {
             Phase::Debrief
         };
-        self.note = "Every resident is safe. The incident is contained.".into();
+        self.feed.push(Event::Cleared { stars, credits });
         true
     }
     pub(crate) fn upgrade_cost(&self, id: usize) -> u32 {
@@ -540,46 +796,47 @@ impl Game {
     fn buy(&mut self, id: usize) -> Cue {
         let cost = self.upgrade_cost(id);
         if self.upgrades[id] >= 2 || self.cash < cost {
+            let lack = if self.upgrades[id] >= 2 {
+                Lack::Maxed
+            } else {
+                Lack::Credits(cost)
+            };
+            self.feed.push(Event::Refused {
+                spot: Spot::Upgrade(id),
+                lack,
+            });
             return Cue::None;
         }
         self.cash -= cost;
         self.upgrades[id] += 1;
-        self.note = "Equipment purchased. It is ready for the next incident.".into();
+        self.feed.push(Event::Bought { id, cost });
         Cue::Good
     }
     /// Execute one supplied input tick. Idle ticks and held arrows are inert;
     /// one fresh direction edge moves the targeting cursor by one tile.
     pub fn step(&mut self, input: &Input) -> Cue {
+        self.feed.clear();
         if self.phase == Phase::Ended {
             return Cue::None;
         }
+        let pointer = input.pointer;
         match self.phase {
             Phase::Briefing => {
-                if input.primary
-                    || (input.click
-                        && input.pointer.x >= 50.
-                        && input.pointer.x <= 565.
-                        && input.pointer.y >= 470.
-                        && input.pointer.y <= 520.)
-                {
+                // The drawn deploy button mirrors Space.
+                if input.primary || (input.click && layout::hit(DEPLOY, pointer)) {
                     self.phase = Phase::Active;
-                    self.note =
-                        "1-3 select crew. Target a tile; Space acts. C ends the turn.".into();
+                    self.feed.push(Event::Deployed);
                     return Cue::Action;
                 }
                 return Cue::None;
             }
             Phase::Setback => {
-                if input.primary
-                    || (input.click
-                        && input.pointer.x >= 50.
-                        && input.pointer.x <= 565.
-                        && input.pointer.y >= 470.
-                        && input.pointer.y <= 520.)
-                {
+                // The drawn retry button mirrors Space.
+                if input.primary || (input.click && layout::hit(RETRY, pointer)) {
                     self.retries -= 1;
                     self.cash = self.start_cash;
                     self.load();
+                    self.feed.push(Event::Retried);
                     return Cue::Action;
                 }
                 return Cue::None;
@@ -588,17 +845,16 @@ impl Game {
                 if let Some(slot @ 1..=3) = input.slot {
                     return self.buy(slot - 1);
                 }
-                if input.click && input.pointer.y >= 328. && input.pointer.y < 441. {
-                    for id in 0..3 {
-                        let x = 54. + id as f32 * 166.;
-                        if input.pointer.x >= x && input.pointer.x < x + 155. {
-                            return self.buy(id);
-                        }
-                    }
+                if input.click
+                    && let Some(id) = layout::shop_at(pointer)
+                {
+                    return self.buy(id);
                 }
-                if input.primary {
+                // The drawn "next" button mirrors Space.
+                if input.primary || (input.click && layout::proceed_at(pointer)) {
                     self.index += 1;
                     self.load();
+                    self.feed.push(Event::Advanced);
                     return Cue::Action;
                 }
                 return Cue::None;
@@ -608,16 +864,9 @@ impl Game {
         }
         if let Some(slot) = input.slot {
             match slot {
-                1..=3 => {
-                    self.selected = slot - 1;
-                    self.cursor = self.crews[self.selected].tile;
-                    return Cue::Action;
-                }
+                1..=3 => return self.select(slot - 1),
                 4 => return self.drop_water(),
-                5 => {
-                    self.show_forecast = !self.show_forecast;
-                    return Cue::Action;
-                }
+                5 => return self.toggle_forecast(),
                 _ => return Cue::None,
             }
         }
@@ -640,50 +889,49 @@ impl Game {
                 return Cue::Action;
             }
         }
-        if input.click && input.pointer.x.is_finite() && input.pointer.y.is_finite() {
-            if input.pointer.x >= 28.
-                && input.pointer.x < 578.
-                && input.pointer.y >= 162.
-                && input.pointer.y < 530.
-            {
-                self.cursor = ((input.pointer.y - 162.) / 46.) as usize * COLS
-                    + ((input.pointer.x - 28.) / 50.) as usize;
-                let cue = self.act();
+        if input.click {
+            if let Some(at) = layout::tile_at(pointer) {
+                self.cursor = at;
+                let cue = self.order(false);
                 return if cue == Cue::None { Cue::Action } else { cue };
             }
-            if input.pointer.x >= 610.
-                && input.pointer.x < 936.
-                && input.pointer.y >= 122.
-                && input.pointer.y < 320.
-            {
-                self.selected = ((input.pointer.y - 122.) / 66.) as usize;
-                self.cursor = self.crews[self.selected].tile;
-                return Cue::Action;
+            if let Some(id) = layout::card_at(pointer) {
+                return self.select(id);
             }
-            if input.pointer.x >= 610. && input.pointer.x < 936. {
-                if (409.0..451.0).contains(&input.pointer.y) {
-                    return self.act();
-                }
-                if (460.0..483.0).contains(&input.pointer.y) {
-                    return self.cut();
-                }
-                if (485.0..508.0).contains(&input.pointer.y) {
-                    return self.drop_water();
-                }
-                if (518.0..560.0).contains(&input.pointer.y) {
-                    return self.weather();
-                }
+            if layout::hit(ACT, pointer) {
+                return self.act();
+            }
+            if layout::hit(CUT, pointer) {
+                return self.cut();
+            }
+            if layout::hit(DROP, pointer) {
+                return self.drop_water();
+            }
+            if layout::hit(END, pointer) {
+                return self.weather();
+            }
+            // The drawn forecast switch mirrors key 5.
+            if layout::hit(FORECAST, pointer) {
+                return self.toggle_forecast();
             }
         }
         Cue::None
     }
+    fn select(&mut self, id: usize) -> Cue {
+        self.selected = id;
+        self.cursor = self.crews[id].tile;
+        self.feed.push(Event::Selected(id));
+        Cue::Action
+    }
+    fn toggle_forecast(&mut self) -> Cue {
+        self.show_forecast = !self.show_forecast;
+        self.feed.push(Event::Forecast(self.show_forecast));
+        Cue::Action
+    }
     fn command(target: usize) -> Input {
         Input {
             click: true,
-            pointer: vec2(
-                28. + (target % COLS) as f32 * 50. + 25.,
-                162. + (target / COLS) as f32 * 46. + 23.,
-            ),
+            pointer: layout::center(target),
             ..Input::default()
         }
     }
@@ -850,22 +1098,27 @@ impl Game {
             ..Input::default()
         }
     }
-    /// Campaign ending or current objective, suitable for a plain-text report.
+    /// One plain sentence on the career so far, for status readers.
     pub fn summary(&self) -> String {
+        let medals: u32 = self.medals.iter().map(|&m| u32::from(m)).sum();
         if self.won {
             format!(
-                "Dawn breaks over six safe districts. All {} residents are home. {} medals and {} points. The watch is over.",
-                self.total_rescued,
-                self.medals.iter().sum::<u8>(),
-                self.points
+                "Dawn: all {} residents home with {} medals and {} points.",
+                self.total_rescued, medals, self.points
             )
         } else {
+            let reason = match self.setback {
+                Some(Setback::Village(_)) => "an occupied village burned",
+                Some(Setback::Trapped(_)) => "a loaded crew was trapped",
+                Some(Setback::Nightfall) => "nightfall came first",
+                None => "the watch continues",
+            };
             format!(
-                "{} incidents cleared. {} residents home. {} points. {}",
+                "{} of 6 incidents cleared and {} residents home for {} points; {}.",
                 self.medals.iter().filter(|&&m| m > 0).count(),
                 self.rescued(),
                 self.points,
-                self.note
+                reason
             )
         }
     }
@@ -874,6 +1127,7 @@ impl Game {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ferravex_arcade::vec2;
     fn fixture() -> Game {
         let mut game = Game::new();
         game.phase = Phase::Active;
@@ -920,11 +1174,11 @@ mod tests {
         assert_eq!(
             game.outcome(),
             Outcome::Won,
-            "incident {} turn {} crews {:?} note {}",
+            "incident {} turn {} crews {:?} setback {:?}",
             game.mission(),
             game.turn,
             game.crews,
-            game.note
+            game.setback
         );
         assert_eq!(game.rescued(), 59);
         assert!(seen.into_iter().all(|v| v));
@@ -1354,10 +1608,197 @@ mod tests {
         assert_eq!((game.cursor, game.crews[2].tile), (BASE + 1, BASE + 1));
         game.step(&Input {
             click: true,
-            pointer: vec2(650., 535.),
+            pointer: vec2(END.x + 40., END.y + END.h * 0.5),
             ..Input::default()
         });
         assert_eq!(game.turn, 2);
+    }
+    fn click(rect: ferravex_arcade::Rect) -> Input {
+        Input {
+            click: true,
+            pointer: vec2(rect.x + rect.w * 0.5, rect.y + rect.h * 0.5),
+            ..Input::default()
+        }
+    }
+    #[test]
+    fn drawn_deploy_retry_next_and_forecast_buttons_mirror_their_keys() {
+        use crate::layout::{PROCEED, shop_card};
+        // Deploy: a click beside the button changes nothing; on it, it deploys.
+        let mut game = Game::new();
+        let before = game.clone();
+        game.step(&Input {
+            click: true,
+            pointer: vec2(DEPLOY.x - 4., DEPLOY.y + 4.),
+            ..Input::default()
+        });
+        assert_eq!(game, before);
+        let mut keyed = Game::new();
+        assert_eq!(game.step(&click(DEPLOY)), keyed.step(&primary()));
+        assert_eq!(game, keyed);
+        assert_eq!(game.phase, Phase::Active);
+        // Forecast switch: the same toggle as key 5, both ways.
+        assert_eq!(game.step(&click(FORECAST)), Cue::Action);
+        assert!(!game.show_forecast);
+        keyed.step(&Input {
+            slot: Some(5),
+            ..Input::default()
+        });
+        assert_eq!(game, keyed);
+        game.step(&click(FORECAST));
+        assert!(game.show_forecast);
+        // Retry: the drawn button spends a retry exactly like Space.
+        let mut failed = Game::new();
+        failed.step(&primary());
+        failed.turn = MISSIONS[0].limit;
+        failed.weather();
+        assert_eq!(failed.phase, Phase::Setback);
+        let mut keyed = failed.clone();
+        let unchanged = failed.clone();
+        failed.step(&click(PROCEED));
+        assert_eq!(failed, unchanged, "only the retry button retries");
+        failed.step(&click(RETRY));
+        keyed.step(&primary());
+        assert_eq!(failed, keyed);
+        assert_eq!((failed.phase, failed.retries), (Phase::Briefing, 2));
+        // Next: the debrief button advances exactly like Space; cards still buy.
+        let mut debrief = fixture();
+        debrief.phase = Phase::Debrief;
+        debrief.cash = 100;
+        let mut keyed = debrief.clone();
+        debrief.step(&click(shop_card(0)));
+        assert_eq!((debrief.upgrades[0], debrief.cash), (1, 70));
+        keyed.step(&Input {
+            slot: Some(1),
+            ..Input::default()
+        });
+        debrief.step(&click(PROCEED));
+        keyed.step(&primary());
+        assert_eq!(debrief, keyed);
+        assert_eq!((debrief.mission(), debrief.phase), (2, Phase::Briefing));
+    }
+    #[test]
+    fn the_feed_records_each_step_and_never_affects_equality() {
+        let mut game = fixture();
+        let fire = BASE - 2 * COLS;
+        game.tiles[fire] = Tile {
+            fire: 2,
+            fuel: 4,
+            ..Tile::from_char(b'f')
+        };
+        game.cursor = fire;
+        let quiet = game.clone();
+        assert_eq!(game.step(&primary()), Cue::Good);
+        let events: Vec<_> = game.feed.iter().collect();
+        assert_eq!(
+            events,
+            [Event::Sprayed {
+                crew: 0,
+                at: fire,
+                removed: 2,
+                out: true
+            }]
+        );
+        assert_ne!(game, quiet, "the spray changed rule state");
+        // An idle step clears the record without touching rule state.
+        let sprayed = game.clone();
+        game.step(&Input::default());
+        assert_eq!(game.feed.iter().count(), 0);
+        assert_eq!(game, sprayed);
+        // A refusal is recorded with what was missing, and changes nothing.
+        game.tiles[fire].fire = 1;
+        game.crews[0].water = 0;
+        let unchanged = game.clone();
+        assert_eq!(game.step(&primary()), Cue::None);
+        assert_eq!(game, unchanged);
+        assert_eq!(
+            game.feed.iter().collect::<Vec<_>>(),
+            [Event::Refused {
+                spot: Spot::Tile(fire),
+                lack: Lack::Water
+            }]
+        );
+        // Clicking a distant fire only aims; Space there reports the range.
+        let far = 2 * COLS + 9;
+        game.tiles[far] = Tile {
+            fire: 2,
+            fuel: 4,
+            ..Tile::from_char(b'f')
+        };
+        assert_eq!(game.step(&Game::command(far)), Cue::Action);
+        assert_eq!(game.cursor, far);
+        assert_eq!(game.feed.iter().count(), 0);
+        game.step(&primary());
+        assert_eq!(
+            game.feed.iter().collect::<Vec<_>>(),
+            [Event::Refused {
+                spot: Spot::Tile(far),
+                lack: Lack::Range
+            }]
+        );
+        // A spread reports exactly the forecast ignitions.
+        let forecast = game.forecast();
+        game.step(&end_turn());
+        let lit = game
+            .feed
+            .iter()
+            .find_map(|e| match e {
+                Event::Spread { lit, .. } => Some(lit),
+                _ => None,
+            })
+            .expect("spread event");
+        for (at, &warned) in forecast.iter().enumerate() {
+            assert_eq!(lit & (1 << at) != 0, warned, "cell {at}");
+        }
+    }
+    #[test]
+    fn reach_and_refusals_agree_with_the_rules_across_a_whole_career() {
+        let mut game = Game::new();
+        let mut checked = 0;
+        for tick in 0..30_000u64 {
+            if game.outcome() != Outcome::Playing {
+                break;
+            }
+            if game.phase == Phase::Active && tick % 97 == 0 {
+                for id in 0..3 {
+                    let reach = game.reach(id);
+                    let crew = game.crews[id];
+                    for (at, &least) in reach.iter().enumerate() {
+                        let action = game.action(id, at);
+                        let lack = game.lack(id, at);
+                        assert!(
+                            !(action.is_some() && lack.is_some()),
+                            "tick {tick} cell {at}"
+                        );
+                        if let Some(Action::Move(path, cost)) = &action {
+                            assert_eq!(least, *cost, "tick {tick} crew {id} cell {at}");
+                            assert_eq!(path.last(), Some(&at));
+                        }
+                        let tile = game.tiles[at];
+                        let plain = tile.people == 0
+                            && !matches!(tile.terrain, Terrain::Base | Terrain::Water);
+                        if plain && at != crew.tile && tile.walkable() {
+                            let affordable = least <= crew.ap;
+                            assert_eq!(
+                                matches!(action, Some(Action::Move(..))),
+                                affordable,
+                                "tick {tick} crew {id} cell {at}"
+                            );
+                            if least != u8::MAX && !affordable {
+                                assert_eq!(lack, Some(Lack::Ap(least)));
+                            }
+                        }
+                        if tile.fire > 0 && Game::distance(crew.tile, at) > Game::range(id) {
+                            assert_eq!(lack, Some(Lack::Range));
+                        }
+                    }
+                }
+                checked += 1;
+            }
+            let input = game.pilot(tick);
+            game.step(&input);
+        }
+        assert_eq!(game.outcome(), Outcome::Won);
+        assert!(checked > 20, "{checked} sampled states");
     }
     #[test]
     fn planner_does_not_treat_an_unaffordable_load_as_a_one_ap_move() {

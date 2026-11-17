@@ -11,12 +11,15 @@
 //! assert_eq!(game.health(), health);
 //! assert_eq!(game.outcome(), Outcome::Playing);
 //! ```
-use crate::content::{Card, ENCOUNTERS, Encounter, Intent, Kind, RELIC_NAMES, REWARDS};
+use crate::content::{Card, ENCOUNTERS, Encounter, Intent, Kind, REWARDS};
+use crate::layout;
 use ferravex_arcade::{Cue, Input, Outcome};
 use ferravex_play::gameplay::loot::RewardRng;
 pub(crate) const MAX_DECK: usize = 28;
 const MAX_BATTLE: usize = 40;
 pub(crate) const MAX_HAND: usize = 7;
+/// Presentation events kept for one update; any beyond this are dropped.
+const MAX_EVENTS: usize = 32;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Phase {
     Oath,
@@ -30,6 +33,155 @@ pub(crate) enum Phase {
     Lost,
 }
 
+/// Which fighter an event concerns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Side {
+    Hero,
+    Enemy,
+}
+/// A lasting effect on a fighter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Status {
+    Strength,
+    Thorns,
+    Poison,
+    Weak,
+    Vulnerable,
+}
+/// How health was lost.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Harm {
+    Attack,
+    Poison,
+    Thorns,
+    Price,
+}
+/// What a refused command was missing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Refusal {
+    Energy(u8),
+    Locked,
+    Health,
+    Coins(u16),
+    Full,
+    Used,
+    Owned,
+    Gilded,
+    DeckFull,
+    Nothing,
+}
+/// The thing that refused: a hand position or a numbered choice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Spot {
+    Hand(u8),
+    Choice(u8),
+}
+/// One thing an executed update accepted, kept for presentation only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Event {
+    Battle,
+    Played {
+        card: Card,
+        slot: u8,
+        of: u8,
+    },
+    Hurt {
+        side: Side,
+        amount: i16,
+        harm: Harm,
+    },
+    Blocked {
+        side: Side,
+        amount: i16,
+    },
+    Guard {
+        side: Side,
+        amount: i16,
+    },
+    Healed {
+        amount: i16,
+    },
+    Status {
+        side: Side,
+        status: Status,
+        amount: i16,
+    },
+    Cleansed,
+    Spent {
+        amount: i16,
+    },
+    Energy {
+        amount: i16,
+    },
+    Drew {
+        from: u8,
+        count: u8,
+    },
+    Wounded,
+    EnemyActs {
+        attack: bool,
+    },
+    Enraged,
+    NewTurn,
+    Victory {
+        coins: u16,
+    },
+    Defeat,
+    TimeUp,
+    /// A card reward joined the deck.
+    Took {
+        option: u8,
+    },
+    /// A camp action: rest, forge, shop or depart.
+    Camp {
+        option: u8,
+    },
+    Relic {
+        id: u8,
+    },
+    Gilded {
+        index: u8,
+    },
+    Bought {
+        item: u8,
+        price: u16,
+    },
+    Skipped,
+    Refused {
+        spot: Spot,
+        why: Refusal,
+    },
+}
+/// The card that most recently left the hand, from where, and when.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Flight {
+    pub card: Card,
+    pub slot: u8,
+    pub of: u8,
+    pub tick: u32,
+}
+/// Presentation-only memory of accepted events, stamped with the model's own
+/// tick counter so drawing can animate them. Rules never read it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Show {
+    /// What the latest update accepted; cleared at the start of each update.
+    pub events: Vec<Event>,
+    pub flight: Option<Flight>,
+    /// First new hand position, how many cards arrived, and when.
+    pub dealt: Option<(u8, u8, u32)>,
+    pub hero_hurt: Option<u32>,
+    pub enemy_hurt: Option<u32>,
+    /// When the enemy last acted, and whether it attacked.
+    pub enemy_acted: Option<(bool, u32)>,
+}
+impl Show {
+    fn push(&mut self, event: Event) {
+        if self.events.len() < MAX_EVENTS {
+            self.events.push(event);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -37,6 +189,13 @@ mod tests {
     fn choice(slot: usize) -> Input {
         Input {
             slot: Some(slot),
+            ..Input::default()
+        }
+    }
+    fn click(at: ferravex_arcade::Vec2) -> Input {
+        Input {
+            click: true,
+            pointer: at,
             ..Input::default()
         }
     }
@@ -48,6 +207,10 @@ mod tests {
     fn hand(g: &mut Game, kinds: &[Kind]) {
         g.hand = kinds.iter().copied().map(Card::new).collect();
         g.selected = 0;
+    }
+    fn card_center(g: &Game, index: usize) -> ferravex_arcade::Vec2 {
+        let (x, w) = g.card_bounds(index);
+        vec2(x + w / 2., 470.)
     }
     #[test]
     fn complete_run_uses_legal_controls_and_replays_exactly() {
@@ -65,6 +228,7 @@ mod tests {
                 game.hand.len() <= MAX_HAND
                     && game.deck.len() <= MAX_DECK
                     && game.battle_cards() <= MAX_BATTLE
+                    && game.show.events.len() <= MAX_EVENTS
             );
             if game.outcome() != Outcome::Playing {
                 finish = Some(tick);
@@ -141,11 +305,7 @@ mod tests {
         for input in [
             choice(0),
             choice(usize::MAX),
-            Input {
-                click: true,
-                pointer: vec2(f32::NAN, f32::INFINITY),
-                ..Input::default()
-            },
+            click(vec2(f32::NAN, f32::INFINITY)),
         ] {
             assert_eq!(g.step(&input), Cue::None);
         }
@@ -399,20 +559,13 @@ mod tests {
     #[test]
     fn pointer_hitboxes_and_deck_inspection_match_the_controls() {
         let mut g = battle();
-        let (x, w) = g.card_bounds(1);
-        g.step(&Input {
-            click: true,
-            pointer: vec2(x + w / 2., 430.),
-            ..Input::default()
-        });
+        let at = card_center(&g, 1);
+        g.step(&click(at));
         assert_eq!(g.selected, 1);
         hand(&mut g, &[Kind::Strike]);
         let hp = g.enemy.hp;
-        g.step(&Input {
-            click: true,
-            pointer: vec2(650., 350.),
-            ..Input::default()
-        });
+        // Clicking the lifted card plays it, exactly like Space.
+        g.step(&click(card_center(&g, 0)));
         assert!(g.enemy.hp < hp);
         let before = (g.hero, g.enemy, g.energy, g.hand.clone(), g.turn);
         g.step(&Input {
@@ -435,44 +588,165 @@ mod tests {
         assert_eq!(before, (g.hero, g.enemy, g.energy, g.hand.clone(), g.turn));
     }
     #[test]
-    fn wounds_obey_the_battle_bound_and_vanish_next_battle() {
-        let mut g = battle();
-        g.floor = 3;
-        g.end_turn();
-        assert!(
-            g.draw
-                .iter()
-                .chain(&g.hand)
-                .chain(&g.discard)
-                .any(|c| c.kind == Kind::Wound)
+    fn clicking_the_lifted_card_matches_space_including_refusals() {
+        let mut keys = battle();
+        let mut mouse = keys.clone();
+        for (g, by_click) in [(&mut keys, false), (&mut mouse, true)] {
+            hand(g, &[Kind::Crush, Kind::Strike, Kind::Guard]);
+            g.energy = 1;
+            // An unaffordable card is refused without spending anything.
+            let refused = if by_click {
+                let at = card_center(g, 0);
+                g.step(&click(at))
+            } else {
+                g.step(&Input {
+                    primary: true,
+                    ..Input::default()
+                })
+            };
+            assert_eq!(refused, Cue::None);
+            assert!(g.show.events.contains(&Event::Refused {
+                spot: Spot::Hand(0),
+                why: Refusal::Energy(2),
+            }));
+            // Select the strike, then play it.
+            if by_click {
+                let at = card_center(g, 1);
+                assert_eq!(g.step(&click(at)), Cue::Action);
+                let at = card_center(g, 1);
+                assert_eq!(g.step(&click(at)), Cue::Good);
+            } else {
+                g.step(&choice(2));
+                g.step(&Input {
+                    primary: true,
+                    ..Input::default()
+                });
+            }
+        }
+        assert_eq!(keys.enemy, mouse.enemy);
+        assert_eq!(
+            (keys.energy, keys.hand.len()),
+            (mouse.energy, mouse.hand.len())
         );
-        g.draw.clear();
-        g.hand.clear();
-        g.exhausted.clear();
-        g.discard = vec![Card::new(Kind::Guard); MAX_BATTLE];
-        g.turn = 1;
-        g.end_turn();
-        assert_eq!(g.battle_cards(), MAX_BATTLE);
-        g.start_battle();
-        assert_eq!(g.battle_cards(), g.deck.len());
-        assert!(g.draw.iter().chain(&g.hand).all(|c| c.kind != Kind::Wound));
+        assert_eq!(keys.discard, mouse.discard);
     }
     #[test]
-    fn gilded_effects_improve_and_mirror_edge_spends_all_block() {
-        let mut plain = battle();
-        hand(&mut plain, &[Kind::Strike]);
-        let mut gilded = plain.clone();
-        gilded.hand[0].upgraded = true;
-        plain.play(0);
-        gilded.play(0);
-        assert_eq!(plain.enemy.hp - gilded.enemy.hp, 3);
-        assert_eq!(plain.energy, gilded.energy);
-        hand(&mut plain, &[Kind::Reversal]);
-        plain.hero.block = 10;
-        let hp = plain.enemy.hp;
-        plain.play(0);
-        assert_eq!(plain.hero.block, 0);
-        assert_eq!(hp - plain.enemy.hp, 15);
+    fn buttons_mirror_end_turn_skip_back_and_deck_keys() {
+        // End turn.
+        let mut keys = battle();
+        let mut mouse = keys.clone();
+        keys.step(&Input {
+            secondary: true,
+            ..Input::default()
+        });
+        mouse.step(&click(layout::END_TURN.center()));
+        assert_eq!(
+            (keys.turn, keys.hero, keys.hand.clone()),
+            (mouse.turn, mouse.hero, mouse.hand.clone())
+        );
+        assert_eq!(mouse.turn, 2);
+        // Skip a reward.
+        let mut skip = battle();
+        skip.phase = Phase::Reward;
+        let size = skip.deck.len();
+        skip.step(&click(layout::SKIP.center()));
+        assert_eq!((skip.phase, skip.deck.len()), (Phase::Camp, size));
+        assert!(skip.show.events.contains(&Event::Skipped));
+        // Leave the forge without gilding.
+        let mut forge = battle();
+        forge.phase = Phase::Forge;
+        forge.step(&click(layout::BACK.center()));
+        assert_eq!(forge.phase, Phase::Camp);
+        assert!(!forge.camp_used && forge.deck.iter().all(|c| !c.upgraded));
+        // Gild by clicking a card, then the button.
+        let mut forge = battle();
+        forge.phase = Phase::Forge;
+        forge.step(&click(layout::forge_cell(2).center()));
+        assert_eq!(forge.selected, 2);
+        assert_eq!(forge.step(&click(layout::GILD.center())), Cue::Good);
+        assert!(forge.deck[2].upgraded && forge.camp_used);
+        // Open, page through and close the deck.
+        let mut deck = battle();
+        deck.step(&click(layout::DECK_BUTTON.center()));
+        assert!(deck.deck_open);
+        deck.step(&click(layout::DECK_NEXT.center()));
+        assert_eq!(deck.deck_page, 1);
+        deck.step(&click(layout::DECK_PREV.center()));
+        assert_eq!(deck.deck_page, 0);
+        deck.step(&click(layout::DECK_CLOSE.center()));
+        assert!(!deck.deck_open);
+    }
+    #[test]
+    fn choice_cards_accept_the_same_choice_as_number_keys() {
+        for slot in 1..=3 {
+            let mut keys = Game::new();
+            let mut mouse = Game::new();
+            keys.step(&choice(slot));
+            mouse.step(&click(layout::option_rect(slot - 1, 3).center()));
+            assert_eq!(keys.relics, mouse.relics);
+            assert_eq!(mouse.phase, Phase::Battle);
+        }
+        let mut camp = battle();
+        camp.phase = Phase::Camp;
+        camp.step(&click(layout::option_rect(2, 4).center()));
+        assert_eq!(camp.phase, Phase::Shop);
+        camp.coins = 0;
+        assert_eq!(
+            camp.step(&click(layout::option_rect(1, 4).center())),
+            Cue::None
+        );
+        assert!(camp.show.events.contains(&Event::Refused {
+            spot: Spot::Choice(1),
+            why: Refusal::Coins(25),
+        }));
+        assert_eq!(
+            camp.step(&click(layout::option_rect(3, 4).center())),
+            Cue::Action
+        );
+        assert_eq!(camp.phase, Phase::Camp);
+    }
+    #[test]
+    fn events_describe_only_the_latest_update() {
+        let mut g = battle();
+        assert!(g.show.events.contains(&Event::Battle));
+        assert!(
+            g.show
+                .dealt
+                .is_some_and(|(from, count, _)| from == 0 && count == 5)
+        );
+        hand(&mut g, &[Kind::Crush]);
+        g.step(&Input {
+            primary: true,
+            ..Input::default()
+        });
+        let events = g.show.events.clone();
+        assert!(matches!(events[0], Event::Played { slot: 0, of: 1, .. }));
+        // Gilt Needle's strength adds one to Hammerfall's sixteen.
+        assert!(events.contains(&Event::Hurt {
+            side: Side::Enemy,
+            amount: 17,
+            harm: Harm::Attack,
+        }));
+        assert!(events.contains(&Event::Status {
+            side: Side::Enemy,
+            status: Status::Vulnerable,
+            amount: 2,
+        }));
+        assert!(g.show.flight.is_some() && g.show.enemy_hurt.is_some());
+        g.step(&Input::default());
+        assert!(g.show.events.is_empty());
+        // The enemy's turn reports its hit on the Liberator.
+        g.step(&Input {
+            secondary: true,
+            ..Input::default()
+        });
+        assert!(g.show.events.contains(&Event::EnemyActs { attack: true }));
+        assert!(g.show.events.contains(&Event::Hurt {
+            side: Side::Hero,
+            amount: 6,
+            harm: Harm::Attack,
+        }));
+        assert!(g.show.events.contains(&Event::NewTurn));
     }
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -507,10 +781,10 @@ pub struct Game {
     pub(crate) camp_used: bool,
     pub(crate) deck_open: bool,
     pub(crate) deck_page: usize,
-    pub(crate) notice: String,
-    pub(crate) previous: String,
+    /// Executed updates; presentation animates against it, rules never do.
     pub(crate) animation: u32,
     pub(crate) won_turns: [u16; 9],
+    pub(crate) show: Show,
     shuffle: u32,
     enraged: bool,
 }
@@ -560,10 +834,12 @@ impl Game {
             camp_used: false,
             deck_open: false,
             deck_page: 0,
-            notice: "Choose the heirloom you carried into the palace.".into(),
-            previous: String::new(),
             animation: 0,
             won_turns: [0; 9],
+            show: Show {
+                events: Vec::with_capacity(MAX_EVENTS),
+                ..Show::default()
+            },
             shuffle: 0,
             enraged: false,
         }
@@ -591,19 +867,50 @@ impl Game {
     pub(crate) fn content(&self) -> &'static Encounter {
         &ENCOUNTERS[self.floor]
     }
-    fn say(&mut self, text: impl Into<String>) {
-        self.previous = std::mem::replace(&mut self.notice, text.into());
+    /// The encounter the campaign is on or heading to: between battles the
+    /// next captor is already the goal.
+    pub(crate) fn stage(&self) -> usize {
+        match self.phase {
+            Phase::Reward | Phase::Relic | Phase::Camp | Phase::Forge | Phase::Shop => {
+                (self.floor + 1).min(ENCOUNTERS.len() - 1)
+            }
+            _ => self.floor,
+        }
     }
     fn heal(&mut self, amount: i16) {
+        let before = self.hero.hp;
         self.hero.hp = (self.hero.hp + amount).min(self.hero.max_hp);
+        if self.hero.hp > before {
+            self.show.push(Event::Healed {
+                amount: self.hero.hp - before,
+            });
+        }
+    }
+    fn guard(&mut self, amount: i16) {
+        let before = self.hero.block;
+        self.hero.block = (self.hero.block + amount).min(200);
+        self.show.push(Event::Guard {
+            side: Side::Hero,
+            amount: self.hero.block - before,
+        });
+    }
+    /// Record a status that grew from `before` to `after`.
+    fn afflict(&mut self, side: Side, status: Status, before: i16, after: i16) {
+        if after > before {
+            self.show.push(Event::Status {
+                side,
+                status,
+                amount: after - before,
+            });
+        }
     }
     fn acquire_relic(&mut self, id: usize) {
         self.relics[id] = true;
+        self.show.push(Event::Relic { id: id as u8 });
         if id == 3 {
             self.hero.max_hp += 16;
             self.heal(16);
         }
-        self.say(format!("{} joins your cause.", RELIC_NAMES[id]));
     }
     fn shuffle_draw(&mut self) {
         let mut rng = RewardRng::new(
@@ -616,6 +923,7 @@ impl Game {
         self.shuffle += 1;
     }
     fn draw_cards(&mut self, amount: usize) {
+        let from = self.hand.len();
         for _ in 0..amount {
             if self.hand.len() >= MAX_HAND {
                 break;
@@ -630,6 +938,12 @@ impl Game {
             if let Some(card) = self.draw.pop() {
                 self.hand.push(card);
             }
+        }
+        if self.hand.len() > from {
+            self.show.push(Event::Drew {
+                from: from as u8,
+                count: (self.hand.len() - from) as u8,
+            });
         }
     }
     fn start_battle(&mut self) {
@@ -658,12 +972,9 @@ impl Game {
         self.draw.extend_from_slice(&self.deck);
         self.shuffle_draw();
         self.energy = if self.relics[4] { 4 } else { 3 };
+        self.show.push(Event::Battle);
         self.draw_cards(5 + usize::from(self.relics[1]));
         self.selected = 0;
-        self.say(format!(
-            "{}: read the intent, then play your hand.",
-            self.content().name
-        ));
     }
     pub(crate) fn intent(&self) -> Intent {
         self.content().intents
@@ -699,10 +1010,25 @@ impl Game {
         let absorbed = damage.min(self.enemy.block);
         self.enemy.block -= absorbed;
         self.enemy.hp = (self.enemy.hp - (damage - absorbed)).max(0);
+        if absorbed > 0 {
+            self.show.push(Event::Blocked {
+                side: Side::Enemy,
+                amount: absorbed,
+            });
+        }
+        if damage > absorbed || absorbed == 0 {
+            self.show.push(Event::Hurt {
+                side: Side::Enemy,
+                amount: damage - absorbed,
+                harm: Harm::Attack,
+            });
+        }
     }
     fn victory(&mut self) -> Cue {
         self.won_turns[self.floor] = self.turn;
-        self.coins = self.coins.saturating_add(22 + self.floor as u16 * 5);
+        let coins = 22 + self.floor as u16 * 5;
+        self.coins = self.coins.saturating_add(coins);
+        self.show.push(Event::Victory { coins });
         self.score += 1000
             + self.floor as u32 * 150
             + u32::from(600u16.saturating_sub(self.turn.saturating_mul(35)));
@@ -711,11 +1037,9 @@ impl Game {
         if self.floor == 8 {
             self.score += u32::try_from(self.hero.hp).unwrap_or(0) * 30;
             self.phase = Phase::Won;
-            self.say("The Regent's contract tears. Every stolen name returns home.");
             Cue::Win
         } else {
             self.phase = Phase::Reward;
-            self.say("A ledger is freed. Choose one card, or pass with X.");
             Cue::Good
         }
     }
@@ -723,7 +1047,7 @@ impl Game {
         if self.hero.hp <= 0 {
             self.hero.hp = 0;
             self.phase = Phase::Lost;
-            self.say("Your name enters the ledger. R begins a new expedition.");
+            self.show.push(Event::Defeat);
             return Some(Cue::Bad);
         }
         if self.enemy.hp <= 0 {
@@ -732,6 +1056,7 @@ impl Game {
         if self.floor == 8 && !self.enraged && self.enemy.hp <= self.enemy.max_hp / 2 {
             self.enraged = true;
             self.enemy.strength += 3;
+            self.show.push(Event::Enraged);
         }
         None
     }
@@ -742,32 +1067,71 @@ impl Game {
                 && (c.kind != Kind::Gambit || self.hero.hp > c.amount(3, 2))
         })
     }
-    fn play(&mut self, index: usize) -> Cue {
+    pub(crate) fn play(&mut self, index: usize) -> Cue {
         if !self.playable(index) {
-            self.say("Cannot play: check energy, HP and the selected card.");
+            if let Some(card) = self.hand.get(index) {
+                let why = if card.kind == Kind::Wound {
+                    Refusal::Locked
+                } else if card.cost() > self.energy {
+                    Refusal::Energy(card.cost())
+                } else {
+                    Refusal::Health
+                };
+                self.show.push(Event::Refused {
+                    spot: Spot::Hand(index as u8),
+                    why,
+                });
+            }
             return Cue::None;
         }
+        let of = self.hand.len() as u8;
         let card = self.hand.remove(index);
+        self.show.push(Event::Played {
+            card,
+            slot: index as u8,
+            of,
+        });
         self.energy -= card.cost();
         match card.kind {
             Kind::Strike => self.strike(card.amount(7, 10)),
-            Kind::Guard => self.hero.block = (self.hero.block + card.amount(6, 9)).min(200),
+            Kind::Guard => self.guard(card.amount(6, 9)),
             Kind::Riposte => {
-                self.hero.block = (self.hero.block + card.amount(5, 7)).min(200);
+                self.guard(card.amount(5, 7));
                 self.strike(card.amount(4, 6));
+                let before = self.enemy.weak;
                 self.enemy.weak = self.enemy.weak.saturating_add(1).min(9);
+                self.afflict(
+                    Side::Enemy,
+                    Status::Weak,
+                    before.into(),
+                    self.enemy.weak.into(),
+                );
             }
             Kind::Venom => {
+                let before = self.enemy.poison;
                 self.enemy.poison = self
                     .enemy
                     .poison
                     .saturating_add(card.amount(4, 6) as u8)
-                    .min(99)
+                    .min(99);
+                self.afflict(
+                    Side::Enemy,
+                    Status::Poison,
+                    before.into(),
+                    self.enemy.poison.into(),
+                );
             }
             Kind::Insight => self.draw_cards(card.amount(2, 3) as usize),
             Kind::Crush => {
                 self.strike(card.amount(16, 21));
+                let before = self.enemy.vulnerable;
                 self.enemy.vulnerable = self.enemy.vulnerable.saturating_add(2).min(9);
+                self.afflict(
+                    Side::Enemy,
+                    Status::Vulnerable,
+                    before.into(),
+                    self.enemy.vulnerable.into(),
+                );
             }
             Kind::Siphon => {
                 self.strike(card.amount(5, 8));
@@ -779,23 +1143,51 @@ impl Game {
                 }
             }
             Kind::Fortify => {
-                self.hero.block = (self.hero.block + card.amount(14, 19)).min(200);
+                self.guard(card.amount(14, 19));
+                let before = self.hero.thorns;
                 self.hero.thorns = (self.hero.thorns + card.amount(2, 3)).min(30);
+                self.afflict(Side::Hero, Status::Thorns, before, self.hero.thorns);
             }
-            Kind::Spark => self.energy = (self.energy + card.amount(1, 2) as u8).min(10),
-            Kind::Focus => self.hero.strength = (self.hero.strength + card.amount(2, 3)).min(30),
+            Kind::Spark => {
+                let before = self.energy;
+                self.energy = (self.energy + card.amount(1, 2) as u8).min(10);
+                if self.energy > before {
+                    self.show.push(Event::Energy {
+                        amount: i16::from(self.energy - before),
+                    });
+                }
+            }
+            Kind::Focus => {
+                let before = self.hero.strength;
+                self.hero.strength = (self.hero.strength + card.amount(2, 3)).min(30);
+                self.afflict(Side::Hero, Status::Strength, before, self.hero.strength);
+            }
             Kind::Gambit => {
-                self.hero.hp -= card.amount(3, 2);
+                let price = card.amount(3, 2);
+                self.hero.hp -= price;
+                self.show.push(Event::Hurt {
+                    side: Side::Hero,
+                    amount: price,
+                    harm: Harm::Price,
+                });
                 self.strike(card.amount(9, 13));
             }
             Kind::Ward => {
-                self.hero.block = (self.hero.block + card.amount(5, 8)).min(200);
+                self.guard(card.amount(5, 8));
+                if self.hero.poison > 0 || self.hero.weak > 0 || self.hero.vulnerable > 0 {
+                    self.show.push(Event::Cleansed);
+                }
                 self.hero.poison = 0;
                 self.hero.weak = 0;
                 self.hero.vulnerable = 0;
             }
             Kind::Reversal => {
                 let damage = self.hero.block + card.amount(4, 8);
+                if self.hero.block > 0 {
+                    self.show.push(Event::Spent {
+                        amount: self.hero.block,
+                    });
+                }
                 self.hero.block = 0;
                 self.strike(damage);
             }
@@ -809,16 +1201,18 @@ impl Game {
             self.discard.push(card);
         }
         self.selected = self.selected.min(self.hand.len().saturating_sub(1));
-        self.say(format!(
-            "Played {}{}. {} energy remains.",
-            card.name(),
-            if card.upgraded { "+" } else { "" },
-            self.energy
-        ));
         self.check_end().unwrap_or(Cue::Good)
     }
-    fn end_turn(&mut self) -> Cue {
-        self.enemy.hp = (self.enemy.hp - i16::from(self.enemy.poison)).max(0);
+    pub(crate) fn end_turn(&mut self) -> Cue {
+        let venom = i16::from(self.enemy.poison);
+        self.enemy.hp = (self.enemy.hp - venom).max(0);
+        if venom > 0 {
+            self.show.push(Event::Hurt {
+                side: Side::Enemy,
+                amount: venom,
+                harm: Harm::Poison,
+            });
+        }
         self.enemy.poison = self.enemy.poison.saturating_sub(1);
         if let Some(cue) = self.check_end() {
             return cue;
@@ -826,7 +1220,16 @@ impl Game {
         self.discard.append(&mut self.hand);
         self.hero.weak = self.hero.weak.saturating_sub(1);
         let intent = self.intent();
+        self.show.push(Event::EnemyActs {
+            attack: intent.hits > 0,
+        });
         self.enemy.block = intent.block;
+        if intent.block > 0 {
+            self.show.push(Event::Guard {
+                side: Side::Enemy,
+                amount: intent.block,
+            });
+        }
         let mut lost = 0;
         for _ in 0..intent.hits {
             let damage = Self::damage_value(
@@ -840,8 +1243,28 @@ impl Game {
             let hit = damage - absorbed;
             lost += hit;
             self.hero.hp = (self.hero.hp - hit).max(0);
+            if absorbed > 0 {
+                self.show.push(Event::Blocked {
+                    side: Side::Hero,
+                    amount: absorbed,
+                });
+            }
+            if hit > 0 || absorbed == 0 {
+                self.show.push(Event::Hurt {
+                    side: Side::Hero,
+                    amount: hit,
+                    harm: Harm::Attack,
+                });
+            }
             if hit > 0 {
                 self.enemy.hp = (self.enemy.hp - self.hero.thorns).max(0);
+                if self.hero.thorns > 0 {
+                    self.show.push(Event::Hurt {
+                        side: Side::Enemy,
+                        amount: self.hero.thorns,
+                        harm: Harm::Thorns,
+                    });
+                }
             }
             if self.hero.hp == 0 || self.enemy.hp == 0 {
                 break;
@@ -853,19 +1276,50 @@ impl Game {
         if let Some(cue) = self.check_end() {
             return cue;
         }
+        let before = self.enemy.strength;
         self.enemy.strength = (self.enemy.strength + intent.strength).min(30);
+        self.afflict(Side::Enemy, Status::Strength, before, self.enemy.strength);
+        let before = self.hero.weak;
         self.hero.weak = self.hero.weak.saturating_add(intent.weak).min(9);
+        self.afflict(
+            Side::Hero,
+            Status::Weak,
+            before.into(),
+            self.hero.weak.into(),
+        );
+        let before = self.hero.vulnerable;
         self.hero.vulnerable = self
             .hero
             .vulnerable
             .saturating_add(intent.vulnerable)
             .min(9);
+        self.afflict(
+            Side::Hero,
+            Status::Vulnerable,
+            before.into(),
+            self.hero.vulnerable.into(),
+        );
+        let before = self.hero.poison;
         self.hero.poison = self.hero.poison.saturating_add(intent.poison).min(99);
+        self.afflict(
+            Side::Hero,
+            Status::Poison,
+            before.into(),
+            self.hero.poison.into(),
+        );
         if intent.wound && self.battle_cards() < MAX_BATTLE {
             self.discard.push(Card::new(Kind::Wound));
+            self.show.push(Event::Wounded);
         }
         let poison = i16::from(self.hero.poison);
         self.hero.hp = (self.hero.hp - poison).max(0);
+        if poison > 0 {
+            self.show.push(Event::Hurt {
+                side: Side::Hero,
+                amount: poison,
+                harm: Harm::Poison,
+            });
+        }
         self.hero.poison = self.hero.poison.saturating_sub(1);
         if let Some(cue) = self.check_end() {
             return cue;
@@ -877,22 +1331,19 @@ impl Game {
         if self.turn > 40 {
             self.hero.hp = 0;
             self.phase = Phase::Lost;
-            self.say("The palace seals at turn 40. Your expedition ends.");
+            self.show.push(Event::TimeUp);
             return Cue::Bad;
         }
         self.draw_cards(5 + usize::from(self.relics[1]));
         self.selected = 0;
-        self.say(format!(
-            "Enemy dealt {} HP; poison dealt {}. New hand, turn {}.",
-            lost, poison, self.turn
-        ));
+        self.show.push(Event::NewTurn);
         if lost + poison > 0 {
             Cue::Bad
         } else {
             Cue::Action
         }
     }
-    fn battle_cards(&self) -> usize {
+    pub(crate) fn battle_cards(&self) -> usize {
         self.draw.len() + self.hand.len() + self.discard.len() + self.exhausted.len()
     }
     fn after_reward(&mut self) {
@@ -904,6 +1355,13 @@ impl Game {
             Phase::Camp
         };
     }
+    fn refuse(&mut self, index: usize, why: Refusal) -> Cue {
+        self.show.push(Event::Refused {
+            spot: Spot::Choice(index as u8),
+            why,
+        });
+        Cue::None
+    }
     fn choose(&mut self, index: usize) -> Cue {
         match self.phase {
             Phase::Oath if index < 3 => {
@@ -914,37 +1372,52 @@ impl Game {
             Phase::Reward if index < 3 && self.deck.len() < MAX_DECK => {
                 let card = Card::new(REWARDS[self.floor][index]);
                 self.deck.push(card);
-                self.say(format!("Added {} to your deck.", card.name()));
+                self.show.push(Event::Took {
+                    option: index as u8,
+                });
                 self.after_reward();
                 Cue::Good
             }
+            Phase::Reward if index < 3 => self.refuse(index, Refusal::DeckFull),
             Phase::Relic if index < 3 && !self.relics[index + 3] => {
                 self.acquire_relic(index + 3);
                 self.phase = Phase::Camp;
                 self.selected = 0;
                 Cue::Good
             }
+            Phase::Relic if index < 3 => self.refuse(index, Refusal::Owned),
             Phase::Camp => match index {
                 0 if !self.camp_used && self.hero.hp < self.hero.max_hp => {
+                    self.show.push(Event::Camp { option: 0 });
                     self.heal(18);
                     self.camp_used = true;
-                    self.say("Restored 18 HP. Your camp action is spent.");
                     Cue::Good
                 }
                 1 if !self.camp_used => {
+                    self.show.push(Event::Camp { option: 1 });
                     self.phase = Phase::Forge;
                     self.selected = 0;
                     Cue::Action
                 }
                 2 if !self.camp_used => {
+                    self.show.push(Event::Camp { option: 2 });
                     self.phase = Phase::Shop;
                     self.selected = 0;
                     Cue::Action
                 }
                 3 => {
+                    self.show.push(Event::Camp { option: 3 });
                     self.floor += 1;
                     self.start_battle();
                     Cue::Good
+                }
+                0..=2 => {
+                    let why = if self.camp_used {
+                        Refusal::Used
+                    } else {
+                        Refusal::Full
+                    };
+                    self.refuse(index, why)
                 }
                 _ => Cue::None,
             },
@@ -953,21 +1426,22 @@ impl Game {
                 self.camp_used = true;
                 self.phase = Phase::Camp;
                 self.selected = 3;
-                self.say("A card is gilded. Its improved effect lasts for the run.");
+                self.show.push(Event::Gilded { index: index as u8 });
                 Cue::Good
             }
+            Phase::Forge if index < self.deck.len() => self.refuse(index, Refusal::Gilded),
             Phase::Shop if !self.camp_used => {
                 let accepted = match index {
                     0 if self.coins >= 35 && self.deck.len() < MAX_DECK => {
                         self.coins -= 35;
                         self.deck.push(Card::new(self.shop_card()));
-                        self.say("Bought the merchant's card.");
+                        self.show.push(Event::Bought { item: 0, price: 35 });
                         true
                     }
                     1 if self.coins >= 25 && self.hero.hp < self.hero.max_hp => {
                         self.coins -= 25;
+                        self.show.push(Event::Bought { item: 1, price: 25 });
                         self.heal(28);
-                        self.say("Bought a tonic: healed 28 HP.");
                         true
                     }
                     2 if self.coins >= 20 && self.deck.len() > 6 => {
@@ -978,7 +1452,7 @@ impl Game {
                         {
                             self.deck.remove(at);
                             self.coins -= 20;
-                            self.say("Removed one ungilded Gilt Strike.");
+                            self.show.push(Event::Bought { item: 2, price: 20 });
                             true
                         } else {
                             false
@@ -996,6 +1470,14 @@ impl Game {
                     self.phase = Phase::Camp;
                     self.selected = 3;
                     Cue::Good
+                } else if index < 3 {
+                    let price = [35, 25, 20][index];
+                    let why = if self.coins < price {
+                        Refusal::Coins(price)
+                    } else {
+                        [Refusal::DeckFull, Refusal::Full, Refusal::Nothing][index]
+                    };
+                    self.refuse(index, why)
                 } else {
                     Cue::None
                 }
@@ -1015,7 +1497,7 @@ impl Game {
             Kind::Purify,
         ][self.floor.min(7)]
     }
-    fn options(&self) -> usize {
+    pub(crate) fn options(&self) -> usize {
         match self.phase {
             Phase::Oath | Phase::Reward | Phase::Relic => 3,
             Phase::Camp | Phase::Shop => 4,
@@ -1024,86 +1506,133 @@ impl Game {
             _ => 0,
         }
     }
+    /// X: end the turn, pass a card reward, or leave the forge or shop.
+    fn back(&mut self) -> Cue {
+        match self.phase {
+            Phase::Battle => self.end_turn(),
+            Phase::Reward => {
+                self.show.push(Event::Skipped);
+                self.after_reward();
+                Cue::Action
+            }
+            Phase::Forge | Phase::Shop => {
+                self.phase = Phase::Camp;
+                self.selected = 0;
+                Cue::Action
+            }
+            _ => Cue::None,
+        }
+    }
     /// Execute one 60 Hz command. Planning has no real-time deadline; held keys do not repeat card plays.
     pub fn step(&mut self, input: &Input) -> Cue {
         if self.outcome() != Outcome::Playing {
             return Cue::None;
         }
+        self.show.events.clear();
         self.animation = self.animation.wrapping_add(1);
-        if input.tertiary {
+        let cue = self.act(input);
+        self.stamp();
+        cue
+    }
+    /// Remember when presentation-worthy events happened.
+    fn stamp(&mut self) {
+        let now = self.animation;
+        for event in &self.show.events {
+            match *event {
+                Event::Played { card, slot, of } => {
+                    self.show.flight = Some(Flight {
+                        card,
+                        slot,
+                        of,
+                        tick: now,
+                    });
+                }
+                Event::Drew { from, count } => self.show.dealt = Some((from, count, now)),
+                Event::Hurt {
+                    side: Side::Hero,
+                    amount,
+                    ..
+                } if amount > 0 => self.show.hero_hurt = Some(now),
+                Event::Hurt {
+                    side: Side::Enemy,
+                    amount,
+                    ..
+                } if amount > 0 => self.show.enemy_hurt = Some(now),
+                Event::EnemyActs { attack } => self.show.enemy_acted = Some((attack, now)),
+                _ => {}
+            }
+        }
+    }
+    fn act(&mut self, input: &Input) -> Cue {
+        let p = input.pointer;
+        if input.tertiary || (input.click && !self.deck_open && layout::DECK_BUTTON.contains(p)) {
             self.deck_open = !self.deck_open;
             self.deck_page = 0;
             return Cue::Action;
         }
         if self.deck_open {
-            let pages = self.deck.len().div_ceil(8).max(1);
-            if input.primary || input.secondary {
+            let pages = self.deck.len().div_ceil(layout::PAGE).max(1);
+            if input.primary || input.secondary || (input.click && layout::DECK_CLOSE.contains(p)) {
                 self.deck_open = false;
                 return Cue::Action;
             }
-            if input.right_pressed || input.down_pressed {
+            if input.right_pressed
+                || input.down_pressed
+                || (input.click && layout::DECK_NEXT.contains(p))
+            {
                 self.deck_page = (self.deck_page + 1) % pages;
                 return Cue::Action;
             }
-            if input.left_pressed || input.up_pressed {
+            if input.left_pressed
+                || input.up_pressed
+                || (input.click && layout::DECK_PREV.contains(p))
+            {
                 self.deck_page = (self.deck_page + pages - 1) % pages;
                 return Cue::Action;
             }
             return Cue::None;
         }
         if input.secondary {
-            return match self.phase {
-                Phase::Battle => self.end_turn(),
-                Phase::Reward => {
-                    self.say("Passed the card reward. A lean deck is a choice.");
-                    self.after_reward();
-                    Cue::Action
-                }
-                Phase::Forge | Phase::Shop => {
-                    self.phase = Phase::Camp;
-                    self.selected = 0;
-                    Cue::Action
-                }
-                _ => Cue::None,
-            };
+            return self.back();
         }
         if input.click {
-            let p = input.pointer;
-            if self.phase == Phase::Battle {
-                if p.y >= 398. && p.y < 558. {
-                    for i in 0..self.hand.len() {
-                        let (x, w) = self.card_bounds(i);
-                        if p.x >= x && p.x < x + w {
-                            self.selected = i;
+            match self.phase {
+                Phase::Battle => {
+                    // First click lifts a card; clicking the lifted card plays it.
+                    if let Some(i) = layout::hand_at(p, self.hand.len()) {
+                        if i == self.selected {
+                            return self.play(i);
+                        }
+                        self.selected = i;
+                        return Cue::Action;
+                    }
+                    if layout::END_TURN.contains(p) {
+                        return self.back();
+                    }
+                }
+                Phase::Forge => {
+                    if let Some(slot) = layout::forge_at(p) {
+                        let id = (self.selected / layout::PAGE) * layout::PAGE + slot;
+                        if id < self.deck.len() {
+                            self.selected = id;
                             return Cue::Action;
                         }
                     }
-                }
-                if p.y >= 340. && p.y < 377. {
-                    if p.x >= 620. && p.x < 766. {
-                        return self.play(self.selected);
+                    if layout::GILD.contains(p) {
+                        return self.choose(self.selected);
                     }
-                    if p.x >= 778. && p.x < 928. {
-                        return self.end_turn();
+                    if layout::BACK.contains(p) {
+                        return self.back();
                     }
                 }
-            } else if self.phase == Phase::Forge {
-                if p.x >= 40. && p.x < 600. && p.y >= 162. && p.y < 482. {
-                    let id = ((p.y - 162.) / 40.) as usize + (self.selected / 8) * 8;
-                    if id < self.deck.len() {
-                        self.selected = id;
-                        return Cue::Action;
+                _ => {
+                    if let Some(i) = layout::option_at(p, self.options()) {
+                        return self.choose(i);
+                    }
+                    if self.phase == Phase::Reward && layout::SKIP.contains(p) {
+                        return self.back();
                     }
                 }
-                if p.x >= 630. && p.x < 920. && p.y >= 472. && p.y < 522. {
-                    return self.choose(self.selected);
-                }
-            } else if p.x >= 480.
-                && p.x < 924.
-                && p.y >= 190.
-                && p.y < 190. + self.options() as f32 * 77.
-            {
-                return self.choose(((p.y - 190.) / 77.) as usize);
             }
         }
         let count = self.options();
@@ -1137,10 +1666,9 @@ impl Game {
             Cue::None
         }
     }
+    #[cfg(test)]
     pub(crate) fn card_bounds(&self, index: usize) -> (f32, f32) {
-        let width = (896. / self.hand.len().max(1) as f32 - 8.).min(166.);
-        let total = (width + 8.) * self.hand.len() as f32 - 8.;
-        ((960. - total) / 2. + index as f32 * (width + 8.), width)
+        layout::hand_slot(index, self.hand.len())
     }
     /// Generate read-only legal player commands for a reproducible full run.
     pub fn pilot(&self, tick: u64) -> Input {
@@ -1314,29 +1842,26 @@ impl Game {
             _ => Input::default(),
         }
     }
-    /// Narrative ending and score summary for the shared results screen.
+    /// One-sentence ending or progress summary for status readers.
     pub fn summary(&self) -> String {
         match self.outcome() {
             Outcome::Won => format!(
-                "The ledgers burn. Nine captors are defeated and the city remembers its names. {} cards, {} relics, {} HP and {} coins remain. {} points. Your choices decide the deck that reaches the throne.",
-                self.deck.len(),
-                self.relics.iter().filter(|&&r| r).count(),
+                "All nine captors defeated with {} HP and {} cards for {} points.",
                 self.hero.hp,
-                self.coins,
+                self.deck.len(),
                 self.score
             ),
             Outcome::Lost => format!(
-                "The {} stopped your expedition at encounter {} of 9. {} points. Read each intent, keep a lean deck and return with a new relic. R begins a fresh run.",
+                "{} ended the expedition at encounter {} of 9 with {} points.",
                 self.content().name,
                 self.encounter(),
                 self.score
             ),
             Outcome::Playing => format!(
-                "Encounter {} of 9: {}. {} HP, {} coins.",
+                "Encounter {} of 9 against {}, {} HP.",
                 self.encounter(),
                 self.content().name,
-                self.hero.hp,
-                self.coins
+                self.hero.hp
             ),
         }
     }

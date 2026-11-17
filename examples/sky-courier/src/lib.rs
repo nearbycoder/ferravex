@@ -952,6 +952,7 @@ async fn game() {
             results: &results,
             coach: &coach,
             pauses,
+            fx: presentation.hud_fx(),
         };
         activate = hud(
             &run,

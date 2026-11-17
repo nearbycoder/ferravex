@@ -1,7 +1,9 @@
 //! Authored workbenches and reference programs entered by the legal pilot.
 pub(crate) struct Room {
     pub name: &'static str,
+    /// Header goal, at most five words.
     pub lesson: &'static str,
+    /// Route advice published to status readers while the visual hint is open.
     pub hint: &'static str,
     pub map: [&'static str; 7],
     pub start: (u32, u32),
@@ -12,7 +14,7 @@ pub(crate) struct Room {
 pub(crate) const ROOMS: [Room; 12] = [
     Room {
         name: "First Parcel",
-        lesson: "Grab the parcel, carry it to the dock, then drop.",
+        lesson: "Grab, carry, drop",
         hint: "Face east: Forward, Grab, four Forward commands, then Drop. Commands are relative to the robot, not the screen.",
         start: (1, 3),
         facing: 1,
@@ -30,7 +32,7 @@ pub(crate) const ROOMS: [Room; 12] = [
     },
     Room {
         name: "The Right Angle",
-        lesson: "Turn before moving around corners.",
+        lesson: "Turn at the corner",
         hint: "Two steps east reach the parcel. Grab, turn Right, walk four steps south and Drop.",
         start: (1, 1),
         facing: 1,
@@ -48,7 +50,7 @@ pub(crate) const ROOMS: [Room; 12] = [
     },
     Room {
         name: "Upstairs Mail",
-        lesson: "Turn left to reach the dock.",
+        lesson: "Turn left, head north",
         hint: "Reach the parcel two steps east, Grab, turn Left and walk four steps north to the dock.",
         start: (1, 5),
         facing: 1,
@@ -66,7 +68,7 @@ pub(crate) const ROOMS: [Room; 12] = [
     },
     Room {
         name: "The Missing Floor",
-        lesson: "Avoid the dark pits.",
+        lesson: "Steer around the pits",
         hint: "Take the parcel, go north along column C, then east along row 2. The direct diagonal crosses pits.",
         start: (1, 5),
         facing: 1,
@@ -84,7 +86,7 @@ pub(crate) const ROOMS: [Room; 12] = [
     },
     Room {
         name: "Repeat Department",
-        lesson: "Repeat 2 repeats the last instruction two more times.",
+        lesson: "Repeat saves tape",
         hint: "After Grab, Forward then Repeat 2 moves three tiles. Add two more Forward commands to reach the far dock.",
         start: (1, 3),
         facing: 1,
@@ -102,7 +104,7 @@ pub(crate) const ROOMS: [Room; 12] = [
     },
     Room {
         name: "Long Delivery",
-        lesson: "Repeat 3 repeats it three more times.",
+        lesson: "Repeat 3, then turn",
         hint: "Grab, travel five tiles east using Forward / Repeat 3 / Forward, turn Left, then Forward / Repeat 3 reaches the dock.",
         start: (1, 5),
         facing: 1,
@@ -120,7 +122,7 @@ pub(crate) const ROOMS: [Room; 12] = [
     },
     Room {
         name: "Wake the Switch",
-        lesson: "Round switches permanently open matching gates.",
+        lesson: "Switches open gates",
         hint: "The switch sits on your delivery route. Carry the parcel across a, then through A. Repeat 3 is safe once the gate opens.",
         start: (1, 3),
         facing: 1,
@@ -138,7 +140,7 @@ pub(crate) const ROOMS: [Room; 12] = [
     },
     Room {
         name: "Switchback",
-        lesson: "Open the gate before delivering.",
+        lesson: "Open the gate first",
         hint: "Carry the parcel north to a. Move three tiles east, turn south through A, then turn east at the bottom to the dock.",
         start: (1, 5),
         facing: 1,
@@ -156,7 +158,7 @@ pub(crate) const ROOMS: [Room; 12] = [
     },
     Room {
         name: "Two Addresses",
-        lesson: "Match each parcel to its numbered dock.",
+        lesson: "Match numbers to docks",
         hint: "Deliver the upper parcel first. Turn around, return four tiles west, turn Left and move four tiles south for parcel 2. Turn Left to deliver east.",
         start: (1, 1),
         facing: 1,
@@ -174,7 +176,7 @@ pub(crate) const ROOMS: [Room; 12] = [
     },
     Room {
         name: "Twin Relays",
-        lesson: "Open gate A before gate B.",
+        lesson: "Gate A, then gate B",
         hint: "Travel east while carrying the parcel, crossing a, A and b. Turn north through B, then turn right for the final tile.",
         start: (1, 5),
         facing: 1,
@@ -192,7 +194,7 @@ pub(crate) const ROOMS: [Room; 12] = [
     },
     Room {
         name: "Assembly Line",
-        lesson: "Deliver all three parcels in one program.",
+        lesson: "Three parcels, one tape",
         hint: "Each row has a parcel at C and a dock at G. Deliver east, return west, go two tiles south, pick up, turn east and repeat the pattern.",
         start: (1, 1),
         facing: 1,
@@ -210,7 +212,7 @@ pub(crate) const ROOMS: [Room; 12] = [
     },
     Room {
         name: "The Daybreak Engine",
-        lesson: "Deliver all parcels through the switch circuits.",
+        lesson: "Wake the Daybreak Engine",
         hint: "Deliver row 2 to G, row 4 to F, and row 6 to G. The first journey opens the lower gate; the second opens its own delivery gate. Adjust the middle route to three tiles.",
         start: (1, 1),
         facing: 1,

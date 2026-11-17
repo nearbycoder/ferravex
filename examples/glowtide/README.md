@@ -14,15 +14,22 @@ new weapons, passives or upgrades. The world waits while you choose.
 Eight weapons have different rhythms: Wisp Bolt, Halo Orbit, Bubble Mortar,
 Tide Lash, Chain Spark, Lantern Aura, Shell Boomerang and Star Skipper. Carry up
 to six weapons and six passives. Raise a weapon to level seven, own its paired
-passive, then open a chest to evolve it. Cards explain what the next level adds.
-Boss attacks have visible windups; save a dash for the opening. Defeat the final
-boss to see dawn.
+passive, then open a chest to evolve it. Each card shows its level as pips and
+what the pick adds as icon chips read straight from the rules (a sword and
++30%, a plus and +1, a clock and -20%); a gold star-and-chest tag marks a pick
+that makes an evolution ready. Reroll and Banish show their remaining uses and
+key caps. Boss attacks have visible windups; save a dash for the opening.
+Defeat the final boss to see dawn. In-run callouts are a word or three, and a
+gold arrow at the screen edge points to any treasure chest out of view.
 
 A run earns **Glimmer**, even if you lose. Spend it at the Shrine on permanent
 bonuses or unlock Pip, Mira and Bramble, each with a different starting weapon
-and strengths. Progress is stored on this device using a versioned save. Quick
-and full tides keep separate survival, kill and level records. Results show your
-build, damage by weapon, a title and the Glimmer you earned.
+and strengths; both screens show those bonuses as icon chips (heart HP, sword
+damage, wind speed, shield armor) and prices as a gem and a number. Progress is
+stored on this device using a versioned save. Quick and full tides keep
+separate survival, kill and level records. Results show a title, your time,
+level, kills and Glimmer as icon tiles (a crown marks a new best) and damage by
+weapon.
 
 ## Controls
 
@@ -60,7 +67,10 @@ The public site exposes it at `/examples/glowtide/`.
   waves, bosses, loot and upgrade choices. It has no platform I/O or rendering.
 - `run.rs` connects the rules to `GameSession`: input edges are consumed only on
   executed ticks; terminal ticks stop catch-up; pause discards elapsed time.
-- `world.rs`, `gfx.rs`, `hud.rs` and `menus.rs` paint the ocean and crisp UI.
+- `world.rs`, `gfx.rs`, `hud.rs` and `menus.rs` paint the ocean and crisp UI;
+  `chips.rs` derives every card, character and Shrine chip from the rules
+  (`weapon_stats` deltas, passive modifiers, character stats, Shrine bonuses),
+  with tests that keep them equal.
   Post-processing blooms the world before HUD text is drawn. Modern text,
   eased cards, roll counters and iris transitions use the shared engine.
 - `fx.rs` and `sfx.rs` consume accepted simulation events. Restart clears effects

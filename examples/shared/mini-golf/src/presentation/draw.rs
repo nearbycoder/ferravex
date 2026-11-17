@@ -4,6 +4,7 @@
 //! post-processing HUD boundary, so emissive accents feed the bloom.
 use super::*;
 use ferravex_render::{
+    icons::{self, Icon, IconStyle},
     post,
     shapes::{self, Fill, Shadow, Stroke},
     text::{FontFace, TextAlign, TextStyle as Type, draw_text_styled},
@@ -98,6 +99,7 @@ impl App {
         post::glow_circle(q.x, q.y, ppm * 0.42, CUP_GLOW, 0.55 * breathe * boost);
         if self.round.phase == Phase::Aiming && !self.modal_open() {
             self.draw_aim(p);
+            self.draw_drag_hint(p);
         }
         // Ambient pollen over the green (frozen under reduced motion).
         for i in 0..scenery::MOTES {
@@ -134,6 +136,52 @@ impl App {
         ground_ring(p, end, lift(end), pulse, 2., fade(color, 0.95));
         let q = p.screen(vec3(end.x, lift(end), end.y));
         shapes::glow_disc(q, ppm * 0.35, fade(color, 0.35));
+    }
+
+    /// Narrow (touch-sized) screens learn the gesture by watching it: a hand
+    /// presses at the ball, drags out to the target ring and lets go. It
+    /// fades over the first few accepted putts and never shows for demos.
+    fn draw_drag_hint(&self, p: &Projector) {
+        let learn = 1. - self.putts as f32 / LEARNED as f32;
+        if learn <= 0. || self.auto || p.w >= 560. {
+            return;
+        }
+        let lift = |g: Vec2| self.round.course.height(g) + 0.03;
+        let ball = self.round.ball;
+        let end = ball + self.aim * preview_length(self.power);
+        let from = p.screen(vec3(ball.x, lift(ball), ball.y));
+        let to = p.screen(vec3(end.x, lift(end), end.y));
+        let cycle = 2.4;
+        let k = if self.juice.motion() == 0. {
+            0.55
+        } else {
+            (self.ambient % cycle) / cycle
+        };
+        let base = 0.4 + 0.6 * learn;
+        let (at, a, press) = if k < 0.18 {
+            (from, (k / 0.08).min(1.), k / 0.18)
+        } else if k < 0.72 {
+            (from.lerp(to, ease_out((k - 0.18) / 0.54)), 1., 1.)
+        } else {
+            (to, 1. - (k - 0.72) / 0.28, 1.)
+        };
+        let a = a * base;
+        if k < 0.18 {
+            shapes::stroke_circle(from, 10. + 8. * press, 2., fade(PAPER, (1. - press) * a));
+        }
+        if k >= 0.72 {
+            let t = (k - 0.72) / 0.28;
+            shapes::stroke_circle(to, 8. + 18. * t, 2., fade(GOLD, (1. - t) * base));
+        }
+        shapes::glow_disc(at, 14., fade(PAPER, 0.35 * a));
+        shapes::fill_circle(at, 4., fade(PAPER, 0.9 * a));
+        let size = 30.;
+        icons::draw_styled(
+            Icon::Hand,
+            at + vec2(size * 0.2, size * 0.5),
+            size,
+            IconStyle::new(fade(PAPER, a)).shadow(shadow(0.45 * a)),
+        );
     }
 
     /// Trail, rings, particles and callouts from accepted events.

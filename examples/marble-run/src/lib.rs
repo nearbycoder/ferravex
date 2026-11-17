@@ -536,17 +536,6 @@ fn trial_actions(player_input: &mut PlayerInput) {
 
 ferravex_render::game!(conf, game);
 
-/// "TRY 2 · GOLD UNDER 35 SEC · BEST 0:31.10": the one-more-try hook at countdown.
-fn countdown_line(course: &courses::Course, attempt: u32, best_us: Option<u64>) -> String {
-    let mut line = format!("TRY {attempt} · GOLD UNDER {:.0} SEC", course.gold_seconds);
-    if let Some(best) = best_us {
-        line.push_str(&format!(" · BEST {}", hud::stopwatch(best as f32 / 1e6)));
-    } else {
-        line.push_str(", NO FALLS");
-    }
-    line
-}
-
 async fn game() {
     let mut demo = Demo::with_content();
     #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
@@ -760,7 +749,7 @@ async fn game() {
             if countdown.is_none() {
                 // The run actually stepped: route its accepted moments.
                 let split = (game.checkpoint > before.checkpoint)
-                    .then(|| records.split_label(&game))
+                    .then(|| records.split(&game))
                     .flatten();
                 juice.on_tick(&game, c, before, split, frame.dt);
                 if !demo.autoplay && controls.roll.length() > 0.3 {
@@ -934,14 +923,16 @@ async fn game() {
             } else {
                 Some(hud::Tip::Controls(((3. - learned) / 0.6).clamp(0., 1.)))
             };
-            let line = countdown_line(
-                c,
-                attempts[course].max(1),
-                records
+            // The one-more-try hook: attempt, gold target and the best to beat.
+            let countdown = hud::Countdown {
+                attempt: attempts[course].max(1),
+                gold: c.gold_seconds,
+                best: records
                     .book
                     .get(c.id, record_context)
-                    .and_then(|r| r.fastest_us),
-            );
+                    .and_then(|r| r.fastest_us)
+                    .map(|us| us as f32 / 1e6),
+            };
             hud::draw(&hud::Hud {
                 run: &game,
                 course: c,
@@ -951,10 +942,16 @@ async fn game() {
                 touch: touch_mode,
                 overview,
                 tip,
-                countdown_line: &line,
+                countdown,
             });
         }
         let view_proj = ferravex_render::Camera::matrix(&camera, w, h);
+        if overview && !trial.picker && !game.finished {
+            // Show, don't tell: a pin over the next target and its distance.
+            hud::goal_pin(&game, juice.time, juice.motion(), |p| {
+                juice::project(view_proj, p, w, h)
+            });
+        }
         juice.draw_pops(|p| juice::project(view_proj, p, w, h));
         if touch_mode && !player_input.touch_customized() && !game.finished && !trial.picker {
             let center = stick_center;
@@ -977,11 +974,10 @@ async fn game() {
                 touch_radius * 0.8,
                 Color::new(0.12, 0.25, 0.24, 0.35),
             );
-            text(
-                "BRAKE",
-                brake_center.x - measure_text("BRAKE", None, 14, 1.).width * 0.5,
-                brake_center.y + 5.,
-                14.,
+            look::icon(
+                look::glyph::BRAKE,
+                brake_center,
+                (touch_radius * 0.75).clamp(18., 40.),
                 CREAM,
             );
         }
@@ -1005,12 +1001,7 @@ async fn game() {
         if ferravex_render::content::reload_state().status
             == ferravex_render::content::ReloadStatus::Rejected
         {
-            centered(
-                "EDIT REJECTED / LAST GOOD COURSE ACTIVE",
-                screen_height() - 8.,
-                10,
-                INK,
-            );
+            centered("EDIT REJECTED", screen_height() - 8., 10, INK);
         }
         if let Some(command) = course_ui::draw(
             &mut course_ui,

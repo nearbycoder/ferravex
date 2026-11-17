@@ -1,432 +1,250 @@
-//! Read-only chart, ship schematics and expedition panels.
+//! Read-only presentation: goals, tabs, the chart, the header strip and the
+//! arcade hooks. Panels live in [`crate::panels`], effects in [`crate::fx`]
+//! and the drawing vocabulary in [`crate::look`].
 //!
-//! Painted rectangles mirror the model's pointer hit regions: tabs at
-//! `24 + 184 * i` (y 116..145), action rows at x 640..922 in 34-unit steps,
-//! the action button at y 526..556 and encounter choices at y `330 + 62 * i`.
+//! Every number is an icon and a value, every count a meter or pips, and every
+//! accepted command is felt where it happened. Clickable things share their
+//! hit regions with the rules through [`crate::layout`], so hover highlights
+//! and previews always match what a click does. Idle motion uses the host's
+//! presentation clock and never feeds back into the rules.
 use crate::content::*;
-use crate::model::{Encounter, Game};
+use crate::layout::*;
+use crate::look::*;
+use crate::look::{GREEN, RED};
+use crate::model::{Game, Refusal};
 use ferravex_arcade::shapes::{self, Cap, Fill, Stroke};
-use ferravex_arcade::typography::{TextAlign, TextStyle, draw_text_styled, text_width, wrap_text};
+use ferravex_arcade::typography::{TextAlign, draw_text_styled, text_width};
 use ferravex_arcade::*;
 use std::f32::consts::{PI, TAU};
 
-const GOLD: Color = Color::new(0.96, 0.78, 0.38, 1.);
-const CYAN: Color = Color::new(0.41, 0.85, 0.9, 1.);
-const DIM: Color = Color::new(0.11, 0.19, 0.26, 1.);
-const BACK: Color = Color::new(0.027, 0.055, 0.10, 1.);
-const GREEN: Color = Color::new(0.46, 0.83, 0.57, 1.);
-const RED: Color = Color::new(0.95, 0.42, 0.43, 1.);
-const SOFT: Color = Color::new(0.74, 0.8, 0.86, 1.);
-/// Alloy, crystal and circuit swatches.
-const RESOURCE: [Color; 3] = [
-    Color::new(0.93, 0.62, 0.38, 1.),
-    Color::new(0.58, 0.8, 1., 1.),
-    Color::new(0.74, 0.62, 0.98, 1.),
-];
-
-/// Right-panel content column and the left chart panel.
-const COL: f32 = 640.;
-const COL_W: f32 = 282.;
-const MAP: Rect = Rect {
-    x: 24.,
-    y: 150.,
-    w: 588.,
-    h: 418.,
-};
-
 // ---------------------------------------------------------------------------
-// Typography
+// Goals and shared readouts
 
-/// Plain text over the dark panels; a shadow adds nothing here.
-fn ink(size: f32, color: Color) -> TextStyle {
-    TextStyle::modern(size, color)
+/// The next step of the campaign, for the header, markers and tab badges.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Goal {
+    /// Recover relic `i` from its sector.
+    Recover(usize),
+    /// Forge gate part `i`; its relic is aboard.
+    Forge(usize),
+    Return,
+    Open,
+    Done,
 }
-fn label(value: &str, x: f32, y: f32, size: f32, color: Color) -> f32 {
-    draw_text_styled(value, x, y, ink(size, color)).width
-}
-fn label_right(value: &str, right: f32, y: f32, size: f32, color: Color) -> f32 {
-    draw_text_styled(
-        value,
-        right,
-        y,
-        ink(size, color).with_align(TextAlign::Right),
-    )
-    .width
-}
-fn label_center(value: &str, cx: f32, y: f32, size: f32, color: Color) {
-    draw_text_styled(value, cx, y, ink(size, color).with_align(TextAlign::Center));
-}
-/// Label shrunk to `width` when necessary.
-fn fitted(value: &str, x: f32, y: f32, width: f32, size: f32, color: Color) {
-    let s = ink(size, color);
-    let w = text_width(value, s);
-    let s = if w > width {
-        s.with_size(size * width / w)
-    } else {
-        s
-    };
-    draw_text_styled(value, x, y, s);
-}
-fn eyebrow(value: &str, x: f32, y: f32, color: Color) {
-    let s = ink(11., color).with_letter_spacing(1.5);
-    draw_text_styled(&value.to_uppercase(), x, y, s);
-}
-/// Wrapped paragraph limited to `max` lines; returns the next baseline.
-fn body(value: &str, x: f32, y: f32, width: f32, size: f32, color: Color, max: usize) -> f32 {
-    let s = ink(size, color);
-    let step = size * 1.34;
-    let mut baseline = y;
-    for line in wrap_text(value, width, s).take(max) {
-        draw_text_styled(line, x, baseline, s);
-        baseline += step;
-    }
-    baseline
-}
-/// Muted name on the left of the column, value on the right.
-fn pair(name: &str, value: &str, y: f32, color: Color) {
-    label(name, COL, y, 13., MUTED);
-    label_right(value, COL + COL_W, y, 14., color);
-}
-fn tint(c: [f32; 3], amount: f32) -> Color {
-    Color::new(c[0] * amount, c[1] * amount, c[2] * amount, 1.)
-}
-
-// ---------------------------------------------------------------------------
-// Widgets
-
-/// Selectable row in the right column (hit region x 640..922, 30 tall).
-fn action_row(y: f32, name: &str, selected: bool) {
-    if selected {
-        rounded_gradient(COL, y, COL_W, 30., 8., lighten(DIM, 0.1), DIM);
-        outline(COL, y, COL_W, 30., 8., 1., with_alpha(GOLD, 0.45));
-        shapes::fill_capsule(vec2(COL + 4.5, y + 8.), vec2(COL + 4.5, y + 22.), 1.5, GOLD);
-    } else {
-        rounded(COL, y, COL_W, 30., 8., with_alpha(DIM, 0.45));
-    }
-    let s = ink(14., if selected { PAPER } else { SOFT });
-    let w = text_width(name, s);
-    let s = if w > 170. {
-        s.with_size(14. * 170. / w)
-    } else {
-        s
-    };
-    draw_text_styled(name, COL + 14., s.centered_baseline(y + 15.), s);
-}
-fn row_tag(y: f32, value: &str, color: Color) {
-    let w = text_width(value, style(11., color)) + 14.3;
-    chip(value, COL + COL_W - 10. - w, y + 7., 11., color);
-}
-fn row_value(y: f32, value: &str, color: Color) {
-    let s = ink(13., color).with_align(TextAlign::Right);
-    draw_text_styled(value, COL + COL_W - 12., s.centered_baseline(y + 15.), s);
-}
-/// The confirm button at the model's 640..922 x 526..556 hit region.
-fn action_button(action: &str, enabled: bool) {
-    let (x, y, w, h) = (COL, 526., COL_W, 30.);
-    if enabled {
-        rounded_gradient(x, y, w, h, 9., lighten(GOLD, 0.08), darken(GOLD, 0.12));
-    } else {
-        rounded(x, y, w, h, 9., with_alpha(DIM, 0.8));
-    }
-    let cap = keycap("Space", "", x + 8., y + 4., MUTED);
-    let s = ink(14., if enabled { INK } else { MUTED });
-    draw_text_styled(action, x + 18. + cap, s.centered_baseline(y + h * 0.5), s);
-}
-/// Lightweight two-layer progress bar.
-fn bar(x: f32, y: f32, w: f32, h: f32, fraction: f32, color: Color) {
-    let f = if fraction.is_finite() {
-        fraction.clamp(0., 1.)
-    } else {
-        0.
-    };
-    rounded(x, y, w, h, h * 0.5, Color::new(0.02, 0.04, 0.07, 0.9));
-    if f > 0. {
-        let fw = (w * f).max(h);
-        rounded_gradient(x, y, fw, h, h * 0.5, lighten(color, 0.18), color);
-    }
-}
-/// Small square swatch and amount, e.g. the cost of a recipe; returns width.
-fn amount(x: f32, y: f32, kind: usize, value: u16, color: Color) -> f32 {
-    rounded(x, y - 7., 6., 6., 1.5, RESOURCE[kind]);
-    8. + label(&format!("{value}"), x + 8., y, 12., color)
-}
-/// Soft light from stacked translucent discs. Unlike additive glows this
-/// stays in the main batch, so it adds no draw call.
-fn halo(c: Vec2, radius: f32, color: Color) {
-    for (k, a) in [(1., 0.05), (0.72, 0.06), (0.45, 0.08)] {
-        draw_circle(c.x, c.y, radius * k, with_alpha(color, a));
-    }
-}
-/// Twinkling starfield and faint nebulae inside the chart panel.
-fn backdrop(ticks: u64) {
-    rounded_gradient(
-        MAP.x,
-        MAP.y,
-        MAP.w,
-        MAP.h,
-        12.,
-        Color::new(0.035, 0.07, 0.125, 1.),
-        Color::new(0.02, 0.035, 0.07, 1.),
-    );
-    let t = ticks as f32;
-    for n in 0..85 {
-        let x = 31. + ((n * 139 + 29) % 570) as f32;
-        let y = 157. + ((n * 71 + 13) % 375) as f32;
-        let twinkle = 0.55 + 0.45 * (t * 0.035 + n as f32 * 2.3).sin();
-        let big = n % 11 == 0;
-        let size = if big { 2. } else { 1.2 };
-        let a = if big {
-            0.5 + 0.4 * twinkle
-        } else {
-            0.25 + 0.3 * twinkle
-        };
-        panel(
-            x - size * 0.5,
-            y - size * 0.5,
-            size,
-            size,
-            Color::new(0.7, 0.84, 0.95, a),
-        );
-    }
-    outline(
-        MAP.x,
-        MAP.y,
-        MAP.w,
-        MAP.h,
-        12.,
-        1.,
-        Color::new(1., 1., 1., 0.06),
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Art
-
-fn ship(x: f32, y: f32, scale: f32, burn: bool) {
-    let p = |dx: f32, dy: f32| vec2(x + dx * scale, y + dy * scale);
-    if burn {
-        draw_triangle(
-            p(-13., -5.),
-            p(-31., 0.),
-            p(-13., 5.),
-            with_alpha(CYAN, 0.55),
-        );
-        draw_triangle(
-            p(-13., -3.),
-            p(-23., 0.),
-            p(-13., 3.),
-            Color::new(0.85, 1., 1., 0.9),
-        );
-    }
-    // Shadowed lower hull, lit upper hull, canopy stripe.
-    draw_triangle(p(22., 0.), p(-16., -12.), p(-9., 0.), PAPER);
-    draw_triangle(
-        p(22., 0.),
-        p(-16., 12.),
-        p(-9., 0.),
-        tint([0.6, 0.75, 0.88], 0.8),
-    );
-    draw_triangle(
-        p(22., 0.),
-        p(-16., -12.),
-        p(-2., -5.),
-        Color::new(1., 1., 1., 0.35),
-    );
-    draw_line(x - 4. * scale, y, x + 12. * scale, y, 3. * scale, CYAN);
-}
-
-fn planet(i: usize, ticks: u64) {
-    let p = &CHART[i];
-    let (x, y) = (p.x, p.y);
-    let c = vec2(x, y);
-    let r = 16.;
-    let t = ticks as f32;
-    match i {
-        0 => {
-            // Ring station: hub, spokes and running lights.
-            draw_circle_lines(x, y, r + 7., 5., tint(p.color, 0.55));
-            draw_circle_lines(x, y, r + 1., 2., CYAN);
-            let spin = t * 0.004;
-            for j in 0..8 {
-                let a = spin + j as f32 * TAU / 8.;
-                let lit = (j + (ticks / 20) as usize).is_multiple_of(8);
-                draw_circle(
-                    x + a.cos() * (r + 7.),
-                    y + a.sin() * (r + 7.),
-                    2.6,
-                    if lit { CYAN } else { PAPER },
-                );
-            }
-            draw_rectangle(x - 11., y - 2., 22., 4., DIM);
-            draw_circle(x, y, 4., tint(p.color, 0.9));
-        }
-        1 | 6 => {
-            // Slowly tumbling asteroid field.
-            let spin = t * 0.0015 * if i == 1 { 1. } else { -1. };
-            for j in 0..9 {
-                let a = j as f32 * 2.4 + spin;
-                let d = 7. + (j % 3) as f32 * 7.;
-                let rr = 3. + (j % 2) as f32 * 2.;
-                let (px, py) = (x + a.cos() * d, y + a.sin() * d * 0.7);
-                draw_circle(px, py, rr, tint(p.color, 0.42 + j as f32 * 0.03));
-                draw_circle(
-                    px - rr * 0.3,
-                    py - rr * 0.3,
-                    rr * 0.62,
-                    tint(p.color, 0.7 + j as f32 * 0.03),
-                );
-            }
-        }
-        3 => {
-            // Derelict wreck.
-            draw_rectangle(x - 22., y - 4., 42., 8., tint(p.color, 0.75));
-            draw_rectangle(x - 22., y - 4., 42., 3., tint(p.color, 0.95));
-            draw_rectangle(x - 9., y - 15., 4., 30., PAPER);
-            draw_rectangle(x + 6., y - 12., 5., 20., tint(p.color, 0.6));
-            let blink = if (ticks / 30).is_multiple_of(2) {
-                GOLD
-            } else {
-                darken(GOLD, 0.5)
-            };
-            draw_circle(x + 27., y + 9., 3., blink);
-        }
-        _ => {
-            if i == 2 {
-                // Comet tail.
-                draw_triangle(
-                    vec2(x - 12., y - 6.),
-                    vec2(x - 60., y - 32.),
-                    vec2(x + 2., y + 10.),
-                    Color::new(p.color[0], p.color[1], p.color[2], 0.22),
-                );
-                draw_triangle(
-                    vec2(x - 10., y - 3.),
-                    vec2(x - 42., y - 22.),
-                    vec2(x, y + 6.),
-                    Color::new(p.color[0], p.color[1], p.color[2], 0.22),
-                );
-            }
-            // Lit sphere: radial light from the upper left, then a rim.
-            shapes::fill_circle(
-                c,
-                r,
-                Fill::radial(
-                    c - vec2(r * 0.45, r * 0.5),
-                    r * 1.75,
-                    tint(p.color, 1.15),
-                    tint(p.color, 0.32),
-                ),
-            );
-            if i == 4 {
-                draw_line(x - r * 0.5, y - r, x + r * 0.2, y + r, 4., BACK);
-            }
-            if i == 5 {
-                draw_circle(x - 5., y + 4., 5., tint([0.12, 0.42, 0.35], 1.));
-                draw_circle(x + 9., y - 7., 4., tint([0.12, 0.42, 0.35], 1.));
-            }
-            shapes::stroke_arc(
-                c,
-                r - 0.5,
-                PI * 0.95,
-                PI * 0.6,
-                Stroke::new(1.5, Color::new(1., 1., 1., 0.35)).cap(Cap::Round),
-            );
-            if i == 7 {
-                draw_circle_lines(x, y, r + 8., 2., GOLD);
-                draw_line(x - 28., y + 9., x + 28., y - 9., 3., GOLD);
-            }
-            if i == 8 {
-                draw_line(x + 4., y - r, x + 4., y - 28., 2., PAPER);
-                let pulse = 0.5 + 0.5 * (t * 0.08).sin();
-                draw_circle(x + 4., y - 30., 3., GOLD);
-                draw_circle(x + 4., y - 30., 6., Color::new(1., 0.8, 0.4, 0.18 * pulse));
-            }
-        }
-    }
-}
-
-fn legend() {
-    let s = ink(11., MUTED);
-    let x = 40.;
-    let row = |i: usize| 172. + i as f32 * 15.;
-    draw_circle_lines(x + 4., row(0) - 4., 4.5, 1.5, CYAN);
-    draw_text_styled("Here", x + 14., row(0), s);
-    draw_circle_lines(x + 4., row(1) - 4., 4.5, 1.5, GOLD);
-    draw_text_styled("Selected", x + 14., row(1), s);
-    panel(x + 1.5, row(2) - 6.5, 5., 5., CYAN);
-    draw_text_styled("Surveyed", x + 14., row(2), s);
-    draw_circle(x + 4., row(3) - 4., 3., GREEN);
-    draw_text_styled("Relic claimed", x + 14., row(3), s);
-}
-
-/// Feedback strip along the bottom of the chart panel (two lines at most).
-fn notice(value: &str) {
-    rounded(34., 530., 568., 30., 8., Color::new(0.04, 0.09, 0.15, 0.92));
-    shapes::fill_capsule(vec2(44., 537.), vec2(44., 553.), 1.5, CYAN);
-    let s = ink(11.5, Color::new(0.72, 0.92, 0.95, 1.));
-    let lines = wrap_text(value, 536., s).count().min(2);
-    let step = 12.5;
-    let mut y = s.centered_baseline(545.) - step * 0.5 * (lines as f32 - 1.);
-    for (i, line) in wrap_text(value, 536., s).take(2).enumerate() {
-        if i == 1 && lines == 2 && wrap_text(value, 536., s).nth(2).is_some() {
-            draw_text_styled(&format!("{line}..."), 54., y, s);
-        } else {
-            draw_text_styled(line, 54., y, s);
-        }
-        y += step;
-    }
-}
-
 impl Game {
-    fn draw_tabs(&self) {
-        for (i, name) in ["Chart", "Survey", "Forge", "Ship", "Mission"]
-            .iter()
-            .enumerate()
-        {
-            let x = 24. + i as f32 * 184.;
-            let active = i == self.page;
-            if active {
-                rounded_gradient(x, 116., 176., 29., 8., lighten(DIM, 0.12), DIM);
-                outline(x, 116., 176., 29., 8., 1., with_alpha(CYAN, 0.3));
-                shapes::fill_capsule(vec2(x + 18., 143.), vec2(x + 158., 143.), 1.2, CYAN);
-            } else {
-                rounded(x, 116., 176., 29., 8., Color::new(0.07, 0.115, 0.18, 0.9));
+    pub(crate) fn goal(&self) -> Goal {
+        if self.result == Outcome::Won {
+            return Goal::Done;
+        }
+        if let Some(i) = (0..3).find(|&i| !self.components[i] && self.relics[i]) {
+            return Goal::Forge(i);
+        }
+        if let Some(i) = (0..3).find(|&i| !self.components[i]) {
+            return Goal::Recover(i);
+        }
+        if self.sector != 0 {
+            Goal::Return
+        } else {
+            Goal::Open
+        }
+    }
+    /// The sector the current goal points at, if any.
+    pub(crate) fn goal_sector(&self) -> Option<usize> {
+        match self.goal() {
+            Goal::Recover(i) => Some(RELIC_SECTORS[i]),
+            Goal::Return => Some(0),
+            _ => None,
+        }
+    }
+    /// A tab's attention dot: something worth doing waits there.
+    pub(crate) fn tab_alert(&self, tab: usize) -> Option<Color> {
+        if self.transit.is_some() || self.result != Outcome::Playing {
+            return None;
+        }
+        // A survey is worth it only where it unlocks deposits or a landmark.
+        let site = self.sites[self.sector];
+        let hidden = site.stock.iter().any(|&n| n > 0) || (self.sector != 0 && !site.claimed);
+        let survey = self.work_refusal(0).is_none() && hidden;
+        match tab {
+            1 if survey || self.work_refusal(4).is_none() => Some(CYAN),
+            2 if (0..3).any(|i| self.forge_refusal(i).is_none()) => Some(GOLD),
+            3 if self.hull < 25 || self.fuel == 0 => Some(RED),
+            4 if self.goal() == Goal::Open => Some(GOLD),
+            _ => None,
+        }
+    }
+    /// One icon and a word or two for a refusal (button wells and popups).
+    pub(crate) fn refusal_label(&self, reason: Refusal, row: usize) -> (Icon, String) {
+        match reason {
+            Refusal::NoLane => (Icon::Cross, "No lane".into()),
+            Refusal::Fuel(n) => (Icon::Fuel, format!("Need {n}")),
+            Refusal::Credits(n) => (Icon::Coin, format!("Need {n}")),
+            Refusal::Cargo(k, n) => (RESOURCE_ICON[k], format!("Need {n}")),
+            Refusal::Materials => {
+                let cost = RECIPES[row.min(RECIPES.len() - 1)].cost;
+                let k = (0..3).find(|&k| self.cargo[k] < cost[k]).unwrap_or(0);
+                (RESOURCE_ICON[k], format!("Need {}", cost[k]))
             }
-            let n = ink(11., if active { CYAN } else { with_alpha(MUTED, 0.7) });
-            let s = ink(14., if active { PAPER } else { MUTED });
-            let number = format!("{}", i + 1);
-            let nw = text_width(&number, n) + 7.;
-            let w = nw + text_width(name, s);
-            let left = x + 88. - w * 0.5;
-            let base = s.centered_baseline(130.5);
-            draw_text_styled(&number, left, base, n);
-            draw_text_styled(name, left + nw, base, s);
+            Refusal::Space => (Icon::Crate, "Full".into()),
+            Refusal::Relic(i) => (RELIC_ICON[i], "Missing".into()),
+            Refusal::Unsurveyed => (Icon::Lock, "Survey".into()),
+            Refusal::Depleted => (Icon::Pickaxe, "Empty".into()),
+            Refusal::Done => (Icon::Check, "Done".into()),
+            Refusal::TankFull => (Icon::Fuel, "Full".into()),
+            Refusal::HullFull => (Icon::Heart, "Full".into()),
+            Refusal::Station => (Icon::Home, "Station".into()),
+            Refusal::Home => (Icon::Home, "Loom".into()),
+            Refusal::Docked => (Icon::Home, "Here".into()),
+            Refusal::Mechanisms => (Icon::Flag, format!("{}/3", self.built())),
+            Refusal::Gate => (Icon::Flag, "Tab 5".into()),
+        }
+    }
+    /// A landmark's rewards as tags from `x`; returns the end.
+    pub(crate) fn landmark_rewards(&self, i: usize, x: f32, cy: f32, size: f32, on: bool) -> f32 {
+        let f = |c: Color| faded(c, on);
+        match i {
+            0 => {
+                let parts = format!("{}/3", self.built());
+                gate_piece(vec2(x + size * 0.5, cy), size * 1.1, 0, f(CYAN));
+                x + size
+                    + 3.
+                    + label(
+                        &parts,
+                        x + size + 3.,
+                        cy + size * 0.32,
+                        tag_text(size),
+                        f(CYAN),
+                    )
+            }
+            1 => tags(
+                &[bit(RESOURCE_ICON[0], "+2", f(RESOURCE[0]))],
+                x,
+                cy,
+                size,
+                9.,
+            ),
+            2 => tags(&[bit(Icon::Fuel, "+4", f(FUEL))], x, cy, size, 9.),
+            3 => tags(
+                &[bit(Icon::Key, "", f(GOLD)), bit(Icon::Coin, "+20", f(COIN))],
+                x,
+                cy,
+                size,
+                9.,
+            ),
+            4 => tags(&[bit(Icon::Music, "", f(GOLD))], x, cy, size, 9.),
+            5 => tags(
+                &[
+                    bit(RESOURCE_ICON[1], "+2", f(RESOURCE[1])),
+                    bit(Icon::Coin, "+15", f(COIN)),
+                ],
+                x,
+                cy,
+                size,
+                9.,
+            ),
+            6 => tags(
+                &[
+                    bit(RESOURCE_ICON[2], "+3", f(RESOURCE[2])),
+                    bit(Icon::Coin, "+40", f(COIN)),
+                ],
+                x,
+                cy,
+                size,
+                9.,
+            ),
+            7 => tags(&[bit(Icon::Battery, "", f(GOLD))], x, cy, size, 9.),
+            _ => tags(
+                &[
+                    bit(Icon::People, "9", f(LANDMARK_COLOR[8])),
+                    bit(Icon::Heart, "+10", f(HULL)),
+                    bit(Icon::Coin, "+25", f(COIN)),
+                ],
+                x,
+                cy,
+                size,
+                8.,
+            ),
         }
     }
 
-    fn draw_chart(&self) {
-        let t = self.ticks as f32;
-        let selected_lane = self.page == 0 && Self::adjacent(self.sector, self.selected);
+    // -----------------------------------------------------------------------
+    // Tabs
+
+    pub(crate) fn draw_tabs(&self, t: f32, p: Vec2, live: bool) {
+        let hover = if live { tab_at(p) } else { None };
+        for i in 0..5 {
+            let x = TAB_X + i as f32 * TAB_STEP;
+            let active = i == self.page;
+            let hovered = hover == Some(i) && !active;
+            let y = TAB_TOP - if hovered { 1.5 } else { 0. };
+            if active {
+                rounded_gradient(x, y, TAB_W, TAB_H, 8., lighten(DIM, 0.14), DIM);
+                outline(x, y, TAB_W, TAB_H, 8., 1., with_alpha(CYAN, 0.4));
+                shapes::fill_capsule(
+                    vec2(x + 24., y + TAB_H - 2.),
+                    vec2(x + TAB_W - 24., y + TAB_H - 2.),
+                    1.3,
+                    CYAN,
+                );
+            } else if hovered {
+                rounded(x, y, TAB_W, TAB_H, 8., Color::new(0.1, 0.16, 0.24, 0.95));
+                outline(x, y, TAB_W, TAB_H, 8., 1., with_alpha(CYAN, 0.28));
+            } else {
+                rounded(x, y, TAB_W, TAB_H, 8., Color::new(0.07, 0.115, 0.18, 0.9));
+            }
+            let fg = if active {
+                PAPER
+            } else if hovered {
+                SOFT
+            } else {
+                MUTED
+            };
+            let named = active || hovered;
+            let name_w = if named {
+                text_width(TAB_NAME[i], ink(14., fg)) + 8.
+            } else {
+                0.
+            };
+            let cy = y + TAB_H * 0.5;
+            let left = x + TAB_W * 0.5 - (16. + 7. + 18. + name_w) * 0.5;
+            const KEYS: [&str; 5] = ["1", "2", "3", "4", "5"];
+            mini_key(KEYS[i], left + 8., cy, if active { 1. } else { 0.7 });
+            icon(
+                TAB_ICON[i],
+                left + 32.,
+                cy,
+                18.,
+                if active { CYAN } else { fg },
+            );
+            if named {
+                line(TAB_NAME[i], left + 49., cy, 90., 14., fg);
+            }
+            if !active && let Some(color) = self.tab_alert(i) {
+                let beat = pulse(t, 1.1);
+                let at = vec2(x + TAB_W - 13., y + 8.);
+                glow(at.x, at.y, 7. + 4. * beat, with_alpha(color, 0.3));
+                shapes::fill_circle(at, 3.5, color);
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // The chart
+
+    pub(crate) fn draw_map(&self, t: f32, p: Vec2, live: bool) {
+        dying_star(self.watch, t);
+        let chart = self.page == 0;
+        let flying = self.transit.is_some();
+        let hover = if live && chart { star_at(p) } else { None };
+        let target = if chart && !flying {
+            hover.or(Some(self.selected))
+        } else {
+            None
+        }
+        .filter(|&i| i != self.sector);
         for &(a, b) in &LINKS {
-            let (pa, pb) = (vec2(CHART[a].x, CHART[a].y), vec2(CHART[b].x, CHART[b].y));
-            let chosen = selected_lane
-                && ((a == self.sector && b == self.selected)
-                    || (b == self.sector && a == self.selected));
-            if chosen {
-                // Marching gold dashes from here to the selected star.
-                let (from, to) = if a == self.sector { (pa, pb) } else { (pb, pa) };
-                let len = from.distance(to);
-                let dashes = (len / 12.) as usize;
-                let march = (t * 0.03).fract();
-                for k in 0..dashes {
-                    let s = (k as f32 + march) / dashes as f32;
-                    let e = s + 0.5 / dashes as f32;
-                    if e <= 1. {
-                        let (p, q) = (from.lerp(to, s), from.lerp(to, e));
-                        draw_line(p.x, p.y, q.x, q.y, 2., GOLD);
-                    }
-                }
-            } else if a == self.sector || b == self.sector {
+            let (pa, pb) = (star(a), star(b));
+            if !flying && (a == self.sector || b == self.sector) {
                 draw_line(
                     pa.x,
                     pa.y,
@@ -439,14 +257,33 @@ impl Game {
                 draw_line(pa.x, pa.y, pb.x, pb.y, 1., Color::new(0.3, 0.45, 0.6, 0.28));
             }
         }
-        let here = vec2(CHART[self.sector].x, CHART[self.sector].y);
-        if self.transit.is_none() {
+        if let Some(to) = target {
+            let (path, n) = route(self.sector, to);
+            let mut from = self.sector;
+            for (k, &next) in path[..n].iter().enumerate() {
+                let (color, width) = if k == 0 {
+                    (GOLD, 2.)
+                } else {
+                    (with_alpha(GOLD, 0.45), 1.5)
+                };
+                marching(star(from), star(next), t, color, width);
+                from = next;
+            }
+        }
+        let here = star(self.sector);
+        if !flying {
             halo(here, 34., CYAN);
         }
+        let goal = self.goal_sector();
         for (i, sector) in CHART.iter().enumerate() {
-            let c = vec2(sector.x, sector.y);
-            if i == self.selected && self.page == 0 {
-                let spin = t * 0.01;
+            let c = star(i);
+            let site = self.sites[i];
+            if hover == Some(i) {
+                halo(c, 40., PAPER);
+                shapes::stroke_circle(c, STAR_RADIUS, 1.2, with_alpha(PAPER, 0.55));
+            }
+            if chart && i == self.selected {
+                let spin = t * 0.6;
                 for k in 0..4 {
                     shapes::stroke_arc(
                         c,
@@ -458,727 +295,408 @@ impl Game {
                 }
             }
             if i == self.sector {
-                draw_circle_lines(sector.x, sector.y, 26.5, 2., CYAN);
+                draw_circle_lines(c.x, c.y, 26.5, 2., CYAN);
             }
-            planet(i, self.ticks);
-            if i == 4 || i == 7 {
-                let orbit = t / 90. + i as f32;
-                draw_circle(
-                    sector.x + orbit.cos() * 23.,
-                    sector.y + orbit.sin() * 13.,
-                    2.,
-                    PAPER,
+            if site.scanned {
+                // A slow radar sweep marks surveyed sectors.
+                let a = t * 0.9 + i as f32 * 1.7;
+                shapes::stroke_arc(
+                    c,
+                    22.,
+                    a,
+                    1.1,
+                    Stroke::new(1.6, with_alpha(CYAN, 0.6)).cap(Cap::Round),
                 );
             }
-            let visited = self.sites[i].visited;
+            planet(i, t, self.components);
+            if i == 4 || i == 7 {
+                let orbit = t * 0.67 + i as f32;
+                draw_circle(c.x + orbit.cos() * 23., c.y + orbit.sin() * 13., 2., PAPER);
+            }
             label_center(
                 sector.name,
-                sector.x,
-                sector.y + 40.,
+                c.x,
+                c.y + 40.,
                 12.,
-                if visited { PAPER } else { MUTED },
+                if site.visited || hover == Some(i) {
+                    PAPER
+                } else {
+                    MUTED
+                },
             );
-            if self.sites[i].claimed {
-                draw_circle(sector.x + 22., sector.y - 21., 3., GREEN);
+            if i != 0 {
+                let at = c + vec2(21., -21. + bob(t + i as f32 * 0.37, 0.45, 1.4));
+                if site.claimed {
+                    icon_badge(Icon::Check, at.x, at.y, 15., darken(GREEN, 0.6), GREEN);
+                } else {
+                    let color = LANDMARK_COLOR[i];
+                    icon_badge(
+                        LANDMARK_ICON[i],
+                        at.x,
+                        at.y,
+                        19.,
+                        darken(color, 0.74),
+                        color,
+                    );
+                }
             }
-            if self.sites[i].scanned {
-                panel(sector.x - 25., sector.y - 23., 5., 5., CYAN);
+            if !site.visited && sector.arrival_damage > 0 {
+                let a = 0.5 + 0.4 * pulse(t, 0.9);
+                icon(Icon::Alert, c.x - 22., c.y - 20., 13., with_alpha(RED, a));
             }
+            if goal == Some(i) && i != self.sector {
+                // Sonar rings call the player to the goal; a pin bobs above
+                // when the chart has room for it.
+                for k in 0..2 {
+                    let phase = (t * 0.6 + k as f32 * 0.5).fract();
+                    shapes::stroke_circle(
+                        c,
+                        24. + 26. * phase,
+                        1.5,
+                        with_alpha(GOLD, 0.5 * (1. - phase)),
+                    );
+                }
+                let y = c.y - 46. + bob(t, 0.8, 3.);
+                if y > MAP.y + 14. {
+                    glow(c.x, y, 15., with_alpha(GOLD, 0.25));
+                    icon(Icon::Pin, c.x, y, 18., GOLD);
+                }
+            }
+        }
+        if let Some(to) = hover.filter(|&i| i != self.sector && !flying) {
+            self.route_costs(to);
         }
         if let Some(flight) = self.transit {
             let progress = 1. - f32::from(flight.remaining) / f32::from(flight.total);
-            let a = &CHART[flight.from];
-            let b = &CHART[flight.to];
-            let at = |t: f32| {
-                vec2(
-                    a.x + (b.x - a.x) * t,
-                    a.y + (b.y - a.y) * t - (t * PI).sin() * 14.,
-                )
-            };
-            // Fading exhaust trail behind the ship.
+            let a = star(flight.from);
+            let b = star(flight.to);
+            let at = |s: f32| a.lerp(b, s) - vec2(0., (s * PI).sin() * 14.);
             for k in 1..6 {
                 let s = (progress - k as f32 * 0.03).max(0.);
-                let p = at(s);
+                let q = at(s);
                 draw_circle(
-                    p.x,
-                    p.y,
+                    q.x,
+                    q.y,
                     2.4 - k as f32 * 0.35,
                     with_alpha(CYAN, 0.5 - k as f32 * 0.08),
                 );
             }
-            let p = at(progress);
-            halo(p, 16., CYAN);
-            ship(p.x, p.y, 0.6, true);
+            let q = at(progress);
+            halo(q, 16., CYAN);
+            ship(q.x, q.y, 0.6, true);
         } else {
-            let bob = (t * 0.05).sin() * 1.5;
-            ship(here.x + 34., here.y - 16. + bob, 0.48, false);
-        }
-        legend();
-    }
-
-    fn draw_chart_panel(&self) {
-        let i = if self.page == 0 {
-            self.selected
-        } else {
-            self.sector
-        };
-        let p = &CHART[i];
-        eyebrow(p.kind, COL, 174., MUTED);
-        fitted(p.name, COL, 198., COL_W - 30., 21., tint(p.color, 1.05));
-        let swatch = vec2(COL + COL_W - 10., 189.);
-        shapes::fill_circle(
-            swatch,
-            9.,
-            Fill::radial(
-                swatch - vec2(4., 4.),
-                15.,
-                tint(p.color, 1.1),
-                tint(p.color, 0.35),
-            ),
-        );
-        let transit = self.transit.is_some();
-        if self.page == 0 {
-            let mut y = body(p.lore, COL, 224., COL_W, 13., PAPER, 3) - 6.;
-            let (tag, color) = if p.station {
-                ("Station: fuel, repair, trade", GOLD)
-            } else {
-                ("Remote sector", MUTED)
-            };
-            chip(tag, COL, y, 12., color);
-            y += 32.;
-            divider(COL, y, COL_W, Color::new(1., 1., 1., 0.12));
-            y += 24.;
-            pair(
-                "First entry",
-                &format!("{} hull risk", p.arrival_damage),
-                y,
-                if p.arrival_damage > 0 { RED } else { PAPER },
-            );
-            y += 23.;
-            pair(
-                "Mining",
-                &format!("{} hull per action", p.extraction_damage),
-                y,
-                if p.extraction_damage > 0 { RED } else { PAPER },
-            );
-            y += 30.;
-            let site = self.sites[i];
-            let cache = if site.scanned { site.stock } else { p.supplies };
-            eyebrow("Deposits", COL, y, CYAN);
-            label_right(
-                if site.scanned {
-                    "Surveyed"
-                } else {
-                    "Charted estimate"
-                },
-                COL + COL_W,
-                y,
-                11.,
-                MUTED,
-            );
-            y += 10.;
-            for (k, name) in RESOURCE_NAMES.iter().enumerate() {
-                let x = COL + k as f32 * 96.;
-                rounded(x, y, 90., 42., 8., Color::new(0.08, 0.13, 0.2, 1.));
-                rounded(x + 9., y + 9., 6., 6., 1.5, RESOURCE[k]);
-                label(name, x + 20., y + 16., 11., MUTED);
-                label(&format!("{}", cache[k]), x + 9., y + 35., 15., PAPER);
-            }
-            if !transit {
-                let (hint, color) = if i == self.sector {
-                    ("You are here. Survey [2] to work this sector.", CYAN)
-                } else if Self::adjacent(self.sector, i) {
-                    ("Connected lane: costs 1 fuel and 1 watch.", PAPER)
-                } else {
-                    (
-                        "No direct lane. Follow the chart's connecting lines.",
-                        MUTED,
-                    )
-                };
-                body(hint, COL, 462., COL_W, 12., color, 2);
-                action_button(
-                    "Jump to sector",
-                    i != self.sector && Self::adjacent(self.sector, i),
-                );
-            }
-        } else {
-            pair(
-                "Hold",
-                &format!("{} / {}", self.hold_used(), self.hold_max()),
-                226.,
-                PAPER,
-            );
-            bar(
-                COL,
-                233.,
-                COL_W,
-                5.,
-                f32::from(self.hold_used()) / f32::from(self.hold_max()),
-                if self.hold_used() >= self.hold_max() {
-                    RED
-                } else {
-                    CYAN
-                },
-            );
-            let mut x = COL;
-            for (k, name) in RESOURCE_NAMES.iter().enumerate() {
-                rounded(x, 250., 6., 6., 1.5, RESOURCE[k]);
-                x +=
-                    10. + label(
-                        &format!("{name} {}", self.cargo[k]),
-                        x + 10.,
-                        257.,
-                        12.,
-                        SOFT,
-                    ) + 14.;
-            }
-            let site = self.sites[i];
-            let labels = [
-                "Survey sector",
-                "Mine alloy",
-                "Mine crystal",
-                "Salvage circuits",
-                "Explore landmark",
-            ];
-            for (r, name) in labels.iter().enumerate() {
-                let y = 282. + r as f32 * 34.;
-                action_row(y, name, r == self.row);
-                match r {
-                    0 if site.scanned => row_tag(y, "Done", GREEN),
-                    4 if site.claimed => row_tag(y, "Claimed", GREEN),
-                    1..=3 => {
-                        let left = site.stock[r - 1];
-                        row_value(
-                            y,
-                            &format!("{left} left"),
-                            if left == 0 {
-                                with_alpha(MUTED, 0.6)
-                            } else {
-                                RESOURCE[r - 1]
-                            },
-                        );
-                    }
-                    _ => {}
-                }
-            }
-            if !transit {
-                body(
-                    if self.row == 0 {
-                        "Each work action costs 1 watch. Scan once to unlock local work; deposits never regenerate."
-                    } else if self.row == 4 {
-                        "Each work action costs 1 watch. Landmarks can be used once."
-                    } else {
-                        "Each work action costs 1 watch. Extracts 2 units, 3 with a scanner; X discards one."
-                    },
-                    COL,
-                    474.,
-                    COL_W,
-                    12.,
-                    MUTED,
-                    3,
-                );
-                action_button("Accept selected work", true);
-            }
+            ship(here.x + 34., here.y - 16. + bob(t, 0.48, 1.5), 0.48, false);
         }
     }
-
-    fn draw_forge(&self) {
-        let recipe = &RECIPES[self.row];
-        // Blueprint grid behind the schematic.
-        for k in 0..9 {
-            let x = 250. + k as f32 * 30.;
-            draw_line(x, 190., x, 430., 1., Color::new(0.3, 0.6, 0.8, 0.07));
-        }
-        for k in 0..9 {
-            let y = 205. + k as f32 * 30.;
-            draw_line(240., y, 500., y, 1., Color::new(0.3, 0.6, 0.8, 0.07));
-        }
-        eyebrow("Onboard fabricator", 42., 178., CYAN);
-        label("Every mechanism has a cost", 42., 202., 19., PAPER);
-        for (r, name) in COMPONENT_NAMES.iter().enumerate() {
-            let y = 255. + r as f32 * 61.;
-            let mounted = self.components[r];
-            draw_line(
-                222.,
-                y + 3.,
-                276.,
-                330.,
-                1.,
-                with_alpha(if mounted { GREEN } else { CYAN }, 0.25),
-            );
-            rounded(
-                42.,
-                y - 20.,
-                180.,
-                47.,
-                9.,
-                Color::new(0.06, 0.1, 0.16, 0.95),
-            );
-            outline(
-                42.,
-                y - 20.,
-                180.,
-                47.,
-                9.,
-                1.,
-                if mounted {
-                    with_alpha(GREEN, 0.5)
-                } else {
-                    Color::new(1., 1., 1., 0.08)
-                },
-            );
-            fitted(
-                name,
-                54.,
-                y - 2.,
-                160.,
-                14.,
-                if mounted { PAPER } else { SOFT },
-            );
-            label(
-                if mounted { "Mounted" } else { "Empty mount" },
-                54.,
-                y + 15.,
-                11.,
-                if mounted { GREEN } else { MUTED },
-            );
-            draw_circle(210., y - 7., 3., if mounted { GREEN } else { DIM });
-        }
-        let core = vec2(370., 325.);
-        draw_circle_lines(core.x, core.y, 93., 1., Color::new(0.3, 0.55, 0.7, 0.35));
-        draw_circle_lines(core.x, core.y, 108., 1., Color::new(0.3, 0.55, 0.7, 0.2));
-        let spin = self.ticks as f32 * 0.006;
-        shapes::stroke_arc(
-            core,
-            108.,
-            spin,
-            0.9,
-            Stroke::new(2., with_alpha(CYAN, 0.5)).cap(Cap::Round),
-        );
-        ship(366., 325., 3.4, false);
-        if self.upgrades[0] {
-            draw_circle_lines(366., 325., 86., 2., CYAN);
-        }
-        let next = body(recipe.detail, 42., 456., 548., 14., PAPER, 2);
-        // Cost chips: green when the hold covers it.
-        let mut x = 42.;
-        let y = next.max(484.) + 8.;
-        x += label("Cost", x, y + 13., 13., MUTED) + 10.;
-        for (k, name) in RESOURCE_NAMES.iter().enumerate() {
-            let need = recipe.cost[k];
-            if need == 0 {
-                continue;
-            }
-            let ok = self.cargo[k] >= need;
-            let text = format!("{need} {}", name.to_lowercase());
-            x += chip(&text, x, y, 12., if ok { GREEN } else { RED }) + 8.;
-        }
-
-        label("Fabricate", COL, 186., 20., CYAN);
-        let mut x = COL;
-        for (k, name) in RESOURCE_NAMES.iter().enumerate() {
-            x += amount(x, 212., k, self.cargo[k], SOFT) + 6.;
-            x += label(name, x, 212., 12., MUTED) + 14.;
-        }
-        for (i, recipe) in RECIPES.iter().enumerate() {
-            let y = 230. + i as f32 * 34.;
-            action_row(y, recipe.name, i == self.row);
-            let done = if i < 3 {
-                self.components[i]
-            } else {
-                self.upgrades[i - 3]
-            };
-            if done {
-                row_tag(y, "Built", GREEN);
-            } else {
-                // Right-aligned cost swatches.
-                let mut right = COL + COL_W - 12.;
-                for k in (0..3).rev() {
-                    let need = recipe.cost[k];
-                    if need == 0 {
-                        continue;
-                    }
-                    let color = if self.cargo[k] >= need { SOFT } else { RED };
-                    let w = 8. + text_width(&format!("{need}"), ink(12., color));
-                    amount(right - w, y + 19.5, k, need, color);
-                    right -= w + 9.;
-                }
-            }
-        }
-        body(
-            "Build cost: listed materials and 1 watch.",
-            COL,
-            466.,
-            COL_W,
-            12.,
-            MUTED,
-            2,
-        );
-        action_button("Build selected part", true);
-    }
-
-    fn draw_ship(&self) {
-        eyebrow("Survey cutter  /  ark escort", 42., 178., MUTED);
-        label("The Little Light", 42., 204., 22., CYAN);
-        let bob = (self.ticks as f32 * 0.04).sin() * 3.;
-        halo(vec2(196., 307. + bob), 30., CYAN);
-        ship(313., 307. + bob, 4.2, true);
-        let hull_color = if self.hull < 25 { RED } else { GREEN };
-        label("Hull", 50., 374., 13., MUTED);
-        label_right(&format!("{} / 100", self.hull), 300., 374., 14., PAPER);
-        bar(50., 382., 250., 8., f32::from(self.hull) / 100., hull_color);
-        label("Fuel", 331., 374., 13., MUTED);
-        label_right(
-            &format!("{} / {}", self.fuel, self.fuel_max()),
-            581.,
-            374.,
-            14.,
-            PAPER,
-        );
-        bar(
-            331.,
-            382.,
-            250.,
-            8.,
-            f32::from(self.fuel) / f32::from(self.fuel_max()),
-            if self.fuel == 0 { RED } else { CYAN },
-        );
-        label("Cargo hold", 50., 418., 13., MUTED);
-        label_right(
-            &format!("{} / {}", self.hold_used(), self.hold_max()),
-            300.,
-            418.,
-            14.,
-            PAPER,
-        );
-        label("Credits", 331., 418., 13., MUTED);
-        label_right(&format!("{}", self.credits), 581., 418., 16., GOLD);
-        for (k, name) in RESOURCE_NAMES.iter().enumerate() {
-            let x = 50. + k as f32 * 180.;
-            rounded(x, 430., 171., 32., 8., Color::new(0.06, 0.1, 0.16, 0.95));
-            rounded(x + 12., 443., 6., 6., 1.5, RESOURCE[k]);
-            label(name, x + 26., 450., 13., SOFT);
-            label_right(&format!("{}", self.cargo[k]), x + 159., 451., 16., PAPER);
-        }
-        chip(
-            if self.tow {
-                "Distress tow ready: 6 watches + 15 hull"
-            } else {
-                "Distress charge spent"
-            },
-            50.,
-            484.,
-            12.,
-            if self.tow { GOLD } else { MUTED },
-        );
-
-        label("Ship services", COL, 186., 20., CYAN);
-        chip(
-            if CHART[self.sector].station {
-                "Station link available"
-            } else {
-                "Field services only"
-            },
-            COL,
-            199.,
-            11.,
-            if CHART[self.sector].station {
-                GOLD
-            } else {
-                MUTED
-            },
-        );
-        let labels = [
-            "Condense fuel".to_owned(),
-            "Field patch".to_owned(),
-            "Station fuel".to_owned(),
-            "Station repair".to_owned(),
-            format!("Sell {}", RESOURCE_NAMES[self.sell_kind].to_lowercase()),
-            "Distress tow".to_owned(),
-        ];
-        let costs = [
-            "1 crystal",
-            "1 alloy + 1 circuit",
-            "15 credits",
-            "20 credits",
-            "",
-            "6 watches",
-        ];
-        for (i, name) in labels.iter().enumerate() {
-            let y = 230. + i as f32 * 34.;
-            action_row(y, name, i == self.row);
-            if i == 4 {
-                let price = [8, 12, 16][self.sell_kind];
-                row_value(y, &format!("+{price} credits"), GOLD);
-            } else if i == 5 && !self.tow {
-                row_tag(y, "Spent", MUTED);
-            } else {
-                row_value(y, costs[i], MUTED);
-            }
-        }
-        let details = [
-            "1 crystal makes up to 3 fuel. One watch.",
-            "1 alloy and 1 circuit repair up to 25 hull. One watch.",
-            "15 credits for up to 5 fuel. Station only. One watch.",
-            "20 credits for up to 45 hull. Station only. One watch.",
-            "X changes cargo type. Sells 1 unit: alloy 8, crystal 12, circuit 16. One watch.",
-            "One-use rescue to Loom: 5 fuel, 15 hull damage, six watches. Cargo is kept.",
-        ];
-        body(details[self.row], COL, 460., COL_W, 12., MUTED, 3);
-        action_button("Accept service", true);
-    }
-
-    fn draw_mission(&self) {
-        eyebrow("Objective", 42., 178., GOLD);
-        label("Components", 42., 204., 22., PAPER);
-        body(
-            "Build all three components and return to Loom Dock.",
-            42.,
-            230.,
-            545.,
-            14.,
-            SOFT,
-            2,
-        );
-        for i in 0..3 {
-            let y = 256. + i as f32 * 71.;
-            let built = self.components[i];
-            let held = self.relics[i];
-            rounded(42., y, 550., 61., 10., Color::new(0.06, 0.1, 0.16, 0.95));
-            outline(
-                42.,
-                y,
-                550.,
-                61.,
-                10.,
-                1.,
-                if built {
-                    with_alpha(GREEN, 0.45)
-                } else {
-                    Color::new(1., 1., 1., 0.07)
-                },
-            );
-            let badge = vec2(76., y + 30.5);
-            let accent = if built {
-                GREEN
-            } else if held {
-                GOLD
-            } else {
-                MUTED
-            };
-            shapes::fill_circle(badge, 17., with_alpha(accent, 0.14));
-            draw_circle_lines(badge.x, badge.y, 17., 1.5, with_alpha(accent, 0.7));
-            label_center(&format!("{}", i + 1), badge.x, badge.y + 6., 17., accent);
-            fitted(COMPONENT_NAMES[i], 108., y + 26., 300., 17., PAPER);
-            label(
-                &format!("{} at {}", RELIC_NAMES[i], CHART[RELIC_SECTORS[i]].name),
-                108.,
-                y + 46.,
-                12.,
-                MUTED,
-            );
-            let (state, color) = if built {
-                ("Mechanism built", GREEN)
-            } else if held {
-                ("Relic held: forge [3]", GOLD)
-            } else {
-                ("Survey, then explore", MUTED)
-            };
-            let w = text_width(state, style(12., color)) + 15.6;
-            chip(state, 576. - w, y + 21.5, 12., color);
-        }
-        chip(
-            if self.crew {
-                "Far Beacon: all nine engineers aboard"
-            } else {
-                "Optional: rescue nine at Far Beacon"
-            },
-            42.,
-            478.,
-            12.,
-            if self.crew { GREEN } else { GOLD },
-        );
-
-        eyebrow("Expedition", COL, 174., CYAN);
-        let w = label(&format!("{}", self.built()), COL, 214., 36., PAPER);
-        label("/ 3 mechanisms", COL + w + 8., 214., 14., MUTED);
-        pair(
-            "Sectors mapped",
-            &format!("{} / 9", self.scanned()),
-            248.,
-            PAPER,
-        );
-        divider(COL, 262., COL_W, Color::new(1., 1., 1., 0.1));
-        let left = DEADLINE - self.watch.min(DEADLINE);
-        pair(
-            "Watches remain",
-            &format!("{left}"),
-            288.,
-            if left < 8 { RED } else { GOLD },
-        );
-        bar(
-            COL,
-            298.,
-            COL_W,
-            7.,
-            1. - f32::from(self.watch) / f32::from(DEADLINE),
-            if left < 8 { RED } else { GOLD },
-        );
-        body(
-            "Each action costs 1 watch. Planning is free.",
-            COL,
-            338.,
-            COL_W,
-            13.,
-            SOFT,
-            2,
-        );
-        body(
-            "The star collapses at watch 52. Escape sooner for a higher score.",
-            COL,
-            390.,
-            COL_W,
-            12.,
-            MUTED,
-            3,
-        );
-        action_button("Open gate at Loom", self.built() == 3 && self.sector == 0);
-    }
-
-    fn draw_transit(&self) {
-        let Some(flight) = self.transit else {
+    /// The whole route's fuel, watches and first-entry damage beside a
+    /// hovered star.
+    pub(crate) fn route_costs(&self, to: usize) {
+        let (path, n) = route(self.sector, to);
+        if n == 0 {
             return;
-        };
-        let (x, y, w, h) = (COL - 4., 470., COL_W + 8., 88.);
-        rounded_gradient(
-            x,
-            y,
-            w,
-            h,
-            10.,
-            Color::new(0.07, 0.16, 0.22, 1.),
-            Color::new(0.04, 0.09, 0.14, 1.),
+        }
+        let hurt: u16 = path[..n]
+            .iter()
+            .filter(|&&s| !self.sites[s].visited)
+            .map(|&s| self.shielded(CHART[s].arrival_damage))
+            .sum();
+        let hops = format!("-{n}");
+        let pain = format!("-{hurt}");
+        let short = n > usize::from(self.fuel);
+        let mut bits = [
+            bit(Icon::Fuel, &hops, if short { RED } else { FUEL }),
+            bit(Icon::Hourglass, &hops, TIME),
+            bit(Icon::Heart, &pain, HULL),
+        ];
+        let count = if hurt > 0 { 3 } else { 2 };
+        let bits = &mut bits[..count];
+        let w: f32 = bits
+            .iter()
+            .map(|b| tag_width(b.text, 14.) + 8.)
+            .sum::<f32>()
+            - 8.;
+        let c = star(to);
+        let x = (c.x - w * 0.5).clamp(MAP.x + 14., MAP.x + MAP.w - 14. - w);
+        let cy = c.y + 62.;
+        rounded(
+            x - 7.,
+            cy - 12.,
+            w + 14.,
+            24.,
+            12.,
+            Color::new(0.03, 0.06, 0.1, 0.9),
         );
-        outline(x, y, w, h, 10., 1., with_alpha(CYAN, 0.35));
-        eyebrow("Lane transit", COL + 10., y + 22., CYAN);
-        label_right(
-            &format!("to {}", CHART[flight.to].name),
-            COL + COL_W - 8.,
-            y + 22.,
-            13.,
-            PAPER,
+        outline(
+            x - 7.,
+            cy - 12.,
+            w + 14.,
+            24.,
+            12.,
+            1.,
+            with_alpha(GOLD, 0.4),
         );
-        bar(
-            COL + 10.,
-            y + 36.,
-            COL_W - 18.,
-            7.,
-            1. - f32::from(flight.remaining) / f32::from(flight.total),
-            CYAN,
-        );
-        label("Arrival is automatic.", COL + 10., y + 68., 12., MUTED);
+        tags(bits, x, cy, 14., 8.);
     }
 
-    fn draw_encounter(&self, event: Encounter) {
-        panel(16., 112., 928., 456., Color::new(0.01, 0.02, 0.05, 0.62));
-        let r = Rect::new(102., 170., 758., 384.);
-        shapes::drop_shadow(
-            r,
-            14.,
-            shapes::Shadow::soft(Color::new(0., 0., 0., 0.5))
-                .offset(vec2(0., 8.))
-                .blur(24.),
-        );
-        rounded_gradient(
-            r.x,
-            r.y,
-            r.w,
-            r.h,
-            14.,
-            Color::new(0.07, 0.11, 0.17, 1.),
-            Color::new(0.03, 0.06, 0.1, 1.),
-        );
-        outline(r.x, r.y, r.w, r.h, 14., 1., with_alpha(GOLD, 0.35));
-        rounded(r.x + 28., r.y, 72., 3., 1.5, GOLD);
-        let (title, story, choices) = match event {
-            Encounter::Choir => (
-                "The Hollow Choir",
-                "Choose how to retrieve the lens.",
-                [
-                    ("Powered probe", "1 fuel, no damage"),
-                    ("Dive", "18 hull risk, lens + 1 crystal"),
-                    ("Withdraw", "No cost, return later"),
-                ],
-            ),
-            Encounter::Sentinel => (
-                "The Sentinel's Toll",
-                "Choose how to retrieve the core.",
-                [
-                    ("Override", "Spend 2 circuits"),
-                    ("Pay the toll", "Spend 30 credits"),
-                    ("Force the vault", "34 hull risk"),
-                ],
-            ),
-            Encounter::Privateers => (
-                "Privateers of Copper Reef",
-                "Choose trade, escape or combat.",
-                [
-                    ("Trade", "1 alloy for 3 circuits"),
-                    ("Escape", "Spend 2 fuel"),
-                    ("Fight", "22 hull risk, gain 40 credits"),
-                ],
-            ),
-        };
-        eyebrow("Encounter", 130., 204., GOLD);
-        label(title, 130., 236., 26., PAPER);
-        label(story, 130., 266., 15., SOFT);
-        let pulse = 0.5 + 0.5 * (self.ticks as f32 * 0.08).sin();
-        for (i, (name, detail)) in choices.iter().enumerate() {
-            let y = 330. + i as f32 * 62.;
-            let on = self.choice == i;
-            if on {
-                rounded_gradient(130., y, 700., 48., 10., lighten(DIM, 0.1), DIM);
-                outline(
-                    130.,
-                    y,
-                    700.,
-                    48.,
-                    10.,
-                    1.,
-                    with_alpha(GOLD, 0.5 + 0.3 * pulse),
-                );
-            } else {
-                rounded(130., y, 700., 48., 10., Color::new(0.05, 0.08, 0.13, 1.));
-                outline(130., y, 700., 48., 10., 1., Color::new(1., 1., 1., 0.06));
-            }
-            let badge = vec2(156., y + 24.);
-            shapes::fill_circle(badge, 12., with_alpha(if on { GOLD } else { MUTED }, 0.16));
-            label_center(
-                &format!("{}", i + 1),
-                badge.x,
-                badge.y + 5.,
-                13.,
-                if on { GOLD } else { MUTED },
-            );
-            let s = ink(17., if on { GOLD } else { PAPER });
-            let base = s.centered_baseline(y + 24.);
-            let w = draw_text_styled(name, 182., base, s).width;
-            fitted(
-                detail,
-                182. + w + 16.,
-                base,
-                610. - w,
-                14.,
-                if on { SOFT } else { MUTED },
+    /// The lane route to `to` as planet beads, with its total cost.
+    pub(crate) fn route_card(&self, to: usize, y: f32) {
+        let (path, n) = route(self.sector, to);
+        if n == 0 {
+            return;
+        }
+        rounded(COL, y, COL_W, 68., 10., WELL);
+        let cy = y + 22.;
+        let step = (COL_W - 44.) / n as f32;
+        let at = |k: usize| vec2(COL + 22. + step * k as f32, cy);
+        let node = |k: usize| if k == 0 { self.sector } else { path[k - 1] };
+        for k in 0..n {
+            let color = if k == 0 { GOLD } else { with_alpha(GOLD, 0.5) };
+            let (a, b) = (at(k), at(k + 1));
+            draw_line(
+                a.x + 9.,
+                a.y,
+                b.x - 9.,
+                b.y,
+                if k == 0 { 2. } else { 1.5 },
+                color,
             );
         }
-        let mut x = 130.;
-        x += keycap("Up", "", x, 524., MUTED) + 4.;
-        x += keycap("Down", "Choose", x, 524., MUTED) + 16.;
-        x += keycap("Space", "Confirm", x, 524., MUTED) + 16.;
-        label("or click an approach", x, 538., 13., MUTED);
+        let mut hurt = 0;
+        for k in 0..=n {
+            let s = node(k);
+            let c = at(k);
+            let color = CHART[s].color;
+            shapes::fill_circle(
+                c,
+                7.,
+                Fill::radial(c - vec2(3., 3.), 11., tint(color, 1.15), tint(color, 0.4)),
+            );
+            if k == 0 {
+                shapes::stroke_circle(c, 10., 1.5, CYAN);
+            } else if !self.sites[s].visited && CHART[s].arrival_damage > 0 {
+                hurt += self.shielded(CHART[s].arrival_damage);
+                icon(Icon::Alert, c.x + 9., c.y - 9., 10., RED);
+            }
+            if k == n {
+                shapes::stroke_circle(c, 10.5, 1.5, GOLD);
+            }
+        }
+        let hops = format!("-{n}");
+        let pain = format!("-{hurt}");
+        let short = n > usize::from(self.fuel);
+        let bits = [
+            bit(Icon::Fuel, &hops, if short { RED } else { FUEL }),
+            bit(Icon::Hourglass, &hops, TIME),
+            bit(Icon::Heart, &pain, HULL),
+        ];
+        let count = if hurt > 0 { 3 } else { 2 };
+        tags(&bits[..count], COL + 14., y + 50., 15., 14.);
+    }
+
+    // -----------------------------------------------------------------------
+    // Right-hand panels
+
+    /// Sector eyebrow, name and planet swatch.
+    pub(crate) fn sector_title(&self, i: usize) {
+        let s = &CHART[i];
+        eyebrow(s.kind, COL, 174., MUTED);
+        line(s.name, COL, 192., COL_W - 34., 21., tint(s.color, 1.05));
+        let c = vec2(COL + COL_W - 11., 185.);
+        shapes::fill_circle(
+            c,
+            10.,
+            Fill::radial(
+                c - vec2(4., 4.),
+                16.,
+                tint(s.color, 1.1),
+                tint(s.color, 0.35),
+            ),
+        );
+    }
+    pub(crate) fn panel_chart(&self, t: f32, p: Vec2, live: bool) {
+        let i = self.selected;
+        let s = &CHART[i];
+        let site = self.sites[i];
+        self.sector_title(i);
+        // Landmark: what is waiting there, and whether it is still unclaimed.
+        let y = 210.;
+        rounded(COL, y, COL_W, 52., 10., WELL);
+        let claimed = site.claimed;
+        let color = LANDMARK_COLOR[i];
+        let b = vec2(COL + 26., y + 26.);
+        if claimed {
+            icon_badge(
+                LANDMARK_ICON[i],
+                b.x,
+                b.y,
+                36.,
+                Color::new(0.1, 0.15, 0.2, 1.),
+                MUTED,
+            );
+            icon_badge(
+                Icon::Check,
+                b.x + 13.,
+                b.y + 12.,
+                16.,
+                darken(GREEN, 0.55),
+                GREEN,
+            );
+        } else {
+            glow(b.x, b.y, 26., with_alpha(color, 0.12));
+            icon_badge(LANDMARK_ICON[i], b.x, b.y, 36., darken(color, 0.72), color);
+        }
+        line(
+            LANDMARK_NAME[i],
+            COL + 52.,
+            y + 17.,
+            COL_W - 60.,
+            14.,
+            if claimed { MUTED } else { PAPER },
+        );
+        self.landmark_rewards(i, COL + 52., y + 37., 15., !claimed);
+        // Deposits: charted stock until surveyed, then what is left.
+        let y = 272.;
+        for k in 0..3 {
+            let x = COL + k as f32 * 97.;
+            rounded(x, y, 88., 48., 9., WELL);
+            let original = s.supplies[k];
+            let left = if site.scanned {
+                site.stock[k]
+            } else {
+                original
+            };
+            let value = left.to_string();
+            let color = if left > 0 {
+                RESOURCE[k]
+            } else {
+                with_alpha(RESOURCE[k], 0.45)
+            };
+            tag(RESOURCE_ICON[k], &value, x + 9., y + 17., 17., color);
+            stock_pips(x + 9., y + 37., left, original, RESOURCE[k], true);
+        }
+        // Hazards: first-entry and per-extraction hull damage after shielding.
+        let cy = 346.;
+        let entry = self.shielded(s.arrival_damage);
+        let dig = self.shielded(s.extraction_damage);
+        let mut x = COL;
+        let entry_text = format!("-{entry}");
+        let dig_text = format!("-{dig}");
+        if !site.visited && entry > 0 {
+            x += tag(Icon::Rocket, "", x, cy, 15., MUTED) + 2.;
+            x += tag(Icon::Heart, &entry_text, x, cy, 15., HULL) + 16.;
+        }
+        if dig > 0 {
+            x += tag(Icon::Pickaxe, "", x, cy, 15., MUTED) + 2.;
+            x += tag(Icon::Heart, &dig_text, x, cy, 15., HULL) + 16.;
+        }
+        if x == COL {
+            tag(Icon::Shield, "Safe", x, cy, 15., GREEN);
+        }
+        if s.station {
+            let cy = 380.;
+            let w = icon_chip(Icon::Home, "Station", COL, cy - 9., 13., GOLD);
+            tags(
+                &[
+                    bit(Icon::Fuel, "", FUEL),
+                    bit(Icon::Wrench, "", HULL),
+                    bit(Icon::Coin, "", COIN),
+                ],
+                COL + w + 10.,
+                cy,
+                15.,
+                8.,
+            );
+        }
+        if self.transit.is_some() {
+            return;
+        }
+        self.route_card(i, 410.);
+        if i == self.sector {
+            let here = Some((Icon::Pin, "Here".to_string()));
+            button(Icon::Rocket, "Jump", &[], here, live, p, t);
+            return;
+        }
+        match self.jump_refusal(i) {
+            None => {
+                let hurt = if site.visited { 0 } else { entry };
+                let pain = format!("-{hurt}");
+                let bits = [
+                    bit(Icon::Fuel, "-1", FUEL),
+                    bit(Icon::Hourglass, "-1", TIME),
+                    bit(Icon::Heart, &pain, HULL),
+                ];
+                let n = if hurt > 0 { 3 } else { 2 };
+                button(Icon::Rocket, "Jump", &bits[..n], None, live, p, t);
+            }
+            Some(reason) => {
+                let why = self.refusal_label(reason, 0);
+                button(Icon::Rocket, "Jump", &[], Some(why), live, p, t);
+            }
+        }
     }
 }
+
+impl Game {
+    // -----------------------------------------------------------------------
+    // Header strip
+
+    /// Watches left, hull, fuel and credits, then the three cargo kinds and
+    /// the hold, at fixed slots in the header.
+    pub(crate) fn stat_strip(&self, t: f32) {
+        let cy = STAT_Y;
+        let left = DEADLINE - self.watch.min(DEADLINE);
+        let col = watch_color(left);
+        let wx = stat_x(Stat::Watch) + 11.;
+        if left < 8 {
+            glow(wx, cy, 16. + 4. * pulse(t, 1.4), with_alpha(RED, 0.25));
+        }
+        shapes::stroke_circle(vec2(wx, cy), 11., 3.5, Color::new(1., 1., 1., 0.1));
+        ring_meter(wx, cy, 11., 3.5, f32::from(left) / f32::from(DEADLINE), col);
+        icon(Icon::Hourglass, wx, cy, 12., col);
+        let value = left.to_string();
+        label(&value, wx + 16., cy + 5., 16., PAPER);
+        let hull = self.hull.to_string();
+        let hull_color = if self.hull < 25 {
+            with_alpha(RED, 0.7 + 0.3 * pulse(t, 1.6))
+        } else {
+            HULL
+        };
+        tag(Icon::Heart, &hull, stat_x(Stat::Hull), cy, 16., hull_color);
+        let fuel = self.fuel.to_string();
+        tag(
+            Icon::Fuel,
+            &fuel,
+            stat_x(Stat::Fuel),
+            cy,
+            16.,
+            if self.fuel == 0 { RED } else { FUEL },
+        );
+        let credits = self.credits.to_string();
+        tag(Icon::Coin, &credits, stat_x(Stat::Credits), cy, 16., COIN);
+        let split = stat_x(Stat::Cargo(0)) - 12.;
+        rounded(split, cy - 10., 1., 20., 0.5, Color::new(1., 1., 1., 0.12));
+        for k in 0..3 {
+            let n = self.cargo[k].to_string();
+            let color = if self.cargo[k] == 0 {
+                with_alpha(RESOURCE[k], 0.45)
+            } else {
+                RESOURCE[k]
+            };
+            tag(RESOURCE_ICON[k], &n, stat_x(Stat::Cargo(k)), cy, 16., color);
+        }
+        let hold = format!("{}/{}", self.hold_used(), self.hold_max());
+        let full = self.hold_free() == 0;
+        tag(
+            Icon::Crate,
+            &hold,
+            stat_x(Stat::Hold),
+            cy,
+            16.,
+            if full { RED } else { SOFT },
+        );
+    }
+}
+
 impl ArcadeGame for Game {
     fn new() -> Self {
         Self::new()
@@ -1187,48 +705,59 @@ impl ArcadeGame for Game {
         self.step(input)
     }
     fn draw(&self) {
-        backdrop(self.ticks);
+        let t = clock();
+        let p = pointer();
+        let live =
+            self.result == Outcome::Playing && self.transit.is_none() && self.encounter.is_none();
+        backdrop(t);
         surface(624., 150., 312., 418.);
-        self.draw_tabs();
+        self.draw_tabs(t, p, live);
         match self.page {
-            0 | 1 => {
-                self.draw_chart();
-                self.draw_chart_panel();
+            0 => {
+                self.draw_map(t, p, live);
+                self.panel_chart(t, p, live);
             }
-            2 => self.draw_forge(),
-            3 => self.draw_ship(),
-            _ => self.draw_mission(),
+            1 => {
+                self.draw_map(t, p, live);
+                self.panel_survey(t, p, live);
+            }
+            2 => {
+                self.forge_left(t, p, live);
+                self.panel_forge(t, p, live);
+            }
+            3 => {
+                self.ship_left(t);
+                self.panel_ship(t, p, live);
+            }
+            _ => {
+                self.mission_left(t);
+                self.panel_mission(t, p, live);
+            }
         }
-        // Reserved strip keeps accepted-event feedback legible above the footer.
-        notice(&self.notice);
         self.draw_transit();
         if let Some(event) = self.encounter {
-            self.draw_encounter(event);
+            self.draw_encounter(event, t, p);
         }
     }
     fn hud(&self) -> Hud {
-        let objective = if let Some(i) = (0..3).find(|&i| !self.components[i]) {
-            if self.relics[i] {
-                format!("Forge {} [3]", COMPONENT_NAMES[i])
-            } else {
-                format!(
-                    "Recover {} at {}",
-                    RELIC_NAMES[i], CHART[RELIC_SECTORS[i]].name
-                )
-            }
-        } else {
-            "Return to Loom Dock; open the gate [5]".into()
+        let objective = match self.goal() {
+            Goal::Recover(i) => format!("{} at {}", RELIC_NAMES[i], CHART[RELIC_SECTORS[i]].name),
+            Goal::Forge(i) => format!("Forge the {}", COMPONENT_NAMES[i]),
+            Goal::Return => "Return to Loom Dock".into(),
+            Goal::Open => "Open the gate".into(),
+            Goal::Done => "The ark is through".into(),
         };
         Hud {
-            stage: format!("Watch {:02}/52 | {}", self.watch, CHART[self.sector].name),
+            stage: CHART[self.sector].name.into(),
             objective,
             status: format!(
-                "Fuel {}  Hull {}  Hold {}/{}  Credits {}",
-                self.fuel,
+                "Watch {}/{DEADLINE}, hull {}, fuel {}, credits {}, hold {}/{}",
+                self.watch,
                 self.hull,
+                self.fuel,
+                self.credits,
                 self.hold_used(),
-                self.hold_max(),
-                self.credits
+                self.hold_max()
             ),
             score: self.points,
         }
@@ -1239,36 +768,320 @@ impl ArcadeGame for Game {
     fn summary(&self) -> String {
         match self.result {
             Outcome::Won => format!(
-                "Ark escaped in {} watches. {} of 9 sectors mapped. Hull {}. {}. {} points.",
+                "The ark escaped on watch {} with {} hull{}: {} points.",
                 self.watch,
-                self.scanned(),
                 self.hull,
                 if self.crew {
-                    "All nine engineers rescued"
+                    " and all nine engineers"
                 } else {
-                    "Far Beacon left behind"
+                    ""
                 },
                 self.points
             ),
             Outcome::Lost => format!(
-                "{}. {} mechanisms built; {} sectors mapped. Score {}. Restart to plan another route.",
+                "{} with {} of 3 gate parts built: {} points.",
                 if self.hull == 0 {
-                    "Your ship was lost"
+                    "The ship was lost"
                 } else {
                     "The star collapsed"
                 },
                 self.built(),
-                self.scanned(),
                 self.points
             ),
             Outcome::Playing => format!(
-                "{} of 3 mechanisms fitted. {} watches remain.",
+                "{} of 3 gate parts built; {} watches remain.",
                 self.built(),
-                DEADLINE - self.watch
+                DEADLINE - self.watch.min(DEADLINE)
             ),
         }
     }
     fn bot_input(&self, tick: u64) -> Input {
         self.pilot(tick)
+    }
+    fn progress(&self) -> Option<(u32, u32)> {
+        Some(((self.built() as u32 + 1).min(4), 4))
+    }
+    fn effects(&self, _cue: Cue, fx: &mut Juice) {
+        for event in self.events.iter() {
+            self.effect(event, fx);
+        }
+    }
+    fn draw_objective(&self, area: Rect) -> bool {
+        let t = clock();
+        let cy = area.y + area.h * 0.5;
+        let goal = self.goal();
+        let focus = match goal {
+            Goal::Forge(i) | Goal::Recover(i) => Some(i),
+            _ => None,
+        };
+        let mut x = area.x + 4.;
+        gate_ring(vec2(x + 13., cy), 11., 4.5, self, focus, t);
+        x += 34.;
+        for (k, &glyph) in RELIC_ICON.iter().enumerate() {
+            let at = vec2(x + 11., cy);
+            let (bg, fg) = if self.components[k] {
+                (darken(CYAN, 0.6), lighten(CYAN, 0.4))
+            } else if self.relics[k] {
+                (darken(GOLD, 0.62), GOLD)
+            } else {
+                (Color::new(0.1, 0.14, 0.2, 1.), with_alpha(MUTED, 0.75))
+            };
+            if focus == Some(k) {
+                glow(at.x, at.y, 15. + 3. * pulse(t, 1.), with_alpha(GOLD, 0.22));
+            }
+            icon_badge(glyph, at.x, at.y, 23., bg, fg);
+            if self.components[k] {
+                icon_badge(
+                    Icon::Check,
+                    at.x + 8.,
+                    at.y + 7.,
+                    11.,
+                    darken(GREEN, 0.5),
+                    GREEN,
+                );
+            }
+            x += 27.;
+        }
+        x += 6.;
+        icon(Icon::ArrowRight, x + 6., cy, 12., MUTED);
+        x += 18.;
+        let room = STRIP - 24. - x;
+        match goal {
+            Goal::Recover(i) => {
+                let s = &CHART[RELIC_SECTORS[i]];
+                icon(Icon::Pin, x + 8., cy, 17., GOLD);
+                line(s.name, x + 21., cy, room - 21., 17., tint(s.color, 1.15));
+            }
+            Goal::Forge(i) => {
+                icon(Icon::Hammer, x + 8., cy, 17., GOLD);
+                line(COMPONENT_NAMES[i], x + 21., cy, room - 21., 17., PAPER);
+            }
+            Goal::Return => {
+                icon(Icon::Home, x + 8., cy, 17., GOLD);
+                line(
+                    CHART[0].name,
+                    x + 21.,
+                    cy,
+                    room - 21.,
+                    17.,
+                    tint(CHART[0].color, 1.15),
+                );
+            }
+            Goal::Open => {
+                let beat = pulse(t, 1.2);
+                glow(x + 8., cy, 14. + 4. * beat, with_alpha(GOLD, 0.25));
+                icon(Icon::Flag, x + 8., cy, 17., GOLD);
+                line(
+                    "Open gate",
+                    x + 21.,
+                    cy,
+                    room - 21.,
+                    17.,
+                    lighten(GOLD, 0.2 * beat),
+                );
+            }
+            Goal::Done => {
+                icon(Icon::Check, x + 8., cy, 17., GREEN);
+                line("Gate open", x + 21., cy, room - 21., 17., GREEN);
+            }
+        }
+        self.stat_strip(t);
+        true
+    }
+    fn draw_result(&self, area: Rect) -> bool {
+        let won = self.result == Outcome::Won;
+        let watch = self.watch.to_string();
+        let hull = self.hull.to_string();
+        let mapped = format!("{}/9", self.scanned());
+        let built = format!("{}/3", self.built());
+        let crew = if self.crew { "9" } else { "0" };
+        let cell = area.w / 4.;
+        let cy = area.y + 44.;
+        let column = |i: usize, glyph: Option<Icon>, value: &str, color: Color| {
+            let cx = area.x + cell * (i as f32 + 0.5);
+            shapes::fill_circle(vec2(cx, cy), 31., with_alpha(color, 0.13));
+            shapes::stroke_circle(vec2(cx, cy), 31., 1.5, with_alpha(color, 0.45));
+            match glyph {
+                Some(g) => icon(g, cx, cy, 32., color),
+                None => gate_ring(vec2(cx, cy), 17., 6., self, None, 0.),
+            }
+            draw_text_styled(
+                value,
+                cx,
+                cy + 66.,
+                style(28., PAPER).with_align(TextAlign::Center),
+            );
+        };
+        if won {
+            column(0, Some(Icon::Hourglass), &watch, TIME);
+            column(1, Some(Icon::Heart), &hull, HULL);
+        } else if self.hull == 0 {
+            column(0, Some(Icon::Heart), "0", RED);
+            column(1, None, &built, CYAN);
+        } else {
+            column(0, Some(Icon::Hourglass), &watch, RED);
+            column(1, None, &built, CYAN);
+        }
+        column(2, Some(Icon::Search), &mapped, CYAN);
+        column(
+            3,
+            Some(Icon::People),
+            crew,
+            if self.crew { LANDMARK_COLOR[8] } else { MUTED },
+        );
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn win(game: &mut Game) {
+        for tick in 0..20_000 {
+            let input = game.pilot(tick);
+            game.step(&input);
+            if game.outcome() != Outcome::Playing {
+                break;
+            }
+        }
+    }
+
+    #[test]
+    fn progress_counts_gate_parts_from_departure_to_the_gate() {
+        let mut game = Game::new();
+        assert_eq!(game.progress(), Some((1, 4)));
+        assert_eq!(game.hud().stage, "Loom Dock");
+        win(&mut game);
+        assert_eq!(game.outcome(), Outcome::Won);
+        assert_eq!(game.progress(), Some((4, 4)));
+        let hud = game.hud();
+        assert_eq!(hud.stage, "Loom Dock");
+        assert!(hud.objective.split_whitespace().count() <= 5);
+        let summary = game.summary();
+        assert_eq!(summary.matches(". ").count(), 0, "one sentence: {summary}");
+        assert!(summary.contains("4817"));
+    }
+
+    #[test]
+    fn short_objectives_follow_the_next_step() {
+        let mut game = Game::new();
+        assert_eq!(game.hud().objective, "Navigator's key at Wayfarer");
+        game.relics[0] = true;
+        assert_eq!(game.hud().objective, "Forge the Beacon spindle");
+        game.components = [true; 3];
+        game.sector = 5;
+        assert_eq!(game.hud().objective, "Return to Loom Dock");
+        game.sector = 0;
+        assert_eq!(game.hud().objective, "Open the gate");
+        for goal in [
+            "Singing lens at Hollow Choir",
+            "Sentinel core at Silent Crown",
+        ] {
+            assert!(goal.split_whitespace().count() <= 5);
+        }
+    }
+
+    #[test]
+    fn accepted_work_is_felt_where_it_happens() {
+        // A survey rings out from the star and sparkles.
+        let mut game = Game::new();
+        game.step(&Input {
+            slot: Some(2),
+            ..Input::default()
+        });
+        let cue = game.step(&Input {
+            primary: true,
+            ..Input::default()
+        });
+        assert_eq!(cue, Cue::Good);
+        let mut fx = Juice::new();
+        game.effects(cue, &mut fx);
+        let counts = fx.counts();
+        assert!(counts.rings >= 3 && counts.sparks > 0, "{counts:?}");
+        // Mining bursts in the ore's color and pops the haul beside its row.
+        let mut game = Game::new();
+        game.sector = 1;
+        game.sites[1].scanned = true;
+        game.page = 1;
+        game.row = 1;
+        let cue = game.step(&Input {
+            primary: true,
+            ..Input::default()
+        });
+        assert_eq!(cue, Cue::Good);
+        let mut fx = Juice::new();
+        game.effects(cue, &mut fx);
+        let counts = fx.counts();
+        assert!(
+            counts.sparks >= 18 && counts.popups == 1 && counts.rings >= 3,
+            "{counts:?}"
+        );
+        // Recovering a relic earns a callout.
+        let mut game = Game::new();
+        game.sector = 3;
+        game.sites[3].scanned = true;
+        game.page = 1;
+        game.row = 4;
+        let cue = game.step(&Input {
+            primary: true,
+            ..Input::default()
+        });
+        let mut fx = Juice::new();
+        game.effects(cue, &mut fx);
+        assert!(fx.counts().popups >= 2, "{:?}", fx.counts());
+    }
+
+    #[test]
+    fn refusals_mark_the_refusing_thing_and_damage_shakes() {
+        let mut game = Game::new();
+        game.page = 1;
+        game.row = 1;
+        let cue = game.step(&Input {
+            primary: true,
+            ..Input::default()
+        });
+        assert_eq!(cue, Cue::None);
+        let mut fx = Juice::new();
+        game.effects(cue, &mut fx);
+        let counts = fx.counts();
+        assert_eq!((counts.rings, counts.popups), (1, 1));
+        fx.update(1. / 60.);
+        assert_ne!(fx.shake_offset(), Vec2::ZERO);
+        // First entry into Wayfarer costs hull: a burst, a heart popup, shake.
+        let mut game = Game::new();
+        game.sector = 1;
+        game.selected = 3;
+        game.step(&Input {
+            primary: true,
+            ..Input::default()
+        });
+        let mut cue = Cue::None;
+        for _ in 0..120 {
+            cue = game.step(&Input::default());
+        }
+        let mut fx = Juice::new();
+        game.effects(cue, &mut fx);
+        let counts = fx.counts();
+        assert!(counts.sparks >= 16 && counts.popups == 1, "{counts:?}");
+        fx.update(1. / 60.);
+        assert_ne!(fx.shake_offset(), Vec2::ZERO);
+    }
+
+    #[test]
+    fn routes_follow_the_charted_lanes() {
+        assert_eq!(route(0, 0).1, 0);
+        let (path, n) = route(0, 2);
+        assert_eq!(&path[..n], &[2]);
+        let (path, n) = route(1, 2);
+        assert_eq!(&path[..n], &[0, 2]);
+        let (path, n) = route(0, 8);
+        assert_eq!(n, 3);
+        assert_eq!(path[n - 1], 8);
+        let mut at = 0;
+        for &next in &path[..n] {
+            assert!(Game::adjacent(at, next));
+            at = next;
+        }
     }
 }

@@ -4,8 +4,9 @@
 //! Physics geometry comes from the crate constants; this module only reads
 //! the table and cosmetic state.
 use super::layout::Layout;
-use super::presentation::{AMBER, GOLD, Presentation};
+use super::presentation::{AMBER, GOLD, Presentation, lamp_insert, multiplier_insert};
 use super::*;
+use ferravex_render::icons::Icon;
 use ferravex_render::post;
 use ferravex_render::shapes::{self, Fill, Shadow, Stroke};
 use ferravex_render::text::{TextAlign, TextStyle, draw_text_styled};
@@ -309,19 +310,25 @@ fn bumpers(
         draw_text_styled(&bufs.pop, v.x, style.centered_baseline(v.y), style);
         // A lamp insert under each bumper shows progress toward the crane.
         lamp(
-            p([point[0], point[1] + 0.98]),
+            p(lamp_insert(i)),
             0.1 * scale,
             GOLD,
             if lit { pulse } else { 0. },
         );
         if skill == Some(i) {
+            // The skill-shot target: a blinking ring and a target pictogram.
             let on = view.blink(3.);
             let color = if on { HOT } else { BRASS };
             shapes::stroke_circle(v, 0.98 * scale, 2.5, color);
             if on {
                 shapes::glow_ring(v, 0.98 * scale, 6., with_alpha(GOLD, 0.5));
             }
-            label("SKILL", v - vec2(0., 1.1 * scale), 0.22 * scale, color);
+            hud::icon(
+                Icon::Target,
+                v - vec2(0., 1.2 * scale),
+                (0.42 * scale).max(14.),
+                color,
+            );
         }
         if ring > 0.0 {
             shapes::stroke_circle(
@@ -381,12 +388,7 @@ fn crane(table: &Table, view: &Presentation, p: &impl Fn([f32; 2]) -> Vec2, scal
         );
     } else {
         shapes::stroke_circle(target, CRANE_RADIUS * scale, 1., with_alpha(CREAM, 0.12));
-        label(
-            "CRANE",
-            p([CRANE[0], CRANE[1] + 0.86]),
-            0.22 * scale,
-            with_alpha(CREAM, 0.16 * label_alpha),
-        );
+        hud::magnet(target, 0.55 * scale, 0.22 * label_alpha, false);
     }
     let left = p([3.35, 0.98]);
     let right = p([5.45, 0.98]);
@@ -445,12 +447,16 @@ fn crane(table: &Table, view: &Presentation, p: &impl Fn([f32; 2]) -> Vec2, scal
     };
     shapes::fill_rounded_rect(body, 4., Fill::vertical(body, top, bottom));
     shapes::stroke_rounded_rect(body, 4., 1.5, BRASS);
-    label(
-        "MAG",
-        vec2(magnet.x, magnet.y + 0.09 * scale),
-        0.2 * scale,
-        if armed { CREAM } else { BRASS },
-    );
+    // Pole shoes along the magnet's face.
+    for dx in [-0.34, 0.34] {
+        let shoe = Rect::new(
+            magnet.x + dx * scale - 0.09 * scale,
+            body.y + 0.06 * scale,
+            0.18 * scale,
+            0.24 * scale,
+        );
+        shapes::fill_rounded_rect(shoe, 2., with_alpha(CREAM, 0.55));
+    }
     if armed || held {
         let glow = if view.blink(4.) { 1. } else { 0.55 };
         let face = Rect::new(body.x + 4., body.y + body.h - 3., body.w - 8., 2.5);
@@ -468,7 +474,7 @@ fn multiplier_inserts(
     scale: f32,
 ) {
     for (n, level) in (2..=MAX_MULTIPLIER).enumerate() {
-        let c = p([3.6 + n as f32 * 0.72, 11.8]);
+        let c = p(multiplier_insert(level));
         let lit = table.multiplier >= level;
         let newest = table.multiplier == level && !view.blink(2.);
         let chase = view.chase(RIM_LAMPS.len() + n, attract);
@@ -508,17 +514,11 @@ fn save_insert(table: &Table, view: &Presentation, p: &impl Fn([f32; 2]) -> Vec2
     if on {
         post::glow_circle(c.x, c.y, 1.1 * scale, MINT, 0.6);
     }
-    label(
-        "SAVE",
-        c + vec2(0., 0.09 * scale),
-        0.2 * scale,
+    hud::icon(
+        Icon::Shield,
+        c,
+        (0.26 * scale).max(10.),
         if on { INK } else { with_alpha(CREAM, 0.3) },
-    );
-    label(
-        "DRAIN",
-        p([4.95, 15.6]),
-        0.22 * scale,
-        with_alpha(BRASS, 0.8),
     );
 }
 
@@ -649,6 +649,16 @@ fn effects(
             );
         }
     });
+    // Glints: a ring expands from each lamp that just lit.
+    for glint in view.glints.iter().flatten() {
+        let t = glint.progress();
+        let ease = 1. - (1. - t) * (1. - t);
+        let c = p(glint.at);
+        let r = (0.25 + glint.radius * ease) * scale;
+        let alpha = (1. - t) * view.motion_scale.min(1.);
+        shapes::stroke_circle(c, r, (0.08 * scale).max(2.), with_alpha(glint.color, alpha));
+        post::glow_circle(c.x, c.y, r * 1.2, glint.color, 0.35 * alpha);
+    }
     let flash = view.board_flash();
     if flash > 0. {
         let c = p(view.flash_at);
@@ -668,18 +678,33 @@ fn effects(
     }
     for pop in view.pops.iter().flatten() {
         let at = p([pop.at[0], pop.at[1] - pop.rise(view.motion_scale)]);
-        bufs.pop.clear();
-        bufs.pop.push('+');
-        quips::grouped_into(&mut bufs.pop, pop.points);
         let size = crisp(if pop.big { 0.62 } else { 0.34 } * scale).max(16.);
         let color = if pop.big { GOLD } else { HOT };
         let alpha = pop.alpha();
         if pop.big {
             post::glow_circle(at.x, at.y - size * 0.4, size * 2.2, GOLD, 0.45 * alpha);
         }
+        if pop.points == 0 {
+            // An icon-only pop (the save shield rising from the drain).
+            let icon = pop.icon.unwrap_or(Icon::Star);
+            hud::icon(
+                icon,
+                at - vec2(0., size * 0.4),
+                size * 1.4,
+                with_alpha(super::MINT, alpha),
+            );
+            continue;
+        }
+        bufs.pop.clear();
+        bufs.pop.push('+');
+        quips::grouped_into(&mut bufs.pop, pop.points);
         let style = TextStyle::classic(size, with_alpha(color, alpha))
             .with_align(TextAlign::Center)
             .with_outline(with_alpha(Color::from_rgba(30, 16, 8, 255), alpha));
-        draw_text_styled(&bufs.pop, at.x, at.y, style);
+        let text = draw_text_styled(&bufs.pop, at.x, at.y, style);
+        if let Some(icon) = pop.icon {
+            let c = vec2(at.x - text.width * 0.5 - size * 0.75, at.y - size * 0.4);
+            hud::icon(icon, c, size * 1.1, with_alpha(color, alpha));
+        }
     }
 }

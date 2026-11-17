@@ -6,10 +6,11 @@ use crate::gfx::{Painter, Rgba, color, ease, mix3, rgba, with_alpha};
 use crate::icons;
 use crate::layout::Layout;
 use crate::sim::content::*;
-use crate::sim::{BossKind, Card, Game};
+use crate::sim::{BossKind, Game, PickupKind};
 use crate::text::{Align, BODY, LARGE, SMALL, Text};
 use crate::world::View;
 use ferravex_play::tween::{Motion, RollCounter, Spring};
+use ferravex_render::icons::{self as glyph, Icon};
 use ferravex_render::prelude::{Color, Rect, Vec2, vec2};
 use ferravex_render::shapes::{self, Fill};
 use ferravex_render::ui::kit::{self, KitTheme};
@@ -408,12 +409,14 @@ pub fn draw(
             motion,
         );
     }
-    // --- Callouts: newest on top, fading.
+    // --- Callouts: newest on top, fading. One punchy line each.
     let mut cy = l.screen.y * if compact { 0.27 } else { 0.24 };
     for call in fx.callouts.iter().flatten() {
         callout(tx, l, vec2(0., cy), call.say, call.alpha());
-        cy += if compact { 44. } else { 56. };
+        cy += if compact { 34. } else { 42. };
     }
+    // --- Treasure beyond the edge: a bobbing arrow points the way.
+    chest_arrows(p, l, game, view, t, motion);
     if let Some((boss, age)) = fx.boss_intro {
         banner(p, tx, l, boss, age, motion);
     }
@@ -439,7 +442,7 @@ pub fn draw(
     }
     vignette(p, l, fx, hp_frac);
     if touch {
-        touch_controls(p, tx, l, game, t, motion);
+        touch_controls(p, l, game, t, motion);
     }
 }
 
@@ -536,138 +539,97 @@ pub fn gem(p: &mut Painter, at: Vec2, r: f32, c: [f32; 3]) {
 fn callout(tx: &mut Text, l: &Layout, at: Vec2, say: Say, a: f32) {
     let w = l.screen.x;
     let size = if l.compact { BODY } else { LARGE };
-    let sub = if l.compact { SMALL } else { BODY };
-    let sub_at = at + vec2(0., size + 6.);
     let head =
         |tx: &mut Text, s: &str, c: [f32; 3]| tx.big(at, w, s, size, rgba(c, a), Align::Center);
-    let tail =
-        |tx: &mut Text, s: &str| tx.label(sub_at, w, s, sub, with_alpha(MUTED, a), Align::Center);
     match say {
+        // The new tide's name, in its own light.
         Say::Tide(tide) => {
             let t = &TIDES[usize::from(tide).min(TIDES.len() - 1)];
-            tx.big_fmt(
-                at,
-                w,
-                size,
-                rgba(t.light, a),
-                Align::Center,
-                format_args!("TIDE SHIFT: {}", t.name),
-            );
-            tail(
-                tx,
-                [
-                    "The water glows.",
-                    "The kelp starts whispering.",
-                    "Everything is suddenly pink.",
-                    "It gets very, very dark.",
-                    "The sun remembers you.",
-                ][usize::from(tide).min(4)],
-            );
+            tx.big(at, w, t.name, size, rgba(t.light, a), Align::Center);
         }
-        Say::Elite { name, kind } => {
-            tx.big_fmt(
-                at,
-                w,
-                size,
-                rgba(GOLD, a),
-                Align::Center,
-                format_args!(
-                    "ELITE: {}",
-                    ELITE_NAMES[usize::from(name) % ELITE_NAMES.len()]
-                ),
-            );
-            tx.label_fmt(
-                sub_at,
-                w,
-                sub,
-                with_alpha(MUTED, a),
-                Align::Center,
-                format_args!(
-                    "A {} with a name. Defeat it for treasure!",
-                    kind.info().name
-                ),
-            );
-        }
-        Say::EliteDown => {
-            head(tx, "ELITE DOWN!", GOLD);
-            tail(tx, "Grab the treasure chest ★");
-        }
+        // An elite's name in gold: its treasure chest is the promise.
+        Say::Elite { name, .. } => tx.big_fmt(
+            at,
+            w,
+            size,
+            rgba(GOLD, a),
+            Align::Center,
+            format_args!("★ {} ★", ELITE_NAMES[usize::from(name) % ELITE_NAMES.len()]),
+        ),
+        Say::EliteDown => head(tx, "ELITE DOWN!", GOLD),
         Say::Swarm(kind) => {
-            let (h, s) = match kind {
-                0 => ("MOTHLING MIGRATION!", "They are not here for you. Mostly."),
-                1 => ("DRIFTLET BLOOM!", "You are surrounded. Politely."),
-                2 => ("SNEEL PACK!", "Watch for the glare, then step aside."),
-                _ => ("CRAB PARADE!", "Sir Pinchington brought friends."),
+            let h = match kind {
+                0 => "MOTHLING MIGRATION!",
+                1 => "DRIFTLET BLOOM!",
+                2 => "SNEEL PACK!",
+                _ => "CRAB PARADE!",
             };
             head(tx, h, [1., 0.7, 0.45]);
-            tail(tx, s);
         }
-        Say::BossWarning(boss) => {
-            head(tx, "SOMETHING BIG STIRS BELOW...", RED);
-            tail(
-                tx,
-                if boss == BossKind::Gulpjaw {
-                    "The moon is missing. Suspicious."
-                } else {
-                    "A motherly disappointment approaches."
-                },
-            );
-        }
+        Say::BossWarning(_) => head(tx, "SOMETHING STIRS...", RED),
         Say::BossPhase(boss, phase) => {
             let h = match (boss, phase) {
-                (BossKind::MotherBrine, _) => "MOTHER BRINE IS FURIOUS!",
+                (BossKind::MotherBrine, _) => "FURIOUS!",
                 (BossKind::Gulpjaw, 1) => "LIGHTS OUT!",
-                _ => "GULPJAW IS ENRAGED!",
+                _ => "ENRAGED!",
             };
             head(tx, h, RED);
-            tail(
-                tx,
-                if phase >= 2 {
-                    "Everything is faster now. Sorry."
-                } else {
-                    "New tricks incoming."
-                },
-            );
         }
-        Say::BossDown(boss) => {
-            head(
-                tx,
-                if boss == BossKind::Gulpjaw {
-                    "THE ANGLERKING FALLS!"
-                } else {
-                    "MOTHER BRINE DISSOLVES!"
-                },
-                GOLD,
-            );
-            tail(
-                tx,
-                if boss == BossKind::Gulpjaw {
-                    "Dawn breaks over Glowtide."
-                } else {
-                    "Into perfectly nice sea foam."
-                },
-            );
+        Say::BossDown(boss) => head(
+            tx,
+            if boss == BossKind::Gulpjaw {
+                "THE ANGLERKING FALLS!"
+            } else {
+                "BRINE DISSOLVES!"
+            },
+            GOLD,
+        ),
+        Say::Evolved(wid) => tx.big_fmt(
+            at,
+            w,
+            size,
+            rgba(GOLD, a),
+            Align::Center,
+            format_args!("{}!", wid.info().evolved),
+        ),
+        Say::SecondWind => head(tx, "SECOND WIND!", [1., 0.95, 0.7]),
+        Say::Charge => head(tx, "CHARGE!", RED),
+        Say::Lure => head(tx, "THE LURE PULLS...", CYAN),
+    }
+}
+
+/// Chests waiting off screen get a gold arrow at the edge, pointing at them.
+fn chest_arrows(p: &mut Painter, l: &Layout, game: &Game, view: &View, t: f32, motion: f32) {
+    let s = l.screen;
+    let margin = 34.;
+    for pickup in &game.pickups {
+        if !matches!(pickup.kind, PickupKind::Chest(_)) || view.visible(pickup.pos, -20.) {
+            continue;
         }
-        Say::Evolved(wid) => {
-            tx.big_fmt(
-                at,
-                w,
-                size,
-                rgba(GOLD, a),
-                Align::Center,
-                format_args!("EVOLVED: {}!", wid.info().evolved),
-            );
-            tail(tx, wid.info().evolved_summary);
+        let at = view.to_screen(pickup.pos);
+        let center = s * 0.5;
+        let d = (at - center).normalize_or_zero();
+        if d == Vec2::ZERO {
+            continue;
         }
-        Say::SecondWind => {
-            head(tx, "SECOND WIND!", [1., 0.95, 0.7]);
-            tail(tx, "Not today, ocean.");
-        }
-        Say::Charge => head(tx, "CHARGE! MOVE ASIDE!", RED),
-        Say::Lure => {
-            head(tx, "THE LURE PULLS...", CYAN);
-            tail(tx, "Swim away from the light.");
-        }
+        // Where the ray from the center meets the inset screen edge.
+        let half = center - Vec2::splat(margin);
+        let k = (half.x / d.x.abs().max(1e-4)).min(half.y / d.y.abs().max(1e-4));
+        let bob = (t * 4.).sin() * 4. * motion;
+        let tip = center + d * (k + bob);
+        let side = vec2(-d.y, d.x);
+        let base = tip - d * 18.;
+        p.glow(tip - d * 8., 30., rgba(GOLD, 0.3));
+        p.tri(
+            false,
+            tip,
+            base + side * 10.,
+            base - side * 10.,
+            rgba(GOLD, 1.),
+            rgba([1., 0.6, 0.25], 1.),
+            rgba([1., 0.6, 0.25], 1.),
+        );
+        crate::world::chest_icon(p, base - d * 16., 0.45, t, 0.);
     }
 }
 
@@ -778,7 +740,7 @@ fn vignette(p: &mut Painter, l: &Layout, fx: &Fx, hp: f32) {
     }
 }
 
-fn touch_controls(p: &mut Painter, tx: &mut Text, l: &Layout, game: &Game, t: f32, motion: f32) {
+fn touch_controls(p: &mut Painter, l: &Layout, game: &Game, t: f32, motion: f32) {
     let (center, radius) = l.dash_button();
     let ready = game.player.dash_cd <= 0.;
     let c = game.character().color;
@@ -815,13 +777,11 @@ fn touch_controls(p: &mut Painter, tx: &mut Text, l: &Layout, game: &Game, t: f3
             rgba(c, 0.18 + 0.08 * (t * 3.).sin() * motion),
         );
     }
-    tx.label(
-        center - vec2(radius, 8.),
-        radius * 2.,
-        "Dash",
-        BODY,
-        if ready { PAPER } else { MUTED },
-        Align::Center,
+    glyph::draw(
+        Icon::Wind,
+        center,
+        radius * 0.9,
+        color(if ready { PAPER } else { MUTED }),
     );
     let pb = l.pause_button();
     let at = vec2(pb.min[0], pb.min[1]);
@@ -904,19 +864,6 @@ pub fn numbers(tx: &mut Text, fx: &Fx, view: &View) {
                 format_args!("{:.0}", n.amount),
             ),
         }
-    }
-}
-
-/// Describe what picking a card does, for the level-up screen.
-pub fn card_line(game: &Game, card: Card) -> &'static str {
-    match card {
-        Card::Weapon(w) => {
-            let next = game.card_next_level(card);
-            w.info().levels[usize::from(next.min(WEAPON_MAX))]
-        }
-        Card::Passive(p) => p.info().summary,
-        Card::Snack => "Restore 30% of your HP.",
-        Card::Pebble => "+25 Glimmer for the Shrine.",
     }
 }
 

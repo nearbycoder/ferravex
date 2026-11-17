@@ -46,18 +46,19 @@ impl Prank {
     pub fn slot(self) -> usize {
         self as usize
     }
-    /// Notepad line, in a raccoon's careful handwriting.
+    /// Notepad line, in a raccoon's careful handwriting (three words at most;
+    /// the line's pictogram and its pin on the minimap carry the rest).
     pub fn line(self) -> &'static str {
         match self {
-            Prank::Pie => "Steal a whole pie",
-            Prank::Marrow => "Swap the marrow for a pinecone",
-            Prank::Music => "Make the band play off-key",
-            Prank::Sled => "Send a blanket sledding",
-            Prank::Bell => "Ring the village bell",
-            Prank::Cushion => "Whoopee-cushion a picnicker",
-            Prank::Melon => "Launch a melon off the seesaw",
-            Prank::Finale => "Do the tablecloth trick",
-            Prank::Escape => "Make a grand escape home",
+            Prank::Pie => "Steal a pie",
+            Prank::Marrow => "Swap the marrow",
+            Prank::Music => "Detune the band",
+            Prank::Sled => "Blanket sledding",
+            Prank::Bell => "Ring the bell",
+            Prank::Cushion => "Whoopee cushion",
+            Prank::Melon => "Launch a melon",
+            Prank::Finale => "Tablecloth trick",
+            Prank::Escape => "Escape home",
         }
     }
     /// A tiny hint shown under an unfinished line when it is selected.
@@ -74,17 +75,18 @@ impl Prank {
             Prank::Escape => "Run home with your cape. Everyone is watching.",
         }
     }
+    /// The crossed-off callout: a punchy line, three words at most.
     pub fn toast(self) -> &'static str {
         match self {
-            Prank::Pie => "Pie acquired. Pie is yours now.",
-            Prank::Marrow => "First prize: one (1) pinecone.",
-            Prank::Music => "The band has lost its place. And its key.",
-            Prank::Sled => "Wheeee! Blanket-sledding is now a sport.",
-            Prank::Bell => "DONG. Everyone checks their watch.",
-            Prank::Cushion => "PFFFRRRT. Nobody will speak of this.",
-            Prank::Melon => "Watermelon has achieved orbit.",
-            Prank::Finale => "The tablecloth trick! (Mostly.)",
-            Prank::Escape => "Picnic thoroughly panicked.",
+            Prank::Pie => "Pie acquired!",
+            Prank::Marrow => "First prize: pinecone!",
+            Prank::Music => "Off-key!",
+            Prank::Sled => "Wheeee!",
+            Prank::Bell => "DONG!",
+            Prank::Cushion => "PFFFRRRT!",
+            Prank::Melon => "Melon in orbit!",
+            Prank::Finale => "Ta-daaa!",
+            Prank::Escape => "Picnic panicked!",
         }
     }
 }

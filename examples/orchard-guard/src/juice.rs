@@ -9,11 +9,14 @@
 //! flashes. Text pops and toasts are informational, so they remain, but they
 //! stop rising or bouncing under reduced motion.
 use crate::game::{Feed, Game, Kind, MAX_PESTS, ROYAL_ID};
+use crate::glyph::Glyph;
+use crate::host::Refusal;
 use crate::quips;
 use ferravex_play::feedback::FeedbackPolicy;
 use ferravex_play::particles::{
     Emitter, EmitterDesc, EmitterTransform, ParticleDesc, ParticleMotion, ParticlePool,
 };
+use ferravex_render::icons::Icon;
 use ferravex_render::prelude::{Color, Vec2, vec2};
 
 const SEED: u64 = 0x4f52_4348;
@@ -22,6 +25,8 @@ const RINGS: usize = 10;
 const GHOSTS: usize = 12;
 pub(super) const GHOST_LIFE: f32 = 0.75;
 const TOAST_FADE: f32 = 0.3;
+/// Seconds a refusal chip stays up.
+pub(super) const REFUSAL_LIFE: f32 = 1.4;
 /// At most this many young pops stack over one spot.
 const MAX_STACK: usize = 3;
 
@@ -84,10 +89,13 @@ pub(super) enum Priority {
     Milestone,
 }
 
+/// A one-line banner: an optional pictogram, a short headline and an
+/// optional signed value chip (`+45` coins, `-1` heart).
 #[derive(Clone, Debug)]
 pub(super) struct Toast {
+    pub glyph: Option<Glyph>,
     pub head: String,
-    pub sub: String,
+    pub value: Option<(Glyph, i32)>,
     pub color: Color,
     pub age: f32,
     pub life: f32,
@@ -152,6 +160,10 @@ pub(super) struct Juice {
     pub rings: [Option<Ring>; RINGS],
     pub ghosts: [Option<Ghost>; GHOSTS],
     pub toast: Option<Toast>,
+    /// The latest refused command and its age, for the refusal chip.
+    pub refusal: Option<(Refusal, f32)>,
+    /// Plot rims pulse after a click that missed every plot, 0..=1.
+    pub plot_hint: f32,
     /// Per-plot recoil (fire) 0..=1.
     pub recoil: [f32; 8],
     /// Per-plot grow-in after planting or upgrading, seconds remaining.
@@ -183,6 +195,8 @@ impl Juice {
             rings: [None; RINGS],
             ghosts: [None; GHOSTS],
             toast: None,
+            refusal: None,
+            plot_hint: 0.,
             recoil: [0.; 8],
             grow: [0.; 8],
             hurt: 0.,
@@ -331,8 +345,9 @@ impl Juice {
 
     pub fn toast(
         &mut self,
+        glyph: Option<Glyph>,
         head: String,
-        sub: String,
+        value: Option<(Glyph, i32)>,
         color: Color,
         life: f32,
         priority: Priority,
@@ -345,13 +360,38 @@ impl Juice {
             return;
         }
         self.toast = Some(Toast {
+            glyph,
             head,
-            sub,
+            value,
             color,
             age: 0.,
             life,
             priority,
         });
+    }
+
+    /// React to a refused command: the HUD shakes the control and shows a
+    /// chip; a click that missed every plot makes the plots pulse instead.
+    pub fn refused(&mut self, game: &Game, refusal: Refusal) {
+        use crate::game::ActionError;
+        use crate::host::Action;
+        match refusal {
+            Refusal::Rejected(Action::Select(_), _) => {
+                self.plot_hint = 1.;
+                return;
+            }
+            Refusal::Rejected(_, ActionError::Finished) => return,
+            Refusal::Rejected(
+                _,
+                ActionError::Occupied | ActionError::Empty | ActionError::FullyGrown,
+            ) => {
+                if let Some(&at) = game.level.plots.get(game.selected) {
+                    self.ring(at, 34., 0.35, APPLE);
+                }
+            }
+            _ => {}
+        }
+        self.refusal = Some((refusal, 0.));
     }
 
     fn kick(&mut self, trauma: f32) {
@@ -439,8 +479,9 @@ impl Juice {
                     self.ring(at, 80., 0.7, GOLD);
                     self.kick(0.45);
                     self.toast(
+                        Some(Glyph::Icon(Icon::Crown)),
                         "Sir Crunchalot dethroned!".into(),
-                        "The crown rolls into a flowerbed. Long live the orchard.".into(),
+                        None,
                         GOLD,
                         3.2,
                         Priority::Milestone,
@@ -462,8 +503,9 @@ impl Juice {
                 );
                 self.kick(0.5);
                 self.toast(
-                    "-1 heart".into(),
+                    None,
                     quips::leak(self.leaks).into(),
+                    Some((Glyph::Heart, -1)),
                     APPLE,
                     1.8,
                     Priority::Alert,
@@ -509,13 +551,37 @@ impl Juice {
                 }
             }
             Feed::Launched { wave } => {
+                let royal = quips::royal_wave(wave);
                 self.toast(
-                    format!("Wave {wave} incoming!"),
+                    Some(if royal {
+                        Glyph::Icon(Icon::Crown)
+                    } else {
+                        Glyph::Beetle
+                    }),
                     quips::incoming(wave).into(),
+                    None,
                     CREAM,
                     2.2,
                     Priority::Info,
                 );
+                // Dust kicks up where the pests will enter.
+                if let Some(&gate) = game.level.path.first() {
+                    let at = vec2(gate.x.clamp(24., 1176.), gate.y);
+                    self.burst(
+                        burst_desc(
+                            Color::new(0.80, 0.68, 0.45, 1.),
+                            CREAM,
+                            70.,
+                            150.,
+                            200.,
+                            0.7,
+                            9.,
+                        ),
+                        at,
+                        18,
+                    );
+                    self.ring(at, 56., 0.5, CREAM);
+                }
             }
             Feed::Cleared {
                 wave,
@@ -525,14 +591,10 @@ impl Juice {
                 self.coin = 1.;
                 let finale = usize::from(wave) == game.level.waves.len();
                 if !finale {
-                    let head = if perfect {
-                        format!("Perfect wave {wave}! +{reward} coins")
-                    } else {
-                        format!("Wave {wave} cleared! +{reward} coins")
-                    };
                     self.toast(
-                        head,
+                        Some(Glyph::Icon(if perfect { Icon::Star } else { Icon::Check })),
                         quips::cleared(wave, perfect).into(),
+                        Some((Glyph::Coin, reward as i32)),
                         if perfect { GOLD } else { CREAM },
                         2.8,
                         Priority::Milestone,
@@ -613,6 +675,13 @@ impl Juice {
                 self.toast = None;
             }
         }
+        if let Some((_, age)) = &mut self.refusal {
+            *age += dt;
+            if *age >= REFUSAL_LIFE {
+                self.refusal = None;
+            }
+        }
+        self.plot_hint = (self.plot_hint - dt * 1.6).max(0.);
         for r in &mut self.recoil {
             *r = (*r - dt * 7.).max(0.);
         }
@@ -731,13 +800,16 @@ mod tests {
             },
         );
         juice.on_event(&game, Feed::Launched { wave: 2 });
-        assert!(
-            juice
-                .toast
-                .as_ref()
-                .unwrap()
-                .head
-                .starts_with("Perfect wave 1")
+        let toast = juice.toast.as_ref().unwrap();
+        assert_eq!(
+            toast.glyph,
+            Some(Glyph::Icon(Icon::Star)),
+            "perfect wave stays up"
+        );
+        assert_eq!(
+            toast.value,
+            Some((Glyph::Coin, 45)),
+            "its reward is a coin chip"
         );
         for id in 0..100 {
             juice.on_event(

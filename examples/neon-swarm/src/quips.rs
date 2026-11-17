@@ -2,7 +2,11 @@
 //! the results hook. Every selector is a pure function of accepted counters,
 //! so the same run always reads the same way. Rotations use a stride coprime
 //! with the table length, so consecutive counters never repeat a line.
+//!
+//! Callouts during play are at most three words; one-line jokes live only on
+//! the pause and results cards. Next goals are a pictogram plus a short name.
 use crate::game::{CLUTCH_HEALTH, Style};
+use ferravex_render::icons::Icon;
 
 /// Silly names for the three waves, shown on intro banners and results.
 pub(crate) const WAVES: [&str; 3] = ["Welcome Committee", "Middle Management", "The Whole Hive"];
@@ -51,7 +55,7 @@ const DRIVE_BY: [&str; 4] = ["DRIVE-BY!", "DASH & BASH!", "HIT AND RUN!", "SPEED
 const BROKEN: [&str; 5] = [
     "CHAIN BROKEN",
     "OOF. THE COMBO.",
-    "IT WAS A GOOD CHAIN",
+    "RIP COMBO",
     "COMBO, INTERRUPTED",
     "RUDE. VERY RUDE.",
 ];
@@ -168,28 +172,29 @@ pub(crate) fn rank(run: RunSummary) -> Rank {
     Rank { title, quip }
 }
 
-/// The single most tempting next goal for "one more try".
-pub(crate) fn next_goal(run: RunSummary) -> &'static str {
+/// The single most tempting next goal for "one more try": a pictogram and
+/// a name or short phrase of at most three words.
+pub(crate) fn next_goal(run: RunSummary) -> (Icon, &'static str) {
     let s = run.style;
     if !run.won {
         return match run.wave {
-            0 | 1 => "Next: survive the Welcome Committee",
-            2 => "Next: reach the Whole Hive",
-            _ => "Next: take down the Overseer",
+            0 | 1 => (Icon::Flag, WAVES[0]),
+            2 => (Icon::Flag, WAVES[2]),
+            _ => (Icon::Crown, "THE OVERSEER"),
         };
     }
     if s.untouched_waves == 0 {
-        "Next: clear a wave without getting hit"
+        (Icon::Shield, "UNTOUCHED WAVE")
     } else if s.drive_bys < 3 {
-        "Next: dash through a drone and shoot it mid-dash"
+        (Icon::Bolt, "DASH + SHOOT")
     } else if s.beacons_lit() == 0 {
-        "Psst: the four wall lamps look… shootable"
+        (Icon::Bulb, "SHOOT THE LAMPS?")
     } else if !s.disco() {
-        "Next: light all four wall lamps"
+        (Icon::Bulb, "ALL FOUR LAMPS")
     } else if s.hits_taken > 0 {
-        "Next: a flawless run. You know you want to."
+        (Icon::Heart, "FLAWLESS RUN")
     } else {
-        "Nothing left to prove. Beat your score?"
+        (Icon::Star, "BEAT YOUR SCORE")
     }
 }
 
@@ -223,6 +228,20 @@ mod tests {
         assert_eq!(multiplier(5), "MAXIMUM NEON");
         assert_eq!(wave_name(0), WAVES[0]);
         assert_eq!(wave_name(9), WAVES[2]);
+    }
+
+    #[test]
+    fn play_callouts_respect_the_three_word_budget() {
+        let mut lines: Vec<&str> = [&CLOSE[..], &DRIVE_BY[..], &BROKEN[..]].concat();
+        lines.extend((1..=5).map(multiplier));
+        lines.extend((2..=6).filter_map(multi_kill));
+        for line in lines {
+            assert!(line.split_whitespace().count() <= 3, "{line}");
+            assert_eq!(line, line.to_uppercase(), "callouts are capitals: {line}");
+        }
+        for line in PAUSE.iter().chain(&WIN).chain(&LOSS) {
+            assert!(line.len() <= 44, "one short line: {line}");
+        }
     }
 
     #[test]
@@ -269,10 +288,11 @@ mod tests {
             for won in [false, true] {
                 let run = RunSummary { won, wave, ..base };
                 assert!(!rank(run).title.is_empty() && !rank(run).quip.is_empty());
-                assert!(!next_goal(run).is_empty());
+                let (_, goal) = next_goal(run);
+                assert!(!goal.is_empty() && goal.split_whitespace().count() <= 3);
             }
         }
-        assert_eq!(next_goal(base), "Next: clear a wave without getting hit");
+        assert_eq!(next_goal(base), (Icon::Shield, "UNTOUCHED WAVE"));
         let veteran = RunSummary {
             style: Style {
                 untouched_waves: 1,
@@ -282,6 +302,6 @@ mod tests {
             },
             ..base
         };
-        assert!(next_goal(veteran).contains("lamps"));
+        assert_eq!(next_goal(veteran).0, Icon::Bulb, "the lamp secret is next");
     }
 }

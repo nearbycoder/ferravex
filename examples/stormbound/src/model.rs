@@ -14,6 +14,7 @@
 //! assert_eq!(game.outcome(), Outcome::Playing);
 //! ```
 use crate::content::{BATTLES, Battle, Tactic};
+use crate::layout;
 use ferravex_arcade::{Cue, Input, Outcome, TICK_DT};
 use ferravex_math::{Quat, Vec2, Vec3};
 use ferravex_play::camera::{Blocker, Sweep};
@@ -47,13 +48,6 @@ impl Ammo {
             Self::Round => 0,
             Self::Chain => 1,
             Self::Shell => 2,
-        }
-    }
-    pub(crate) fn name(self) -> &'static str {
-        match self {
-            Self::Round => "Round",
-            Self::Chain => "Chain",
-            Self::Shell => "Shell",
         }
     }
     fn from_slot(slot: usize) -> Option<Self> {
@@ -116,7 +110,7 @@ impl Ship {
             rotation: Quat::IDENTITY,
         }
     }
-    fn repair(&mut self, mut amount: u16) {
+    pub(crate) fn repair(&mut self, mut amount: u16) {
         // Mend the weakest section first so a wrecked section can sail again.
         while amount > 0 && self.hull() < self.hull_max() {
             let part = (0..3)
@@ -198,6 +192,92 @@ struct Checkpoint {
     score: u32,
     credits: u16,
 }
+/// Why a sortie ended in a recoverable setback.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Cause {
+    Retreat,
+    Sunk,
+    Empty,
+}
+/// One thing the latest tick accepted, with its world position where it has
+/// one. Presentation reads these to place effects; rules never read them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Event {
+    /// The briefing closed and the battle began.
+    Engaged,
+    /// A cannon fired from its muzzle.
+    Fired { player: bool, at: Vec2 },
+    /// A ball struck `side`'s section `part` (3 is the mast). Integrity of
+    /// every section before and after, including shell splash, and the
+    /// struck hull section's armor before and after.
+    Hit {
+        side: usize,
+        part: usize,
+        at: Vec2,
+        before: [u16; 4],
+        after: [u16; 4],
+        armor: [u16; 2],
+    },
+    /// A ball fell into the sea or left the chart.
+    Splash { at: Vec2 },
+    /// The selected ammunition changed.
+    Loaded(Ammo),
+    /// The navigator's firing table was shown (`true`) or hidden.
+    Table(bool),
+    /// Fire was refused: the selected magazine is empty.
+    Empty(Ammo),
+    /// The enemy began laying its next volley.
+    EnemyAims,
+    /// The enemy's fallen rigging cancelled its volley.
+    Fouled,
+    /// The wind changed between exchanges.
+    Gust(f32),
+    /// The enemy ship sank and paid `salvage`.
+    Sank { salvage: u16 },
+    /// A dock purchase in `slot` (1-4) spent `cost`.
+    Bought { slot: usize, cost: u16 },
+    /// A dock purchase was refused: `short` salvage was missing, or zero
+    /// when the item is already full or capped.
+    Refused { slot: usize, short: u16 },
+    /// The ship sailed for the next island.
+    Sailed,
+    /// A setback began.
+    Setback(Cause),
+    /// A lifeboat restored the island approach.
+    Rescued,
+    /// The captain retired and the voyage ended.
+    Retired,
+}
+const EVENTS: usize = 8;
+/// The bounded event list of the latest tick; cleared when the next executed
+/// tick starts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Events {
+    list: [Option<Event>; EVENTS],
+}
+impl Events {
+    const fn new() -> Self {
+        Self {
+            list: [None; EVENTS],
+        }
+    }
+    fn push(&mut self, event: Event) {
+        if let Some(slot) = self.list.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(event);
+        }
+    }
+    pub(crate) fn iter(&self) -> impl Iterator<Item = Event> + '_ {
+        self.list.iter().map_while(|event| *event)
+    }
+}
+/// A read-only forecast of what the current aim would do on contact.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Preview {
+    pub side: usize,
+    pub part: usize,
+    pub before: [u16; 4],
+    pub after: [u16; 4],
+}
 
 /// An eight-battle single-player campaign. Storage and flight duration are bounded.
 #[derive(Clone, Debug, PartialEq)]
@@ -230,9 +310,10 @@ pub struct Game {
     pub(crate) impact: Option<Vec2>,
     pub(crate) impact_ticks: u16,
     pub(crate) last_damage: u16,
-    enemy_setting: Setting,
+    pub(crate) enemy_setting: Setting,
     salvo_left: u8,
     checkpoint: Checkpoint,
+    pub(crate) events: Events,
 }
 impl Default for Game {
     fn default() -> Self {
@@ -277,7 +358,7 @@ impl Game {
             shots: 0,
             hits: 0,
             wins: 0,
-            log: "Relief sails wait for your signal.",
+            log: BATTLES[0].advice,
             impact: None,
             impact_ticks: 0,
             last_damage: 0,
@@ -288,6 +369,7 @@ impl Game {
                 score: 0,
                 credits: 40,
             },
+            events: Events::new(),
         };
         game.refresh_aim();
         game
@@ -320,16 +402,16 @@ impl Game {
             _ => Outcome::Playing,
         }
     }
-    /// Campaign result and rank, suitable for a headless report or host ending.
+    /// One-sentence campaign result and rank, for headless reports and status
+    /// readers.
     pub fn summary(&self) -> String {
         format!(
-            "{} / 8 islands freed. Rank: {}. {} points; {} hits from {} shots; {} lifeboats remain.",
-            self.wins,
+            "{}: {} of 8 islands freed, {} of {} shots hit, {} points.",
             self.rank(),
-            self.score,
+            self.wins,
             self.hits,
             self.shots,
-            self.lifeboats
+            self.score
         )
     }
     pub(crate) fn rank(&self) -> &'static str {
@@ -359,12 +441,15 @@ impl Game {
         if self.outcome() != Outcome::Playing {
             return Cue::None;
         }
+        self.events = Events::new();
+        let input = &self.route_click(input);
         self.ticks = self.ticks.saturating_add(1);
         self.impact_ticks = self.impact_ticks.saturating_sub(1);
         match self.phase {
             Phase::Briefing if input.primary => {
                 self.phase = Phase::Aim;
-                self.log = "Arrows aim and set power; Space fires. X shows the firing table.";
+                self.log = "Your guns are ready.";
+                self.events.push(Event::Engaged);
                 Cue::Action
             }
             Phase::Aim => self.aim(input),
@@ -386,16 +471,75 @@ impl Game {
                 self.credits = self.checkpoint.credits;
                 self.prepare_battle();
                 self.phase = Phase::Aim;
-                self.log = "Lifeboat used: the island approach is restored. The failed sortie still counts in your accuracy.";
+                self.log = "Lifeboat used; the island approach is restored.";
+                self.events.push(Event::Rescued);
                 Cue::Action
             }
             Phase::Setback if input.primary || (input.tertiary && self.lifeboats == 0) => {
                 self.phase = Phase::Sunk;
-                self.log = "Your flag is lowered. The islands will remember the harbors you freed.";
+                self.log = "Voyage ended.";
+                self.events.push(Event::Retired);
                 Cue::Bad
             }
             _ => Cue::None,
         }
+    }
+    /// Route a pointer click on a drawn control to the key action it mirrors,
+    /// so mouse and touch players take exactly the keyboard's rule paths.
+    fn route_click(&self, input: &Input) -> Input {
+        let mut routed = *input;
+        if !input.click {
+            return routed;
+        }
+        let p = input.pointer;
+        match self.phase {
+            Phase::Briefing => routed.primary |= layout::START.contains(p),
+            Phase::Aim => {
+                if let Some(i) = layout::AMMO.iter().position(|r| r.contains(p)) {
+                    routed.slot = Some(i + 1);
+                }
+                routed.primary |= layout::FIRE.contains(p);
+                routed.secondary |= layout::TABLE.contains(p);
+                routed.left_pressed |= layout::ANGLE_DOWN.contains(p);
+                routed.right_pressed |= layout::ANGLE_UP.contains(p);
+                routed.down_pressed |= layout::POWER_DOWN.contains(p);
+                routed.up_pressed |= layout::POWER_UP.contains(p);
+            }
+            Phase::Dock => {
+                if let Some(i) = layout::SHOP.iter().position(|r| r.contains(p)) {
+                    routed.slot = Some(i + 1);
+                }
+                routed.primary |= layout::SAIL.contains(p);
+            }
+            Phase::Setback => {
+                routed.tertiary |= self.lifeboats > 0 && layout::RETRY.contains(p);
+                routed.primary |= layout::RETIRE.contains(p);
+            }
+            _ => {}
+        }
+        routed
+    }
+    /// Read-only forecast of the current aim's contact when fired with
+    /// `ammo`: the struck side and section, and every section's integrity
+    /// before and after. It uses the live damage rules on a copy.
+    pub(crate) fn preview(&self, ammo: Ammo) -> Option<Preview> {
+        let (side, part) = self.forecast.contact?;
+        let mut ship = self.ships[side];
+        apply_damage(
+            &mut ship,
+            part,
+            ammo,
+            self.upgrades[0],
+            false,
+            self.battle,
+            self.forecast.end,
+        );
+        Some(Preview {
+            side,
+            part,
+            before: self.ships[side].hp,
+            after: ship.hp,
+        })
     }
     fn aim(&mut self, input: &Input) -> Cue {
         let before = self.setting;
@@ -404,6 +548,7 @@ impl Game {
             && ammo != self.setting.ammo
         {
             self.setting.ammo = ammo;
+            self.events.push(Event::Loaded(ammo));
             cue = Cue::Action;
         }
         let slow = self.ticks.is_multiple_of(3);
@@ -430,12 +575,13 @@ impl Game {
         }
         if input.secondary {
             self.show_table = !self.show_table;
+            self.events.push(Event::Table(self.show_table));
             cue = Cue::Action;
         }
         if input.tertiary {
             self.phase = Phase::Setback;
-            self.log =
-                "Retreated to the lifeboats. Retry this island with C, or retire with Space.";
+            self.log = "Retreated to the lifeboats.";
+            self.events.push(Event::Setback(Cause::Retreat));
             return Cue::Bad;
         }
         if input.primary && self.ammo[self.setting.ammo.index()] > 0 {
@@ -444,6 +590,10 @@ impl Game {
             self.last_setting = Some(self.setting);
             self.launch(true, self.setting);
             return Cue::Action;
+        }
+        if input.primary {
+            // Refused: nothing is spent; presentation shows the empty rack.
+            self.events.push(Event::Empty(self.setting.ammo));
         }
         cue
     }
@@ -456,12 +606,16 @@ impl Game {
         self.trace = Trace::new();
         if let Some(ball) = self.ball {
             self.trace.push(ball.pos);
+            self.events.push(Event::Fired {
+                player,
+                at: ball.pos,
+            });
         }
         self.phase = Phase::Flight;
         self.log = if player {
-            "Shot away! Watch its flight through the wind."
+            "Shot away."
         } else {
-            "Enemy cannon fired!"
+            "Enemy cannon fired."
         };
     }
     fn flight(&mut self) -> Cue {
@@ -475,6 +629,7 @@ impl Game {
         if let Some((ship, part, fraction)) = contact(previous, ball.pos, self.ships, ball.age) {
             ball.pos = previous.lerp(ball.pos, fraction);
             self.trace.push(ball.pos);
+            let before = self.ships[ship];
             let damage = apply_damage(
                 &mut self.ships[ship],
                 part,
@@ -494,14 +649,20 @@ impl Game {
             if ball.from_player && ship == 1 && damage > 0 {
                 self.hits = self.hits.saturating_add(1);
             }
-            self.log = if part == 3 && ship == 1 {
-                "Rigging hit! A fallen enemy mast delays alternate volleys."
-            } else if part == 3 {
-                "Your mast is hit! If it falls, maximum cannon power drops to 76."
-            } else if ship == 1 {
-                "Direct hit! A hull section splinters."
-            } else {
-                "Incoming hit! Your hull takes damage."
+            let armor = |s: Ship| if part < 3 { s.armor[part] } else { 0 };
+            self.events.push(Event::Hit {
+                side: ship,
+                part,
+                at: ball.pos,
+                before: before.hp,
+                after: self.ships[ship].hp,
+                armor: [armor(before), armor(self.ships[ship])],
+            });
+            self.log = match (ship, part == 3) {
+                (1, true) => "Enemy rigging hit.",
+                (1, false) => "Enemy hull hit.",
+                (_, true) => "Your mast is hit.",
+                _ => "Your hull is hit.",
             };
             let cue = if ship == 1 { Cue::Good } else { Cue::Bad };
             return self.end_flight(ball, cue);
@@ -510,7 +671,10 @@ impl Game {
             self.impact = Some(Vec2::new(ball.pos.x, 0.));
             self.impact_ticks = 35;
             self.last_damage = 0;
-            self.log = "Splash. No ship contact, no damage.";
+            self.log = "Splash: a miss.";
+            self.events.push(Event::Splash {
+                at: Vec2::new(ball.pos.x, 0.),
+            });
             return self.end_flight(ball, Cue::Action);
         }
         self.ball = Some(ball);
@@ -523,7 +687,8 @@ impl Game {
         }
         if self.ships[0].hull() == 0 {
             self.phase = Phase::Setback;
-            self.log = "Your hull is lost. C spends a lifeboat to retry; Space retires.";
+            self.log = "Your hull is lost.";
+            self.events.push(Event::Setback(Cause::Sunk));
             return Cue::Bad;
         }
         if self.ships[1].hull() == 0 {
@@ -531,13 +696,15 @@ impl Game {
             self.score += 800
                 + self.ships[0].hull() as u32 * 2
                 + self.ammo.iter().map(|&n| u32::from(n) * 15).sum::<u32>();
-            self.credits += 85 + self.battle as u16 * 8;
+            let salvage = 85 + self.battle as u16 * 8;
+            self.credits += salvage;
+            self.events.push(Event::Sank { salvage });
             self.phase = if self.battle == 7 {
                 Phase::Liberated
             } else {
                 Phase::Dock
             };
-            self.log = "Harbor liberated! The island offers salvage and a safe repair dock.";
+            self.log = "Harbor liberated.";
             return if self.phase == Phase::Liberated {
                 Cue::Win
             } else {
@@ -546,7 +713,8 @@ impl Game {
         }
         if ball.from_player {
             if self.ships[1].hp[3] == 0 && self.round % 2 == 1 {
-                self.log = "Enemy rigging fouls the gun crew. Their return volley is delayed.";
+                self.log = "Enemy rigging fouled; their volley is skipped.";
+                self.events.push(Event::Fouled);
                 self.next_round();
             } else {
                 self.salvo_left = if self.battle_info().tactic == Tactic::Broadside
@@ -613,8 +781,10 @@ impl Game {
         self.salvo_left = self.salvo_left.saturating_sub(1);
         self.phase = Phase::EnemyReady;
         self.timer = 65;
+        self.events.push(Event::EnemyAims);
     }
     fn next_round(&mut self) {
+        let calm = self.wind;
         self.round = self.round.saturating_add(1);
         self.wind = if self.battle_info().tactic == Tactic::Bomber {
             self.battle_info().wind
@@ -626,10 +796,14 @@ impl Game {
         } else {
             self.battle_info().wind
         };
+        if self.wind != calm {
+            self.events.push(Event::Gust(self.wind));
+        }
         self.setting.power = self.setting.power.min(self.power_limit());
         if self.ammo.iter().all(|&n| n == 0) {
             self.phase = Phase::Setback;
-            self.log = "The magazines are empty. C spends a lifeboat to retry; Space retires.";
+            self.log = "The magazines are empty.";
+            self.events.push(Event::Setback(Cause::Empty));
         } else {
             self.phase = Phase::Aim;
             self.refresh_aim();
@@ -653,25 +827,34 @@ impl Game {
             match slot {
                 1 => {
                     self.ships[0].repair(80);
-                    self.log = "Shipwrights restored 80 hull and 25 mast integrity.";
+                    self.log = "Shipwrights mended the hull and mast.";
                 }
                 2 => {
                     self.upgrades[0] += 1;
-                    self.log = "Long guns installed: all ammunition deals 8 more direct damage.";
+                    self.log = "Long guns installed.";
                 }
                 3 => {
                     self.upgrades[1] += 1;
-                    self.log = "Hull plating installed: refreshed armor at each island.";
+                    self.log = "Hull plating installed.";
                 }
                 4 => {
                     self.upgrades[2] += 1;
-                    self.log = "Magazine expanded: one extra shell at every island.";
+                    self.log = "Magazine expanded.";
                 }
                 _ => unreachable!(),
             }
+            self.events.push(Event::Bought { slot, cost });
             return Cue::Good;
         }
+        if let Some(slot) = input.slot.filter(|slot| (1..=4).contains(slot)) {
+            // Refused: full, capped or unaffordable purchases spend nothing.
+            let short = self
+                .cost(slot)
+                .map_or(0, |cost| cost.saturating_sub(self.credits));
+            self.events.push(Event::Refused { slot, short });
+        }
         if input.primary {
+            self.events.push(Event::Sailed);
             self.battle += 1;
             self.ships[0].armor = [u16::from(self.upgrades[1]) * 5; 3];
             self.checkpoint = Checkpoint {
@@ -1156,6 +1339,7 @@ mod tests {
         game.end_flight(ball, Cue::Good);
         assert_eq!(game.phase, Phase::Aim);
         assert_eq!(game.round, 2);
+        assert!(game.events.iter().any(|e| e == Event::Fouled));
         game.ships[0].hp[3] = 0;
         game.setting.power = 90;
         game.next_round();
@@ -1175,6 +1359,7 @@ mod tests {
         assert_eq!(game.wind, 13.);
         game.next_round();
         assert_eq!(game.wind, -13.);
+        assert!(game.events.iter().any(|e| e == Event::Gust(-13.)));
         game.battle = 6;
         game.prepare_battle();
         game.round = 3;
@@ -1243,5 +1428,161 @@ mod tests {
             assert_eq!(game.step(&command(true, Some(1))), Cue::None);
         }
         assert_eq!(game, frozen);
+    }
+    fn click(at: ferravex_math::Rect) -> Input {
+        Input {
+            click: true,
+            pointer: at.center(),
+            ..Input::default()
+        }
+    }
+    fn key(press: fn(&mut Input)) -> Input {
+        let mut input = Input::default();
+        press(&mut input);
+        input
+    }
+    #[test]
+    fn clicks_take_exactly_the_rule_paths_of_their_keys() {
+        // Aiming: every gun deck control mirrors its key.
+        let (mut keys, mut mouse) = (Game::new(), Game::new());
+        for (input, rect) in [
+            (key(|i| i.primary = true), layout::START),
+            (key(|i| i.slot = Some(3)), layout::AMMO[2]),
+            (key(|i| i.right_pressed = true), layout::ANGLE_UP),
+            (key(|i| i.left_pressed = true), layout::ANGLE_DOWN),
+            (key(|i| i.up_pressed = true), layout::POWER_UP),
+            (key(|i| i.down_pressed = true), layout::POWER_DOWN),
+            (key(|i| i.secondary = true), layout::TABLE),
+            (key(|i| i.primary = true), layout::FIRE),
+        ] {
+            assert_eq!(keys.step(&input), mouse.step(&click(rect)));
+            assert_eq!(keys, mouse);
+        }
+        assert_eq!(mouse.phase, Phase::Flight);
+        assert_eq!((mouse.ammo[2], mouse.show_table), (1, true));
+        // Controls are inert outside their phase, and so is open water.
+        let (mut idle, mut clicked) = (mouse.clone(), mouse.clone());
+        idle.step(&Input::default());
+        clicked.step(&click(layout::AMMO[0]));
+        assert_eq!(idle, clicked);
+        clicked.step(&click(layout::SCENE));
+        idle.step(&Input::default());
+        assert_eq!(idle, clicked);
+        // The dock's cards and sail button.
+        let mut docked = Game::new();
+        play_until(&mut docked, Phase::Dock, 10_000);
+        let (mut keys, mut mouse) = (docked.clone(), docked);
+        for (input, rect) in [
+            (key(|i| i.slot = Some(2)), layout::SHOP[1]),
+            (key(|i| i.slot = Some(1)), layout::SHOP[0]),
+            (key(|i| i.slot = Some(4)), layout::SHOP[3]),
+            (key(|i| i.primary = true), layout::SAIL),
+        ] {
+            assert_eq!(keys.step(&input), mouse.step(&click(rect)));
+            assert_eq!(keys, mouse);
+        }
+        assert_eq!((mouse.phase, mouse.upgrades[0]), (Phase::Briefing, 1));
+        // Setbacks: retry spends a lifeboat, retire ends the voyage.
+        let retreat = key(|i| i.tertiary = true);
+        for game in [&mut keys, &mut mouse] {
+            game.step(&command(true, None));
+            game.step(&retreat);
+        }
+        assert_eq!(keys.step(&retreat), mouse.step(&click(layout::RETRY)));
+        assert_eq!(keys, mouse);
+        assert_eq!((mouse.phase, mouse.lifeboats), (Phase::Aim, 1));
+        for game in [&mut keys, &mut mouse] {
+            game.step(&retreat);
+        }
+        assert_eq!(
+            keys.step(&command(true, None)),
+            mouse.step(&click(layout::RETIRE))
+        );
+        assert_eq!(keys, mouse);
+        assert_eq!(mouse.outcome(), Outcome::Lost);
+        // Without lifeboats the retry button is inert rather than a retire.
+        let mut stranded = Game::new();
+        stranded.lifeboats = 0;
+        stranded.step(&command(true, None));
+        stranded.step(&retreat);
+        stranded.step(&click(layout::RETRY));
+        assert_eq!(stranded.phase, Phase::Setback);
+    }
+    #[test]
+    fn events_and_damage_preview_match_the_live_shot() {
+        let mut game = Game::new();
+        game.step(&command(true, None));
+        assert_eq!(game.events.iter().collect::<Vec<_>>(), [Event::Engaged]);
+        let mut preview = None;
+        while game.phase == Phase::Aim {
+            preview = game.preview(game.setting.ammo);
+            game.step(&game.pilot(0));
+        }
+        let muzzle = game.events.iter().find_map(|e| match e {
+            Event::Fired { player: true, at } => Some(at),
+            _ => None,
+        });
+        assert_eq!(muzzle, Some(Vec2::new(PLAYER_X + 50., 40.)));
+        let preview = preview.expect("the navigator's aim strikes a ship");
+        let hit = loop {
+            assert_eq!(game.phase, Phase::Flight);
+            game.step(&Input::default());
+            if let Some(hit) = game.events.iter().find(|e| matches!(e, Event::Hit { .. })) {
+                break hit;
+            }
+        };
+        let Event::Hit {
+            side,
+            part,
+            at,
+            before,
+            after,
+            ..
+        } = hit
+        else {
+            unreachable!()
+        };
+        assert_eq!((side, part, before, after), {
+            let p = preview;
+            (p.side, p.part, p.before, p.after)
+        });
+        assert_eq!(Some(at), game.impact);
+        assert!(after.iter().sum::<u16>() < before.iter().sum::<u16>());
+        // Each executed tick starts from a clean list.
+        game.step(&Input::default());
+        assert!(!game.events.iter().any(|e| matches!(e, Event::Hit { .. })));
+    }
+    #[test]
+    fn refusals_are_recorded_and_spend_nothing() {
+        let mut game = Game::new();
+        game.step(&command(true, None));
+        game.ammo[0] = 0;
+        let ammo = game.ammo;
+        game.step(&command(true, None));
+        assert_eq!(
+            game.events.iter().collect::<Vec<_>>(),
+            [Event::Empty(Ammo::Round)]
+        );
+        assert_eq!((game.phase, game.ammo, game.shots), (Phase::Aim, ammo, 0));
+        let mut game = Game::new();
+        play_until(&mut game, Phase::Dock, 10_000);
+        assert!(game.events.iter().any(|e| e == Event::Sank { salvage: 85 }));
+        game.credits = 10;
+        let upgrades = game.upgrades;
+        game.step(&command(false, Some(2)));
+        assert_eq!(
+            game.events.iter().collect::<Vec<_>>(),
+            [Event::Refused { slot: 2, short: 55 }]
+        );
+        game.upgrades[1] = 2;
+        game.step(&command(false, Some(3)));
+        assert_eq!(
+            game.events.iter().collect::<Vec<_>>(),
+            [Event::Refused { slot: 3, short: 0 }]
+        );
+        assert_eq!((game.credits, game.upgrades[0]), (10, upgrades[0]));
+        // Keys that are not purchases are not refusals either.
+        game.step(&command(false, Some(5)));
+        assert_eq!(game.events.iter().count(), 0);
     }
 }

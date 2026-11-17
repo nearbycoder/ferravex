@@ -128,6 +128,39 @@ impl Interactable {
     }
 }
 
+/// What a locked target is waiting for, read from the objective graph.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Blocker {
+    /// Altar I needs every crystal: (recovered, required).
+    Crystals(u16, u16),
+    /// Altar II needs altar I awake first.
+    AltarI,
+    /// The seal needs both altars; this many are awake.
+    Altars(u8),
+}
+
+/// The nearby-object prompt, drawn as a key cap and pictograms.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Prompt {
+    /// Press interact to use this target (the note shows its next page).
+    Use(Interactable),
+    /// Locked until the blocker clears.
+    Locked(Interactable, Blocker),
+    /// The seal is open: walk through into the daylight.
+    Exit,
+}
+
+/// A transient message after a use, shown as pictograms or the note itself.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Notice {
+    #[default]
+    None,
+    /// A refused use and what it is waiting for (the prompt shakes).
+    Locked(Interactable, Blocker),
+    /// A page of Wendell's note, read in passing.
+    Note(u32),
+}
+
 /// Steve, the shy bonus crystal, hides in the corner behind the spawn point.
 fn shy_position() -> Vec2 {
     center(7, 13) + vec2(0.85, 0.85)
@@ -201,7 +234,7 @@ struct Game {
     gate: Aabb2,
     won: bool,
     elapsed: f32,
-    notice: String,
+    notice: Notice,
     notice_time: f32,
     shy_found: bool,
     note_reads: u32,
@@ -248,8 +281,8 @@ impl Game {
             gate: Aabb2::from_min_size(at(b'G') - vec2(TILE * 0.5, 0.175), vec2(TILE, 0.35)),
             won: false,
             elapsed: 0.0,
-            notice: "Recover three crystals. Wake the numbered altars.".into(),
-            notice_time: 8.0,
+            notice: Notice::None,
+            notice_time: 0.,
             shy_found: false,
             note_reads: 0,
             bonks: 0,
@@ -303,7 +336,7 @@ impl Game {
             _ => None,
         }
     }
-    fn hint_text(&self) -> String {
+    fn hint_text(&self) -> &'static str {
         let zone = self.hint_crystal().map_or(0, zone_at);
         quips::hint(self.stage(), self.hint_level, zone)
     }
@@ -353,9 +386,9 @@ impl Game {
     fn near(&self, p: Vec2) -> bool {
         self.position.distance_squared(p) < 1.7 * 1.7 && self.visible(p)
     }
-    fn message(&mut self, text: impl Into<String>) {
-        self.notice = text.into();
-        self.notice_time = 3.5;
+    fn notify(&mut self, notice: Notice, seconds: f32) {
+        self.notice = notice;
+        self.notice_time = seconds;
     }
     fn objective_event(&mut self, index: usize) {
         self.objectives
@@ -455,35 +488,19 @@ impl Game {
                 .and_then(|target| Interactable::from_id(target.id)),
         )
     }
-    fn objective_hint(&self) -> String {
-        let (count, required) = self.crystal_progress();
-        match Some(self.stage()).filter(|&stage| stage < 6) {
-            Some(0..=2) => format!(
-                "Search the side chambers: {} / {required} crystals remain",
-                required - count
-            ),
-            Some(3) => "Find altar I in the northern chamber".into(),
-            Some(4) => "Altar I is awake. Find altar II".into(),
-            Some(_) => "Seal open. Walk through to the daylight".into(),
-            None => "Expedition complete".into(),
-        }
-    }
-    fn blocker(&self, target: Interactable) -> String {
-        let Some(view) = target.objective().and_then(|i| self.objectives.inspect(i)) else {
-            return String::new();
-        };
+    fn blocker(&self, target: Interactable) -> Option<Blocker> {
+        let view = target
+            .objective()
+            .and_then(|i| self.objectives.inspect(i))?;
         let missing = view.blockers.missing_all;
         let (count, required) = self.crystal_progress();
-        if missing & 7 != 0 {
-            format!("Altar I locked / Three crystals required ({count} / {required} recovered)")
+        Some(if missing & 7 != 0 {
+            Blocker::Crystals(count, required)
         } else if missing & (1 << 3) != 0 {
-            format!("Altar II locked / Wake altar I first ({count} / {required} crystals)")
+            Blocker::AltarI
         } else {
-            format!(
-                "Seal locked / Awaken both numbered altars ({} / 2 awake)",
-                self.switches
-            )
-        }
+            Blocker::Altars(self.switches)
+        })
     }
     fn interact(&mut self) {
         let (focus, target) = self.select_focus();
@@ -494,59 +511,41 @@ impl Game {
         if !self.target_ready(target) {
             self.rejected += 1;
             self.events.rejected = Some(target);
-            self.message(self.blocker(target));
+            if let Some(blocker) = self.blocker(target) {
+                self.notify(Notice::Locked(target, blocker), 3.5);
+            }
             return;
         }
+        // Accepted uses speak through pops, sockets and the echo; a refusal
+        // still showing from earlier is replaced, not left behind.
+        self.notify(Notice::None, 0.);
         match target {
-            Interactable::Crystal(i) => {
-                self.objective_event(i);
-                // The pop already shows the count; the notice only says where next.
-                self.message(match self.count() {
-                    1 => "Two more hum somewhere in the side chambers.",
-                    2 => "Last one. Follow the hum.",
-                    _ => "Now wake altar I in the Hall of Altars.",
-                });
-            }
-            Interactable::Altar(0) => {
-                self.objective_event(3);
-                self.message("Altar II is ready on the east side of the hall.");
-            }
-            Interactable::Altar(_) => {
-                self.objective_event(4);
-                self.message("Head north through the seal, into the daylight.");
-            }
-            Interactable::Gate => self.message(self.objective_hint()),
+            Interactable::Crystal(i) => self.objective_event(i),
+            Interactable::Altar(0) => self.objective_event(3),
+            Interactable::Altar(_) => self.objective_event(4),
+            Interactable::Gate => {}
             Interactable::Shy => {
                 self.shy_found = true;
                 self.events.shy = true;
-                self.message("Secret found: Steve, the shy crystal. He's blushing.");
             }
             Interactable::Note => {
                 self.events.note = Some(self.note_reads);
-                self.message(quips::note(self.note_reads));
                 // Handwriting takes longer to read than a status line.
-                self.notice_time = 6.;
+                self.notify(Notice::Note(self.note_reads), 6.);
                 self.note_reads += 1;
             }
         }
     }
-    fn prompt(&self, interact_hint: &str) -> Option<String> {
+    fn prompt(&self) -> Option<Prompt> {
         self.target().map(|target| {
-            if !self.target_ready(target) {
-                return self.blocker(target);
+            if !self.target_ready(target)
+                && let Some(blocker) = self.blocker(target)
+            {
+                return Prompt::Locked(target, blocker);
             }
             match target {
-                Interactable::Crystal(_) => format!("{interact_hint} - Recover crystal"),
-                Interactable::Altar(0) => format!("{interact_hint} - Awaken altar I"),
-                Interactable::Altar(_) => format!("{interact_hint} - Awaken altar II"),
-                Interactable::Gate => "Seal open / Walk through to daylight".into(),
-                Interactable::Shy => format!("{interact_hint} - Coax the shy crystal"),
-                Interactable::Note if self.note_reads == 0 => {
-                    format!("{interact_hint} - Read the lost note")
-                }
-                Interactable::Note => {
-                    format!("{interact_hint} - Read page {}", self.note_reads % 4 + 1)
-                }
+                Interactable::Gate => Prompt::Exit,
+                target => Prompt::Use(target),
             }
         })
     }
@@ -631,7 +630,7 @@ impl Game {
         }
         if self.open() && self.position.distance(at(b'X')) < 1.2 {
             self.objective_event(5);
-            self.message("Expedition complete.");
+            self.notify(Notice::None, 0.);
         }
     }
 }
@@ -688,9 +687,8 @@ impl Expedition {
         }
     }
     fn restart(&mut self) {
+        // A fresh Game: every crystal, altar, notice and whisper resets.
         self.game = Game::new();
-        self.game
-            .message("Fresh expedition. All crystals and altars reset.");
         self.session.restart();
         self.pilot = Pilot::default();
         self.discard_frame = true;
@@ -1543,17 +1541,22 @@ async fn game() {
             sound.reset();
             view_rig.cut();
             pitch = -0.03;
-            juice.call(
-                "BACK TO BASE CAMP",
+            // Back at Base Camp: the whole expedition again, as pictograms.
+            juice.call_marked(
+                "BASE CAMP",
                 quips::retry(expedition.runs),
+                Some(juice::Mark::Icon(
+                    ferravex_render::icons::Icon::Home,
+                    juice::STONE,
+                )),
+                juice::Extra::Chain,
                 juice::STONE,
                 3.,
                 juice::Priority::Event,
             );
         } else if confirm && expedition.session.state() == SessionState::Ready {
             expedition.start();
-            let (name, sub) = quips::ZONES[0];
-            juice.call(name, sub, juice::STONE, 3.2, juice::Priority::Zone);
+            juice.zone(0, 3.2);
         }
         if restarted || activate {
             // Suppress keys held across start/retry/resume, then restore the
@@ -1799,12 +1802,22 @@ async fn game() {
                 if game.target().is_some() { 3. } else { 1.7 },
                 target_color,
             );
-            // Locked altar copy occupies four lines at 320px. Keep it
-            // above the notice and preserve a gap before the help rows.
+            // The prompt pill sits below the reticle, above the note slip and
+            // clear of the help rows.
             let prompt_top = (h * 0.55).min(h - 230.).max(114.);
-            let prompt = game.prompt(&use_hint);
-            if let Some(prompt) = &prompt {
-                hud::prompt(prompt_top, w, &use_hint, None, prompt, target_color);
+            let prompt = game.prompt();
+            if let Some(prompt) = prompt {
+                // Any accepted use teaches the key; then the target leads.
+                let learned =
+                    game.count() > 0 || game.switches > 0 || game.shy_found || game.note_reads > 0;
+                hud::prompt(
+                    prompt_top,
+                    w,
+                    &use_hint,
+                    prompt,
+                    (game.note_reads, learned),
+                    &juice,
+                );
             }
             // Milestones, zone names and the cave's echo sit between the bar
             // and the prompt, never in the warm notice slot below.
@@ -1826,10 +1839,12 @@ async fn game() {
                 callout_top,
                 (callout_bottom - callout_top).clamp(0., 96.),
             );
+            // Wendell's note is the one text read during play: it is the find.
+            // A refused use speaks through the shaking prompt and the echo.
             if game.notice_time > 0.0
-                && game.notice != "Recover three crystals. Wake the numbered altars."
+                && let Notice::Note(page) = game.notice
             {
-                hud::notice(&game.notice, w, h);
+                hud::note(page, w, h);
             }
             if help {
                 hud::help([&use_hint, &pause_hint, &retry_hint, &help_hint], w, h);
@@ -1873,7 +1888,12 @@ async fn game() {
                 tint,
             );
             draw_circle_lines(w - 65., h - 90., 44., 2., tint);
-            draw_text("USE", w - 82., h - 84., 17., tint);
+            ferravex_render::icons::draw(
+                ferravex_render::icons::Icon::Hand,
+                vec2(w - 65., h - 90.),
+                34.,
+                tint,
+            );
         }
         player_input.draw_controls();
         #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
@@ -2063,13 +2083,13 @@ mod tests {
         game.crystals[1] = p + vec2(0.8, 0.);
         game.position = p + vec2(0.65, 0.);
         assert_eq!(game.target(), Some(Interactable::Crystal(1)));
-        assert!(game.prompt("E").unwrap().contains("Recover crystal"));
+        assert_eq!(game.prompt(), Some(Prompt::Use(Interactable::Crystal(1))));
         game.interact();
         assert!(!game.collected[0]);
         assert!(game.collected[1]);
-        // The count lives in the pickup pop; the notice adds where to go next.
-        assert!(game.notice.contains("side chambers"));
-        assert!(!game.notice.contains("1 / 3"));
+        // The count lives in the pickup pop and the HUD's sockets; an accepted
+        // use leaves no sentence behind.
+        assert_eq!(game.notice, Notice::None);
         let corner = center(5, 8);
         game.position = corner + vec2(-1.65, 1.);
         game.crystals[0] = corner + vec2(-1., 1.65);
@@ -2084,27 +2104,45 @@ mod tests {
         let mut game = Game::new();
         game.position = at(b'A');
         assert!(!game.target_ready(game.target().unwrap()));
-        assert!(
-            game.prompt("E")
-                .unwrap()
-                .contains("Three crystals required")
+        assert_eq!(
+            game.prompt(),
+            Some(Prompt::Locked(
+                Interactable::Altar(0),
+                Blocker::Crystals(0, 3)
+            ))
         );
         game.interact();
         assert_eq!(game.switches, 0);
+        assert_eq!(
+            game.notice,
+            Notice::Locked(Interactable::Altar(0), Blocker::Crystals(0, 3))
+        );
+        game.position = at(b'B');
+        assert_eq!(
+            game.prompt(),
+            Some(Prompt::Locked(Interactable::Altar(1), Blocker::AltarI))
+        );
+        game.position = at(b'A');
         for i in 0..3 {
             game.objective_event(i);
         }
         assert!(game.target_ready(game.target().unwrap()));
-        assert!(game.prompt("E").unwrap().contains("Awaken altar I"));
+        assert_eq!(game.prompt(), Some(Prompt::Use(Interactable::Altar(0))));
+        game.position = at(b'B');
+        assert_eq!(
+            game.prompt(),
+            Some(Prompt::Locked(Interactable::Altar(1), Blocker::AltarI))
+        );
+        game.position = at(b'A');
         game.interact();
         assert_eq!(game.target(), None);
         game.position = at(b'B');
-        assert!(game.prompt("E").unwrap().contains("Awaken altar II"));
+        assert_eq!(game.prompt(), Some(Prompt::Use(Interactable::Altar(1))));
         game.interact();
         assert!(game.open());
         game.position = at(b'G') + vec2(0., 1.);
         assert_eq!(game.target(), Some(Interactable::Gate));
-        assert!(game.prompt("E").unwrap().contains("Walk through"));
+        assert_eq!(game.prompt(), Some(Prompt::Exit));
         assert!(
             !game.won,
             "Opening the gate does not complete the expedition"

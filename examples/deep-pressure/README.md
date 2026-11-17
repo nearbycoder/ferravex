@@ -17,7 +17,42 @@ The rules run at fixed 60 Hz independently of drawing, platform input and clocks
 The collection contains 18 reef formations, 15 authored hazard placements
 (three types), 27 named survivors, three two-level refit tracks and six medals.
 Visuals are original procedural art: layered water, drifting particles, kelp,
-submarine lights, air-bell silhouettes, pulsing beacons and readable instruments.
+current streaks, submarine lights, air-bell silhouettes and pulsing beacons.
+
+## Reading the screen
+
+The play screen explains itself with icons, dials and motion instead of text:
+
+- **Header:** six sortie pips, the station name, and every survivor of the
+  campaign as a person icon grouped by sortie: gold once home, aqua aboard,
+  pulsing white while waiting. The home icon counts people landed.
+- **Strip above the water:** dive clock beside the medal this pace earns (its
+  gold ring drains toward the 150-second gold limit; a coral dot marks each
+  hit), then the current (wave and one to three arrows), the violet pressure
+  warning on the deep charts (a shield once armor is fitted) and the depth.
+- **Chart:** waiting air bells glow under a bobbing chevron; a dashed reach ring
+  appears on approach, green when a tap will winch, amber when the boat must
+  brake first, with a Space key cap when it will work. The dock's dashed ring
+  is its true reach and its home badge bobs while people are aboard. One
+  porthole per berth lights up for each passenger. When the cabin is full,
+  everyone is collected or air is down to the trip home, marching dots and a
+  bow chevron show the route to the dock (coral when air is short).
+- **Instruments:** an air dial (bubbles) whose white mark is the air the trip
+  home needs, a hull dial (shield), a cabin cutaway with one seat per berth, the
+  manifest (pin waiting, person aboard, check home), clickable ballast (arrow
+  rising, anchor holding) and sonar (recharge ring, air cost) buttons, a speed
+  bar whose green zone is slow enough to winch or dock, credits and tugs.
+  Hovering a manifest name rings that diver's bell, and hovering a bell
+  highlights the name.
+- **Feedback:** winches burst bubbles and raise a person at the bell and a
+  sparkle in the seat; docking bursts gold with landed people and pay at the
+  purse; hits throw debris where they land with a hull popup and a shake (mines
+  flash); refusals show "Slow down" or "Full" at the boat and a red ring on the
+  thing that refused; low air pulses the dial and the water's edges red.
+- **Between dives:** the briefing shows the job (people to home), the hazards,
+  current and pressure ahead, and refit cards with their gain, level pips and
+  coin price; the debrief shows the medal and four stat tiles; a wreck shows the
+  cause and the recovery tugs left.
 
 ## Play
 
@@ -32,11 +67,12 @@ cargo run -p deep-pressure --offline --locked -j 2
 | Hold Space | Brake; release and tap again to winch |
 | X / E | Toggle rising light ballast / neutral ballast |
 | C / Q | Sonar: highlights hazard danger circles for three seconds |
+| Click ballast / sonar button | Same command as X / C while diving |
 | 1 / 2 / 3 | Buy air / armor / cabin refit during briefing |
 | Left / Right, then X | Select and buy a briefing refit |
 | Click refit card / launch button | Same briefing action as keyboard |
 | R | Restart the entire career |
-| H | Full paginated rules |
+| H | Key caps and a four-line guide |
 | Esc / P | Pause |
 | M | Sound toggle |
 
@@ -88,11 +124,14 @@ rustfmt --edition 2024 --check examples/deep-pressure/src/{lib,main,content,mode
 cargo run -p deep-pressure --offline --locked -j 2 -- --headless
 ```
 
-There are 12 behavioral tests and one executable public API doctest. Tests cover
+There are 21 behavioral tests and one executable public API doctest. Tests cover
 inertia and ballast, reef collisions, cabin limits, winch range/speed, paid refit
 limits, sonar consumption/cooldown, docking without reward duplication, hazard
-timing/armor, oxygen loss, bounded recovery and ledger rollback, pointer actions,
-all authored rescue routes, and terminal invariance. A complete legal pilot
+timing/armor, oxygen loss, bounded recovery and ledger rollback, pointer actions
+(including the instrument buttons mirroring X and C), all authored rescue
+routes, terminal invariance, the per-tick presentation events, the guidance
+trail, medal pace, header progress and copy, and the effects requested for
+rescues, docking, hits and refits. A complete legal pilot
 starts with `Game::new()` and rescues all 27 people using only normal `Input`;
 it never teleports, mutates resources, advances stages directly or skips hazards.
 Focused mechanic tests use local fixtures to isolate their conditions.
@@ -102,8 +141,11 @@ at ticks 0, 1,923, 4,551, 7,167, 10,313 and 13,981. The pilot is deterministic,
 read-only and uses grid navigation followed by the same physical thrust and
 braking rules as a human. It is a legal smoke driver, not a claim of ideal play.
 
-The parent inspected a native frame-600 capture: the sea map, life-support
-sidebar, controls and survivor state were readable, with no observed overlap.
+Presentation events are recorded per tick for effects only and are never read
+by the rules; the guidance trail and the air mark reuse the pilot's own route
+search and air rule of thumb without changing state. Native captures of the
+title, help, briefing, a dive, a bell approach, a winch, docking, sonar, a reef
+strike, low air, a wreck, sortie five and the results card were reviewed.
 Parent integration owns additional native captures, browser/Wasm builds and shared
 staging. Suggested native captures: autoplay tick/frame 600 for the nursery,
 3,000 for the cable station and 11,000 for the violet pressure layer. Example:
