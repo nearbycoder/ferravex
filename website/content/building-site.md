@@ -22,9 +22,9 @@ This requires matching game and API artifacts and still runs the dependency audi
 
 ## Hosting configuration
 
-The repository's Dockerfile and static server remain available for a future publishing step. The image builds WebAssembly/API documentation, then serves generated files with the original Python server. It accepts `PORT` and exposes `/healthz`.
+Coolify builds the repository's Dockerfile from `main` after receiving a signed GitHub push webhook. The image builds WebAssembly and API documentation, then serves the generated site with the Python server. It accepts `PORT` and exposes `/healthz`.
 
-The production service builds this Dockerfile from the merged main branch. Verify its exact deployment reaches SUCCESS, then check /healthz and the served game manifest before calling a release deployed. Existing hosting configuration or a local build alone does not establish publication. Toolchains and container base images are hosting tools, not bundled game runtime dependencies.
+Confirm the commit in Coolify, then check `/healthz` and the served game manifest on ferravex.com. Toolchains and container base images are used for hosting. The packaged game runtime retains its first-party dependencies.
 
 ## Add an example
 
