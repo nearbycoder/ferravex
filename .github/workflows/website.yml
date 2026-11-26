@@ -1,0 +1,30 @@
+name: Website
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/website.yml
+      - Dockerfile
+      - website/**
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the production website
+        run: docker build --tag ferravex-site:ci .
+      - name: Serve and check the generated site
+        run: |
+          docker run -d --name ferravex-ci -p 127.0.0.1:18080:8080 ferravex-site:ci
+          trap 'docker logs ferravex-ci; docker rm -f ferravex-ci' EXIT
+          origin=http://127.0.0.1:18080
+          curl -fsS --retry 10 --retry-all-errors --retry-delay 1 "$origin/healthz"
+          curl -fsS "$origin/" --output /dev/null
+          curl -fsS "$origin/asset-manifest.json" | jq -e 'type == "object" and length > 0'
